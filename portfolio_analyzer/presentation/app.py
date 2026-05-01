@@ -15,9 +15,13 @@ if _PROJECT_ROOT not in sys.path:
 
 import streamlit as st
 
+from pathlib import Path
+
+_LOGO_PATH = Path(__file__).parent / "assets" / "tarzan_logo.png"
+
 st.set_page_config(
     page_title="Tarzan · Portfolio Analyzer",
-    page_icon="🦍",
+    page_icon=str(_LOGO_PATH) if _LOGO_PATH.exists() else "🦍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -112,7 +116,9 @@ def _inject_css():
 def _sidebar():
     """Sidebar: upload files, navigation, export."""
     with st.sidebar:
-        st.markdown("### 🦍 Tarzan")
+        if _LOGO_PATH.exists():
+            st.image(str(_LOGO_PATH), width=60)
+        st.markdown("### Tarzan")
         st.caption("Portfolio Analyzer")
 
         # Navigation (only if data loaded)
@@ -213,11 +219,28 @@ def _export_excel():
 
 def _show_welcome():
     """Welcome screen when no data is loaded."""
+    import base64
+    from pathlib import Path
+
+    logo_path = Path(__file__).parent / "assets" / "tarzan_logo.png"
+    logo_html = ""
+    if logo_path.exists():
+        with open(logo_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
+        logo_html = (
+            f"<img src='data:image/png;base64,{encoded}' "
+            f"style='width: 140px; height: 140px; border-radius: 20px; "
+            f"box-shadow: 0 8px 24px rgba(0,0,0,0.4);' />"
+        )
+
     st.markdown(
-        """
-        <div style='text-align:center; padding: 60px 20px;'>
-            <h1 style='font-size: 3rem; margin-bottom: 0;'>🦍 Tarzan</h1>
-            <p style='color: #8b949e; font-size: 1.1rem;'>Portfolio analysis for investors who swing smart.</p>
+        f"""
+        <div style='text-align:center; padding: 40px 20px 20px;'>
+            {logo_html}
+            <h1 style='font-size: 3rem; margin: 16px 0 0; font-weight: 800;'>Tarzan</h1>
+            <p style='color: #8b949e; font-size: 1.1rem; margin-top: 8px;'>
+                Portfolio analysis for investors who swing smart.
+            </p>
         </div>
         """,
         unsafe_allow_html=True,
