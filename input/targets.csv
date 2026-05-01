@@ -1,0 +1,16 @@
+key,value
+rebalancing_lump_sum_amount,1000
+rebalancing_min_transaction_eur,0
+rebalancing_max_tolerance,1
+rebalancing_no_sell,TRUE
+portfolio_inception,1/26/26
+target_geo_allocation_usa,52
+target_geo_allocation_japan,9
+target_geo_allocation_eurozone_emu,15
+target_geo_allocation_dev_ex_usa_ex_emu_ex_jp,12
+target_geo_allocation_emerging_markets,12
+target_asset_allocation_equities,67
+target_asset_allocation_fixed_income,24
+target_asset_allocation_cash,5
+target_asset_allocation_commodities,4
+target_asset_allocation_alternative,0

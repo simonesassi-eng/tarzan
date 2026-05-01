@@ -1,0 +1,89 @@
+# Static configuration — rarely changed parameters
+
+# ---------------------------------------------------------------------------
+# Exchange: ticker suffix → country
+# ---------------------------------------------------------------------------
+exchange_country:
+  ".MI": Italy
+  ".PA": France
+  ".DE": Germany
+  ".AS": Netherlands
+  ".L": United Kingdom
+  ".TO": Canada
+  ".AX": Australia
+  ".HK": Hong Kong
+  ".T": Japan
+  ".KS": South Korea
+  ".TW": Taiwan
+  ".SA": Brazil
+  ".MX": Mexico
+
+# ---------------------------------------------------------------------------
+# ISIN probing suffixes
+# ---------------------------------------------------------------------------
+isin_exchange_suffixes:
+  - ".MI"
+  - ".SG"
+  - ".ETLX"
+  - ".DE"
+  - ".F"
+  - ".L"
+
+# ---------------------------------------------------------------------------
+# OpenFIGI mappings
+# ---------------------------------------------------------------------------
+figi_exchange_map:
+  MI: ".MI"
+  US: ""
+  GY: ".DE"
+  GF: ".F"
+  LN: ".L"
+  FP: ".PA"
+  NA: ".AS"
+  SG: ".SG"
+  SM: ".MC"
+  SW: ".SW"
+  AU: ".AX"
+  JT: ".T"
+  HK: ".HK"
+  CT: ".TO"
+
+figi_mic_map:
+  MTAA: ".MI"
+  MOTX: ".MI"
+  XMIL: ".MI"
+  XNYS: ""
+  XNAS: ""
+  XETR: ".DE"
+  XFRA: ".F"
+  XLON: ".L"
+  XPAR: ".PA"
+  XAMS: ".AS"
+  XSTU: ".SG"
+  XSWX: ".SW"
+  ETLX: ".MI"
+
+# ---------------------------------------------------------------------------
+# Asset class colors for charts
+# ---------------------------------------------------------------------------
+asset_class_colors:
+  Equities: "#00B050"
+  Fixed Income: "#0070C0"
+  Cash & Cash Equivalents: "#FFD700"
+  Commodities: "#D4AF37"
+  Real Estate: "#8B4513"
+  Alternative: "#808080"
+
+# ---------------------------------------------------------------------------
+# Excel sheet names
+# ---------------------------------------------------------------------------
+sheet_names:
+  - Dashboard
+  - Optimizer
+  - Holdings
+  - Performance
+  - Return Contribution
+  - Documentation
+
+# Number of top/bottom performers shown on Dashboard
+top_and_bottom_performers_count: 7
