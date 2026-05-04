@@ -33,18 +33,20 @@ multi-asset portfolios.
 # 1. Install
 pip install -r requirements.txt
 
-# 2. Run the Streamlit app
-streamlit run tarzan/presentation/app.py
-
-# 3. Or use the CLI
+# 2. Try the sample portfolio
 python -m tarzan.main \
-    --input_holdings input/holdings.csv \
-    --input_config input/targets.csv \
-    --output output/
+    --input_holdings input/sample/sample_holdings.csv \
+    --input_config   input/sample/sample_targets.csv \
+    --output         output/sample/
+
+# 3. Or launch the Streamlit app
+streamlit run tarzan/presentation/app.py
 ```
 
-The app opens in your browser. Upload your holdings CSV and (optionally) a
-targets CSV, then click **Analyze Portfolio**.
+The Streamlit app opens in your browser. Upload your own holdings CSV and
+(optionally) a targets CSV, then click **Analyze Portfolio**. A ready-made
+dashboard built from the sample data lives in
+[`output/sample/portfolio_dashboard_sample.xlsx`](output/sample/).
 
 ## Input format
 
@@ -80,9 +82,10 @@ Tarzan/
 │   ├── models/              # Holding, InvestorConfig, PortfolioMetrics
 │   ├── presentation/        # Streamlit app and views
 │   └── tests/               # Pytest suite
-├── input/                   # Sample holdings / targets CSVs
-├── mockups/                 # UI design prototypes
-├── output/                  # Generated reports (git-ignored)
+├── input/
+│   └── sample/              # Sample holdings / targets CSVs (tracked)
+├── output/
+│   └── sample/              # Pre-generated sample Excel dashboard (tracked)
 └── requirements.txt
 ```
 

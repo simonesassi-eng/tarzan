@@ -1,0 +1,1960 @@
+2026-05-04 09:46:45,367 [INFO] tarzan: Tarzan v3.0 starting...
+2026-05-04 09:46:46,002 [INFO] numexpr.utils: Note: NumExpr detected 14 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+2026-05-04 09:46:46,002 [INFO] numexpr.utils: NumExpr defaulting to 8 threads.
+2026-05-04 09:46:46,293 [INFO] tarzan.orchestrator: Loading holdings...
+2026-05-04 09:46:46,295 [INFO] tarzan.data.loader: Loaded 10 holdings from input/sample/sample_holdings.csv
+2026-05-04 09:46:46,295 [INFO] tarzan.orchestrator: Loaded 10 holdings
+2026-05-04 09:46:46,297 [INFO] tarzan.orchestrator: Config loaded (threshold=2.5%)
+2026-05-04 09:46:46,588 [INFO] tarzan.orchestrator: Enriching holdings (period=5y)...
+2026-05-04 09:46:46,588 [INFO] tarzan.data.enricher: Enriching 10 holdings (max 8 workers)...
+2026-05-04 09:46:46,589 [INFO] tarzan.data.enricher: Fetching data for EUNL.DE
+2026-05-04 09:46:46,589 [INFO] tarzan.data.enricher: Fetching data for VWCE.DE
+2026-05-04 09:46:46,589 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/EUNL.DE
+2026-05-04 09:46:46,589 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/VWCE.DE
+2026-05-04 09:46:46,589 [INFO] tarzan.data.enricher: Fetching data for CSPX.L
+2026-05-04 09:46:46,589 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [INFO] tarzan.data.enricher: Fetching data for XMME.DE
+2026-05-04 09:46:46,590 [INFO] tarzan.data.enricher: Fetching data for CNKY.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [INFO] tarzan.data.enricher: Fetching data for VERX.DE
+2026-05-04 09:46:46,590 [INFO] tarzan.data.enricher: Fetching data for IEAG.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/CSPX.L
+2026-05-04 09:46:46,590 [INFO] tarzan.data.enricher: Fetching data for IBTM.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/XMME.DE
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/CNKY.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/VERX.DE
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/IEAG.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/IBTM.L
+2026-05-04 09:46:46,590 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/EUNL.DE
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/VWCE.DE
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,590 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'EUNL.DE'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'VWCE.DE'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/CSPX.L
+2026-05-04 09:46:46,591 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/XMME.DE
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/CNKY.L
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/VERX.DE
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/IEAG.L
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'CSPX.L'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/IBTM.L
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'XMME.DE'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'CNKY.L'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'VERX.DE'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'IEAG.L'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'IBTM.L'}
+2026-05-04 09:46:46,591 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:46,591 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:46,591 [DEBUG] yfinance:      Entering _load_cookie_curlCffi()
+2026-05-04 09:46:46,595 [DEBUG] peewee: ('CREATE TABLE IF NOT EXISTS "_cookieschema" ("strategy" VARCHAR(255) NOT NULL PRIMARY KEY, "fetch_date" DATETIME NOT NULL, "cookie_bytes" BLOB NOT NULL) WITHOUT ROWID', [])
+2026-05-04 09:46:46,595 [DEBUG] peewee: ('SELECT "t1"."strategy", "t1"."fetch_date", "t1"."cookie_bytes" FROM "_cookieschema" AS "t1" WHERE ("t1"."strategy" = ?) LIMIT ? OFFSET ?', ['curlCffi', 1, 0])
+2026-05-04 09:46:46,596 [DEBUG] yfinance:      Exiting _load_cookie_curlCffi()
+2026-05-04 09:46:46,596 [DEBUG] yfinance: reusing persistent cookie
+2026-05-04 09:46:46,596 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,596 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,596 [DEBUG] yfinance:      Entering _get_cookie_basic()
+2026-05-04 09:46:46,596 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,596 [DEBUG] yfinance:      Exiting _get_cookie_basic()
+2026-05-04 09:46:46,889 [DEBUG] yfinance: crumb = 'XwpMrokaWaL'
+2026-05-04 09:46:46,889 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,889 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,889 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,890 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,890 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,890 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,891 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,892 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,892 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:46,893 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:46,893 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,130 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,130 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,131 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,131 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,131 [DEBUG] yfinance: params={'symbols': 'EUNL.DE', 'formatted': 'false'}
+2026-05-04 09:46:47,131 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,131 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,131 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,131 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,131 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,146 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,146 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,147 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,147 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,147 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,147 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,147 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,147 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,147 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,147 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,148 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,148 [DEBUG] yfinance: params={'symbols': 'CSPX.L', 'formatted': 'false'}
+2026-05-04 09:46:47,148 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,148 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,148 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,148 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,148 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,148 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,148 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,149 [DEBUG] yfinance: params={'symbols': 'VERX.DE', 'formatted': 'false'}
+2026-05-04 09:46:47,149 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: params={'symbols': 'VWCE.DE', 'formatted': 'false'}
+2026-05-04 09:46:47,149 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,149 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,149 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,149 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,149 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,149 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,149 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,150 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,150 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,151 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,151 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,151 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,151 [DEBUG] yfinance: params={'symbols': 'XMME.DE', 'formatted': 'false'}
+2026-05-04 09:46:47,151 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,151 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,151 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,151 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,151 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,152 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,152 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,152 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,152 [DEBUG] yfinance: params={'symbols': 'IEAG.L', 'formatted': 'false'}
+2026-05-04 09:46:47,152 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,152 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,152 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,152 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,152 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,163 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,163 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,163 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,163 [DEBUG] yfinance: params={'symbols': 'CNKY.L', 'formatted': 'false'}
+2026-05-04 09:46:47,163 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,163 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,163 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,163 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,163 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,199 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,199 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,200 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,203 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,203 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,203 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/EUNL.DE?symbol=EUNL.DE&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,203 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,203 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,203 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,203 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,203 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,203 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,203 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,320 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,320 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,320 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,321 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,321 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,321 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/VWCE.DE?symbol=VWCE.DE&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,321 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,321 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,321 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,321 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,321 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,321 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,321 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,322 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,322 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,322 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,322 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,322 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,322 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/CNKY.L?symbol=CNKY.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,322 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,322 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,322 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,323 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,323 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,323 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,323 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,328 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,328 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,328 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,329 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,329 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,329 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/IEAG.L?symbol=IEAG.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,329 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,329 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,329 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,329 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,329 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,329 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,329 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,332 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,333 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,333 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,333 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,333 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,333 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/CSPX.L?symbol=CSPX.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,333 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,333 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,334 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,334 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,334 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,334 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,334 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,334 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,334 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,334 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,334 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,334 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,334 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,335 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,335 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,336 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/XMME.DE?symbol=XMME.DE&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,336 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,336 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,335 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,337 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,337 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,337 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,337 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,337 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,336 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,337 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,338 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,338 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,338 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,336 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,338 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,338 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,338 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,338 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,338 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,338 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,339 [DEBUG] yfinance: params={'symbols': 'IBTM.L', 'formatted': 'false'}
+2026-05-04 09:46:47,339 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,339 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,339 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,339 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,339 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,339 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,336 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,339 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/VERX.DE?symbol=VERX.DE&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,339 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,339 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,339 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,339 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,340 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,340 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,340 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,349 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,349 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,349 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,349 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,351 [DEBUG] peewee: ('CREATE TABLE IF NOT EXISTS "_tz_kv" ("key" VARCHAR(255) NOT NULL PRIMARY KEY, "value" VARCHAR(255)) WITHOUT ROWID', [])
+2026-05-04 09:46:47,351 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['EUNL.DE', 1, 0])
+2026-05-04 09:46:47,447 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,447 [DEBUG] yfinance: EUNL.DE: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,447 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,447 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,447 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/EUNL.DE
+2026-05-04 09:46:47,447 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,447 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,447 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,447 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,447 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,447 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,447 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,461 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,461 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,461 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,461 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,461 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['CNKY.L', 1, 0])
+2026-05-04 09:46:47,462 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,462 [DEBUG] yfinance: CNKY.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,462 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,462 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,462 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/CNKY.L
+2026-05-04 09:46:47,462 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,462 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,462 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,462 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,462 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,462 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,462 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,463 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,463 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['VWCE.DE', 1, 0])
+2026-05-04 09:46:47,463 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: VWCE.DE: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,463 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,463 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/VWCE.DE
+2026-05-04 09:46:47,463 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,463 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,463 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,463 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,463 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,463 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,471 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,471 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,471 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,471 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,472 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['IEAG.L', 1, 0])
+2026-05-04 09:46:47,472 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,472 [DEBUG] yfinance: IEAG.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,472 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,472 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,472 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/IEAG.L
+2026-05-04 09:46:47,472 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,472 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,472 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,472 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,472 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,472 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,472 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,478 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,478 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['VERX.DE', 1, 0])
+2026-05-04 09:46:47,478 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: VERX.DE: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,478 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,478 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/VERX.DE
+2026-05-04 09:46:47,478 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,478 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,478 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,478 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,478 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,478 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,479 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,479 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,479 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,480 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['XMME.DE', 1, 0])
+2026-05-04 09:46:47,480 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: XMME.DE: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,480 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,480 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/XMME.DE
+2026-05-04 09:46:47,480 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,480 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,480 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,480 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,480 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,480 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,482 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,482 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['CSPX.L', 1, 0])
+2026-05-04 09:46:47,482 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: CSPX.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,482 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,482 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/CSPX.L
+2026-05-04 09:46:47,482 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,482 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,482 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,482 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,482 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,482 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,495 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,495 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/IBTM.L?symbol=IBTM.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,495 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,495 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,495 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,495 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,495 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,495 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,568 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,568 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,569 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,573 [DEBUG] yfinance: EUNL.DE: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-04 07:31:44
+2026-05-04 09:46:47,577 [DEBUG] yfinance: EUNL.DE: OHLC after cleaning: 2021-05-04 09:00:00+02:00 -> 2026-05-04 09:31:44+02:00
+2026-05-04 09:46:47,579 [DEBUG] yfinance: EUNL.DE: OHLC after combining events: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,582 [DEBUG] yfinance: EUNL.DE: yfinance returning OHLC: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,582 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,582 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,584 [INFO] tarzan.data.enricher: Fetching data for SGLD.L
+2026-05-04 09:46:47,584 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:47,584 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,584 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,584 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:47,584 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'SGLD.L'}
+2026-05-04 09:46:47,584 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,584 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,584 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,584 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,584 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,584 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,586 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,586 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,586 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,587 [DEBUG] yfinance: CNKY.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-01 07:00:00
+2026-05-04 09:46:47,588 [DEBUG] yfinance: CNKY.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-01 08:00:00+01:00
+2026-05-04 09:46:47,590 [DEBUG] yfinance: CNKY.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,591 [DEBUG] yfinance: CNKY.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,591 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,591 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,592 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,592 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,592 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,594 [DEBUG] yfinance: VWCE.DE: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-04 07:31:45
+2026-05-04 09:46:47,594 [DEBUG] yfinance: VWCE.DE: OHLC after cleaning: 2021-05-04 09:00:00+02:00 -> 2026-05-04 09:31:45+02:00
+2026-05-04 09:46:47,596 [DEBUG] yfinance: VWCE.DE: OHLC after combining events: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,596 [DEBUG] tarzan.data.enricher: Rescaling GBp prices to GBP (divide by 100)
+2026-05-04 09:46:47,596 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,596 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['GBPEUR=X', 1, 0])
+2026-05-04 09:46:47,597 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,597 [DEBUG] yfinance: GBPEUR=X: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,597 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,598 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/GBPEUR=X
+2026-05-04 09:46:47,598 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,598 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,598 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,598 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,598 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,598 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: VWCE.DE: yfinance returning OHLC: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,598 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,598 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,599 [INFO] tarzan.data.enricher: Fetching data for CASH-EUR
+2026-05-04 09:46:47,600 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:47,600 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,600 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,600 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:47,600 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'CASH-EUR'}
+2026-05-04 09:46:47,600 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,600 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,600 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,600 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,600 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,600 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,603 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,603 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,603 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,605 [DEBUG] yfinance: CSPX.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-04 07:24:14
+2026-05-04 09:46:47,606 [DEBUG] yfinance: CSPX.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-04 08:24:14+01:00
+2026-05-04 09:46:47,607 [DEBUG] yfinance: CSPX.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,609 [DEBUG] yfinance: CSPX.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,609 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,609 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,609 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,609 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,609 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,611 [DEBUG] yfinance: XMME.DE: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-04 07:31:02
+2026-05-04 09:46:47,612 [DEBUG] yfinance: XMME.DE: OHLC after cleaning: 2021-05-04 09:00:00+02:00 -> 2026-05-04 09:31:02+02:00
+2026-05-04 09:46:47,613 [DEBUG] yfinance: XMME.DE: OHLC after combining events: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,613 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,613 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['USDEUR=X', 1, 0])
+2026-05-04 09:46:47,613 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,613 [DEBUG] yfinance: USDEUR=X: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,614 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,614 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,614 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/USDEUR=X
+2026-05-04 09:46:47,615 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,615 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,615 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,615 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,615 [DEBUG] yfinance: XMME.DE: yfinance returning OHLC: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,615 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,615 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,615 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,615 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,615 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,620 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,620 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,620 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,621 [DEBUG] yfinance: VERX.DE: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-04 07:26:15
+2026-05-04 09:46:47,622 [DEBUG] yfinance: VERX.DE: OHLC after cleaning: 2021-05-04 09:00:00+02:00 -> 2026-05-04 09:26:15+02:00
+2026-05-04 09:46:47,626 [DEBUG] yfinance: VERX.DE: OHLC after combining events: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,628 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,628 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,628 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,630 [DEBUG] yfinance: IEAG.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-01 07:00:00
+2026-05-04 09:46:47,630 [DEBUG] yfinance: VERX.DE: yfinance returning OHLC: 2021-05-04 00:00:00+02:00 -> 2026-05-04 00:00:00+02:00
+2026-05-04 09:46:47,630 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,630 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,630 [DEBUG] yfinance: IEAG.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-01 08:00:00+01:00
+2026-05-04 09:46:47,634 [DEBUG] yfinance: IEAG.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,635 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,635 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,636 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,636 [DEBUG] yfinance: IEAG.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,636 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,636 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,636 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['IBTM.L', 1, 0])
+2026-05-04 09:46:47,636 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,636 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,636 [DEBUG] yfinance: IBTM.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,636 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,636 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,636 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/IBTM.L
+2026-05-04 09:46:47,636 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,636 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,636 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,636 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,637 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,637 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,637 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,724 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,724 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,725 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,727 [DEBUG] yfinance: GBPEUR=X: yfinance received OHLC data: 2021-05-03 23:00:00 -> 2026-05-04 07:45:13
+2026-05-04 09:46:47,728 [DEBUG] yfinance: GBPEUR=X: OHLC after cleaning: 2021-05-04 00:00:00+01:00 -> 2026-05-04 08:45:13+01:00
+2026-05-04 09:46:47,729 [DEBUG] yfinance: GBPEUR=X: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,731 [DEBUG] yfinance: GBPEUR=X: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,732 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,732 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,732 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,732 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,733 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,733 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,733 [DEBUG] yfinance: params={'symbols': 'SGLD.L', 'formatted': 'false'}
+2026-05-04 09:46:47,733 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,733 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,733 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,733 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,733 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,750 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,750 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,751 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,753 [DEBUG] yfinance: USDEUR=X: yfinance received OHLC data: 2021-05-03 23:00:00 -> 2026-05-04 07:46:13
+2026-05-04 09:46:47,753 [DEBUG] yfinance: USDEUR=X: OHLC after cleaning: 2021-05-04 00:00:00+01:00 -> 2026-05-04 08:46:13+01:00
+2026-05-04 09:46:47,754 [DEBUG] yfinance: USDEUR=X: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,756 [DEBUG] yfinance: USDEUR=X: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-04 00:00:00+01:00
+2026-05-04 09:46:47,756 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,756 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,805 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,805 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,805 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,806 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,806 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,806 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/SGLD.L?symbol=SGLD.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,806 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,806 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,806 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,806 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,806 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,806 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,806 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,821 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,822 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:47,822 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:47,824 [DEBUG] yfinance: IBTM.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-01 07:00:00
+2026-05-04 09:46:47,825 [DEBUG] yfinance: IBTM.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-01 08:00:00+01:00
+2026-05-04 09:46:47,828 [DEBUG] yfinance: IBTM.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,830 [DEBUG] yfinance: IBTM.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:47,830 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:47,830 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,927 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,927 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,927 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:47,927 [DEBUG] yfinance: params={'symbols': 'CASH-EUR', 'formatted': 'false'}
+2026-05-04 09:46:47,927 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,927 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,927 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,927 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,927 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,927 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,927 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,928 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,928 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,945 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:47,945 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['SGLD.L', 1, 0])
+2026-05-04 09:46:47,945 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: SGLD.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,945 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:47,945 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/SGLD.L
+2026-05-04 09:46:47,945 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:47,945 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,945 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,945 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,945 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,945 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:47,990 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:47,990 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/CASH-EUR?symbol=CASH-EUR&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:47,990 [DEBUG] yfinance: params=None
+2026-05-04 09:46:47,990 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:47,990 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,990 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:47,990 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:47,990 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:47,990 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:47,991 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:47,991 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:47,991 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:47,991 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,073 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:48,073 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:48,073 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:48,076 [DEBUG] yfinance: SGLD.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-01 07:00:00
+2026-05-04 09:46:48,077 [DEBUG] yfinance: SGLD.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-01 08:00:00+01:00
+2026-05-04 09:46:48,079 [DEBUG] yfinance: SGLD.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:48,081 [DEBUG] yfinance: SGLD.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:48,081 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:48,082 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:48,085 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:48,085 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:48,085 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:48,085 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:48,085 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'SGLD.L'}
+2026-05-04 09:46:48,085 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,085 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:48,085 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,085 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:48,085 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:48,085 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:48,085 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:48,085 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:48,085 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:48,086 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,086 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,135 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:48,135 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:48,135 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:48,135 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:48,135 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['CASH-EUR', 1, 0])
+2026-05-04 09:46:48,135 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:48,135 [DEBUG] yfinance:  Entering _fetch_ticker_tz()
+2026-05-04 09:46:48,135 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:48,136 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/CASH-EUR
+2026-05-04 09:46:48,136 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: params=frozendict.frozendict({'range': '1d', 'interval': '1d'})
+2026-05-04 09:46:48,136 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:48,136 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:48,136 [DEBUG] yfinance: params={'symbols': 'SGLD.L', 'formatted': 'false'}
+2026-05-04 09:46:48,136 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:48,136 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:48,136 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:48,136 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,136 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:48,137 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:48,137 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,137 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,184 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:48,184 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:48,184 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:48,188 [INFO] tarzan.data.geo_resolver: Loaded 58 rows from indexes.csv
+2026-05-04 09:46:48,190 [DEBUG] urllib3.connectionpool: Starting new HTTPS connection (1): www.justetf.com:443
+2026-05-04 09:46:48,197 [DEBUG] yfinance: response code=404
+2026-05-04 09:46:48,197 [DEBUG] yfinance: toggling cookie strategy basic -> csrf
+2026-05-04 09:46:48,197 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,197 [DEBUG] yfinance: cookie_mode = 'csrf'
+2026-05-04 09:46:48,197 [DEBUG] yfinance:      Entering _get_crumb_csrf()
+2026-05-04 09:46:48,197 [DEBUG] yfinance:       Entering _get_cookie_csrf()
+2026-05-04 09:46:48,197 [DEBUG] yfinance:        Entering _load_cookie_curlCffi()
+2026-05-04 09:46:48,198 [DEBUG] peewee: ('SELECT "t1"."strategy", "t1"."fetch_date", "t1"."cookie_bytes" FROM "_cookieschema" AS "t1" WHERE ("t1"."strategy" = ?) LIMIT ? OFFSET ?', ['curlCffi', 1, 0])
+2026-05-04 09:46:48,199 [DEBUG] yfinance:        Exiting _load_cookie_curlCffi()
+2026-05-04 09:46:48,199 [DEBUG] yfinance: reusing persistent cookie
+2026-05-04 09:46:48,199 [DEBUG] yfinance:       Exiting _get_cookie_csrf()
+2026-05-04 09:46:48,335 [DEBUG] yfinance: crumb = 'XwpMrokaWaL'
+2026-05-04 09:46:48,335 [DEBUG] yfinance:      Exiting _get_crumb_csrf()
+2026-05-04 09:46:48,335 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,393 [DEBUG] yfinance: response code=404
+2026-05-04 09:46:48,393 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:48,393 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:48,393 [DEBUG] yfinance: Got error from yahoo api for ticker CASH-EUR, Error: {'code': 'Not Found', 'description': 'No data found, symbol may be delisted'}
+2026-05-04 09:46:48,393 [DEBUG] yfinance:  Exiting _fetch_ticker_tz()
+2026-05-04 09:46:48,393 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:48,393 [DEBUG] yfinance: CASH-EUR: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:48,393 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:48,393 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:48,393 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/CASH-EUR
+2026-05-04 09:46:48,394 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:48,394 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,394 [DEBUG] yfinance: cookie_mode = 'csrf'
+2026-05-04 09:46:48,394 [DEBUG] yfinance:      Entering _get_crumb_csrf()
+2026-05-04 09:46:48,394 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:48,394 [DEBUG] yfinance:      Exiting _get_crumb_csrf()
+2026-05-04 09:46:48,394 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,452 [DEBUG] yfinance: response code=404
+2026-05-04 09:46:48,452 [DEBUG] yfinance: toggling cookie strategy csrf -> basic
+2026-05-04 09:46:48,452 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,452 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:48,452 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,452 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:48,452 [DEBUG] yfinance:        Entering _load_cookie_curlCffi()
+2026-05-04 09:46:48,452 [DEBUG] peewee: ('SELECT "t1"."strategy", "t1"."fetch_date", "t1"."cookie_bytes" FROM "_cookieschema" AS "t1" WHERE ("t1"."strategy" = ?) LIMIT ? OFFSET ?', ['curlCffi', 1, 0])
+2026-05-04 09:46:48,452 [DEBUG] yfinance:        Exiting _load_cookie_curlCffi()
+2026-05-04 09:46:48,452 [DEBUG] yfinance: reusing persistent cookie
+2026-05-04 09:46:48,452 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:48,452 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:48,452 [DEBUG] yfinance:        Entering _get_cookie_basic()
+2026-05-04 09:46:48,452 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:48,452 [DEBUG] yfinance:        Exiting _get_cookie_basic()
+2026-05-04 09:46:48,581 [DEBUG] urllib3.connectionpool: https://www.justetf.com:443 "GET /en/etf-profile.html?isin=IE00B579F325 HTTP/11" 200 None
+2026-05-04 09:46:48,591 [DEBUG] yfinance: crumb = 'XwpMrokaWaL'
+2026-05-04 09:46:48,591 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:48,591 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,591 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,622 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:48,622 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:48,622 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:48,622 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/SGLD.L
+2026-05-04 09:46:48,622 [DEBUG] yfinance: params={'modules': 'quoteType,summaryProfile,topHoldings,fundProfile', 'corsDomain': 'finance.yahoo.com', 'symbol': 'SGLD.L', 'formatted': 'false'}
+2026-05-04 09:46:48,622 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:48,622 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:48,622 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:48,622 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:48,622 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:48,622 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:48,648 [DEBUG] yfinance: response code=404
+2026-05-04 09:46:48,648 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:48,648 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:48,648 [ERROR] yfinance: $CASH-EUR: possibly delisted; no price data found  (period=5y) (Yahoo error = "No data found, symbol may be delisted")
+2026-05-04 09:46:48,648 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:48,648 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:48,794 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:48,794 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:48,794 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:49,219 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:49,220 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:49,220 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:49,220 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:49,220 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'CASH-EUR'}
+2026-05-04 09:46:49,220 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:49,220 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:49,220 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:49,220 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:49,220 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:49,220 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:49,369 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:49,369 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:49,370 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:49,370 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:49,370 [DEBUG] yfinance: params={'symbols': 'CASH-EUR', 'formatted': 'false'}
+2026-05-04 09:46:49,370 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:49,370 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:49,370 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:49,370 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:49,370 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:49,429 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:49,429 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:49,429 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:49,431 [DEBUG] urllib3.connectionpool: Starting new HTTPS connection (1): www.justetf.com:443
+2026-05-04 09:46:49,498 [DEBUG] urllib3.connectionpool: https://www.justetf.com:443 "GET /en/etf-profile.html?isin=CASH-EUR HTTP/11" 302 0
+2026-05-04 09:46:52,453 [DEBUG] urllib3.connectionpool: https://www.justetf.com:443 "GET /en/search.html?query=CASH-EUR&search=ETFS HTTP/11" 200 None
+2026-05-04 09:46:52,493 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:52,493 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:52,493 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:52,493 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/CASH-EUR
+2026-05-04 09:46:52,493 [DEBUG] yfinance: params={'modules': 'quoteType,summaryProfile,topHoldings,fundProfile', 'corsDomain': 'finance.yahoo.com', 'symbol': 'CASH-EUR', 'formatted': 'false'}
+2026-05-04 09:46:52,493 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:52,493 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:52,493 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:52,493 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:52,493 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:52,493 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:52,634 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:52,634 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:52,635 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:52,635 [INFO] tarzan.data.enricher: Enrichment complete. Total portfolio value: 80934.80 EUR
+2026-05-04 09:46:52,635 [INFO] tarzan.orchestrator: Enriched 9/10 holdings
+2026-05-04 09:46:52,636 [INFO] tarzan.orchestrator: Computing metrics...
+2026-05-04 09:46:52,651 [INFO] tarzan.data.enricher: Fetching data for ^GSPC
+2026-05-04 09:46:52,651 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/^GSPC
+2026-05-04 09:46:52,651 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:52,651 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:52,651 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/^GSPC
+2026-05-04 09:46:52,651 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': '^GSPC'}
+2026-05-04 09:46:52,651 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:52,651 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:52,651 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:52,651 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:52,651 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:52,651 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:53,911 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:53,911 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:53,911 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:53,911 [DEBUG] yfinance: params={'symbols': '^GSPC', 'formatted': 'false'}
+2026-05-04 09:46:53,911 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:53,911 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:53,911 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:53,911 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:53,911 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:54,176 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:54,176 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:54,176 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:54,176 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:54,177 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:54,177 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/^GSPC?symbol=^GSPC&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:54,177 [DEBUG] yfinance: params=None
+2026-05-04 09:46:54,177 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:54,177 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:54,177 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:54,177 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:54,177 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:54,177 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:54,316 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:54,316 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:54,316 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:54,316 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:54,316 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['^GSPC', 1, 0])
+2026-05-04 09:46:54,318 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:54,318 [DEBUG] yfinance: ^GSPC: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:54,318 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:54,318 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:54,318 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/^GSPC
+2026-05-04 09:46:54,318 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:54,318 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:54,318 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:54,318 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:54,318 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:54,318 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:54,318 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:54,720 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:54,721 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:54,721 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:54,724 [DEBUG] yfinance: ^GSPC: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:46:54,726 [DEBUG] yfinance: ^GSPC: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:46:54,727 [DEBUG] yfinance: ^GSPC: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:54,730 [DEBUG] yfinance: ^GSPC: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:54,730 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:54,730 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:54,741 [DEBUG] tarzan.data.enricher: Cache hit for ^GSPC
+2026-05-04 09:46:55,224 [INFO] tarzan.engine.rebalancer: No rebalancing solution within 2.0% max tolerance — portfolio is close enough given min_transaction constraint
+2026-05-04 09:46:55,225 [INFO] tarzan.data.enricher: Fetching data for VWRL.L
+2026-05-04 09:46:55,225 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/VWRL.L
+2026-05-04 09:46:55,225 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:55,225 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:55,225 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/VWRL.L
+2026-05-04 09:46:55,225 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'VWRL.L'}
+2026-05-04 09:46:55,225 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:55,225 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:55,225 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:55,225 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:55,225 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,225 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:55,450 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:55,450 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:55,450 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:55,451 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:55,451 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:55,451 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:55,451 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:55,451 [DEBUG] yfinance: params={'symbols': 'VWRL.L', 'formatted': 'false'}
+2026-05-04 09:46:55,451 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:55,451 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:55,451 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:55,451 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:55,451 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,451 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:55,513 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:55,513 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:55,513 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:55,514 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:55,514 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:55,514 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/VWRL.L?symbol=VWRL.L&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:55,514 [DEBUG] yfinance: params=None
+2026-05-04 09:46:55,514 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:55,514 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:55,514 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,514 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:55,514 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:55,514 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:55,514 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:55,514 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:55,515 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:55,515 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,515 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:55,703 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:55,703 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:55,703 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:55,703 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:55,703 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['VWRL.L', 1, 0])
+2026-05-04 09:46:55,703 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:55,703 [DEBUG] yfinance: VWRL.L: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:55,703 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:55,703 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:55,703 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/VWRL.L
+2026-05-04 09:46:55,703 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:55,703 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:55,704 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:55,704 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:55,704 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:55,704 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:55,704 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:56,119 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:56,119 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:56,119 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:56,122 [DEBUG] yfinance: VWRL.L: yfinance received OHLC data: 2021-05-04 07:00:00 -> 2026-05-01 07:00:00
+2026-05-04 09:46:56,123 [DEBUG] yfinance: VWRL.L: OHLC after cleaning: 2021-05-04 08:00:00+01:00 -> 2026-05-01 08:00:00+01:00
+2026-05-04 09:46:56,128 [DEBUG] yfinance: VWRL.L: OHLC after combining events: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:56,130 [DEBUG] yfinance: VWRL.L: yfinance returning OHLC: 2021-05-04 00:00:00+01:00 -> 2026-05-01 00:00:00+01:00
+2026-05-04 09:46:56,130 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:56,130 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:56,133 [INFO] tarzan.data.enricher: Fetching data for ^892400-USD-STRD
+2026-05-04 09:46:56,133 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/^892400-USD-STRD
+2026-05-04 09:46:56,133 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:56,133 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:56,133 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/^892400-USD-STRD
+2026-05-04 09:46:56,133 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': '^892400-USD-STRD'}
+2026-05-04 09:46:56,133 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:56,133 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:56,133 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,133 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:56,134 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:56,134 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:56,134 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:56,134 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:56,134 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:56,134 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,134 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:56,274 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:56,274 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:56,274 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:56,274 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:56,274 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:56,274 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:56,274 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:56,275 [DEBUG] yfinance: params={'symbols': '^892400-USD-STRD', 'formatted': 'false'}
+2026-05-04 09:46:56,275 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:56,275 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:56,275 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:56,275 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:56,275 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,275 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:56,339 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:56,339 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:56,339 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:56,339 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:56,340 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:56,340 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/^892400-USD-STRD?symbol=^892400-USD-STRD&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:56,340 [DEBUG] yfinance: params=None
+2026-05-04 09:46:56,340 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:56,340 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:56,340 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:56,340 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:56,340 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,340 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:56,522 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:56,522 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:56,522 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:56,522 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:56,522 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['^892400-USD-STRD', 1, 0])
+2026-05-04 09:46:56,522 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:56,522 [DEBUG] yfinance: ^892400-USD-STRD: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:56,522 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:56,523 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:56,523 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/^892400-USD-STRD
+2026-05-04 09:46:56,523 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:56,523 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:56,523 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:56,523 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:56,523 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:56,523 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,523 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:56,937 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:56,937 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:56,937 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:56,941 [DEBUG] yfinance: ^892400-USD-STRD: yfinance received OHLC data: 2021-05-04 04:00:00 -> 2026-05-04 04:00:00
+2026-05-04 09:46:56,942 [DEBUG] yfinance: ^892400-USD-STRD: OHLC after cleaning: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:56,944 [DEBUG] yfinance: ^892400-USD-STRD: OHLC after combining events: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:56,947 [DEBUG] yfinance: ^892400-USD-STRD: yfinance returning OHLC: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:56,947 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:56,947 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:56,951 [INFO] tarzan.data.enricher: Fetching data for EFA
+2026-05-04 09:46:56,951 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/EFA
+2026-05-04 09:46:56,951 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:56,951 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:56,951 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/EFA
+2026-05-04 09:46:56,951 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'EFA'}
+2026-05-04 09:46:56,951 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:56,951 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:56,951 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:56,951 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:56,951 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:56,951 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:57,340 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:57,341 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:57,341 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:57,341 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:57,341 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:57,341 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:57,341 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:57,341 [DEBUG] yfinance: params={'symbols': 'EFA', 'formatted': 'false'}
+2026-05-04 09:46:57,341 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:57,341 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:57,341 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,341 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:57,342 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:57,342 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:57,342 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:57,342 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:57,342 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:57,342 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,342 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:57,595 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:57,595 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:57,595 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:57,595 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:57,595 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:57,595 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/EFA?symbol=EFA&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:57,596 [DEBUG] yfinance: params=None
+2026-05-04 09:46:57,596 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:57,596 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:57,596 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:57,596 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:57,596 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,596 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:57,734 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:57,735 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:57,735 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:57,735 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:57,735 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['EFA', 1, 0])
+2026-05-04 09:46:57,735 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:57,735 [DEBUG] yfinance: EFA: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:57,735 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:57,735 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:57,736 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/EFA
+2026-05-04 09:46:57,736 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:57,736 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:57,736 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:57,736 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:57,736 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:57,736 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,736 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:57,852 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:57,852 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:57,853 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:57,857 [DEBUG] yfinance: EFA: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:46:57,858 [DEBUG] yfinance: EFA: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:46:57,863 [DEBUG] yfinance: EFA: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:57,866 [DEBUG] yfinance: EFA: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:57,866 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:57,866 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:57,869 [INFO] tarzan.data.enricher: Fetching data for EEM
+2026-05-04 09:46:57,869 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/EEM
+2026-05-04 09:46:57,869 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:57,869 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:57,869 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/EEM
+2026-05-04 09:46:57,869 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'EEM'}
+2026-05-04 09:46:57,869 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:57,869 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:57,869 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,869 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:57,869 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:57,869 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:57,869 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:57,869 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:57,869 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:57,869 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:57,870 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,018 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,018 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,018 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,019 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,019 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,019 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,019 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,019 [DEBUG] yfinance: params={'symbols': 'EEM', 'formatted': 'false'}
+2026-05-04 09:46:58,019 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,019 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,019 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,019 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,019 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,019 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,077 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,077 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,077 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,078 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,078 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,078 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/EEM?symbol=EEM&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:58,078 [DEBUG] yfinance: params=None
+2026-05-04 09:46:58,078 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,078 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,078 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,078 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,078 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,078 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,221 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,221 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,221 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:58,222 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['EEM', 1, 0])
+2026-05-04 09:46:58,222 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: EEM: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:58,222 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:58,222 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/EEM
+2026-05-04 09:46:58,222 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:58,222 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,222 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,222 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,222 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,222 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,319 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,319 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:58,319 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:58,323 [DEBUG] yfinance: EEM: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:46:58,324 [DEBUG] yfinance: EEM: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:46:58,330 [DEBUG] yfinance: EEM: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:58,332 [DEBUG] yfinance: EEM: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:58,333 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:58,333 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:58,336 [INFO] tarzan.data.enricher: Fetching data for ^990100-USD-STRD
+2026-05-04 09:46:58,336 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/^990100-USD-STRD
+2026-05-04 09:46:58,336 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,336 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,336 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/^990100-USD-STRD
+2026-05-04 09:46:58,336 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': '^990100-USD-STRD'}
+2026-05-04 09:46:58,336 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,336 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,336 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,336 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,336 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,336 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,478 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,478 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,478 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,478 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,478 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,479 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,479 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,479 [DEBUG] yfinance: params={'symbols': '^990100-USD-STRD', 'formatted': 'false'}
+2026-05-04 09:46:58,479 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,479 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,479 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,479 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,479 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,479 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,538 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,538 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,538 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,539 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,539 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,539 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/^990100-USD-STRD?symbol=^990100-USD-STRD&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:58,539 [DEBUG] yfinance: params=None
+2026-05-04 09:46:58,539 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,539 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,539 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,539 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,539 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,539 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,681 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,681 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,681 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,681 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:58,681 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['^990100-USD-STRD', 1, 0])
+2026-05-04 09:46:58,681 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:58,682 [DEBUG] yfinance: ^990100-USD-STRD: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:58,682 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:58,682 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:58,682 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/^990100-USD-STRD
+2026-05-04 09:46:58,682 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:58,682 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,682 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,682 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,682 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,682 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,682 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,753 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,753 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:58,753 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:58,757 [DEBUG] yfinance: ^990100-USD-STRD: yfinance received OHLC data: 2021-05-04 04:00:00 -> 2026-05-04 04:00:00
+2026-05-04 09:46:58,758 [DEBUG] yfinance: ^990100-USD-STRD: OHLC after cleaning: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:58,760 [DEBUG] yfinance: ^990100-USD-STRD: OHLC after combining events: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:58,763 [DEBUG] yfinance: ^990100-USD-STRD: yfinance returning OHLC: 2021-05-04 00:00:00-04:00 -> 2026-05-04 00:00:00-04:00
+2026-05-04 09:46:58,763 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:58,763 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:58,766 [INFO] tarzan.data.enricher: Fetching data for MTUM
+2026-05-04 09:46:58,766 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/MTUM
+2026-05-04 09:46:58,767 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,767 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,767 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/MTUM
+2026-05-04 09:46:58,767 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'MTUM'}
+2026-05-04 09:46:58,767 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,767 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,767 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,767 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,767 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,767 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,915 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,916 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,916 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,916 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:58,916 [DEBUG] yfinance: params={'symbols': 'MTUM', 'formatted': 'false'}
+2026-05-04 09:46:58,916 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,916 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,916 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,916 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,916 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:58,973 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:58,973 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:58,973 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:58,974 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:58,974 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:58,974 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/MTUM?symbol=MTUM&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:58,974 [DEBUG] yfinance: params=None
+2026-05-04 09:46:58,974 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:58,974 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:58,974 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:58,974 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:58,974 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:58,974 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,114 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,114 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:59,115 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['MTUM', 1, 0])
+2026-05-04 09:46:59,115 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: MTUM: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:59,115 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:59,115 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/MTUM
+2026-05-04 09:46:59,115 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:59,115 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,115 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,115 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,115 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,115 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,205 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,205 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:59,205 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:59,210 [DEBUG] yfinance: MTUM: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:46:59,211 [DEBUG] yfinance: MTUM: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:46:59,218 [DEBUG] yfinance: MTUM: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:59,220 [DEBUG] yfinance: MTUM: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:59,220 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:59,220 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:59,224 [INFO] tarzan.data.enricher: Fetching data for QUAL
+2026-05-04 09:46:59,224 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/QUAL
+2026-05-04 09:46:59,224 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,224 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,224 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/QUAL
+2026-05-04 09:46:59,224 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'QUAL'}
+2026-05-04 09:46:59,224 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,224 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,224 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,224 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,224 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,224 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,365 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,366 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:59,366 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,366 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:59,366 [DEBUG] yfinance: params={'symbols': 'QUAL', 'formatted': 'false'}
+2026-05-04 09:46:59,366 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,366 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,366 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,366 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,366 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,427 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,427 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,427 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,428 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,428 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,428 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/QUAL?symbol=QUAL&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:59,428 [DEBUG] yfinance: params=None
+2026-05-04 09:46:59,428 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,428 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,428 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,428 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,428 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,428 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,568 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,568 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,568 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: Entering history()
+2026-05-04 09:46:59,569 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['QUAL', 1, 0])
+2026-05-04 09:46:59,569 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: QUAL: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:59,569 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:46:59,569 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/QUAL
+2026-05-04 09:46:59,569 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:46:59,569 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,569 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,569 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,569 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,569 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,654 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,654 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:46:59,654 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:46:59,658 [DEBUG] yfinance: QUAL: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:46:59,659 [DEBUG] yfinance: QUAL: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:46:59,665 [DEBUG] yfinance: QUAL: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:59,668 [DEBUG] yfinance: QUAL: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:46:59,668 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:46:59,668 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:46:59,671 [INFO] tarzan.data.enricher: Fetching data for ^NDX
+2026-05-04 09:46:59,671 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/^NDX
+2026-05-04 09:46:59,671 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,671 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,671 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/^NDX
+2026-05-04 09:46:59,671 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': '^NDX'}
+2026-05-04 09:46:59,671 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,671 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,671 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,671 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,671 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,671 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,672 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,672 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,672 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,672 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,672 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,814 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,814 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,814 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,815 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:59,815 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,815 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,815 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:46:59,815 [DEBUG] yfinance: params={'symbols': '^NDX', 'formatted': 'false'}
+2026-05-04 09:46:59,815 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,815 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,815 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,815 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,815 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,815 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:46:59,879 [DEBUG] yfinance: response code=200
+2026-05-04 09:46:59,879 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:46:59,879 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:46:59,880 [DEBUG] yfinance: Entering get()
+2026-05-04 09:46:59,880 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:46:59,880 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/^NDX?symbol=^NDX&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:46:59,880 [DEBUG] yfinance: params=None
+2026-05-04 09:46:59,880 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:46:59,880 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:46:59,880 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:46:59,880 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:46:59,880 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:46:59,880 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,020 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,021 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: Entering history()
+2026-05-04 09:47:00,021 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['^NDX', 1, 0])
+2026-05-04 09:47:00,021 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: ^NDX: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:47:00,021 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:47:00,021 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/^NDX
+2026-05-04 09:47:00,021 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:47:00,021 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:47:00,021 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:47:00,021 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:47:00,021 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,021 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,099 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,099 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:47:00,099 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:47:00,101 [DEBUG] yfinance: ^NDX: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:47:00,102 [DEBUG] yfinance: ^NDX: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:47:00,103 [DEBUG] yfinance: ^NDX: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:47:00,106 [DEBUG] yfinance: ^NDX: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:47:00,106 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:47:00,106 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:47:00,109 [DEBUG] tarzan.data.enricher: Cache hit for ^GSPC
+2026-05-04 09:47:00,110 [INFO] tarzan.data.enricher: Fetching data for AGG
+2026-05-04 09:47:00,111 [DEBUG] yfinance: get_raw_json(): https://query2.finance.yahoo.com/v10/finance/quoteSummary/AGG
+2026-05-04 09:47:00,111 [DEBUG] yfinance: Entering get()
+2026-05-04 09:47:00,111 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:47:00,111 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v10/finance/quoteSummary/AGG
+2026-05-04 09:47:00,111 [DEBUG] yfinance: params={'modules': 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail', 'corsDomain': 'finance.yahoo.com', 'formatted': 'false', 'symbol': 'AGG'}
+2026-05-04 09:47:00,111 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:47:00,111 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:47:00,111 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:47:00,111 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:47:00,111 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,111 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,257 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,258 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: get_raw_json(): https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:47:00,258 [DEBUG] yfinance: Entering get()
+2026-05-04 09:47:00,258 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/v7/finance/quote?
+2026-05-04 09:47:00,258 [DEBUG] yfinance: params={'symbols': 'AGG', 'formatted': 'false'}
+2026-05-04 09:47:00,258 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:47:00,258 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:47:00,258 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:47:00,258 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,258 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,313 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,313 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: Entering get()
+2026-05-04 09:47:00,314 [DEBUG] yfinance:  Entering _make_request()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: url=https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/AGG?symbol=AGG&type=trailingPegRatio&period1=1762128000&period2=1777939200
+2026-05-04 09:47:00,314 [DEBUG] yfinance: params=None
+2026-05-04 09:47:00,314 [DEBUG] yfinance:   Entering _get_cookie_and_crumb()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:47:00,314 [DEBUG] yfinance:    Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance:     Entering _get_cookie_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:47:00,314 [DEBUG] yfinance:     Exiting _get_cookie_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance:     Entering _get_crumb_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:47:00,314 [DEBUG] yfinance:     Exiting _get_crumb_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance:    Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,314 [DEBUG] yfinance:   Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,460 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,460 [DEBUG] yfinance:  Exiting _make_request()
+2026-05-04 09:47:00,460 [DEBUG] yfinance: Exiting get()
+2026-05-04 09:47:00,460 [DEBUG] yfinance: Entering history()
+2026-05-04 09:47:00,461 [DEBUG] peewee: ('SELECT "t1"."key", "t1"."value" FROM "_tz_kv" AS "t1" WHERE ("t1"."key" = ?) LIMIT ? OFFSET ?', ['AGG', 1, 0])
+2026-05-04 09:47:00,461 [DEBUG] yfinance:  Entering history()
+2026-05-04 09:47:00,461 [DEBUG] yfinance: AGG: Yahoo GET parameters: {'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:47:00,461 [DEBUG] yfinance:   Entering get()
+2026-05-04 09:47:00,461 [DEBUG] yfinance:    Entering _make_request()
+2026-05-04 09:47:00,461 [DEBUG] yfinance: url=https://query2.finance.yahoo.com/v8/finance/chart/AGG
+2026-05-04 09:47:00,461 [DEBUG] yfinance: params={'range': '5y', 'interval': '1d', 'includePrePost': False, 'events': 'div,splits,capitalGains'}
+2026-05-04 09:47:00,461 [DEBUG] yfinance:     Entering _get_cookie_and_crumb()
+2026-05-04 09:47:00,461 [DEBUG] yfinance: cookie_mode = 'basic'
+2026-05-04 09:47:00,461 [DEBUG] yfinance:      Entering _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance:       Entering _get_cookie_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance: reusing cookie
+2026-05-04 09:47:00,461 [DEBUG] yfinance:       Exiting _get_cookie_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance:       Entering _get_crumb_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance: reusing crumb
+2026-05-04 09:47:00,461 [DEBUG] yfinance:       Exiting _get_crumb_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance:      Exiting _get_cookie_and_crumb_basic()
+2026-05-04 09:47:00,461 [DEBUG] yfinance:     Exiting _get_cookie_and_crumb()
+2026-05-04 09:47:00,574 [DEBUG] yfinance: response code=200
+2026-05-04 09:47:00,575 [DEBUG] yfinance:    Exiting _make_request()
+2026-05-04 09:47:00,575 [DEBUG] yfinance:   Exiting get()
+2026-05-04 09:47:00,577 [DEBUG] yfinance: AGG: yfinance received OHLC data: 2021-05-03 13:30:00 -> 2026-05-01 13:30:00
+2026-05-04 09:47:00,577 [DEBUG] yfinance: AGG: OHLC after cleaning: 2021-05-03 09:30:00-04:00 -> 2026-05-01 09:30:00-04:00
+2026-05-04 09:47:00,581 [DEBUG] yfinance: AGG: OHLC after combining events: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:47:00,583 [DEBUG] yfinance: AGG: yfinance returning OHLC: 2021-05-03 00:00:00-04:00 -> 2026-05-01 00:00:00-04:00
+2026-05-04 09:47:00,583 [DEBUG] yfinance:  Exiting history()
+2026-05-04 09:47:00,583 [DEBUG] yfinance: Exiting history()
+2026-05-04 09:47:00,586 [DEBUG] tarzan.data.enricher: Cache hit for ^GSPC
+2026-05-04 09:47:00,605 [DEBUG] tarzan.data.enricher: Cache hit for VWRL.L
+2026-05-04 09:47:00,608 [DEBUG] tarzan.data.enricher: Cache hit for ^892400-USD-STRD
+2026-05-04 09:47:00,612 [DEBUG] tarzan.data.enricher: Cache hit for EFA
+2026-05-04 09:47:00,616 [DEBUG] tarzan.data.enricher: Cache hit for EEM
+2026-05-04 09:47:00,618 [DEBUG] tarzan.data.enricher: Cache hit for ^990100-USD-STRD
+2026-05-04 09:47:00,622 [DEBUG] tarzan.data.enricher: Cache hit for MTUM
+2026-05-04 09:47:00,624 [DEBUG] tarzan.data.enricher: Cache hit for QUAL
+2026-05-04 09:47:00,627 [DEBUG] tarzan.data.enricher: Cache hit for ^NDX
+2026-05-04 09:47:00,630 [DEBUG] tarzan.data.enricher: Cache hit for ^GSPC
+2026-05-04 09:47:00,633 [INFO] tarzan.orchestrator: Total portfolio value: €80934.80
+2026-05-04 09:47:00,944 [INFO] tarzan.export.excel: Excel dashboard written to output/sample/portfolio_dashboard_20260504_0947.xlsx
+2026-05-04 09:47:00,944 [INFO] tarzan: Dashboard saved to: output/sample/portfolio_dashboard_20260504_0947.xlsx
+2026-05-04 09:47:00,944 [INFO] tarzan: Completed successfully.

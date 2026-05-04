@@ -30,7 +30,8 @@ Thumbs.db
 .kiro/
 
 # Project-specific
-output/
+output/*
+!output/sample/
 input/.cache/
 input/holdings.csv
 build.log

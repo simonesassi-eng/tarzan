@@ -59,17 +59,20 @@ pip install -r requirements.txt
 
 ```bash
 # Minimal run (uses defaults for input_config and output)
-python -m tarzan.main --input_holdings input/holdings.csv
+python -m tarzan.main --input_holdings input/sample/sample_holdings.csv
 
 # Full CLI
 python -m tarzan.main \
-    --input_holdings input/holdings.csv \
-    --input_config input/targets.csv \
-    --output output/
+    --input_holdings input/sample/sample_holdings.csv \
+    --input_config   input/sample/sample_targets.csv \
+    --output         output/sample/
 
 # Streamlit dashboard
 streamlit run tarzan/presentation/app.py
 ```
+
+See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
+[`output/sample/`](../output/sample/) for a pre-generated Excel dashboard.
 
 ## Input
 
