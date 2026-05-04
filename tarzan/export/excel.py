@@ -899,23 +899,23 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
             f"per instrument (max 5 years). \u03b1/\u03b2 computed vs {bench_beta_name}.")
     cell = sheet.cell(row=row, column=1, value=note)
     cell.font = px_font(size=9, italic=True, color=C['text_sec'])
-    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=19)
+    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
     row = 4
 
     # Columns
     all_cols = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y",
                 "cagr", "volatility", "sharpe", "sortino", "max_drawdown",
-                "alpha", "beta", "period_used"]
+                "var_95", "cvar_95", "alpha", "beta", "period_used"]
     all_labels = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y",
                   "CAGR", "Volatility", "Sharpe", "Sortino", "Max DD",
-                  alpha_label, beta_label, "Period Used"]
+                  "VaR 95%", "CVaR 95%", alpha_label, beta_label, "Period Used"]
 
     # Set column widths
     sheet.column_dimensions['A'].width = 42
     sheet.column_dimensions['B'].width = 14
-    for i in range(3, 19):
+    for i in range(3, 21):
         sheet.column_dimensions[get_column_letter(i)].width = 11
-    sheet.column_dimensions[get_column_letter(19)].width = 12
+    sheet.column_dimensions[get_column_letter(21)].width = 12
 
     # Header row
     _apply_header(sheet, row, 1, "Name")
@@ -957,24 +957,65 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
     _apply_subtitle(sheet, row, 1, "Legend — Rating Thresholds")
     row += 1
 
-    legend_headers = ["Metric", "\u25cf Strong", "\u25cf Fair", "\u25cf Weak", "Source"]
+    legend_headers = ["Metric", "Description", "\u25cf Strong", "\u25cf Fair", "\u25cf Weak", "Source"]
+    # Column widths tuned for readability of Description
+    sheet.column_dimensions['A'].width = 22  # Metric
+    sheet.column_dimensions['B'].width = 80  # Description
+    for i in range(3, 6):
+        sheet.column_dimensions[get_column_letter(i)].width = 16
+    sheet.column_dimensions['F'].width = 34  # Source
     for c, h in enumerate(legend_headers, 1):
         _apply_header(sheet, row, c, h)
     row += 1
 
     ratings = cfg.metric_ratings() or {}
     legend_rows = [
-        ("CAGR", "cagr", "Equity risk premium (Dimson et al.)"),
-        (alpha_label, "alpha", "Jensen's Alpha (CAPM)"),
-        (beta_label, "beta", "CAPM, 1.0 = market"),
-        ("Max DD", "max_drawdown", "Retail drawdown tolerance"),
-        ("Volatility", "volatility", "Hist. equity vol ~15%"),
-        ("Sharpe", "sharpe", "Sharpe (1994)"),
-        ("Sortino", "sortino", "Sortino & Price (1994)"),
-        ("VaR 95%", "var_pct", "Basel III (retail adj.)"),
-        ("CVaR 95%", "cvar_pct", "Artzner et al. (1999)"),
+        ("CAGR", "cagr",
+         "Compound Annual Growth Rate. The single yearly return that, if repeated every year, "
+         "would grow your portfolio from start to end value. Accounts for compounding. "
+         "~7% is the long-term global equity average.",
+         "Equity risk premium (Dimson et al.)"),
+        (alpha_label, "alpha",
+         "Extra annual return vs the benchmark, after adjusting for how risky the portfolio is (CAPM). "
+         "Positive = you beat the market beyond what your risk alone justified. "
+         "Negative = you underperformed after fees and noise.",
+         "Jensen's Alpha (CAPM)"),
+        (beta_label, "beta",
+         "How much your portfolio moves when the benchmark moves 1%. β=1 in line, β=0.5 half as "
+         "reactive, β=1.5 amplifies by 50%, β≈0 uncorrelated. Tells you how much systematic "
+         "market risk you're running.",
+         "CAPM, 1.0 = market"),
+        ("Max DD", "max_drawdown",
+         "Maximum Drawdown. Worst peak-to-trough loss over the period — the most painful scenario "
+         "an investor lived through. -20% is typical for diversified equity; deeper drops signal "
+         "concentration or high volatility.",
+         "Retail drawdown tolerance"),
+        ("Volatility", "volatility",
+         "How bumpy the ride is. Annualized standard deviation of daily returns. A 15% vol means "
+         "~±15% year-to-year noise around the average return. Equity indexes ~15–20%, bonds ~3–7%.",
+         "Hist. equity vol ~15%"),
+        ("Sharpe", "sharpe",
+         "Return per unit of risk taken: (CAGR − risk-free rate) / Volatility. "
+         "Above 1 is good, above 2 is excellent, negative means you were paid less than a safe "
+         "bond for the risk you ran.",
+         "Sharpe (1994)"),
+        ("Sortino", "sortino",
+         "Like Sharpe but only penalizes downside volatility (ignores upside swings). More honest "
+         "when returns are asymmetric. Usually higher than Sharpe — the gap shows how much of "
+         "your volatility is actually good volatility.",
+         "Sortino & Price (1994)"),
+        ("VaR 95%", "var_pct",
+         "Value at Risk. The daily loss exceeded only 5% of the time (historical simulation). "
+         "A VaR of -1.2% means on an average month you should expect about one day worse than "
+         "-1.2%. Non-parametric: no normal-distribution assumption.",
+         "Basel III (retail adj.)"),
+        ("CVaR 95%", "cvar_pct",
+         "Conditional VaR, a.k.a. Expected Shortfall. The average loss on the worst 5% of days. "
+         "Always more negative than VaR. Captures tail risk VaR misses — how bad it really gets "
+         "when it goes bad.",
+         "Artzner et al. (1999)"),
     ]
-    for ti, (metric_label, key, source) in enumerate(legend_rows):
+    for ti, (metric_label, key, description, source) in enumerate(legend_rows):
         spec = ratings.get(key, {})
         thresholds = spec.get("thresholds", [None, None])
         labels = spec.get("labels", ["—", "—", "—"])
@@ -991,10 +1032,14 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
             weak = f"< {warn_t}" if warn_t is not None else "—"
 
         _write_data_cell(sheet, row, 1, metric_label, ti)
-        _write_data_cell(sheet, row, 2, strong, ti)
-        _write_data_cell(sheet, row, 3, fair, ti)
-        _write_data_cell(sheet, row, 4, weak, ti)
-        _write_data_cell(sheet, row, 5, source, ti)
+        # Description cell: wrap text for readability
+        desc_cell = _write_data_cell(sheet, row, 2, description, ti)
+        desc_cell.alignment = px_align(h='left', wrap=True)
+        _write_data_cell(sheet, row, 3, strong, ti)
+        _write_data_cell(sheet, row, 4, fair, ti)
+        _write_data_cell(sheet, row, 5, weak, ti)
+        _write_data_cell(sheet, row, 6, source, ti)
+        sheet.row_dimensions[row].height = 48
         row += 1
 
     row += 2
