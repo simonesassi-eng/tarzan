@@ -355,19 +355,21 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     for i, h in enumerate(holdings):
         ac = h.asset_class.value if h.asset_class else "Alternative"
         class_pcts[ac] = class_pcts.get(ac, 0) + new_values[i] / tv * 100
-    ac_details, max_ac = [], 0.0
+    ac_details, ac_items, max_ac = [], [], 0.0
     for ac, target in config.allocation_targets.items():
         actual = class_pcts.get(ac, 0)
         d = abs(actual - target); max_ac = max(max_ac, d)
         ac_details.append(f"{ac} {actual:.1f}% (tgt. {target:.1f}%)")
-    verifications.append({"check": "Asset Allocation",
+        ac_items.append({"category": ac, "actual_pct": actual, "target_pct": target})
+    verifications.append({"check": "Asset Allocation", "kind": "asset",
                           "status": "✓ OK" if max_ac <= tol else "⚠ PARTIAL",
-                          "detail": ", ".join(ac_details)})
+                          "detail": ", ".join(ac_details),
+                          "items": ac_items})
 
     # Geo allocation
     eq_mask = np.array([1.0 if h.asset_class == AssetClass.EQUITIES else 0.0 for h in holdings])
     eq_total = (new_values * eq_mask).sum()
-    geo_details, max_geo = [], 0.0
+    geo_details, geo_items, max_geo = [], [], 0.0
     if eq_total > 0:
         for g_idx, gn in enumerate(all_geos):
             actual = sum(geo_frac[i][g_idx] * new_values[i] for i, h in enumerate(holdings)
@@ -375,24 +377,29 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
             target = config.geo_allocation.get(gn, 0)
             d = abs(actual - target); max_geo = max(max_geo, d)
             geo_details.append(f"{gn} {actual:.1f}% (tgt. {target:.1f}%)")
-    verifications.append({"check": "Geo Allocation",
+            geo_items.append({"category": gn, "actual_pct": actual, "target_pct": target})
+    verifications.append({"check": "Geo Allocation", "kind": "geography",
                           "status": "✓ OK" if max_geo <= tol else "⚠ PARTIAL",
-                          "detail": ", ".join(geo_details)})
+                          "detail": ", ".join(geo_details),
+                          "items": geo_items})
 
     # Per-holding equity
-    ph_details, max_ph = [], 0.0
+    ph_details, ph_items, max_ph = [], [], 0.0
     for i, h in enumerate(holdings):
         if h.target_equities is None or h.asset_class != AssetClass.EQUITIES:
             continue
         actual = new_values[i] / eq_total * 100 if eq_total > 0 else 0
         d = abs(actual - h.target_equities); max_ph = max(max_ph, d)
         ph_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_equities:.0f}%)")
-    verifications.append({"check": "Per-Holding Equity Targets",
+        ph_items.append({"category": h.ticker, "actual_pct": actual,
+                         "target_pct": float(h.target_equities)})
+    verifications.append({"check": "Per-Holding Equity Targets", "kind": "per_holding_equity",
                           "status": "✓ OK" if max_ph <= tol else "⚠ PARTIAL",
-                          "detail": ", ".join(ph_details) or "No targets set"})
+                          "detail": ", ".join(ph_details) or "No targets set",
+                          "items": ph_items})
 
     # Per-holding FI
-    fi_details, max_fi = [], 0.0
+    fi_details, fi_items, max_fi = [], [], 0.0
     fi_mask = np.array([1.0 if h.asset_class == AssetClass.FIXED_INCOME else 0.0 for h in holdings])
     fi_total = (new_values * fi_mask).sum()
     for i, h in enumerate(holdings):
@@ -401,8 +408,11 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         actual = new_values[i] / fi_total * 100 if fi_total > 0 else 0
         d = abs(actual - h.target_fixed_income); max_fi = max(max_fi, d)
         fi_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_fixed_income:.0f}%)")
-    verifications.append({"check": "Per-Holding FI Targets",
+        fi_items.append({"category": h.ticker, "actual_pct": actual,
+                         "target_pct": float(h.target_fixed_income)})
+    verifications.append({"check": "Per-Holding FI Targets", "kind": "per_holding_fi",
                           "status": "✓ OK" if max_fi <= tol else "⚠ PARTIAL",
-                          "detail": ", ".join(fi_details) or "No targets set"})
+                          "detail": ", ".join(fi_details) or "No targets set",
+                          "items": fi_items})
 
     return verifications
