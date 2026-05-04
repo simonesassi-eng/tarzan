@@ -117,6 +117,15 @@ class MetricsEngine:
             ctx["portfolio_history_full"] = pd.Series(dtype=float)
             return
         combined = pd.concat(series_list, axis=1).ffill()
+        # Normalize the index to naive calendar days so that series coming from
+        # different exchanges (with different timezones) align cleanly, and
+        # drop any duplicate days created by timezone offsets.
+        combined.index = (
+            combined.index.tz_convert("UTC").tz_localize(None).normalize()
+            if combined.index.tz is not None
+            else combined.index.normalize()
+        )
+        combined = combined[~combined.index.duplicated(keep="last")]
         # Drop dates where any holding is missing (pre-existence periods)
         combined = combined.dropna(how="any")
         if combined.empty:
