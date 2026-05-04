@@ -1020,16 +1020,26 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
         thresholds = spec.get("thresholds", [None, None])
         labels = spec.get("labels", ["—", "—", "—"])
         invert = spec.get("invert", False)
+        unit = spec.get("unit", "")
         good_t, warn_t = thresholds[0], thresholds[1]
 
+        def fmt(v):
+            return f"{v:.1f}{unit}" if v is not None else "—"
+
         if invert:
-            strong = f"< {abs(good_t):.1f}%" if good_t is not None else "—"
-            fair = f"{abs(warn_t):.1f}% – {abs(good_t):.1f}%" if good_t is not None and warn_t is not None else "—"
-            weak = f"> {abs(warn_t):.1f}%" if warn_t is not None else "—"
+            strong = f"< {fmt(abs(good_t)) if good_t is not None else '—'}"
+            fair = (
+                f"{fmt(abs(warn_t))} – {fmt(abs(good_t))}"
+                if good_t is not None and warn_t is not None else "—"
+            )
+            weak = f"> {fmt(abs(warn_t)) if warn_t is not None else '—'}"
         else:
-            strong = f"> {good_t}" if good_t is not None else "—"
-            fair = f"{warn_t} – {good_t}" if good_t is not None and warn_t is not None else "—"
-            weak = f"< {warn_t}" if warn_t is not None else "—"
+            strong = f"> {fmt(good_t)}"
+            fair = (
+                f"{fmt(warn_t)} – {fmt(good_t)}"
+                if good_t is not None and warn_t is not None else "—"
+            )
+            weak = f"< {fmt(warn_t)}"
 
         _write_data_cell(sheet, row, 1, metric_label, ti)
         # Description cell: wrap text for readability
