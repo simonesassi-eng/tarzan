@@ -457,9 +457,9 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     row += 1
 
     hero_data = [
-        ("Total Value (AuM)", metrics.total_value, None, "currency"),
-        ("Total Gain", total_gain, total_gain, "currency_signed"),
-        ("RTD (Return to Date)", rtd, total_gain, "percent_signed"),
+        ("Total Value (EUR)", metrics.total_value, None, "number"),
+        ("Total Gain (EUR)", total_gain, total_gain, "number_signed"),
+        ("RTD (%)", rtd, total_gain, "number_signed"),
     ]
     for ti, (label, value, gain_for_color, kind) in enumerate(hero_data):
         lcell = sheet.cell(row=row, column=1, value=label)
@@ -475,13 +475,10 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         vcell.fill = _data_fill(ti)
         vcell.border = px_border()
         vcell.alignment = px_align(h='right')
-        if kind == "currency":
-            vcell.number_format = '"€"#,##0.00'
-        elif kind == "currency_signed":
-            vcell.number_format = '"€"+#,##0.00;"€"-#,##0.00;"€"0.00'
-        elif kind == "percent_signed":
-            # rtd is already in percent units (e.g. 33.12 means 33.12 %)
-            vcell.number_format = '+0.00"%";-0.00"%";0.00"%"'
+        if kind == "number":
+            vcell.number_format = '#,##0.00'
+        elif kind == "number_signed":
+            vcell.number_format = '+#,##0.00;-#,##0.00;0.00'
         row += 1
 
     # ALLOCATION
@@ -879,9 +876,9 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             _write_data_cell(sheet, row, 1, s.get("name", ""), ti)
             _write_data_cell(sheet, row, 2, direction, ti, bold=True, font_color=dir_color)
             _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True,
-                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+                             num_fmt='#,##0.00', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 4, pct_of_port, ti, is_number=True,
-                             num_fmt='0.00"%"', font_color=C['text_pri'])
+                             num_fmt='0.00', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 7, s.get("reason", ""), ti)
             row += 1
     else:
@@ -1021,20 +1018,20 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             _write_data_cell(sheet, row, 2,
                              current_pct if current_pct is not None else "",
                              ti, is_number=current_pct is not None,
-                             num_fmt='0.00"%"' if current_pct is not None else None,
+                             num_fmt='0.00' if current_pct is not None else None,
                              font_color=C['text_pri'])
             _write_data_cell(sheet, row, 3,
                              target_pct if target_pct is not None else "",
                              ti, is_number=target_pct is not None,
-                             num_fmt='0.00"%"' if target_pct is not None else None,
+                             num_fmt='0.00' if target_pct is not None else None,
                              font_color=C['text_pri'])
             _write_data_cell(sheet, row, 4,
                              post_pct if post_pct is not None else "",
                              ti, is_number=post_pct is not None,
-                             num_fmt='0.00"%"' if post_pct is not None else None,
+                             num_fmt='0.00' if post_pct is not None else None,
                              font_color=C['text_pri'])
             _write_data_cell(sheet, row, 5, delta_after, ti, is_number=True,
-                             num_fmt='+0.00"%";-0.00"%";0.00"%"', font_color=color)
+                             num_fmt='+0.00;-0.00;0.00', font_color=color)
             _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
             row += 1
 
