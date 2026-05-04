@@ -88,7 +88,9 @@ A `.csv` or `.xlsx` file with the following columns (case-insensitive):
 | `cost_basis_eur`   | float | ✓        | Total cost in EUR               |
 | `market_value_eur` | float | ✓        | Current market value in EUR     |
 | `currency`         | str   | ✓        | Instrument currency             |
-| `usa`, `japan`, `eurozone_emu`, ... | float |  | Geographic breakdown (%) |
+
+Geographic allocation is resolved automatically: first by ticker / ISIN
+lookup in `input/indexes.csv`, then via yfinance fund composition data.
 
 ### Targets (optional)
 

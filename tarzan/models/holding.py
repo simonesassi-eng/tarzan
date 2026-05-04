@@ -75,8 +75,6 @@ class Holding:
     geography: Optional[Geography] = None
     geo_breakdown: Optional[dict[Geography, float]] = None
     geo_source: Optional[str] = None
-    input_geo: Optional[dict[Geography, float]] = None
-    input_geo_source: Optional[str] = None
     sector: Optional[str] = None
     country: Optional[str] = None
     ter: Optional[float] = None
