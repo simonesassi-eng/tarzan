@@ -878,8 +878,10 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             dir_color = C['green'] if direction == "BUY" else C['red']
             _write_data_cell(sheet, row, 1, s.get("name", ""), ti)
             _write_data_cell(sheet, row, 2, direction, ti, bold=True, font_color=dir_color)
-            _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True, num_fmt='"€"#,##0.00')
-            _write_data_cell(sheet, row, 4, pct_of_port, ti, is_number=True, num_fmt='0.00"%"')
+            _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True,
+                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+            _write_data_cell(sheet, row, 4, pct_of_port, ti, is_number=True,
+                             num_fmt='0.00"%"', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 7, s.get("reason", ""), ti)
             row += 1
     else:
@@ -1019,15 +1021,18 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             _write_data_cell(sheet, row, 2,
                              current_pct if current_pct is not None else "",
                              ti, is_number=current_pct is not None,
-                             num_fmt='0.00"%"' if current_pct is not None else None)
+                             num_fmt='0.00"%"' if current_pct is not None else None,
+                             font_color=C['text_pri'])
             _write_data_cell(sheet, row, 3,
                              target_pct if target_pct is not None else "",
                              ti, is_number=target_pct is not None,
-                             num_fmt='0.00"%"' if target_pct is not None else None)
+                             num_fmt='0.00"%"' if target_pct is not None else None,
+                             font_color=C['text_pri'])
             _write_data_cell(sheet, row, 4,
                              post_pct if post_pct is not None else "",
                              ti, is_number=post_pct is not None,
-                             num_fmt='0.00"%"' if post_pct is not None else None)
+                             num_fmt='0.00"%"' if post_pct is not None else None,
+                             font_color=C['text_pri'])
             _write_data_cell(sheet, row, 5, delta_after, ti, is_number=True,
                              num_fmt='+0.00"%";-0.00"%";0.00"%"', font_color=color)
             _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
