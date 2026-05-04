@@ -323,7 +323,7 @@ def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value
     ac_actual = ac_sum / tv * 100
     ac_target = config.allocation_targets.get(ac, 0)
     if abs(ac_actual - ac_target) > 0.5:
-        reasons.append(f"{ac} {ac_actual:.1f}% → {ac_target:.0f}%")
+        reasons.append(f"{ac} at {ac_actual:.1f}% vs target {ac_target:.0f}%")
     if h.asset_class == AssetClass.EQUITIES and eq_value > 0:
         for g_idx, gn in enumerate(all_geos):
             frac = geo_frac[idx][g_idx]
@@ -332,16 +332,20 @@ def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value
                                  if hh.asset_class == AssetClass.EQUITIES) / eq_value * 100
                 geo_target = config.geo_allocation.get(gn, 0)
                 if abs(geo_actual - geo_target) > 0.5:
-                    reasons.append(f"{gn} {geo_actual:.1f}% → {geo_target:.0f}%")
+                    reasons.append(f"{gn} at {geo_actual:.1f}% vs target {geo_target:.0f}%")
     if h.target_equities is not None and eq_value > 0:
         ph_actual = values[idx] / eq_value * 100
         if abs(ph_actual - h.target_equities) > 0.5:
-            reasons.append(f"Holding {ph_actual:.1f}% → {h.target_equities:.0f}% of Eq")
+            reasons.append(
+                f"Holding at {ph_actual:.1f}% vs target {h.target_equities:.0f}% of Equities"
+            )
     fi_val = sum(values[j] for j, hh in enumerate(holdings) if hh.asset_class == AssetClass.FIXED_INCOME)
     if h.target_fixed_income is not None and fi_val > 0:
         ph_actual = values[idx] / fi_val * 100
         if abs(ph_actual - h.target_fixed_income) > 0.5:
-            reasons.append(f"Holding {ph_actual:.1f}% → {h.target_fixed_income:.0f}% of FI")
+            reasons.append(
+                f"Holding at {ph_actual:.1f}% vs target {h.target_fixed_income:.0f}% of FI"
+            )
     return "; ".join(reasons[:3]) if reasons else "Optimization"
 
 
