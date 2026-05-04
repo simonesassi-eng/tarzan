@@ -788,11 +788,11 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
 
     # Column widths
     sheet.column_dimensions['A'].width = 36   # Category / Holding
-    sheet.column_dimensions['B'].width = 16   # Type / Direction
-    sheet.column_dimensions['C'].width = 14   # Current / Amount
-    sheet.column_dimensions['D'].width = 14   # Target
-    sheet.column_dimensions['E'].width = 14   # Delta
-    sheet.column_dimensions['F'].width = 10   # Status icon
+    sheet.column_dimensions['B'].width = 13   # Current %
+    sheet.column_dimensions['C'].width = 13   # Target %
+    sheet.column_dimensions['D'].width = 16   # Post-rebal %
+    sheet.column_dimensions['E'].width = 16   # Delta after rebal
+    sheet.column_dimensions['F'].width = 12   # Status
     sheet.column_dimensions['G'].width = 45   # Reason / Notes
 
     tol = config.rebalancing_threshold if config else 5.0
@@ -894,14 +894,17 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         row += 1
 
     # =====================================================================
-    # ALLOCATION DEVIATIONS
+    # ALLOCATION DEVIATIONS — grouped by type, with post-rebalancing view
     # =====================================================================
     row += 2
     _write_area_header(sheet, row, 1, 7, "ALLOCATION DEVIATIONS")
     row += 1
     subcell = sheet.cell(
         row=row, column=1,
-        value=f"Ordered by |delta|. Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red).",
+        value=(
+            f"Status color based on delta after rebalancing vs target. "
+            f"Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red)."
+        ),
     )
     subcell.font = px_font(size=9, italic=True, color=C['text_sec'])
     subcell.fill = px_fill(C['bg_page'])
@@ -909,29 +912,102 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
     row += 2
 
-    for c, h in enumerate(
-        ["Category", "Type", "Current %", "Target %", "Delta (pp)", "Status", ""], 1
-    ):
-        if h:
-            _apply_header(sheet, row, c, h)
-    row += 1
-
+    # Build current (goal_deltas) lookup by (type, category)
+    current_lookup: dict[tuple[str, str], tuple[float, float]] = {}
     if metrics.goal_deltas is not None and not metrics.goal_deltas.empty:
-        df = metrics.goal_deltas.copy()
-        df["abs_delta"] = df["delta_pct"].abs()
-        df = df.sort_values("abs_delta", ascending=False).drop(columns=["abs_delta"])
-        type_label = {
-            "asset_class": "Asset",
-            "geography (equity only)": "Geography",
-        }
-        for ti, (_, dd) in enumerate(df.iterrows()):
-            cat = dd["category"]
-            tp = type_label.get(dd["type"], dd["type"])
-            actual = float(dd["actual_pct"])
-            target = float(dd["target_pct"])
-            delta = float(dd["delta_pct"])
-            color = _deviation_color(delta, tol)
-            abs_d = abs(delta)
+        for _, gd in metrics.goal_deltas.iterrows():
+            tp = "asset" if gd["type"] == "asset_class" else "geography"
+            current_lookup[(tp, gd["category"])] = (
+                float(gd["actual_pct"]), float(gd["target_pct"]),
+            )
+
+    # Build post-rebalancing lookup by (kind, category)
+    post_lookup: dict[tuple[str, str], tuple[float, float]] = {}
+    if metrics.rebalancing_verifications:
+        for v in metrics.rebalancing_verifications:
+            for it in v.get("items", []) or []:
+                post_lookup[(v["kind"], it["category"])] = (
+                    float(it["actual_pct"]), float(it["target_pct"]),
+                )
+
+    # Define the four groups in the desired order
+    groups = [
+        ("asset", "Asset Allocation", current_lookup),
+        ("geography", "Geography (equity only)", current_lookup),
+        ("per_holding_equity", "Per-Holding Equity Targets", None),
+        ("per_holding_fi", "Per-Holding Fixed Income Targets", None),
+    ]
+
+    for kind, title, current_source in groups:
+        # Collect categories: current_lookup keys for asset/geo, verifications items for per-holding
+        categories: list[str] = []
+        if kind in ("asset", "geography"):
+            categories = [cat for (tp, cat) in current_lookup if tp == kind]
+        else:
+            # per-holding targets only come from the verifications pass
+            for (k, cat) in post_lookup:
+                if k == kind:
+                    categories.append(cat)
+
+        if not categories:
+            continue
+
+        # Group header
+        hdr = sheet.cell(row=row, column=1, value=title)
+        hdr.font = px_font(size=10, bold=True, color=C['text_pri'])
+        hdr.fill = px_fill(C['bg_page'])
+        hdr.alignment = px_align(h='left')
+        hdr.border = px_no_border()
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        row += 1
+
+        # Column headers
+        col_headers = [
+            "Category", "Current %", "Target %",
+            "Post-rebal %", "Delta after rebal (pp)", "Status",
+        ]
+        for c, h in enumerate(col_headers, 1):
+            _apply_header(sheet, row, c, h)
+        row += 1
+
+        # Sort categories by |post-rebal delta|, then by |current delta|, descending
+        def _sort_key(cat: str) -> float:
+            post = post_lookup.get((kind, cat))
+            if post:
+                return abs(post[0] - post[1])
+            curr = current_source.get((kind, cat)) if current_source else None
+            return abs(curr[0] - curr[1]) if curr else 0.0
+
+        categories.sort(key=_sort_key, reverse=True)
+
+        for ti, cat in enumerate(categories):
+            # Current (pre-rebalancing)
+            curr_tuple = current_source.get((kind, cat)) if current_source else None
+            current_pct = curr_tuple[0] if curr_tuple else None
+            # Target + post from verifications (authoritative for per-holding)
+            post_tuple = post_lookup.get((kind, cat))
+            if post_tuple:
+                post_pct, target_pct = post_tuple
+            else:
+                post_pct = None
+                target_pct = curr_tuple[1] if curr_tuple else None
+
+            # When current is not in goal_deltas but we do have a post value
+            # (typical for per-holding targets), use post as current baseline so
+            # the Current column is not empty and confusing.
+            if current_pct is None and post_pct is not None:
+                current_pct = post_pct
+
+            # Delta after rebal drives color and status
+            if post_pct is not None and target_pct is not None:
+                delta_after = post_pct - target_pct
+            elif current_pct is not None and target_pct is not None:
+                delta_after = current_pct - target_pct
+            else:
+                delta_after = 0.0
+
+            color = _deviation_color(delta_after, tol)
+            abs_d = abs(delta_after)
             if abs_d <= tol:
                 status = "\u25cf Aligned"
             elif abs_d <= 2 * tol:
@@ -940,14 +1016,26 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 status = "\u25cf Action"
 
             _write_data_cell(sheet, row, 1, cat, ti)
-            _write_data_cell(sheet, row, 2, tp, ti)
-            _write_data_cell(sheet, row, 3, actual, ti, is_number=True, num_fmt='0.00"%"')
-            _write_data_cell(sheet, row, 4, target, ti, is_number=True, num_fmt='0.00"%"')
-            _write_data_cell(sheet, row, 5, delta, ti, is_number=True,
+            _write_data_cell(sheet, row, 2,
+                             current_pct if current_pct is not None else "",
+                             ti, is_number=current_pct is not None,
+                             num_fmt='0.00"%"' if current_pct is not None else None)
+            _write_data_cell(sheet, row, 3,
+                             target_pct if target_pct is not None else "",
+                             ti, is_number=target_pct is not None,
+                             num_fmt='0.00"%"' if target_pct is not None else None)
+            _write_data_cell(sheet, row, 4,
+                             post_pct if post_pct is not None else "",
+                             ti, is_number=post_pct is not None,
+                             num_fmt='0.00"%"' if post_pct is not None else None)
+            _write_data_cell(sheet, row, 5, delta_after, ti, is_number=True,
                              num_fmt='+0.00"%";-0.00"%";0.00"%"', font_color=color)
             _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
             row += 1
-    else:
+
+        row += 1  # spacer between groups
+
+    if not current_lookup and not post_lookup:
         nocell = sheet.cell(row=row, column=1, value="No targets configured.")
         nocell.font = px_font(size=10, italic=True, color=C['text_sec'])
         nocell.fill = px_fill(C['bg_page'])
