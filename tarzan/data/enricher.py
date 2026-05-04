@@ -123,11 +123,50 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     return pd.Series([1.0], index=[pd.Timestamp.now()])
 
 
+# ---------------------------------------------------------------------------
+# Minor-unit currency normalization (pence, cents, agorot, ...)
+# ---------------------------------------------------------------------------
+# Yahoo Finance quotes some instruments in the "minor unit" of a currency —
+# 1/100 of the major. For example LSE-listed ETFs are often quoted in GBp
+# (Great British pence), not GBP. A price of 28450 "GBp" means 284.50 GBP.
+# If we skip this step, current_value explodes by 100x.
+#
+# Convention: the minor-unit code is the 2-letter currency code followed by
+# a lowercase letter (e.g. GBp, ZAc, ILa). There is no FX pair for these
+# codes on yfinance, so we must rescale to the major unit first.
+_MINOR_TO_MAJOR_CURRENCY: dict[str, str] = {
+    "GBp": "GBP",   # British pence
+    "GBX": "GBP",   # British pence (alternate code, uppercase)
+    "ZAc": "ZAR",   # South African cents
+    "ZAC": "ZAR",
+    "ILa": "ILS",   # Israeli agorot
+    "ILA": "ILS",
+    "ZWL": "ZWL",   # edge case, keep as-is
+}
+
+
+def _normalize_minor_currency(
+    prices: pd.Series, currency: str
+) -> tuple[pd.Series, str]:
+    """Rescale prices quoted in a minor unit to the major currency.
+
+    Returns (prices, currency) where currency is always the major ISO code.
+    If the input currency is not a known minor unit, returns the inputs
+    unchanged.
+    """
+    if currency in _MINOR_TO_MAJOR_CURRENCY and currency != _MINOR_TO_MAJOR_CURRENCY[currency]:
+        major = _MINOR_TO_MAJOR_CURRENCY[currency]
+        logger.debug("Rescaling %s prices to %s (divide by 100)", currency, major)
+        return prices / 100.0, major
+    return prices, currency
+
+
 def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
     """Convert a price series to EUR using the FX rate.
 
     For EUR input, returns prices unchanged. Aligns by date with forward-fill.
     """
+    prices, currency = _normalize_minor_currency(prices, currency)
     if currency == "EUR":
         return prices
     fx = _get_fx_series(currency)
@@ -677,6 +716,8 @@ def _set_price_data(
     """Set price_history and current_price on a holding, with FX conversion."""
     if not history.empty:
         prices = history["Close"].copy()
+        # Normalize minor-unit quotes (e.g. GBp → GBP) before FX conversion
+        prices, currency = _normalize_minor_currency(prices, currency)
         if currency != "EUR":
             prices = convert_to_eur(prices, currency)
         holding.price_history = prices
@@ -684,6 +725,10 @@ def _set_price_data(
     else:
         price = info.get("regularMarketPrice") or info.get("previousClose")
         if price:
+            # Normalize minor-unit quotes first
+            scalar = pd.Series([float(price)])
+            scalar, currency = _normalize_minor_currency(scalar, currency)
+            price = float(scalar.iloc[0])
             if currency != "EUR":
                 fx = _get_fx_series(currency)
                 if not fx.empty:
