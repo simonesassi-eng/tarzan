@@ -7,7 +7,8 @@ Tarzan against the sample portfolio in [`input/sample/`](../../input/sample/).
 
 - **`portfolio_dashboard_sample.xlsx`** — 8-sheet dashboard with KPIs,
   allocations (with traffic-light deviation colors), top holdings,
-  performance, risk, return contribution, and documentation.
+  performance (including VaR / CVaR), risk, return contribution, and
+  documentation.
 - **`sample_run.log`** — full execution log from the run that produced
   the dashboard.
 
