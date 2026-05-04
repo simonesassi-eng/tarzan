@@ -852,23 +852,17 @@ def _apply_openfigi_fallback(holding: Holding) -> None:
 
 
 def _apply_geo_breakdown(holding: Holding) -> None:
-    """Apply geographic breakdown from input CSV or dynamic scraping."""
-    if holding.input_geo:
-        holding.geo_breakdown = holding.input_geo
-        holding.geo_source = holding.input_geo_source or "input_csv"
-        input_geo = holding.input_geo  # local ref avoids None check in lambda
-        holding.geography = max(input_geo, key=lambda g: input_geo[g])
+    """Apply geographic breakdown from index lookup or dynamic scraping."""
+    result = get_geo_breakdown(holding.ticker, holding.isin)
+    if result:
+        breakdown, source = result
+        holding.geo_breakdown = breakdown
+        holding.geo_source = source
+        if breakdown:
+            holding.geography = max(breakdown, key=lambda g: breakdown[g])
     else:
-        result = get_geo_breakdown(holding.ticker, holding.isin)
-        if result:
-            breakdown, source = result
-            holding.geo_breakdown = breakdown
-            holding.geo_source = source
-            if breakdown:
-                holding.geography = max(breakdown, key=lambda g: breakdown[g])
-        else:
-            holding.geo_breakdown = None
-            holding.geo_source = "not_available"
+        holding.geo_breakdown = None
+        holding.geo_source = "not_available"
 
 
 # ---------------------------------------------------------------------------

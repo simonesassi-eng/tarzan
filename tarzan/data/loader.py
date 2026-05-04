@@ -1,8 +1,7 @@
 """Data ingestion: load holdings from CSV/XLSX and investor config from CSV.
 
-Handles column validation, number parsing, optional geo columns,
-and per-holding target columns. Also loads InvestorConfig from CSV
-or returns defaults.
+Handles column validation, number parsing, and per-holding target columns.
+Also loads InvestorConfig from CSV or returns defaults.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from typing import Optional, Union
 
 import pandas as pd
 
-from tarzan.models.holding import Geography, Holding
+from tarzan.models.holding import Holding
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.exceptions import DataIngestionError
 
@@ -23,14 +22,6 @@ logger = logging.getLogger(__name__)
 REQUIRED_COLUMNS = frozenset({
     "isin", "ticker", "quantity", "cost_basis_eur", "market_value_eur", "currency",
 })
-
-_GEO_COLUMNS = {
-    "usa": "USA",
-    "emerging_markets": "Emerging Markets",
-    "eurozone_emu": "Eurozone EMU",
-    "japan": "Japan",
-    "dev_ex_usa_ex_emu_ex_jp": "Dev ex-USA ex-EMU ex-JP",
-}
 
 
 def load_holdings(source: Union[str, io.BytesIO], filename: str = "") -> list[Holding]:
@@ -150,14 +141,6 @@ def _parse_row(idx: int, row: pd.Series, columns) -> Optional[Holding]:
         cost_basis_eur=cost_basis, market_value_eur=market_value, currency=currency,
     )
 
-    # Parse optional geography columns from input
-    geo = _parse_input_geo(row, columns)
-    if geo:
-        holding.input_geo = geo
-        holding.input_geo_source = (
-            str(row.get("source_and_timestamp", "input_csv")).strip() or "input_csv"
-        )
-
     # Parse optional target columns
     if "target_equities" in columns:
         try:
@@ -195,21 +178,3 @@ def _parse_number(val) -> float:
         return float(val)
     s = str(val).strip().replace(",", "")
     return float(s)
-
-
-def _parse_input_geo(row: pd.Series, columns) -> Optional[dict]:
-    geo_lookup = {g.value: g for g in Geography}
-    result = {}
-    has_any = False
-    for col_name, geo_value in _GEO_COLUMNS.items():
-        if col_name in columns:
-            try:
-                pct = _parse_number(row[col_name])
-                if pct > 0:
-                    geo = geo_lookup.get(geo_value)
-                    if geo:
-                        result[geo] = pct
-                        has_any = True
-            except (ValueError, TypeError):
-                pass
-    return result if has_any else None

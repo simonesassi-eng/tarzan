@@ -60,7 +60,6 @@ Holdings are a CSV or XLSX with the following columns (case-insensitive):
 | `cost_basis_eur`   | float | ✓        | Total cost in EUR               |
 | `market_value_eur` | float | ✓        | Current market value in EUR     |
 | `currency`         | str   | ✓        | Instrument currency             |
-| `usa`, `japan`, `eurozone_emu`, ... | float |  | Geographic breakdown (%) |
 
 Targets are an optional CSV with key / value pairs for monthly investment
 capacity, geographic exposure, asset-class targets, and rebalancing thresholds.
