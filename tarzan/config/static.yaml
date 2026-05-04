@@ -83,7 +83,6 @@ sheet_names:
   - Holdings
   - Performance
   - Return Contribution
-  - Documentation
 
 # Number of top/bottom performers shown on Dashboard
 top_and_bottom_performers_count: 7

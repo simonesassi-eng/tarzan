@@ -209,7 +209,7 @@ def asset_class_colors() -> dict[str, str]:
 def sheet_names() -> list[str]:
     return get("sheet_names", [
         "Dashboard", "Optimizer", "Holdings", "Performance",
-        "Return Contribution", "Documentation",
+        "Return Contribution",
     ])
 
 def top_and_bottom_performers_count() -> int:

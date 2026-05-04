@@ -60,7 +60,6 @@ GEO_COLORS = {
 TAB_COLORS = {
     'Dashboard': '5B5BD6', 'Holdings': '1E293B', 'Optimizer': '16A34A',
     'Performance': '2563EB', 'Return Contribution': 'D97706',
-    'Documentation': '64748B',
 }
 
 # KPI value color map
@@ -363,7 +362,6 @@ def generate_excel(
         _write_holdings(workbook, sheets["Holdings"], metrics)
         _write_performance(workbook, sheets["Performance"], metrics)
         _write_analysis(workbook, sheets["Return Contribution"], metrics)
-        _write_documentation(workbook, sheets["Documentation"], metrics)
 
         _set_column_widths(sheets)
 
@@ -415,10 +413,6 @@ def _set_column_widths(sheets: dict) -> None:
     s["Return Contribution"].column_dimensions['A'].width = 35
     for i in range(2, 9):
         s["Return Contribution"].column_dimensions[get_column_letter(i)].width = 14
-
-    s["Documentation"].column_dimensions['A'].width = 22
-    s["Documentation"].column_dimensions['B'].width = 70
-    s["Documentation"].column_dimensions['C'].width = 28
 
 
 # ---------------------------------------------------------------------------
@@ -789,85 +783,220 @@ def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
 
 
 def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: InvestorConfig):
-    """Optimizer: only rebalancing actions + verification (allocations are in Dashboard)."""
+    """Optimizer: status overview, rebalancing actions, consolidated deviations table."""
     _apply_title(sheet, 1, 1, "Portfolio Optimizer")
 
     # Column widths
-    sheet.column_dimensions['A'].width = 45
-    sheet.column_dimensions['B'].width = 12
-    sheet.column_dimensions['C'].width = 14
-    sheet.column_dimensions['D'].width = 12
-    sheet.column_dimensions['E'].width = 45
+    sheet.column_dimensions['A'].width = 36   # Category / Holding
+    sheet.column_dimensions['B'].width = 16   # Type / Direction
+    sheet.column_dimensions['C'].width = 14   # Current / Amount
+    sheet.column_dimensions['D'].width = 14   # Target
+    sheet.column_dimensions['E'].width = 14   # Delta
+    sheet.column_dimensions['F'].width = 10   # Status icon
+    sheet.column_dimensions['G'].width = 45   # Reason / Notes
+
+    tol = config.rebalancing_threshold if config else 5.0
+
+    # =====================================================================
+    # OVERVIEW banner — traffic-light status based on largest deviation
+    # =====================================================================
+    max_abs_delta = 0.0
+    if metrics.goal_deltas is not None and not metrics.goal_deltas.empty:
+        max_abs_delta = float(metrics.goal_deltas["delta_pct"].abs().max())
+    n_actions = len(metrics.rebalancing_suggestions) if metrics.rebalancing_suggestions else 0
+
+    if max_abs_delta <= tol:
+        banner_color = C['green']
+        banner_icon = "\u25cf"  # filled circle
+        banner_text = f"Aligned — all allocations within \u00b1{tol:.1f}%"
+    elif max_abs_delta <= 2 * tol:
+        banner_color = C['amber']
+        banner_icon = "\u25cf"
+        banner_text = (
+            f"Minor drift — largest deviation {max_abs_delta:.1f}%"
+            f" (tolerance \u00b1{tol:.1f}%). Rebalancing optional."
+        )
+    else:
+        banner_color = C['red']
+        banner_icon = "\u25cf"
+        banner_text = (
+            f"Action needed — largest deviation {max_abs_delta:.1f}%"
+            f" (>{2 * tol:.1f}%). Rebalancing recommended."
+        )
+    if n_actions > 0:
+        banner_text += f"  \u00b7  {n_actions} action{'s' if n_actions != 1 else ''} suggested below"
 
     row = 3
+    bcell = sheet.cell(row=row, column=1, value=f"{banner_icon}  {banner_text}")
+    bcell.font = px_font(size=11, bold=True, color=banner_color)
+    bcell.fill = px_fill(C['bg_page'])
+    bcell.alignment = px_align(h='left', v='center')
+    bcell.border = px_no_border()
+    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+    sheet.row_dimensions[row].height = 22
+    row += 2
 
     # =====================================================================
-    # SECTION: REBALANCING ACTIONS (includes lump sum if configured)
+    # REBALANCING ACTIONS
     # =====================================================================
-    header = "REBALANCING ACTIONS"
+    header_parts = ["REBALANCING ACTIONS"]
     if config.rebalancing_lump_sum_amount > 0:
-        header = f"REBALANCING + LUMP SUM ALLOCATION ({_format_number(config.rebalancing_lump_sum_amount)} EUR)"
+        header_parts.append(
+            f"lump sum {_format_number(config.rebalancing_lump_sum_amount)} EUR"
+        )
     if config.rebalancing_no_sell:
-        header += " — NO SELL"
-    _write_area_header(sheet, row, 1, 5, header)
+        header_parts.append("no-sell mode")
+    _write_area_header(sheet, row, 1, 7, " \u00b7 ".join(header_parts))
     row += 1
 
-    # Summary line
     if metrics.rebalancing_suggestions:
         total_buy = sum(s["amount_eur"] for s in metrics.rebalancing_suggestions if s["direction"] == "buy")
         total_sell = sum(s["amount_eur"] for s in metrics.rebalancing_suggestions if s["direction"] == "sell")
-        summary = f"Total BUY: {_format_number(total_buy)} EUR  ·  Total SELL: {_format_number(total_sell)} EUR  ·  Net: {_format_number(total_buy - total_sell)} EUR"
-        cell = sheet.cell(row=row, column=1, value=summary)
-        cell.font = px_font(size=10, bold=True, color=C['text_sec'])
-        cell.fill = px_fill(C['bg_page'])
-        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+        summary = (
+            f"Total BUY: {_format_number(total_buy)} EUR"
+            f"  \u00b7  Total SELL: {_format_number(total_sell)} EUR"
+            f"  \u00b7  Net: {_format_number(total_buy - total_sell)} EUR"
+        )
+        scell = sheet.cell(row=row, column=1, value=summary)
+        scell.font = px_font(size=10, bold=True, color=C['text_sec'])
+        scell.fill = px_fill(C['bg_page'])
+        scell.alignment = px_align(h='left')
+        scell.border = px_no_border()
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 2
 
-        for c, h in enumerate(["Holding", "Direction", "Amount EUR", "", "Reason"], 1):
+        for c, h in enumerate(
+            ["Holding", "Direction", "Amount (EUR)", "% of Portfolio", "", "", "Reason"], 1
+        ):
             if h:
                 _apply_header(sheet, row, c, h)
         row += 1
+        total_value = metrics.total_value or 1.0
         for ti, s in enumerate(metrics.rebalancing_suggestions):
-            prefix = "\u2192 " if s["direction"] == "buy" else ""
-            _write_data_cell(sheet, row, 1, f"{prefix}{s['name']}", ti)
-            _write_data_cell(sheet, row, 2, s["direction"].upper(), ti)
-            _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True, num_fmt='#,##0.00')
-            _write_data_cell(sheet, row, 5, s.get("reason", ""), ti)
+            direction = s["direction"].upper()
+            pct_of_port = (s["amount_eur"] / total_value) * 100 if total_value > 0 else 0
+            dir_color = C['green'] if direction == "BUY" else C['red']
+            _write_data_cell(sheet, row, 1, s.get("name", ""), ti)
+            _write_data_cell(sheet, row, 2, direction, ti, bold=True, font_color=dir_color)
+            _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True, num_fmt='"€"#,##0.00')
+            _write_data_cell(sheet, row, 4, pct_of_port, ti, is_number=True, num_fmt='0.00"%"')
+            _write_data_cell(sheet, row, 7, s.get("reason", ""), ti)
             row += 1
     else:
-        _write_data_cell(sheet, row, 1, "No rebalancing needed — portfolio is aligned with targets", 0)
+        nocell = sheet.cell(
+            row=row, column=1,
+            value="No actions within the current tolerance and no-sell / min-transaction constraints.",
+        )
+        nocell.font = px_font(size=10, italic=True, color=C['text_sec'])
+        nocell.fill = px_fill(C['bg_page'])
+        nocell.border = px_no_border()
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 1
 
     # =====================================================================
-    # VERIFICATION
+    # ALLOCATION DEVIATIONS
     # =====================================================================
+    row += 2
+    _write_area_header(sheet, row, 1, 7, "ALLOCATION DEVIATIONS")
+    row += 1
+    subcell = sheet.cell(
+        row=row, column=1,
+        value=f"Ordered by |delta|. Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red).",
+    )
+    subcell.font = px_font(size=9, italic=True, color=C['text_sec'])
+    subcell.fill = px_fill(C['bg_page'])
+    subcell.border = px_no_border()
+    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+    row += 2
+
+    for c, h in enumerate(
+        ["Category", "Type", "Current %", "Target %", "Delta (pp)", "Status", ""], 1
+    ):
+        if h:
+            _apply_header(sheet, row, c, h)
+    row += 1
+
+    if metrics.goal_deltas is not None and not metrics.goal_deltas.empty:
+        df = metrics.goal_deltas.copy()
+        df["abs_delta"] = df["delta_pct"].abs()
+        df = df.sort_values("abs_delta", ascending=False).drop(columns=["abs_delta"])
+        type_label = {
+            "asset_class": "Asset",
+            "geography (equity only)": "Geography",
+        }
+        for ti, (_, dd) in enumerate(df.iterrows()):
+            cat = dd["category"]
+            tp = type_label.get(dd["type"], dd["type"])
+            actual = float(dd["actual_pct"])
+            target = float(dd["target_pct"])
+            delta = float(dd["delta_pct"])
+            color = _deviation_color(delta, tol)
+            abs_d = abs(delta)
+            if abs_d <= tol:
+                status = "\u25cf Aligned"
+            elif abs_d <= 2 * tol:
+                status = "\u25cf Drift"
+            else:
+                status = "\u25cf Action"
+
+            _write_data_cell(sheet, row, 1, cat, ti)
+            _write_data_cell(sheet, row, 2, tp, ti)
+            _write_data_cell(sheet, row, 3, actual, ti, is_number=True, num_fmt='0.00"%"')
+            _write_data_cell(sheet, row, 4, target, ti, is_number=True, num_fmt='0.00"%"')
+            _write_data_cell(sheet, row, 5, delta, ti, is_number=True,
+                             num_fmt='+0.00"%";-0.00"%";0.00"%"', font_color=color)
+            _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
+            row += 1
+    else:
+        nocell = sheet.cell(row=row, column=1, value="No targets configured.")
+        nocell.font = px_font(size=10, italic=True, color=C['text_sec'])
+        nocell.fill = px_fill(C['bg_page'])
+        nocell.border = px_no_border()
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        row += 1
+
+    # =====================================================================
+    # SOLVER INFO
+    # =====================================================================
+    row += 2
+    _write_area_header(sheet, row, 1, 7, "SOLVER PARAMETERS")
+    row += 1
+
+    tol_used = None
     if metrics.rebalancing_verifications:
-        row += 2
-        _apply_subtitle(sheet, row, 1, "Post-Rebalancing Verification")
-        row += 1
-
         tol_used = metrics.rebalancing_verifications[0].get("tolerance")
-        if tol_used is not None:
-            cell = sheet.cell(row=row, column=1, value=f"Solver tolerance: \u00b1{tol_used:.1f}%")
-            cell.font = px_font(size=9, bold=True, color=C['text_sec'])
-            cell.fill = px_fill(C['bg_page'])
-            sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
-            row += 1
 
-        for ti, v in enumerate(metrics.rebalancing_verifications):
-            status_icon = "\u2713" if v["status"].lower() in ("pass", "ok", "true", "\u2713") else "\u2717"
-            cell = sheet.cell(row=row, column=1, value=f"{status_icon}  {v['check']}")
-            cell.font = px_font(size=9, bold=True, color=C['text_sec'])
-            cell.fill = px_fill(C['bg_page'])
-            sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
-            row += 1
-            items = [item.strip() for item in v["detail"].split(",") if item.strip()]
-            for item in items:
-                cell = sheet.cell(row=row, column=1, value=f"    {item}")
-                cell.font = px_font(size=9, italic=True, color=C['text_sec'])
-                cell.fill = px_fill(C['bg_page'])
-                sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
-                row += 1
+    info_rows = [
+        ("Alert threshold",
+         f"\u00b1{tol:.1f}%",
+         "Deviation at which a category turns amber (green below, red beyond 2\u00d7)"),
+        ("Solver tolerance",
+         (f"\u00b1{tol_used:.1f}%" if tol_used is not None else "n/a"),
+         "Actual tolerance the optimizer converged at (progressive up to max)"),
+        ("Max tolerance",
+         f"\u00b1{config.rebalancing_max_tolerance:.1f}%",
+         "Cap on solver tolerance (from config.rebalancing_max_tolerance)"),
+        ("Min transaction",
+         f"{_format_number(config.rebalancing_min_transaction_eur)} EUR",
+         "Trades below this amount are skipped"),
+        ("Lump sum",
+         (f"{_format_number(config.rebalancing_lump_sum_amount)} EUR"
+          if config.rebalancing_lump_sum_amount > 0 else "—"),
+         "Additional cash to deploy in the rebalance"),
+        ("No-sell mode",
+         ("enabled" if config.rebalancing_no_sell else "disabled"),
+         "If enabled, the solver can only buy, never sell"),
+    ]
+
+    for c, h in enumerate(["Parameter", "Value", "", "", "", "", "Description"], 1):
+        if h:
+            _apply_header(sheet, row, c, h)
+    row += 1
+    for ti, (param, value, desc) in enumerate(info_rows):
+        _write_data_cell(sheet, row, 1, param, ti, bold=True)
+        _write_data_cell(sheet, row, 2, value, ti)
+        _write_data_cell(sheet, row, 7, desc, ti)
+        row += 1
 
     row += 1
     _write_footer(sheet, row, 1)
@@ -1322,89 +1451,3 @@ def _write_benchmark(workbook, sheet, metrics: PortfolioMetrics):
     row += 2
     _write_footer(sheet, row, 1)
 
-
-def _write_documentation(workbook, sheet, metrics: PortfolioMetrics):
-    """Documentation: descriptions and calculations for all metrics."""
-    _apply_title(sheet, 1, 1, "Metrics Documentation")
-    row = 3
-
-    rfr = cfg.risk_free_rate()
-    td = cfg.trading_days()
-
-    hist_info = "N/A"
-    if metrics.portfolio_history is not None and len(metrics.portfolio_history) > 1:
-        days = (metrics.portfolio_history.index[-1] - metrics.portfolio_history.index[0]).days
-        hist_info = f"{days / 365.25:.1f} years ({days} calendar days)"
-
-    _apply_header(sheet, row, 1, "Metric")
-    _apply_header(sheet, row, 2, "Description & Calculation")
-    _apply_header(sheet, row, 3, "Timeframe / Parameters")
-    row += 1
-
-    docs = [
-        ("Total Value (EUR)",
-         "Sum of current market values of all holdings, converted to EUR.",
-         "Point-in-time (today)"),
-        ("YTD Return",
-         "Year-to-date return. Formula: (Current Value / Value at Jan 1) - 1.",
-         "Jan 1 of current year to today"),
-        ("CAGR",
-         "Compound Annual Growth Rate. Formula: (End/Start)^(1/years) - 1. "
-         "Measures mean annual growth rate assuming constant compounding.",
-         f"Full history: {hist_info}"),
-        ("Sharpe Ratio",
-         "Risk-adjusted return. Formula: (Return - Rf) / Volatility. Higher is better.",
-         f"Risk-free rate: {rfr:.1%}. Period: {hist_info}"),
-        ("Sortino Ratio",
-         "Downside risk-adjusted return. Uses only negative returns for deviation. "
-         "Formula: (Return - Rf) / Downside Deviation.",
-         f"Risk-free rate: {rfr:.1%}. Period: {hist_info}"),
-        ("Volatility",
-         f"Annualized std dev of daily returns. Formula: StdDev(daily) x sqrt({td}).",
-         f"Period: {hist_info}. Trading days/year: {td}"),
-        ("Max Drawdown",
-         "Largest peak-to-trough decline. Formula: min((V - CumMax) / CumMax).",
-         f"Period: {hist_info}"),
-        ("VaR (95%)",
-         "Value at Risk via historical simulation. The 5th percentile of daily returns. "
-         "Non-parametric: no distributional assumptions, robust for fat tails.",
-         f"Period: {hist_info}. Confidence: 95%"),
-        ("CVaR (95%)",
-         "Conditional VaR (Expected Shortfall). Average loss beyond VaR threshold. "
-         "A coherent risk measure per Artzner et al. (1999), preferred for tail risk.",
-         f"Period: {hist_info}. Confidence: 95%"),
-        ("Beta",
-         "CAPM sensitivity to market. Formula: Cov(Rp, Rb) / Var(Rb). Beta=1 means same as market.",
-         f"Benchmark: S&P 500. Period: {hist_info}"),
-        ("Alpha",
-         "Jensen's Alpha. Excess return vs CAPM expected. "
-         "Formula: Rp - [Rf + Beta x (Rb - Rf)].",
-         f"Benchmark: S&P 500. Risk-free rate: {rfr:.1%}"),
-        ("Weighted Yield",
-         "Portfolio-weighted average dividend/coupon yield.",
-         "Based on latest yield data from yfinance"),
-        ("Geography Allocation",
-         "Geographic exposure of equity holdings only. Multi-geo ETFs split proportionally.",
-         "Equity only. Sources: justETF, index_geo_allocation.csv, yfinance"),
-        ("Rebalancing Amount",
-         "Suggested trade amount to reach target. Asset class: total value. Geography: equity value.",
-         "Threshold from config (rebalancing_threshold)"),
-    ]
-
-    for ti, (metric, desc, timeframe) in enumerate(docs):
-        _write_data_cell(sheet, row, 1, metric, ti)
-        cell_desc = sheet.cell(row=row, column=2, value=desc)
-        cell_desc.fill = _data_fill(ti)
-        cell_desc.border = px_border()
-        cell_desc.font = px_font(size=10, color=C['text_pri'])
-        cell_desc.alignment = px_align(h='left', v='top', wrap=True)
-        cell_tf = sheet.cell(row=row, column=3, value=timeframe)
-        cell_tf.fill = _data_fill(ti)
-        cell_tf.border = px_border()
-        cell_tf.font = px_font(size=10, color=C['text_pri'])
-        cell_tf.alignment = px_align(h='left', v='top', wrap=True)
-        sheet.row_dimensions[row].height = 45
-        row += 1
-
-    row += 2
-    _write_footer(sheet, row, 1)
