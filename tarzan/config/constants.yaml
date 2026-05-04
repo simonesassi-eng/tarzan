@@ -27,35 +27,44 @@ metric_ratings:
   cagr:
     thresholds: [7.0, 3.0]          # >7% green, 3-7% amber, <3% red (equity risk premium ~5-7%)
     labels: ["Strong", "Fair", "Weak"]
+    unit: "%"
   alpha:
     thresholds: [0.0, -1.0]         # >0% green, -1-0% amber, <-1% red (Jensen's Alpha)
     labels: ["Beating Mkt", "Neutral", "Lagging"]
+    unit: "%"
   max_drawdown:                      # lower-is-better (absolute value)
     thresholds: [-15.0, -30.0]       # >-15% green, -15/-30% amber, <-30% red
     labels: ["Contained", "Moderate", "Severe"]
     invert: true
+    unit: "%"
   volatility:                        # lower-is-better
     thresholds: [10.0, 18.0]        # <10% green, 10-18% amber, >18% red (equity vol ~15%)
     labels: ["Low", "Moderate", "High"]
     invert: true
-  beta:                              # lower-is-better
+    unit: "%"
+  beta:                              # higher = more market risk
     thresholds: [0.7, 1.0]          # <0.7 green, 0.7-1 amber, >1 red (CAPM)
     labels: ["Defensive", "Neutral", "Aggressive"]
     invert: true
+    unit: ""
   sharpe:
     thresholds: [1.0, 0.5]          # >1 green, 0.5-1 amber, <0.5 red (Sharpe 1994)
     labels: ["Strong", "Fair", "Weak"]
+    unit: ""
   sortino:
     thresholds: [1.5, 0.7]          # >1.5 green, 0.7-1.5 amber, <0.7 red (Sortino & Price 1994)
     labels: ["Strong", "Fair", "Weak"]
+    unit: ""
   var_pct:                           # lower-is-better (% of AuM)
     thresholds: [0.8, 1.5]          # <0.8% green, 0.8-1.5% amber, >1.5% red (Basel III adj)
     labels: ["Low", "Moderate", "Elevated"]
     invert: true
+    unit: "%"
   cvar_pct:                          # lower-is-better (% of AuM)
     thresholds: [1.2, 2.0]          # <1.2% green, 1.2-2% amber, >2% red (Artzner 1999)
     labels: ["Low", "Moderate", "Elevated"]
     invert: true
+    unit: "%"
 
 
 # =============================================================================
