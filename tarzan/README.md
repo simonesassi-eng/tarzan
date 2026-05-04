@@ -1,154 +1,157 @@
-# Tarzan v2.0
+# Tarzan — Package Reference
 
-Motore di analisi portafoglio production-ready con arricchimento dati di mercato in tempo reale e dashboard Excel professionale.
+Technical reference for the `tarzan` Python package. For an overview and
+quickstart, see the [root README](../README.md).
 
-## Architettura
+## Architecture
 
 ```
 tarzan/
 ├── __init__.py                  # Package root, versioning
-├── main.py                      # CLI entry point (pipeline orchestrator)
+├── main.py                      # CLI entry point
+├── orchestrator.py              # Pipeline: load → enrich → compute
+├── exceptions.py                # Domain exception hierarchy (TarzanError)
 ├── config/
 │   ├── __init__.py              # Configuration loader (YAML → typed accessors)
-│   ├── constants.yaml           # Tunable parameters (risk-free rate, benchmarks, etc.)
-│   └── static.yaml              # Rarely-changed mappings (exchanges, colors, etc.)
+│   ├── constants.yaml           # Tunable parameters (risk-free rate, benchmarks, ...)
+│   └── static.yaml              # Rarely-changed mappings (exchanges, colors, ...)
 ├── models/
-│   ├── __init__.py              # Model exports
-│   ├── holding.py               # Holding dataclass, AssetClass/Geography enums
+│   ├── holding.py               # Holding dataclass, AssetClass / Geography enums
 │   ├── investor_config.py       # InvestorConfig with CSV deserialization
 │   └── portfolio.py             # PortfolioMetrics (output DTO)
-├── utils/
-│   ├── __init__.py              # Utility module docs
-│   ├── exceptions.py            # Domain-specific exception hierarchy
-│   ├── holdings_loader.py       # Data Ingestion: CSV/XLSX → list[Holding]
-│   ├── config_loader.py         # Config loading facade
-│   ├── data_fetcher.py          # Data Enrichment: yfinance, OpenFIGI, FX, classification
-│   ├── geo_scraper.py           # Geographic allocation: justETF + MSCI factsheets
-│   ├── calculators.py           # Metric Computation: performance, risk, allocations
-│   └── excel_generator.py       # Reporting: 8-sheet Excel dashboard
-├── data/                        # Sample input files
-│   ├── config_sample.csv
-│   └── holdings_fineco_021726.csv
-├── tests/
-│   ├── __init__.py
-│   └── conftest.py
-├── output/                      # Generated dashboards and logs
-└── requirements.txt
+├── data/
+│   ├── loader.py                # CSV / XLSX → list[Holding], config parsing
+│   ├── enricher.py              # yfinance, FX, classification, backtest period
+│   ├── geo_resolver.py          # Geographic allocation resolver
+│   ├── bond_fetcher.py          # Borsa Italiana bond fallback scraper
+│   └── cache.py                 # Local cache for enriched data
+├── engine/
+│   ├── metrics.py               # MetricsEngine: performance, risk, allocations
+│   └── rebalancer.py            # Mixed-integer rebalancing optimizer
+├── export/
+│   └── excel.py                 # 8-sheet Excel dashboard generator
+├── presentation/
+│   ├── app.py                   # Streamlit entry point
+│   ├── charts.py                # Plotly chart factories (donut, line, drawdown)
+│   ├── formatters.py            # Number / currency / percent formatters
+│   ├── assets/                  # Logo and static assets
+│   └── views/                   # Per-page Streamlit views
+│       ├── dashboard.py
+│       ├── holdings.py
+│       ├── optimizer.py
+│       ├── performance.py
+│       ├── contribution.py
+│       └── documentation.py
+└── tests/                       # Pytest suite
+    ├── conftest.py
+    ├── test_loader.py
+    ├── test_metrics.py
+    └── test_rebalancer.py
 ```
 
-## Installazione
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Utilizzo
+## Usage
 
 ```bash
-# Base (con defaults)
-python -m tarzan.main --input_holdings data/holdings_fineco_021726.csv
+# Minimal run (uses defaults for input_config and output)
+python -m tarzan.main --input_holdings input/holdings.csv
 
-# Completo
+# Full CLI
 python -m tarzan.main \
-    --input_holdings data/holdings_fineco_021726.csv \
-    --input_config data/config_sample.csv \
+    --input_holdings input/holdings.csv \
+    --input_config input/targets.csv \
     --output output/
+
+# Streamlit dashboard
+streamlit run tarzan/presentation/app.py
 ```
 
 ## Input
 
-### Holdings (obbligatorio)
+### Holdings (required)
 
-`.xlsx` o `.csv` con colonne (case-insensitive):
+A `.csv` or `.xlsx` file with the following columns (case-insensitive):
 
-| Colonna | Tipo | Obbligatorio | Descrizione |
-|---------|------|:---:|-------------|
-| isin | str | ✓ | Codice ISIN a 12 caratteri |
-| ticker | str | ✓ | Ticker Yahoo Finance |
-| quantity | float | ✓ | Numero di unità (>0) |
-| cost_basis_eur | float | ✓ | Costo totale in EUR |
-| market_value_eur | float | ✓ | Valore di mercato in EUR |
-| currency | str | ✓ | Valuta dello strumento |
-| usa, japan, eurozone_emu, ... | float | | Breakdown geografico (%) |
+| Column             | Type  | Required | Description                     |
+|--------------------|-------|:--------:|---------------------------------|
+| `isin`             | str   | ✓        | 12-character ISIN code          |
+| `ticker`           | str   | ✓        | Yahoo Finance ticker            |
+| `quantity`         | float | ✓        | Number of units (> 0)           |
+| `cost_basis_eur`   | float | ✓        | Total cost in EUR               |
+| `market_value_eur` | float | ✓        | Current market value in EUR     |
+| `currency`         | str   | ✓        | Instrument currency             |
+| `usa`, `japan`, `eurozone_emu`, ... | float |  | Geographic breakdown (%) |
 
-### Config (opzionale)
+### Targets (optional)
 
-`config.csv` con coppie chiave-valore:
+A `targets.csv` with key / value pairs:
 
-| Chiave | Default | Descrizione |
-|--------|---------|-------------|
-| monthly_invest_capacity | 0 | Budget mensile EUR |
-| geo_exposure | 20% ciascuno | JSON: target allocazione geografica |
-| allocation_targets | Equity 65%... | JSON: target asset class |
-| rebalancing_threshold | 5.0 | Soglia ribilanciamento (%) |
+| Key                       | Default        | Description                              |
+|---------------------------|----------------|------------------------------------------|
+| `monthly_invest_capacity` | `0`            | Monthly investment budget in EUR         |
+| `geo_exposure`            | 20% each       | JSON: target geographic allocation       |
+| `allocation_targets`      | Equity 65% ... | JSON: target asset-class allocation      |
+| `rebalancing_threshold`   | `5.0`          | Rebalancing deviation threshold (%)      |
 
-## Metriche Finanziarie
+## Financial metrics
 
 ### Performance
-- CAGR, YTD, rendimenti periodici (1d–5y), IRR
+- CAGR, YTD, periodic returns (1d to 5y), IRR
 
-### Risk (cutting-edge)
-- **Sharpe Ratio**: rendimento risk-adjusted (excess return / volatilità)
-- **Sortino Ratio**: penalizza solo la volatilità al ribasso
-- **Max Drawdown**: massima perdita peak-to-trough
-- **VaR (95%)**: Value at Risk via simulazione storica (non-parametrico)
-- **CVaR (95%)**: Expected Shortfall — media delle perdite oltre il VaR (misura coerente di rischio, Artzner et al. 1999)
-- **Volatilità Realizzata**: rolling window annualizzata
-- **Beta / Alpha**: CAPM vs S&P 500
+### Risk
+- **Sharpe ratio** — risk-adjusted return (excess return / volatility)
+- **Sortino ratio** — penalizes downside volatility only
+- **Max drawdown** — largest peak-to-trough loss
+- **VaR (95%)** — Value at Risk via historical simulation (non-parametric)
+- **CVaR (95%)** — Expected Shortfall, the mean loss beyond VaR (a coherent
+  risk measure, Artzner et al. 1999)
+- **Realized volatility** — annualized rolling window
+- **Beta / Alpha** — CAPM vs S&P 500
 
-### Allocazioni
-- Per asset class, geografia (solo equity), settore
-- Supporto ETF multi-geografia con split proporzionale
-- Delta vs target con suggerimenti di ribilanciamento
+### Allocations
+- By asset class, geography (equity only), and sector
+- Multi-geography ETFs split proportionally
+- Delta vs target with rebalancing suggestions
 
-### Benchmark
-- Confronto con 20+ benchmark (S&P 500, ACWI, VTI, AVUV, etc.)
-- Analisi what-if: valore ipotetico se investito in ciascun benchmark
+### Benchmarks
+- Comparison against 20+ indexes (S&P 500, ACWI, VTI, AVUV, ...)
+- What-if analysis: hypothetical value if invested in each benchmark
 
 ## Output
 
-`portfolio_dashboard_[YYYYMMDD].xlsx` con 8 fogli:
+Excel file `portfolio_dashboard_[YYYYMMDD_HHMM].xlsx` with 8 sheets:
 
-1. **Dashboard** — KPI (inclusi VaR/CVaR), donut chart, top/bottom performers, goals
-2. **Holdings** — Tabella completa arricchita con fonti dati e timestamp
-3. **Allocations** — Pie/bar chart con actual vs target
-4. **Performance** — Rendimenti cumulativi, griglie per periodo, overlay holdings
-5. **Risk** — Metriche di rischio complete, drawdown chart, scatter risk-return
-6. **Multi-Purpose Analysis** — Contribuzione al rendimento, breakdown, azioni di ribilanciamento
-7. **Benchmark** — Confronto vs 20+ benchmark, performance cumulativa, what-if
-8. **Documentation** — Descrizione e formula di ogni metrica
+1. **Dashboard** — KPIs (VaR / CVaR included), donut chart, top / bottom
+   performers, goals
+2. **Holdings** — Full enriched table with data sources and timestamps
+3. **Allocations** — Pie / bar charts with actual vs target
+4. **Performance** — Cumulative returns, per-period grids, holdings overlay
+5. **Risk** — Full risk metrics, drawdown chart, risk-return scatter
+6. **Multi-Purpose Analysis** — Return contribution, breakdowns, rebalancing
+   actions
+7. **Benchmark** — Comparison vs 20+ benchmarks, cumulative performance,
+   what-if
+8. **Documentation** — Description and formula for every metric
 
-## Principali Migliorie (v1 → v2)
+## Exception hierarchy
 
-1. **Metriche cutting-edge**: aggiunta VaR (95%), CVaR/Expected Shortfall (95%), volatilità realizzata rolling
-2. **Gerarchia eccezioni**: `TarzanError` con sottoclassi specifiche per dati finanziari
-3. **Principi SOLID/DRY**: funzioni estratte e riutilizzabili, classificazione modulare, zero duplicazione
-4. **Documentazione Google-style**: ogni funzione documentata con Args/Returns/Raises
-5. **Commenti matematici**: spiegazione del "perché" dietro VaR storico vs parametrico, CVaR come misura coerente
-6. **Error handling robusto**: isolamento errori per-holding, fallback graceful, logging granulare
-7. **Output serializzabile**: `PortfolioMetrics.to_summary_dict()` per integrazione API/pipeline
-8. **Dead code rimosso**: eliminati parametri ridondanti, variabili inutilizzate, import superflui
-9. **Type safety**: annotazioni complete, guard clause per None, dict tipizzati
-10. **Modello Holding arricchito**: metodi `is_enriched()` e `unrealized_gain_eur()`
+All domain errors inherit from `TarzanError`:
 
-## Struttura Futura Consigliata
+- `TarzanError` — base class
+- `DataIngestionError` — input data cannot be loaded or parsed
+- `DataEnrichmentError` — market data enrichment failed for a holding
+- `InsufficientDataError` — not enough data to compute a metric
+- `MetricCalculationError` — numerical error in a metric calculation
+- `ClassificationError` — instrument cannot be classified
+- `ConfigurationError` — invalid or missing configuration
 
-```
-tarzan/
-├── core/                    # Logica di dominio pura (no I/O)
-│   ├── risk_engine.py       # Motore di rischio standalone (VaR, CVaR, stress test)
-│   ├── optimizer.py         # Mean-variance optimization (Markowitz)
-│   └── scenario_engine.py   # Monte Carlo simulation, stress testing
-├── adapters/                # Interfacce verso sistemi esterni
-│   ├── yfinance_adapter.py  # Astrazione su yfinance
-│   ├── openfigi_adapter.py  # Astrazione su OpenFIGI
-│   └── bloomberg_adapter.py # Futuro: Bloomberg Terminal API
-├── api/                     # REST API layer
-│   └── fastapi_app.py       # Endpoint per integrazione pipeline
-├── streaming/               # Real-time data
-│   └── websocket_feed.py    # Live price updates
-└── tests/
-    ├── unit/
-    ├── integration/
-    └── property/             # Hypothesis-based property tests
+## Testing
+
+```bash
+pytest tarzan/tests/
 ```
