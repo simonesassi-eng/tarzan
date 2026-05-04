@@ -113,6 +113,29 @@ def _num_color(val):
     return C['green'] if val >= 0 else C['red']
 
 
+def _deviation_color(delta_pct, tolerance):
+    """Return a traffic-light color based on how far Actual% deviates from Target%.
+
+    Args:
+        delta_pct: Actual - Target (percentage points, signed).
+        tolerance: Alert threshold in percentage points (from config.rebalancing_threshold).
+
+    Returns:
+        Green if |delta| <= tolerance, amber if within 2× tolerance, red beyond.
+        Neutral text color if delta or tolerance are unavailable.
+    """
+    if delta_pct is None or (isinstance(delta_pct, float) and pd.isna(delta_pct)):
+        return C['text_pri']
+    if tolerance is None or tolerance <= 0:
+        return C['text_pri']
+    abs_delta = abs(delta_pct)
+    if abs_delta <= tolerance:
+        return C['green']
+    if abs_delta <= 2 * tolerance:
+        return C['amber']
+    return C['red']
+
+
 def _apply_title(ws, row, col, text):
     """LIVELLO 1 — Sheet title."""
     cell = ws.cell(row=row, column=col, value=text)
@@ -146,13 +169,16 @@ def _data_fill(table_idx):
 
 
 def _write_data_cell(ws, row, col, value, table_idx, is_number=False, bold=False,
-                     asset_class=None, geography=None, num_fmt=None):
+                     asset_class=None, geography=None, num_fmt=None, font_color=None):
     """Write a data cell with proper Clean Premium styling."""
     cell = ws.cell(row=row, column=col, value=value)
     cell.fill = _data_fill(table_idx)
     cell.border = px_border()
 
-    if asset_class and asset_class in ASSET_COLORS:
+    if font_color is not None:
+        cell.font = px_font(size=10, bold=bold or is_number, color=font_color)
+        cell.alignment = px_align(h='center' if is_number else 'left')
+    elif asset_class and asset_class in ASSET_COLORS:
         cell.font = px_font(size=10, bold=True, color=ASSET_COLORS[asset_class])
         cell.alignment = px_align(h='left')
     elif geography and geography in GEO_COLORS:
@@ -437,11 +463,11 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     row += 1
 
     hero_data = [
-        ("Total Value (AuM)", _format_number(metrics.total_value), None),
-        ("Total Gain", _format_number(total_gain), total_gain),
-        ("RTD (Return to Date)", _format_number(rtd, True), total_gain),
+        ("Total Value (AuM)", metrics.total_value, None, "currency"),
+        ("Total Gain", total_gain, total_gain, "currency_signed"),
+        ("RTD (Return to Date)", rtd, total_gain, "percent_signed"),
     ]
-    for ti, (label, value, gain_for_color) in enumerate(hero_data):
+    for ti, (label, value, gain_for_color, kind) in enumerate(hero_data):
         lcell = sheet.cell(row=row, column=1, value=label)
         lcell.font = px_font(size=10, color=C['text_sec'])
         lcell.fill = _data_fill(ti)
@@ -455,6 +481,13 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         vcell.fill = _data_fill(ti)
         vcell.border = px_border()
         vcell.alignment = px_align(h='right')
+        if kind == "currency":
+            vcell.number_format = '"€"#,##0.00'
+        elif kind == "currency_signed":
+            vcell.number_format = '"€"+#,##0.00;"€"-#,##0.00;"€"0.00'
+        elif kind == "percent_signed":
+            # rtd is already in percent units (e.g. 33.12 means 33.12 %)
+            vcell.number_format = '+0.00"%";-0.00"%";0.00"%"'
         row += 1
 
     # ALLOCATION
@@ -476,14 +509,20 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         _apply_header(sheet, header_row, c, h)
     row += 1
 
+    tol = config.rebalancing_threshold if config else 5.0
     if not metrics.allocation_by_class.empty:
         sorted_ac = metrics.allocation_by_class.sort_values("weight_pct", ascending=False)
         for ti, (_, rd) in enumerate(sorted_ac.iterrows()):
             cat = rd["category"]
             target_pct, delta_pct = ac_targets.get(cat, (None, None))
+            dev_color = _deviation_color(delta_pct, tol)
             _write_data_cell(sheet, row, 1, cat, ti, asset_class=cat)
-            _write_data_cell(sheet, row, 2, rd["weight_pct"], ti, is_number=True)
-            _write_data_cell(sheet, row, 3, target_pct if target_pct is not None else "", ti, is_number=target_pct is not None)
+            _write_data_cell(sheet, row, 2, rd["weight_pct"], ti, is_number=True,
+                             font_color=dev_color)
+            _write_data_cell(sheet, row, 3,
+                             target_pct if target_pct is not None else "",
+                             ti, is_number=target_pct is not None,
+                             font_color=C['text_pri'] if target_pct is not None else None)
             row += 1
     ac_end_row = row
 
@@ -497,9 +536,14 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         for ti, (_, rd) in enumerate(sorted_geo.iterrows()):
             cat = rd["category"]
             target_pct, delta_pct = geo_targets.get(cat, (None, None))
+            dev_color = _deviation_color(delta_pct, tol)
             _write_data_cell(sheet, row, 5, cat, ti, geography=cat)
-            _write_data_cell(sheet, row, 6, rd["weight_pct"], ti, is_number=True)
-            _write_data_cell(sheet, row, 7, target_pct if target_pct is not None else "", ti, is_number=target_pct is not None)
+            _write_data_cell(sheet, row, 6, rd["weight_pct"], ti, is_number=True,
+                             font_color=dev_color)
+            _write_data_cell(sheet, row, 7,
+                             target_pct if target_pct is not None else "",
+                             ti, is_number=target_pct is not None,
+                             font_color=C['text_pri'] if target_pct is not None else None)
             row += 1
 
     row = max(row, ac_end_row)
