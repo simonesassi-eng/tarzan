@@ -383,7 +383,24 @@ def _show_welcome():
 
     st.markdown("---")
     st.markdown("#### Get started")
-    st.markdown("Upload your holdings in the sidebar, or click **Load sample data** to try with demo data.")
+
+    holdings_file = st.file_uploader(
+        "📁 Holdings (CSV/XLSX)", type=["csv", "xlsx"], key="holdings_upload_welcome",
+    )
+    targets_file = st.file_uploader(
+        "🎯 Targets (CSV, optional)", type=["csv"], key="targets_upload_welcome",
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🔄 Analyze Portfolio", use_container_width=True, type="primary"):
+            if holdings_file is not None:
+                _run_analysis(holdings_file, targets_file)
+            else:
+                st.warning("Upload a holdings file first.")
+    with col_b:
+        if st.button("📂 Load sample data", use_container_width=True):
+            _run_analysis("input/sample/sample_holdings.csv", "input/sample/sample_targets.csv")
 
 
 if __name__ == "__main__":
