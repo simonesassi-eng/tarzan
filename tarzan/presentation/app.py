@@ -23,7 +23,7 @@ st.set_page_config(
     page_title="Tarzan",
     page_icon=str(_LOGO_PATH) if _LOGO_PATH.exists() else "🦍",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -40,6 +40,7 @@ PAGES = [
 def main():
     _inject_css()
     _sidebar()
+    _mobile_bottom_nav()
 
     if "metrics" not in st.session_state:
         _show_welcome()
@@ -70,15 +71,16 @@ def main():
 
 
 def _inject_css():
-    """Global CSS tweaks for a cleaner dark look."""
+    """Global CSS tweaks — dark look + mobile responsive layout."""
     st.markdown(
         """
         <style>
-        /* Hide Streamlit default chrome */
+        /* ── Hide Streamlit chrome ───────────────────────────────────── */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
+        header {visibility: hidden;}
 
-        /* Custom metric cards */
+        /* ── Metric cards ────────────────────────────────────────────── */
         .metric-card {
             background: linear-gradient(135deg, #161b22 0%, #1e2530 100%);
             border: 1px solid #21262d;
@@ -101,10 +103,74 @@ def _inject_css():
             font-size: 0.7rem;
         }
 
-        /* Nav buttons */
+        /* ── Sidebar nav buttons ─────────────────────────────────────── */
         .stButton button {
             justify-content: flex-start !important;
             text-align: left !important;
+        }
+
+        /* ── Mobile bottom navigation bar ───────────────────────────── */
+        .mobile-nav {
+            display: none;
+        }
+        @media (max-width: 768px) {
+            /* Show bottom nav only on mobile */
+            .mobile-nav {
+                display: flex;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                z-index: 9999;
+                background: #161b22;
+                border-top: 1px solid #21262d;
+                justify-content: space-around;
+                align-items: center;
+                padding: 6px 0 10px;
+            }
+            .mobile-nav a {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                color: #8b949e;
+                text-decoration: none;
+                font-size: 0.6rem;
+                gap: 2px;
+                flex: 1;
+            }
+            .mobile-nav a.active { color: #58a6ff; }
+            .mobile-nav a span.icon { font-size: 1.3rem; }
+
+            /* Extra bottom padding so content clears the nav bar */
+            .block-container {
+                padding-bottom: 80px !important;
+                padding-left: 12px !important;
+                padding-right: 12px !important;
+                padding-top: 1rem !important;
+            }
+
+            /* Stack ALL multi-column layouts vertically */
+            [data-testid="columns"] {
+                flex-direction: column !important;
+                gap: 8px !important;
+            }
+            [data-testid="column"] {
+                width: 100% !important;
+                flex: none !important;
+                min-width: 100% !important;
+            }
+
+            /* Smaller hero value on narrow screens */
+            h1 { font-size: 2rem !important; }
+            .metric-value { font-size: 1.25rem !important; }
+
+            /* Plotly charts: reduce height on mobile */
+            .js-plotly-plot { max-height: 260px; }
+
+            /* Dataframes: allow horizontal scroll */
+            [data-testid="stDataFrame"] {
+                overflow-x: auto !important;
+            }
         }
         </style>
         """,
@@ -217,6 +283,55 @@ def _export_excel():
         st.error(f"Export failed: {e}")
 
 
+def _mobile_bottom_nav():
+    """Sticky bottom navigation bar — visible only on mobile (CSS-gated)."""
+    if "metrics" not in st.session_state:
+        return
+    current = st.session_state.get("page", "Dashboard")
+
+    NAV_ITEMS = [
+        ("📊", "Dashboard"),
+        ("💼", "Holdings"),
+        ("⚖️", "Optimizer"),
+        ("📈", "Performance"),
+        ("🌊", "Contribution"),
+    ]
+
+    # Map display label → actual page name
+    LABEL_TO_PAGE = {
+        "Dashboard": "Dashboard",
+        "Holdings": "Holdings",
+        "Optimizer": "Optimizer",
+        "Performance": "Performance",
+        "Contribution": "Return Contribution",
+    }
+
+    items_html = ""
+    for icon, label in NAV_ITEMS:
+        page_name = LABEL_TO_PAGE[label]
+        active = "active" if page_name == current else ""
+        # Use query_params to trigger page switch via URL anchor
+        items_html += (
+            f"<a href='#' class='{active}' "
+            f"onclick=\"window.location.hash='{label}'; return false;\">"
+            f"<span class='icon'>{icon}</span>{label}</a>"
+        )
+
+    st.markdown(
+        f"<div class='mobile-nav'>{items_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Read hash-based navigation (works on mobile tap)
+    nav_query = st.query_params.get("nav")
+    if nav_query and nav_query in LABEL_TO_PAGE:
+        new_page = LABEL_TO_PAGE[nav_query]
+        if new_page != current:
+            st.session_state["page"] = new_page
+            st.query_params.clear()
+            st.rerun()
+
+
 def _show_welcome():
     """Welcome screen when no data is loaded."""
     import base64
@@ -246,13 +361,25 @@ def _show_welcome():
         unsafe_allow_html=True,
     )
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.info("📈 **Performance**\n\nCAGR, period returns, Sharpe, Sortino, Alpha, Beta vs benchmark")
-    with col2:
-        st.info("⚡ **Risk Analytics**\n\nVaR, CVaR, Max Drawdown, Volatility on 5y horizon")
-    with col3:
-        st.info("⚖️ **Optimizer**\n\nMILP-based rebalancing with lump sum, min transaction, freeze rules")
+    st.markdown(
+        """
+        <div style='display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 8px;'>
+            <div style='background:#161b22; border:1px solid #21262d; border-radius:12px; padding:16px;'>
+                <b>📈 Performance</b><br>
+                <span style='color:#8b949e; font-size:0.85rem;'>CAGR, period returns, Sharpe, Sortino, Alpha, Beta vs benchmark</span>
+            </div>
+            <div style='background:#161b22; border:1px solid #21262d; border-radius:12px; padding:16px;'>
+                <b>⚡ Risk Analytics</b><br>
+                <span style='color:#8b949e; font-size:0.85rem;'>VaR, CVaR, Max Drawdown, Volatility on 5y horizon</span>
+            </div>
+            <div style='background:#161b22; border:1px solid #21262d; border-radius:12px; padding:16px;'>
+                <b>⚖️ Optimizer</b><br>
+                <span style='color:#8b949e; font-size:0.85rem;'>MILP-based rebalancing with lump sum, min transaction, freeze rules</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
     st.markdown("#### Get started")
