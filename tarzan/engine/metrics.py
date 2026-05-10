@@ -66,6 +66,7 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _valuation(self, ctx: dict) -> None:
         rows = []
+        cash_class = AssetClass.CASH_EQUIVALENTS.value
         for h in self.holdings:
             value = h.current_value if h.current_value is not None else h.market_value_eur
             cost = h.cost_basis_eur
@@ -89,18 +90,49 @@ class MetricsEngine:
                 "fetch_timestamp": h.fetch_timestamp.strftime("%Y-%m-%d %H:%M") if h.fetch_timestamp else "",
             })
         df = pd.DataFrame(rows)
-        total = df["current_value"].sum()
-        df["weight_pct"] = (df["current_value"] / total * 100) if total > 0 else 0.0
-        class_totals = df.groupby("asset_class")["current_value"].transform("sum")
-        df["pct_of_class"] = (df["current_value"] / class_totals * 100).fillna(0.0)
+        total = float(df["current_value"].sum()) if not df.empty else 0.0
+
+        # Split total into cash vs invested
+        if df.empty:
+            cash_value = 0.0
+        else:
+            cash_mask = df["asset_class"] == cash_class
+            cash_value = float(df.loc[cash_mask, "current_value"].sum())
+        invested_value = total - cash_value
+
+        # Two weight columns: percentage of total portfolio (includes cash)
+        # and percentage of invested portfolio (excludes cash). Cash rows
+        # have a NaN weight_of_invested_pctg by design.
+        df["weight_pct"] = (
+            (df["current_value"] / total * 100) if total > 0 else 0.0
+        )
+        if not df.empty:
+            cash_mask = df["asset_class"] == cash_class
+            if invested_value > 0:
+                df["weight_of_invested_pctg"] = (
+                    df["current_value"] / invested_value * 100
+                )
+                df.loc[cash_mask, "weight_of_invested_pctg"] = float("nan")
+            else:
+                df["weight_of_invested_pctg"] = float("nan")
+        class_totals = df.groupby("asset_class")["current_value"].transform("sum") if not df.empty else None
+        if class_totals is not None:
+            df["pct_of_class"] = (df["current_value"] / class_totals * 100).fillna(0.0)
+
         class_order = {v: i for i, v in enumerate([
             "Equities", "Fixed Income", "Cash & Cash Equivalents",
             "Gold", "Commodities", "Real Estate", "Alternative",
         ])}
-        df["_sort"] = df["asset_class"].map(class_order).fillna(99)
-        df = df.sort_values(["_sort", "current_value"], ascending=[True, False]).drop(columns=["_sort"]).reset_index(drop=True)
+        if not df.empty:
+            df["_sort"] = df["asset_class"].map(class_order).fillna(99)
+            df = df.sort_values(
+                ["_sort", "current_value"], ascending=[True, False]
+            ).drop(columns=["_sort"]).reset_index(drop=True)
+
         ctx["holdings_df"] = df
         ctx["total_value"] = float(total)
+        ctx["invested_value"] = float(invested_value)
+        ctx["cash_value"] = float(cash_value)
 
     # ------------------------------------------------------------------
     # Portfolio history
@@ -221,16 +253,34 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _allocations(self, ctx: dict) -> None:
         df = ctx["holdings_df"]
-        by_class = df.groupby("asset_class")["weight_pct"].sum().reset_index()
-        by_class.columns = ["category", "weight_pct"]
+        invested_value = ctx.get("invested_value", 0.0)
+        cash_class = AssetClass.CASH_EQUIVALENTS.value
+
+        # Invested allocation: exclude cash, percentages relative to
+        # invested_value (not total_value).
+        invested_df = df[df["asset_class"] != cash_class] if not df.empty else df
+        if not invested_df.empty and invested_value > 0:
+            by_class = (
+                invested_df.groupby("asset_class")["current_value"].sum().reset_index()
+            )
+            by_class["weight_pct"] = by_class["current_value"] / invested_value * 100
+            by_class = by_class[["asset_class", "weight_pct"]]
+            by_class.columns = ["category", "weight_pct"]
+        else:
+            by_class = pd.DataFrame(columns=["category", "weight_pct"])
+
         by_geo = _compute_geo_allocation(df, self.holdings)
         by_sector = pd.DataFrame(columns=["category", "weight_pct"])
-        if "sector" in df.columns:
+        if not df.empty and "sector" in df.columns:
             by_sector = df.groupby("sector")["weight_pct"].sum().reset_index()
             by_sector.columns = ["category", "weight_pct"]
-        top_10 = df.nlargest(10, "weight_pct")[
-            ["ticker", "name", "isin", "current_value", "weight_pct", "gain_pct"]
-        ].copy()
+        top_10 = (
+            df.nlargest(10, "weight_pct")[
+                ["ticker", "name", "isin", "current_value", "weight_pct", "gain_pct"]
+            ].copy()
+            if not df.empty
+            else pd.DataFrame()
+        )
         ctx["allocation_by_class"] = by_class
         ctx["allocation_by_geo"] = by_geo
         ctx["allocation_by_sector"] = by_sector
@@ -259,18 +309,53 @@ class MetricsEngine:
         by_class = ctx["allocation_by_class"]
         by_geo = ctx["allocation_by_geo"]
         rows = []
+
+        # Invested asset-class rows: % of invested portfolio. Cash is
+        # never in invested_allocation_targets_pctg, so it is correctly
+        # skipped here.
         actual_class = dict(zip(by_class["category"], by_class["weight_pct"]))
         for cat in sorted(set(self.config.invested_allocation_targets_pctg) | set(actual_class)):
             actual = actual_class.get(cat, 0.0)
             target = self.config.invested_allocation_targets_pctg.get(cat, 0.0)
-            rows.append({"category": cat, "type": "asset_class",
-                         "actual_pct": actual, "target_pct": target, "delta_pct": actual - target})
+            rows.append({
+                "category": cat, "type": "asset_class",
+                "actual_pct": actual, "target_pct": target,
+                "delta_pct": actual - target,
+                "actual_eur": None, "target_eur": None, "delta_eur": None,
+            })
+
+        # Equity geography rows: % of equity portion.
         actual_geo = dict(zip(by_geo["category"], by_geo["weight_pct"]))
         for cat in sorted(set(self.config.equity_geo_targets_pctg) | set(actual_geo)):
             actual = actual_geo.get(cat, 0.0)
             target = self.config.equity_geo_targets_pctg.get(cat, 0.0)
-            rows.append({"category": cat, "type": "geography (equity only)",
-                         "actual_pct": actual, "target_pct": target, "delta_pct": actual - target})
+            rows.append({
+                "category": cat, "type": "geography (equity only)",
+                "actual_pct": actual, "target_pct": target,
+                "delta_pct": actual - target,
+                "actual_eur": None, "target_eur": None, "delta_eur": None,
+            })
+
+        # Cash buffer row: absolute EUR, no percentages. Pctg fields carry
+        # the relative deviation vs the target buffer so the traffic-light
+        # helper can reuse rebalancing_threshold_pctg.
+        cash_value = ctx.get("cash_value", 0.0)
+        cash_target = float(self.config.target_cash_buffer_eur or 0.0)
+        if cash_target > 0:
+            delta_eur = cash_value - cash_target
+            delta_pct = delta_eur / cash_target * 100.0
+        else:
+            delta_eur = cash_value  # no target: any cash is a drift
+            delta_pct = 0.0
+        rows.append({
+            "category": "Cash Buffer", "type": "cash",
+            "actual_pct": None, "target_pct": None,
+            "delta_pct": delta_pct,
+            "actual_eur": cash_value,
+            "target_eur": cash_target,
+            "delta_eur": delta_eur,
+        })
+
         ctx["goal_deltas"] = pd.DataFrame(rows)
 
     # ------------------------------------------------------------------
@@ -387,8 +472,12 @@ class MetricsEngine:
     # Build final PortfolioMetrics
     # ------------------------------------------------------------------
     def _build_result(self, ctx: dict) -> PortfolioMetrics:
+        cash_target = float(self.config.target_cash_buffer_eur) if self.config else 0.0
         return PortfolioMetrics(
             total_value=ctx.get("total_value", 0.0),
+            invested_value=ctx.get("invested_value", 0.0),
+            cash_value=ctx.get("cash_value", 0.0),
+            cash_target_eur=cash_target,
             holdings_df=ctx.get("holdings_df", pd.DataFrame()),
             allocation_by_class=ctx.get("allocation_by_class", pd.DataFrame()),
             allocation_by_geo=ctx.get("allocation_by_geo", pd.DataFrame()),

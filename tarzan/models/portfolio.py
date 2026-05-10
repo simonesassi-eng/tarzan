@@ -21,8 +21,13 @@ class PortfolioMetrics:
 
     Attributes:
         total_value: Sum of all holding market values in EUR.
+        invested_value: Total value excluding cash holdings. Denominator
+            for the invested allocation percentages.
+        cash_value: Sum of cash-equivalent holdings in EUR.
+        cash_target_eur: Target cash buffer in EUR (from config).
         holdings_df: Enriched holdings table with weights, gains, classifications.
-        allocation_by_class: Allocation breakdown by asset class.
+        allocation_by_class: Allocation breakdown by asset class (invested only,
+            percentages relative to invested_value).
         allocation_by_geo: Geographic allocation (equity portion only).
         allocation_by_sector: Sector allocation breakdown.
         top_10: Top 10 holdings by portfolio weight.
@@ -30,7 +35,9 @@ class PortfolioMetrics:
         risk: Dict of risk metrics (volatility, sharpe, sortino, var, etc.).
         weighted_yield: Portfolio-weighted average dividend/coupon yield.
         avg_ter: Portfolio-weighted average Total Expense Ratio.
-        goal_deltas: Actual vs target allocation comparison.
+        goal_deltas: Actual vs target allocation comparison. Rows carry a
+            'type' column with values 'asset_class',
+            'geography (equity only)' or 'cash' (cash row uses EUR deltas).
         rebalancing_suggestions: Buy/sell suggestions exceeding threshold.
         benchmark_comparison: Portfolio vs benchmark metrics table.
         what_if: Hypothetical value if invested in each benchmark.
@@ -42,6 +49,9 @@ class PortfolioMetrics:
     """
 
     total_value: float = 0.0
+    invested_value: float = 0.0
+    cash_value: float = 0.0
+    cash_target_eur: float = 0.0
     holdings_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     allocation_by_class: pd.DataFrame = field(default_factory=pd.DataFrame)
     allocation_by_geo: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -70,6 +80,9 @@ class PortfolioMetrics:
         """
         return {
             "total_value_eur": round(self.total_value, 2),
+            "invested_value_eur": round(self.invested_value, 2),
+            "cash_value_eur": round(self.cash_value, 2),
+            "cash_target_eur": round(self.cash_target_eur, 2),
             "performance": {
                 k: round(v, 6) if isinstance(v, float) else v
                 for k, v in self.performance.items()

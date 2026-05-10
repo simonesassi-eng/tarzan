@@ -32,10 +32,17 @@ def compute_unified_rebalancing(
 ) -> tuple[list[dict], list[dict]]:
     """Compute optimal rebalancing actions via MILP.
 
+    The invested allocation targets (``invested_allocation_targets_pctg``)
+    apply to the *invested* portfolio (total minus cash). The cash position
+    has a separate absolute target ``target_cash_buffer_eur``. The solver
+    treats excess cash above the target as an implicit lump sum available
+    for investment and, in no-sell mode, relaxes the cash target when cash
+    is already below it.
+
     Returns:
         (actions, verifications)
     """
-    is_lump_sum = lump_sum is not None and lump_sum > 0
+    is_explicit_lump_sum = lump_sum is not None and lump_sum > 0
     n = len(holdings)
     if n == 0:
         return [], []
@@ -53,6 +60,15 @@ def compute_unified_rebalancing(
     tv = values.sum()
     if tv <= 0:
         return [], []
+
+    # --- Split total into cash vs invested ---
+    cash_mask = np.array([
+        1.0 if h.asset_class == AssetClass.CASH_EQUIVALENTS else 0.0
+        for h in holdings
+    ])
+    cash_value = float((cash_mask * values).sum())
+    invested_value = tv - cash_value
+    cash_target = float(config.target_cash_buffer_eur or 0.0)
 
     # --- Build geo exposure matrix ---
     all_geos = sorted(config.equity_geo_targets_pctg.keys())
@@ -77,6 +93,25 @@ def compute_unified_rebalancing(
     is_fi = np.array([1.0 if h.asset_class == AssetClass.FIXED_INCOME else 0.0 for h in holdings])
     fi_value = (values * is_fi).sum()
 
+    # --- Effective net inflow: explicit lump sum + excess cash above target ---
+    # In no-sell mode with cash already below target, we cannot shrink cash
+    # further; treat cash as 'locked at current level' and skip the cash
+    # constraint (the solver will still respect the explicit lump_sum).
+    explicit_lump = float(lump_sum or 0.0)
+    cash_excess = cash_value - cash_target
+    enforce_cash_target = True
+    if config.rebalancing_no_sell and cash_excess < 0:
+        # Cash is below target and solver cannot sell to generate more.
+        enforce_cash_target = False
+        cash_excess = 0.0
+        logger.info(
+            "Cash (%.2f EUR) is below target (%.2f EUR) and no-sell mode is on; "
+            "cash buffer target skipped for this run.",
+            cash_value, cash_target,
+        )
+    effective_net_inflow = explicit_lump + (cash_excess if enforce_cash_target else 0.0)
+    is_lump_sum = effective_net_inflow > 0
+
     # --- Phase 1: Check trigger (skip for lump sum) ---
     # Always run the solver — min_transaction_eur handles filtering
 
@@ -91,7 +126,10 @@ def compute_unified_rebalancing(
     for tol in tolerances:
         result = _solve_lp(n, values, holdings, config, geo_frac, all_geos,
                            eq_value, fi_value, tv, tol,
-                           lump_sum=lump_sum if is_lump_sum else None)
+                           cash_value=cash_value,
+                           invested_value=invested_value,
+                           net_inflow=effective_net_inflow,
+                           lock_cash_holdings=config.rebalancing_no_sell or not enforce_cash_target)
         if result is not None and result.success:
             actions = _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq_value)
             used_tolerance = tol
@@ -139,10 +177,14 @@ def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq
 
 
 def _check_trigger(values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv, threshold):
+    invested_tv = sum(
+        values[i] for i, h in enumerate(holdings)
+        if h.asset_class != AssetClass.CASH_EQUIVALENTS
+    )
     for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
         ac_sum = sum(values[i] for i, h in enumerate(holdings)
                      if (h.asset_class.value if h.asset_class else "Alternative") == ac_name)
-        if abs(ac_sum / tv * 100 - target_pct) > threshold:
+        if invested_tv > 0 and abs(ac_sum / invested_tv * 100 - target_pct) > threshold:
             return True
     if eq_value > 0:
         for g_idx, gn in enumerate(all_geos):
@@ -163,28 +205,47 @@ def _check_trigger(values, holdings, config, geo_frac, all_geos, eq_value, fi_va
     return False
 
 
-def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv, opt_tolerance, lump_sum=None):
-    tol_frac = opt_tolerance / 100
-    net_inflow = lump_sum if lump_sum else 0.0
+def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv,
+              opt_tolerance, cash_value=0.0, invested_value=0.0,
+              net_inflow=0.0, lock_cash_holdings=False):
+    """Build and solve the MILP for a given precision.
+
+    The invested allocation percentages apply to ``invested_value_after``,
+    i.e. (total_value + net_inflow - cash_after), where ``cash_after`` is
+    either the cash target (if the cash constraint is enforced) or the
+    current cash value (if cash is locked).
+    """
+    tol_frac = opt_tolerance / 100.0
+    cash_target = float(config.target_cash_buffer_eur or 0.0)
     new_tv = tv + net_inflow
-    new_eq_value = eq_value + net_inflow * (eq_value / tv) if tv > 0 else eq_value
+
+    # Cash position after rebalancing. When the cash constraint is enforced,
+    # the solver effectively moves (cash_value - cash_target) from cash into
+    # the rest of the portfolio, so cash_after == cash_target. When cash is
+    # locked (no-sell + cash below target), cash stays at cash_value.
+    cash_after = cash_target if not lock_cash_holdings else cash_value
+    invested_value_after = max(new_tv - cash_after, 0.0)
 
     A_eq_rows, b_eq_vals = [], []
     A_ub_rows, b_ub_vals = [], []
 
-    # Cash flow: sum(buy) - sum(sell) = net_inflow
+    # Cash flow: sum(buy) - sum(sell) = net_inflow  (net_inflow already includes
+    # the explicit lump sum + any excess cash being moved into invested assets).
     row = np.zeros(2 * n)
     row[:n] = 1.0
     row[n:] = -1.0
     A_eq_rows.append(row)
     b_eq_vals.append(net_inflow)
 
-    # Asset class constraints
+    # Invested asset-class constraints: applied on invested_value_after.
     for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
-        mask = np.array([1.0 if (h.asset_class.value if h.asset_class else "Alternative") == ac_name else 0.0 for h in holdings])
+        mask = np.array([
+            1.0 if (h.asset_class.value if h.asset_class else "Alternative") == ac_name
+            else 0.0 for h in holdings
+        ])
         current_sum = (mask * values).sum()
-        target_val = target_pct / 100 * new_tv
-        tol_val = tol_frac * new_tv
+        target_val = target_pct / 100.0 * invested_value_after
+        tol_val = tol_frac * invested_value_after
         row_upper = np.zeros(2 * n)
         row_upper[:n] = mask
         row_upper[n:] = -mask
@@ -194,11 +255,12 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         b_ub_vals.append(current_sum - (target_val - tol_val))
 
     # Geo constraints
+    new_eq_value = eq_value + net_inflow * (eq_value / tv) if tv > 0 else eq_value
     geo_ref = new_eq_value if new_eq_value > 0 else eq_value
     if geo_ref > 0:
         for g_idx, geo_name in enumerate(all_geos):
             target_pct = config.equity_geo_targets_pctg.get(geo_name, 0)
-            target_val = target_pct / 100 * geo_ref
+            target_val = target_pct / 100.0 * geo_ref
             tol_val = tol_frac * geo_ref
             gf = geo_frac[:, g_idx]
             current_sum = (gf * values).sum()
@@ -215,7 +277,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         for i, h in enumerate(holdings):
             if h.target_equities is None or h.asset_class != AssetClass.EQUITIES:
                 continue
-            target_val = h.target_equities / 100 * geo_ref
+            target_val = h.target_equities / 100.0 * geo_ref
             tol_val = tol_frac * geo_ref
             row_upper = np.zeros(2 * n)
             row_upper[i] = 1.0
@@ -232,7 +294,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         for i, h in enumerate(holdings):
             if h.target_fixed_income is None or h.asset_class != AssetClass.FIXED_INCOME:
                 continue
-            target_val = h.target_fixed_income / 100 * fi_ref
+            target_val = h.target_fixed_income / 100.0 * fi_ref
             tol_val = tol_frac * fi_ref
             row_upper = np.zeros(2 * n)
             row_upper[i] = 1.0
@@ -241,6 +303,16 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             b_ub_vals.append(target_val + tol_val - values[i])
             A_ub_rows.append(-row_upper)
             b_ub_vals.append(values[i] - (target_val - tol_val))
+
+    # Cash holdings cannot be traded by the solver — the cash buffer is
+    # handled via net_inflow (as an external cash flow). Forbid buy/sell
+    # on cash instruments explicitly to avoid double-counting.
+    for i, h in enumerate(holdings):
+        if h.asset_class == AssetClass.CASH_EQUIVALENTS:
+            row = np.zeros(2 * n); row[i] = 1.0
+            A_eq_rows.append(row); b_eq_vals.append(0.0)
+            row = np.zeros(2 * n); row[n + i] = 1.0
+            A_eq_rows.append(row); b_eq_vals.append(0.0)
 
     # MILP: min_tx binary linking for BOTH buy and sell
     # Variables: [buy_0..n-1, sell_0..n-1, zb_0..n-1, zs_0..n-1]  (4n total)
@@ -317,12 +389,17 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
 def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value):
     reasons = []
     tv = values.sum()
+    # Invested portion (exclude cash) so reasons align with Optimizer table.
+    invested_tv = sum(
+        values[j] for j, hh in enumerate(holdings)
+        if hh.asset_class != AssetClass.CASH_EQUIVALENTS
+    )
     ac = h.asset_class.value if h.asset_class else "Alternative"
     ac_sum = sum(values[j] for j, hh in enumerate(holdings)
                  if (hh.asset_class.value if hh.asset_class else "Alternative") == ac)
-    ac_actual = ac_sum / tv * 100
+    ac_actual = ac_sum / invested_tv * 100 if invested_tv > 0 else 0.0
     ac_target = config.invested_allocation_targets_pctg.get(ac, 0)
-    if abs(ac_actual - ac_target) > 0.5:
+    if h.asset_class != AssetClass.CASH_EQUIVALENTS and abs(ac_actual - ac_target) > 0.5:
         reasons.append(f"{ac} at {ac_actual:.1f}% vs target {ac_target:.0f}%")
     if h.asset_class == AssetClass.EQUITIES and eq_value > 0:
         for g_idx, gn in enumerate(all_geos):
@@ -352,25 +429,36 @@ def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value
 def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     verifications = []
     tv = new_values.sum()
+    # Split cash from invested for the percentage-based checks.
+    cash_mask = np.array([
+        1.0 if h.asset_class == AssetClass.CASH_EQUIVALENTS else 0.0
+        for h in holdings
+    ])
+    cash_new = float((cash_mask * new_values).sum())
+    invested_new = max(float(tv - cash_new), 0.0)
     tol = 1.0  # 1% tolerance for verification display
 
-    # Asset allocation
+    # Invested asset allocation: percentages relative to invested_new
+    # (excludes cash). Cash is never in invested_allocation_targets_pctg.
     class_pcts = {}
-    for i, h in enumerate(holdings):
-        ac = h.asset_class.value if h.asset_class else "Alternative"
-        class_pcts[ac] = class_pcts.get(ac, 0) + new_values[i] / tv * 100
+    if invested_new > 0:
+        for i, h in enumerate(holdings):
+            if h.asset_class == AssetClass.CASH_EQUIVALENTS:
+                continue
+            ac = h.asset_class.value if h.asset_class else "Alternative"
+            class_pcts[ac] = class_pcts.get(ac, 0) + new_values[i] / invested_new * 100
     ac_details, ac_items, max_ac = [], [], 0.0
     for ac, target in config.invested_allocation_targets_pctg.items():
         actual = class_pcts.get(ac, 0)
         d = abs(actual - target); max_ac = max(max_ac, d)
         ac_details.append(f"{ac} {actual:.1f}% (tgt. {target:.1f}%)")
         ac_items.append({"category": ac, "actual_pct": actual, "target_pct": target})
-    verifications.append({"check": "Asset Allocation", "kind": "asset",
+    verifications.append({"check": "Invested Allocation", "kind": "asset",
                           "status": "✓ OK" if max_ac <= tol else "⚠ PARTIAL",
                           "detail": ", ".join(ac_details),
                           "items": ac_items})
 
-    # Geo allocation
+    # Geo allocation (equity portion, no cash involved)
     eq_mask = np.array([1.0 if h.asset_class == AssetClass.EQUITIES else 0.0 for h in holdings])
     eq_total = (new_values * eq_mask).sum()
     geo_details, geo_items, max_geo = [], [], 0.0
@@ -382,7 +470,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
             d = abs(actual - target); max_geo = max(max_geo, d)
             geo_details.append(f"{gn} {actual:.1f}% (tgt. {target:.1f}%)")
             geo_items.append({"category": gn, "actual_pct": actual, "target_pct": target})
-    verifications.append({"check": "Geo Allocation", "kind": "geography",
+    verifications.append({"check": "Equity Geography", "kind": "geography",
                           "status": "✓ OK" if max_geo <= tol else "⚠ PARTIAL",
                           "detail": ", ".join(geo_details),
                           "items": geo_items})
@@ -418,5 +506,24 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
                           "status": "✓ OK" if max_fi <= tol else "⚠ PARTIAL",
                           "detail": ", ".join(fi_details) or "No targets set",
                           "items": fi_items})
+
+    # Cash buffer (absolute EUR)
+    cash_target = float(config.target_cash_buffer_eur or 0.0)
+    cash_delta_eur = cash_new - cash_target
+    cash_ok = abs(cash_delta_eur) <= max(cash_target * 0.01, 1.0)  # 1% of target or 1 EUR
+    verifications.append({
+        "check": "Cash Buffer", "kind": "cash",
+        "status": "✓ OK" if cash_ok else "⚠ PARTIAL",
+        "detail": (
+            f"Cash {cash_new:.2f} EUR (tgt. {cash_target:.2f} EUR, "
+            f"delta {cash_delta_eur:+.2f} EUR)"
+        ),
+        "items": [{
+            "category": "Cash Buffer",
+            "actual_eur": cash_new,
+            "target_eur": cash_target,
+            "delta_eur": cash_delta_eur,
+        }],
+    })
 
     return verifications
