@@ -15,7 +15,7 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
     total_gain = metrics.total_value - total_cost
     rtd = (total_gain / total_cost * 100) if total_cost > 0 else 0.0
 
-    inception_str = config.portfolio_inception if config and config.portfolio_inception else ""
+    inception_str = config.portfolio_inception_date if config and config.portfolio_inception_date else ""
     inception_label = f" · since {inception_str}" if inception_str else ""
 
     st.markdown(
@@ -100,7 +100,7 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
         if config and not metrics.allocation_by_class.empty:
             _delta_section(
                 metrics.allocation_by_class,
-                config.allocation_targets,
+                config.invested_allocation_targets_pctg,
                 "dash_delta_class",
             )
 
@@ -123,7 +123,7 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
         if config and not metrics.allocation_by_geo.empty:
             _delta_section(
                 metrics.allocation_by_geo,
-                config.geo_allocation,
+                config.equity_geo_targets_pctg,
                 "dash_delta_geo",
             )
 

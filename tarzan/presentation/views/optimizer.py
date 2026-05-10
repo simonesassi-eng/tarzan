@@ -17,13 +17,13 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
 
     if config:
         header_parts = []
-        if config.rebalancing_lump_sum_amount > 0:
-            header_parts.append(f"Lump sum: **{fmt_eur(config.rebalancing_lump_sum_amount)}**")
+        if config.rebalancing_lump_sum_amount_eur > 0:
+            header_parts.append(f"Lump sum: **{fmt_eur(config.rebalancing_lump_sum_amount_eur)}**")
         if config.rebalancing_no_sell:
             header_parts.append("**NO SELL**")
         if config.rebalancing_min_transaction_eur > 0:
             header_parts.append(f"Min transaction: **{fmt_eur(config.rebalancing_min_transaction_eur)}**")
-        header_parts.append(f"Max tolerance: **{config.rebalancing_max_tolerance:.1f}%**")
+        header_parts.append(f"Max tolerance: **{config.rebalancing_max_tolerance_pctg:.1f}%**")
         st.caption(" · ".join(header_parts))
 
     actions = metrics.rebalancing_suggestions or []

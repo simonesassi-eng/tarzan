@@ -117,7 +117,7 @@ def _deviation_color(delta_pct, tolerance):
 
     Args:
         delta_pct: Actual - Target (percentage points, signed).
-        tolerance: Alert threshold in percentage points (from config.rebalancing_threshold).
+        tolerance: Alert threshold in percentage points (from config.rebalancing_threshold_pctg).
 
     Returns:
         Green if |delta| <= tolerance, amber if within 2× tolerance, red beyond.
@@ -425,7 +425,7 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     """Dashboard: Hero (Value/Gain/RTD) + Allocation + Top 5 + Rebalancing alert."""
 
     # --- Dates ---
-    inception_str = config.portfolio_inception or ""
+    inception_str = config.portfolio_inception_date or ""
     as_of = datetime.now().strftime("%d %b %Y")
 
     # --- KPI values ---
@@ -500,7 +500,7 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         _apply_header(sheet, header_row, c, h)
     row += 1
 
-    tol = config.rebalancing_threshold if config else 5.0
+    tol = config.rebalancing_threshold_pctg if config else 5.0
     if not metrics.allocation_by_class.empty:
         sorted_ac = metrics.allocation_by_class.sort_values("weight_pct", ascending=False)
         for ti, (_, rd) in enumerate(sorted_ac.iterrows()):
@@ -792,7 +792,7 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     sheet.column_dimensions['F'].width = 12   # Status
     sheet.column_dimensions['G'].width = 45   # Reason / Notes
 
-    tol = config.rebalancing_threshold if config else 5.0
+    tol = config.rebalancing_threshold_pctg if config else 5.0
 
     # =====================================================================
     # OVERVIEW banner — traffic-light status based on largest deviation
@@ -837,9 +837,9 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     # REBALANCING ACTIONS
     # =====================================================================
     header_parts = ["REBALANCING ACTIONS"]
-    if config.rebalancing_lump_sum_amount > 0:
+    if config.rebalancing_lump_sum_amount_eur > 0:
         header_parts.append(
-            f"lump sum {_format_number(config.rebalancing_lump_sum_amount)} EUR"
+            f"lump sum {_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
         )
     if config.rebalancing_no_sell:
         header_parts.append("no-sell mode")
@@ -1064,14 +1064,14 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
          (f"\u00b1{tol_used:.1f}%" if tol_used is not None else "n/a"),
          "Actual tolerance the optimizer converged at (progressive up to max)"),
         ("Max tolerance",
-         f"\u00b1{config.rebalancing_max_tolerance:.1f}%",
-         "Cap on solver tolerance (from config.rebalancing_max_tolerance)"),
+         f"\u00b1{config.rebalancing_max_tolerance_pctg:.1f}%",
+         "Cap on solver tolerance (from config.rebalancing_max_tolerance_pctg)"),
         ("Min transaction",
          f"{_format_number(config.rebalancing_min_transaction_eur)} EUR",
          "Trades below this amount are skipped"),
         ("Lump sum",
-         (f"{_format_number(config.rebalancing_lump_sum_amount)} EUR"
-          if config.rebalancing_lump_sum_amount > 0 else "—"),
+         (f"{_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
+          if config.rebalancing_lump_sum_amount_eur > 0 else "—"),
          "Additional cash to deploy in the rebalance"),
         ("No-sell mode",
          ("enabled" if config.rebalancing_no_sell else "disabled"),

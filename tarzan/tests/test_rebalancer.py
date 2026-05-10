@@ -34,8 +34,8 @@ def test_zero_total_value(sample_holdings, sample_config):
 def test_lump_sum_buy_only(sample_holdings, sample_config):
     """With no_sell=True and lump_sum=5000, total buy should equal ~5000, total sell=0."""
     sample_config.rebalancing_no_sell = True
-    sample_config.rebalancing_lump_sum_amount = 5000.0
-    sample_config.rebalancing_max_tolerance = 5.0  # Loose tolerance for feasibility
+    sample_config.rebalancing_lump_sum_amount_eur = 5000.0
+    sample_config.rebalancing_max_tolerance_pctg = 5.0  # Loose tolerance for feasibility
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=5000.0)
@@ -68,7 +68,7 @@ def test_zero_sum_rebalancing(sample_holdings, sample_config):
 def test_min_transaction_respected(sample_holdings, sample_config):
     """No action should be below min_transaction_eur."""
     sample_config.rebalancing_min_transaction_eur = 500.0
-    sample_config.rebalancing_lump_sum_amount = 2000.0
+    sample_config.rebalancing_lump_sum_amount_eur = 2000.0
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=2000.0)
@@ -83,7 +83,7 @@ def test_no_buy_no_sell_frozen(sample_holdings, sample_config):
     """Holdings with no_buy_no_sell=True should have zero buy AND zero sell."""
     sample_holdings[0].no_buy_no_sell = True  # Freeze USA_ETF
     frozen_ticker = sample_holdings[0].ticker
-    sample_config.rebalancing_lump_sum_amount = 2000.0
+    sample_config.rebalancing_lump_sum_amount_eur = 2000.0
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=2000.0)
@@ -108,7 +108,7 @@ def test_all_frozen_no_crash(sample_holdings, sample_config):
 def test_max_tolerance_caps_solver(sample_holdings, sample_config):
     """With tight max_tolerance and min_transaction, infeasible → return 0 actions."""
     sample_config.rebalancing_min_transaction_eur = 100000.0  # absurdly high
-    sample_config.rebalancing_max_tolerance = 0.1  # very tight
+    sample_config.rebalancing_max_tolerance_pctg = 0.1  # very tight
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv)
@@ -136,7 +136,7 @@ def test_single_holding(sample_config):
 
 def test_actions_have_required_fields(sample_holdings, sample_config):
     """Every action must have ticker, direction, amount_eur, reason."""
-    sample_config.rebalancing_lump_sum_amount = 2000.0
+    sample_config.rebalancing_lump_sum_amount_eur = 2000.0
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=2000.0)

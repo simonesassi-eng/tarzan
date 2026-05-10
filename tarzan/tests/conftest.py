@@ -13,22 +13,22 @@ from tarzan.models.investor_config import InvestorConfig
 def sample_config() -> InvestorConfig:
     """Minimal investor config for testing."""
     config = InvestorConfig()
-    config.allocation_targets = {
-        "Equities": 60.0,
-        "Fixed Income": 30.0,
-        "Cash & Cash Equivalents": 10.0,
+    config.invested_allocation_targets_pctg = {
+        "Equities": 65.0,
+        "Fixed Income": 35.0,
     }
-    config.geo_allocation = {
+    config.equity_geo_targets_pctg = {
         "USA": 50.0,
         "Eurozone EMU": 20.0,
         "Japan": 10.0,
         "Dev ex-USA ex-EMU ex-JP": 10.0,
         "Emerging Markets": 10.0,
     }
+    config.target_cash_buffer_eur = 1000.0
     config.rebalancing_min_transaction_eur = 0.0
-    config.rebalancing_max_tolerance = 2.0
+    config.rebalancing_max_tolerance_pctg = 2.0
     config.rebalancing_no_sell = False
-    config.rebalancing_lump_sum_amount = 0.0
+    config.rebalancing_lump_sum_amount_eur = 0.0
     return config
 
 

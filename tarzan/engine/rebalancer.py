@@ -55,7 +55,7 @@ def compute_unified_rebalancing(
         return [], []
 
     # --- Build geo exposure matrix ---
-    all_geos = sorted(config.geo_allocation.keys())
+    all_geos = sorted(config.equity_geo_targets_pctg.keys())
     geo_frac = np.zeros((n, len(all_geos)))
     for i, h in enumerate(holdings):
         if h.asset_class != AssetClass.EQUITIES:
@@ -82,7 +82,7 @@ def compute_unified_rebalancing(
 
     # --- Phase 2: Solve MILP with progressive tolerance ---
     # Cap at user-configured max_tolerance to avoid solutions that worsen allocations.
-    max_tol = config.rebalancing_max_tolerance
+    max_tol = config.rebalancing_max_tolerance_pctg
     tolerances = [t for t in [0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0] if t <= max_tol]
     if not tolerances:
         tolerances = [max_tol]
@@ -139,7 +139,7 @@ def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq
 
 
 def _check_trigger(values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv, threshold):
-    for ac_name, target_pct in config.allocation_targets.items():
+    for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
         ac_sum = sum(values[i] for i, h in enumerate(holdings)
                      if (h.asset_class.value if h.asset_class else "Alternative") == ac_name)
         if abs(ac_sum / tv * 100 - target_pct) > threshold:
@@ -148,7 +148,7 @@ def _check_trigger(values, holdings, config, geo_frac, all_geos, eq_value, fi_va
         for g_idx, gn in enumerate(all_geos):
             actual = sum(geo_frac[i][g_idx] * values[i] for i, h in enumerate(holdings)
                          if h.asset_class == AssetClass.EQUITIES) / eq_value * 100
-            if abs(actual - config.geo_allocation.get(gn, 0)) > threshold:
+            if abs(actual - config.equity_geo_targets_pctg.get(gn, 0)) > threshold:
                 return True
     if eq_value > 0:
         for i, h in enumerate(holdings):
@@ -180,7 +180,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     b_eq_vals.append(net_inflow)
 
     # Asset class constraints
-    for ac_name, target_pct in config.allocation_targets.items():
+    for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
         mask = np.array([1.0 if (h.asset_class.value if h.asset_class else "Alternative") == ac_name else 0.0 for h in holdings])
         current_sum = (mask * values).sum()
         target_val = target_pct / 100 * new_tv
@@ -197,7 +197,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     geo_ref = new_eq_value if new_eq_value > 0 else eq_value
     if geo_ref > 0:
         for g_idx, geo_name in enumerate(all_geos):
-            target_pct = config.geo_allocation.get(geo_name, 0)
+            target_pct = config.equity_geo_targets_pctg.get(geo_name, 0)
             target_val = target_pct / 100 * geo_ref
             tol_val = tol_frac * geo_ref
             gf = geo_frac[:, g_idx]
@@ -321,7 +321,7 @@ def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value
     ac_sum = sum(values[j] for j, hh in enumerate(holdings)
                  if (hh.asset_class.value if hh.asset_class else "Alternative") == ac)
     ac_actual = ac_sum / tv * 100
-    ac_target = config.allocation_targets.get(ac, 0)
+    ac_target = config.invested_allocation_targets_pctg.get(ac, 0)
     if abs(ac_actual - ac_target) > 0.5:
         reasons.append(f"{ac} at {ac_actual:.1f}% vs target {ac_target:.0f}%")
     if h.asset_class == AssetClass.EQUITIES and eq_value > 0:
@@ -330,7 +330,7 @@ def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value
             if frac > 0.1:
                 geo_actual = sum(geo_frac[j][g_idx] * values[j] for j, hh in enumerate(holdings)
                                  if hh.asset_class == AssetClass.EQUITIES) / eq_value * 100
-                geo_target = config.geo_allocation.get(gn, 0)
+                geo_target = config.equity_geo_targets_pctg.get(gn, 0)
                 if abs(geo_actual - geo_target) > 0.5:
                     reasons.append(f"{gn} at {geo_actual:.1f}% vs target {geo_target:.0f}%")
     if h.target_equities is not None and eq_value > 0:
@@ -360,7 +360,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         ac = h.asset_class.value if h.asset_class else "Alternative"
         class_pcts[ac] = class_pcts.get(ac, 0) + new_values[i] / tv * 100
     ac_details, ac_items, max_ac = [], [], 0.0
-    for ac, target in config.allocation_targets.items():
+    for ac, target in config.invested_allocation_targets_pctg.items():
         actual = class_pcts.get(ac, 0)
         d = abs(actual - target); max_ac = max(max_ac, d)
         ac_details.append(f"{ac} {actual:.1f}% (tgt. {target:.1f}%)")
@@ -378,7 +378,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         for g_idx, gn in enumerate(all_geos):
             actual = sum(geo_frac[i][g_idx] * new_values[i] for i, h in enumerate(holdings)
                          if h.asset_class == AssetClass.EQUITIES) / eq_total * 100
-            target = config.geo_allocation.get(gn, 0)
+            target = config.equity_geo_targets_pctg.get(gn, 0)
             d = abs(actual - target); max_geo = max(max_geo, d)
             geo_details.append(f"{gn} {actual:.1f}% (tgt. {target:.1f}%)")
             geo_items.append({"category": gn, "actual_pct": actual, "target_pct": target})
