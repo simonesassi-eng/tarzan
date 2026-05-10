@@ -32,6 +32,7 @@ Thumbs.db
 # Project-specific
 output/*
 !output/sample/
+output/sample/~$*
 input/.cache/
 input/holdings.csv
 build.log
