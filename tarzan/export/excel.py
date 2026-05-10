@@ -49,7 +49,7 @@ C = {
 
 ASSET_COLORS = {
     'Equities': '1D4ED8', 'Fixed Income': 'A16207',
-    'Cash & Cash Equivalents': '15803D', 'Commodities': 'C2410C', 'Alternative': '7C3AED',
+    'Cash & Cash Equivalents': '15803D', 'Gold': 'CA8A04', 'Commodities': 'C2410C', 'Alternative': '7C3AED',
 }
 
 GEO_COLORS = {

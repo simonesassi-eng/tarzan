@@ -170,7 +170,7 @@ def benchmark_details() -> dict[str, dict]:
 def default_allocation_targets() -> dict[str, float]:
     return get("default_allocation_targets", {
         "Equities": 60.0, "Fixed Income": 25.0,
-        "Cash & Cash Equivalents": 5.0, "Commodities": 5.0, "Alternative": 5.0,
+        "Cash & Cash Equivalents": 5.0, "Gold": 5.0, "Commodities": 0.0, "Alternative": 5.0,
     })
 
 def default_geo_allocation() -> dict[str, float]:

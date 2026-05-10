@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 # Consistent color palette
 COLORS = {
     "Equities": "#58a6ff", "Fixed Income": "#3fb950",
-    "Cash & Cash Equivalents": "#d2a8ff", "Commodities": "#f0883e",
+    "Cash & Cash Equivalents": "#d2a8ff", "Gold": "#f2c94c", "Commodities": "#f0883e",
     "Real Estate": "#8b4513", "Alternative": "#8b949e",
 }
 GEO_COLORS = {
