@@ -151,12 +151,14 @@ def test_actions_have_required_fields(sample_holdings, sample_config):
 
 
 def test_verification_structure(sample_holdings, sample_config):
-    """Verifications should always include standard checks."""
+    """Verifications should always include the standard check categories."""
     tv = _total_value(sample_holdings)
 
     _, verifications = compute_unified_rebalancing(sample_holdings, sample_config, tv)
 
-    assert len(verifications) >= 3  # At least Asset, Geo, Per-holding
-    check_names = [v["check"] for v in verifications]
-    assert any("Asset" in c for c in check_names)
-    assert any("Geo" in c for c in check_names)
+    # At least Invested Allocation, Equity Geography, Per-Holding, Cash Buffer.
+    assert len(verifications) >= 3
+    check_kinds = [v.get("kind") for v in verifications]
+    assert "asset" in check_kinds
+    assert "geography" in check_kinds
+    assert "cash" in check_kinds

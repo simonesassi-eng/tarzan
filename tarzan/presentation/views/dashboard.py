@@ -27,11 +27,26 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
         unsafe_allow_html=True,
     )
 
-    # ── Row 1: Value / Gain / RTD ──────────────────────────────────────
+    # ── Row 1: Total / Invested / Cash ────────────────────────────────
     col1, col2, col3 = st.columns(3)
-    _hero_card(col1, "Total Value (AuM)", fmt_eur(metrics.total_value), None)
-    _hero_card(col2, "Total Gain", fmt_eur(total_gain), total_gain)
-    _hero_card(col3, "RTD (Return to Date)", fmt_pct(rtd), total_gain)
+    _hero_card(col1, "Total Value (EUR)", fmt_eur(metrics.total_value), None)
+    _hero_card(col2, "Invested Value (EUR)", fmt_eur(metrics.invested_value), None)
+    cash_delta = metrics.cash_value - metrics.cash_target_eur
+    cash_hint = (
+        f"target {fmt_eur(metrics.cash_target_eur)} · Δ {cash_delta:+,.0f} EUR"
+        if metrics.cash_target_eur > 0
+        else "no target set"
+    )
+    _hero_card(
+        col3, "Cash (EUR)", fmt_eur(metrics.cash_value), None, hint=cash_hint,
+    )
+
+    # ── Row 2: Gain / RTD / (placeholder) ─────────────────────────────
+    col4, col5, col6 = st.columns(3)
+    _hero_card(col4, "Total Gain (EUR)", fmt_eur(total_gain), total_gain)
+    _hero_card(col5, "RTD (%)", fmt_pct(rtd), total_gain)
+    # Leave the third column empty for balance, or show inception
+    _hero_card(col6, "Inception", inception_str or "—", None)
 
     # ── Row 2: CAGR / YTD / Yield / TER ───────────────────────────────
     perf = metrics.performance or {}
@@ -180,14 +195,19 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
 
 # ── Helper renderers ───────────────────────────────────────────────────
 
-def _hero_card(col, label: str, value: str, gain_for_color):
+def _hero_card(col, label: str, value: str, gain_for_color, hint: str | None = None):
     color = "#f0f6fc"
     if gain_for_color is not None and isinstance(gain_for_color, (int, float)):
         color = "#3fb950" if gain_for_color >= 0 else "#f85149"
+    hint_html = (
+        f"<div style='font-size:0.72rem; color:#8b949e; margin-top:4px;'>{hint}</div>"
+        if hint else ""
+    )
     col.markdown(
         f"<div class='metric-card'>"
         f"<div class='metric-label'>{label}</div>"
         f"<div class='metric-value' style='color:{color};'>{value}</div>"
+        f"{hint_html}"
         f"</div>",
         unsafe_allow_html=True,
     )

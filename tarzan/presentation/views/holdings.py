@@ -33,7 +33,8 @@ def render(metrics: PortfolioMetrics):
     # Main table columns (ISIN and Geography go to Technical Details)
     display_cols = ["name", "ticker", "asset_class", "security_type",
                     "currency", "quantity", "avg_purchase_price", "current_price",
-                    "cost_basis_eur", "current_value", "weight_pct", "pct_of_class",
+                    "cost_basis_eur", "current_value",
+                    "weight_pct", "weight_of_invested_pctg", "pct_of_class",
                     "gain_eur", "gain_pct"]
     # Only include columns that exist in the dataframe
     display_cols = [c for c in display_cols if c in df.columns]
@@ -45,7 +46,9 @@ def render(metrics: PortfolioMetrics):
         "currency": "Ccy", "quantity": "Qty",
         "avg_purchase_price": "Avg Price", "current_price": "Price",
         "cost_basis_eur": "Cost €", "current_value": "Value €",
-        "weight_pct": "Weight %", "pct_of_class": "% of Class",
+        "weight_pct": "% of Portfolio",
+        "weight_of_invested_pctg": "% of Invested",
+        "pct_of_class": "% of Class",
         "gain_eur": "Gain €", "gain_pct": "Gain %",
     }
     show_df.columns = [col_names.get(c, c) for c in display_cols]
@@ -59,14 +62,17 @@ def render(metrics: PortfolioMetrics):
             fmt[col] = "{:,.2f}"
         elif col == "Qty":
             fmt[col] = "{:,.2f}"
-        elif col in ("Weight %", "% of Class"):
+        elif col in ("% of Portfolio", "% of Invested", "% of Class"):
             fmt[col] = "{:.1f}%"
         elif col == "Gain %":
             fmt[col] = "{:+.1f}%"
 
     # Color gain columns + weight columns (text color, not background)
     gain_cols = [c for c in ["Gain %", "Gain €"] if c in show_df.columns]
-    weight_cols = [c for c in ["Weight %", "% of Class"] if c in show_df.columns]
+    weight_cols = [
+        c for c in ["% of Portfolio", "% of Invested", "% of Class"]
+        if c in show_df.columns
+    ]
     colored_cols = gain_cols + weight_cols
 
     styled = show_df.style.format(fmt, na_rep="—")

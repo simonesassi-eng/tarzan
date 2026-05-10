@@ -456,8 +456,13 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     _write_area_header(sheet, row, 1, 8, f"PORTFOLIO STATUS{inception_label}")
     row += 1
 
+    cash_delta_eur = metrics.cash_value - metrics.cash_target_eur
     hero_data = [
         ("Total Value (EUR)", metrics.total_value, None, "number"),
+        ("Invested Value (EUR)", metrics.invested_value, None, "number"),
+        ("Cash (EUR)", metrics.cash_value, None, "number"),
+        ("Cash Target (EUR)", metrics.cash_target_eur, None, "number"),
+        ("Cash Δ vs Target (EUR)", cash_delta_eur, None, "number_signed"),
         ("Total Gain (EUR)", total_gain, total_gain, "number_signed"),
         ("RTD (%)", rtd, total_gain, "number_signed"),
     ]
@@ -494,6 +499,7 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
                 ac_targets[gd["category"]] = (gd["target_pct"], gd["delta_pct"])
             elif gd["type"] == "geography (equity only)":
                 geo_targets[gd["category"]] = (gd["target_pct"], gd["delta_pct"])
+            # cash type is rendered in the Cash Buffer section, not here
 
     header_row = row
     for c, h in enumerate(["Asset Class", "Actual %", "Target %"], 1):
@@ -751,6 +757,7 @@ def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
         ("Cost Basis (EUR)", "cost_basis_eur", True, '#,##0.00'),
         ("Value (EUR)", "current_value", True, '#,##0.00'),
         ("% of Portfolio", "weight_pct", True, '0.00'),
+        ("% of Invested", "weight_of_invested_pctg", True, '0.00'),
         ("% of Asset Class", "pct_of_class", True, '0.00'),
         ("Gain (EUR)", "gain_eur", True, '#,##0.00'),
         ("Gain %", "gain_pct", True, '0.00'),
@@ -799,7 +806,12 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     # =====================================================================
     max_abs_delta = 0.0
     if metrics.goal_deltas is not None and not metrics.goal_deltas.empty:
-        max_abs_delta = float(metrics.goal_deltas["delta_pct"].abs().max())
+        # Exclude cash row: its delta_pct is relative to the cash target,
+        # not an allocation percentage point. Cash is reported in EUR
+        # further down in its own Cash Buffer section.
+        non_cash = metrics.goal_deltas[metrics.goal_deltas["type"] != "cash"]
+        if not non_cash.empty:
+            max_abs_delta = float(non_cash["delta_pct"].abs().max())
     n_actions = len(metrics.rebalancing_suggestions) if metrics.rebalancing_suggestions else 0
 
     if max_abs_delta <= tol:
@@ -911,19 +923,25 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
     row += 2
 
-    # Build current (goal_deltas) lookup by (type, category)
+    # Build current (goal_deltas) lookup by (type, category). Skip cash
+    # rows: cash uses EUR fields and a dedicated section.
     current_lookup: dict[tuple[str, str], tuple[float, float]] = {}
     if metrics.goal_deltas is not None and not metrics.goal_deltas.empty:
         for _, gd in metrics.goal_deltas.iterrows():
+            if gd["type"] == "cash":
+                continue
             tp = "asset" if gd["type"] == "asset_class" else "geography"
             current_lookup[(tp, gd["category"])] = (
                 float(gd["actual_pct"]), float(gd["target_pct"]),
             )
 
-    # Build post-rebalancing lookup by (kind, category)
+    # Build post-rebalancing lookup by (kind, category). Skip cash —
+    # its items use EUR fields and are rendered in the Cash Buffer section.
     post_lookup: dict[tuple[str, str], tuple[float, float]] = {}
     if metrics.rebalancing_verifications:
         for v in metrics.rebalancing_verifications:
+            if v.get("kind") == "cash":
+                continue
             for it in v.get("items", []) or []:
                 post_lookup[(v["kind"], it["category"])] = (
                     float(it["actual_pct"]), float(it["target_pct"]),
@@ -1046,6 +1064,74 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         row += 1
 
     # =====================================================================
+    # CASH BUFFER — absolute EUR, no percentages
+    # =====================================================================
+    row += 2
+    _write_area_header(sheet, row, 1, 7, "CASH BUFFER")
+    row += 1
+    csubcell = sheet.cell(
+        row=row, column=1,
+        value=(
+            "Cash is not part of the invested allocation. The solver targets "
+            f"{_format_number(config.target_cash_buffer_eur)} EUR as cash buffer; "
+            "any excess or shortfall drives buy/sell suggestions above."
+        ),
+    )
+    csubcell.font = px_font(size=9, italic=True, color=C['text_sec'])
+    csubcell.fill = px_fill(C['bg_page'])
+    csubcell.border = px_no_border()
+    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+    row += 2
+
+    cash_headers = [
+        "Category", "Current (EUR)", "Target (EUR)",
+        "Post-rebal (EUR)", "Delta (EUR)", "Status",
+    ]
+    for c, h in enumerate(cash_headers, 1):
+        _apply_header(sheet, row, c, h)
+    row += 1
+
+    # Find cash values: current from goal_deltas, post from verifications
+    cash_actual = metrics.cash_value
+    cash_target_eur = metrics.cash_target_eur
+    cash_post = cash_actual
+    if metrics.rebalancing_verifications:
+        for v in metrics.rebalancing_verifications:
+            if v.get("kind") == "cash" and v.get("items"):
+                cash_post = float(v["items"][0].get("actual_eur", cash_actual))
+                break
+    cash_delta_eur = cash_post - cash_target_eur
+    # Traffic-light: use the same rebalancing_threshold_pctg, applied to
+    # the relative deviation vs the target (or to the absolute delta when
+    # target is zero).
+    if cash_target_eur > 0:
+        rel_dev = abs(cash_delta_eur) / cash_target_eur * 100.0
+        cash_color = _deviation_color(
+            (cash_delta_eur / cash_target_eur) * 100.0, tol,
+        )
+    else:
+        rel_dev = abs(cash_delta_eur)
+        cash_color = C['text_pri'] if cash_actual == 0 else C['amber']
+    if rel_dev <= tol:
+        cash_status = "\u25cf Aligned"
+    elif rel_dev <= 2 * tol:
+        cash_status = "\u25cf Drift"
+    else:
+        cash_status = "\u25cf Action"
+
+    _write_data_cell(sheet, row, 1, "Cash Buffer", 0)
+    _write_data_cell(sheet, row, 2, cash_actual, 0, is_number=True,
+                     num_fmt='#,##0.00', font_color=C['text_pri'])
+    _write_data_cell(sheet, row, 3, cash_target_eur, 0, is_number=True,
+                     num_fmt='#,##0.00', font_color=C['text_pri'])
+    _write_data_cell(sheet, row, 4, cash_post, 0, is_number=True,
+                     num_fmt='#,##0.00', font_color=C['text_pri'])
+    _write_data_cell(sheet, row, 5, cash_delta_eur, 0, is_number=True,
+                     num_fmt='+#,##0.00;-#,##0.00;0.00', font_color=cash_color)
+    _write_data_cell(sheet, row, 6, cash_status, 0, bold=True, font_color=cash_color)
+    row += 1
+
+    # =====================================================================
     # SOLVER INFO
     # =====================================================================
     row += 2
@@ -1073,6 +1159,10 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
          (f"{_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
           if config.rebalancing_lump_sum_amount_eur > 0 else "—"),
          "Additional cash to deploy in the rebalance"),
+        ("Cash buffer target",
+         (f"{_format_number(config.target_cash_buffer_eur)} EUR"
+          if config.target_cash_buffer_eur > 0 else "—"),
+         "Absolute cash target used by the solver (from target_cash_buffer_eur)"),
         ("No-sell mode",
          ("enabled" if config.rebalancing_no_sell else "disabled"),
          "If enabled, the solver can only buy, never sell"),

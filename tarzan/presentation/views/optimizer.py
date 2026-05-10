@@ -19,6 +19,10 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
         header_parts = []
         if config.rebalancing_lump_sum_amount_eur > 0:
             header_parts.append(f"Lump sum: **{fmt_eur(config.rebalancing_lump_sum_amount_eur)}**")
+        if config.target_cash_buffer_eur > 0:
+            header_parts.append(
+                f"Cash target: **{fmt_eur(config.target_cash_buffer_eur)}**"
+            )
         if config.rebalancing_no_sell:
             header_parts.append("**NO SELL**")
         if config.rebalancing_min_transaction_eur > 0:
