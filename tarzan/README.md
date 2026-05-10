@@ -94,14 +94,50 @@ lookup in `input/indexes.csv`, then via yfinance fund composition data.
 
 ### Targets (optional)
 
-A `targets.csv` with key / value pairs:
+A `targets.csv` with key / value pairs. Keys follow a typed-suffix
+convention so the unit is unambiguous:
 
-| Key                       | Default        | Description                              |
-|---------------------------|----------------|------------------------------------------|
-| `monthly_invest_capacity` | `0`            | Monthly investment budget in EUR         |
-| `geo_exposure`            | 20% each       | JSON: target geographic allocation       |
-| `allocation_targets`      | Equity 65% ... | JSON: target asset-class allocation      |
-| `rebalancing_threshold`   | `5.0`          | Rebalancing deviation threshold (%)      |
+- `_eur` — absolute EUR amount
+- `_pctg` — percentage value
+- `_date` — free-form date string
+- no suffix — boolean flag
+
+**Rebalancing parameters**
+
+| Key                                  | Default | Description                                             |
+|--------------------------------------|---------|---------------------------------------------------------|
+| `rebalancing_lump_sum_amount_eur`    | `0`     | Extra cash to deploy in a rebalance                     |
+| `rebalancing_min_transaction_eur`    | `500`   | Trades below this amount are skipped                    |
+| `rebalancing_max_tolerance_pctg`     | `2.0`   | Cap on solver tolerance (progressive up to this value)  |
+| `rebalancing_threshold_pctg`         | `5.0`   | Alert threshold for traffic-light colors                |
+| `rebalancing_no_sell`                | `false` | If true, solver can only buy                            |
+| `portfolio_inception_date`           | `""`    | Inception date used by performance charts               |
+
+**Cash buffer (absolute EUR, tracked separately from invested %)**
+
+| Key                      | Default | Description                                      |
+|--------------------------|---------|--------------------------------------------------|
+| `target_cash_buffer_eur` | `0`     | Target cash amount; excess is invested by solver |
+
+**Invested allocation (% of invested portfolio = total − cash, must sum to 100)**
+
+| Key                                                | Description                     |
+|----------------------------------------------------|---------------------------------|
+| `target_invested_allocation_equities_pctg`         | Target weight for equities      |
+| `target_invested_allocation_fixed_income_pctg`     | Target weight for fixed income  |
+| `target_invested_allocation_gold_pctg`             | Target weight for gold          |
+| `target_invested_allocation_commodities_pctg`      | Target weight for commodities   |
+| `target_invested_allocation_alternative_pctg`      | Target weight for alternative   |
+
+**Equity geography (% of equity portion, must sum to 100)**
+
+| Key                                                    | Description     |
+|--------------------------------------------------------|-----------------|
+| `target_equity_geo_usa_pctg`                           | USA             |
+| `target_equity_geo_japan_pctg`                         | Japan           |
+| `target_equity_geo_eurozone_emu_pctg`                  | Eurozone        |
+| `target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg`       | Other developed |
+| `target_equity_geo_emerging_markets_pctg`              | Emerging mkts   |
 
 ## Financial metrics
 
