@@ -407,6 +407,9 @@ def _classify_figi_item(
         if any(k in name_lower for k in kw.get("name_fixed_income", [])):
             info["asset_class"] = AssetClass.FIXED_INCOME
             info["instrument_type"] = info.get("instrument_type", "Bond")
+        elif any(k in name_lower for k in kw.get("name_gold", [])):
+            info["asset_class"] = AssetClass.GOLD
+            info["instrument_type"] = "Gold ETC"
         elif any(k in name_lower for k in kw.get("name_commodities", [])):
             info["asset_class"] = AssetClass.COMMODITIES
             info["instrument_type"] = "ETC"
@@ -442,6 +445,8 @@ def _infer_instrument_type(info: dict, holding: Holding) -> str:
         return "Bond"
     if "etn" in hint:
         return "ETN"
+    if any(k in hint for k in kw.get("asset_type_gold", [])):
+        return "Gold ETC"
     if any(k in hint for k in kw.get("asset_type_commodities", [])):
         return "Precious Metals ETF"
     return "Other"
@@ -453,6 +458,8 @@ def _classify_etf_subtype(cat: str, name: str, kw: dict) -> str:
         return "ETF Bond"
     if any(k in cat for k in kw.get("instrument_money_market", [])) or any(k in name for k in kw.get("instrument_money_market", [])):
         return "ETF Money Market"
+    if any(k in name for k in kw.get("instrument_gold_etc", [])):
+        return "Gold ETC"
     if any(k in cat for k in kw.get("instrument_commodities_etf", [])):
         return "ETF Commodities"
     if any(k in name for k in kw.get("instrument_precious_etc", [])):
@@ -474,6 +481,7 @@ def _derive_security_type(holding: Holding) -> str:
             else "Bond"
         ),
         AssetClass.CASH_EQUIVALENTS: "Money Market ETF" if "etf" in it else "Money Market Instrument",
+        AssetClass.GOLD: "Gold ETC",
         AssetClass.COMMODITIES: "ETC" if "etc" in it else "Commodity",
         AssetClass.REAL_ESTATE: "REIT",
     }
@@ -517,6 +525,8 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClas
         return result
 
     # 4. Long name keywords
+    if any(k in long_name for k in kw.get("name_gold", [])):
+        return AssetClass.GOLD
     if any(k in long_name for k in kw.get("name_commodities", [])):
         return AssetClass.COMMODITIES
     if any(k in long_name for k in kw.get("name_fixed_income", [])):
@@ -543,6 +553,7 @@ def _classify_from_hint(hint: str, kw: dict) -> Optional[AssetClass]:
         ("asset_type_equities", AssetClass.EQUITIES),
         ("asset_type_fixed_income", AssetClass.FIXED_INCOME),
         ("asset_type_cash", AssetClass.CASH_EQUIVALENTS),
+        ("asset_type_gold", AssetClass.GOLD),
         ("asset_type_commodities", AssetClass.COMMODITIES),
         ("asset_type_alternative", AssetClass.ALTERNATIVE),
     ]
@@ -558,9 +569,11 @@ def _classify_from_category(cat: str, sector: str) -> Optional[AssetClass]:
         return AssetClass.FIXED_INCOME
     if "money market" in cat:
         return AssetClass.CASH_EQUIVALENTS
-    if any(k in cat for k in ("precious metal", "gold", "silver", "commodit")):
+    if any(k in cat for k in ("gold",)) or any(k in sector for k in ("gold",)):
+        return AssetClass.GOLD
+    if any(k in cat for k in ("precious metal", "silver", "commodit")):
         return AssetClass.COMMODITIES
-    if any(k in sector for k in ("precious metal", "gold")):
+    if any(k in sector for k in ("precious metal",)):
         return AssetClass.COMMODITIES
     if any(k in cat for k in ("real estate", "reit")):
         return AssetClass.REAL_ESTATE
@@ -831,6 +844,8 @@ def _reclassify_by_name(holding: Holding) -> None:
         holding.asset_class = AssetClass.FIXED_INCOME
     elif any(k in name_lower for k in kw.get("name_cash", [])):
         holding.asset_class = AssetClass.CASH_EQUIVALENTS
+    elif any(k in name_lower for k in kw.get("name_gold", [])):
+        holding.asset_class = AssetClass.GOLD
     elif any(k in name_lower for k in kw.get("name_commodities", [])):
         holding.asset_class = AssetClass.COMMODITIES
 

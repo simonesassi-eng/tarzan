@@ -95,7 +95,7 @@ class MetricsEngine:
         df["pct_of_class"] = (df["current_value"] / class_totals * 100).fillna(0.0)
         class_order = {v: i for i, v in enumerate([
             "Equities", "Fixed Income", "Cash & Cash Equivalents",
-            "Commodities", "Real Estate", "Alternative",
+            "Gold", "Commodities", "Real Estate", "Alternative",
         ])}
         df["_sort"] = df["asset_class"].map(class_order).fillna(99)
         df = df.sort_values(["_sort", "current_value"], ascending=[True, False]).drop(columns=["_sort"]).reset_index(drop=True)

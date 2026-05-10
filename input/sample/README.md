@@ -6,11 +6,11 @@ real personal data.
 ## Files
 
 - **`sample_holdings.csv`** — 10 positions across equities, fixed income,
-  commodities and cash. Uses real, liquid tickers (iShares, Vanguard,
+  gold, and cash. Uses real, liquid tickers (iShares, Vanguard,
   Xtrackers) for realistic live market data.
 - **`sample_targets.csv`** — investor targets: 65% equities / 25% fixed
-  income / 5% cash / 5% commodities, with geographic allocation tilted
-  to USA (55%) and a rebalancing threshold of 2.5%.
+  income / 5% gold / 3% cash / 2% alternative, with geographic
+  allocation tilted to USA (55%) and a rebalancing threshold of 2.5%.
 
 ## How to use
 

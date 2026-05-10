@@ -22,6 +22,7 @@ class AssetClass(str, Enum):
     EQUITIES = "Equities"
     FIXED_INCOME = "Fixed Income"
     CASH_EQUIVALENTS = "Cash & Cash Equivalents"
+    GOLD = "Gold"
     COMMODITIES = "Commodities"
     REAL_ESTATE = "Real Estate"
     ALTERNATIVE = "Alternative"
