@@ -1,13 +1,24 @@
 """Investor configuration model with serialization and normalization.
 
-Handles loading investor preferences from CSV key-value files and provides
-sensible defaults from the YAML configuration layer.
+Loads investor preferences from a key-value CSV (no JSON, no legacy aliases).
+
+Naming convention for CSV keys:
+- `_eur` suffix → absolute EUR value
+- `_pctg` suffix → percentage
+- `_date` suffix → date (free-form string)
+- no suffix → boolean flags
+
+Asset-class targets are expressed as `target_invested_allocation_<class>_pctg`
+and describe the allocation within the *invested* portion of the portfolio
+(total minus cash). Cash is tracked separately via `target_cash_buffer_eur`.
+
+Equity geography targets use `target_equity_geo_<region>_pctg` and describe
+the allocation within the equity portion only.
 """
 
 from __future__ import annotations
 
 import csv
-import json
 import logging
 from dataclasses import dataclass, field
 
@@ -26,34 +37,53 @@ def normalize_percentages(d: dict[str, float]) -> dict[str, float]:
 
 @dataclass
 class InvestorConfig:
-    """Investor profile with allocation targets and rebalancing preferences."""
+    """Investor profile with allocation targets and rebalancing preferences.
 
-    rebalancing_lump_sum_amount: float = 0.0
-    geo_allocation: dict[str, float] = field(
-        default_factory=lambda: dict(cfg.default_geo_allocation())
-    )
-    allocation_targets: dict[str, float] = field(
-        default_factory=lambda: dict(cfg.default_allocation_targets())
-    )
-    rebalancing_threshold: float = 5.0
-    rebalancing_precision: float = 0.5
+    Allocation semantics:
+    - `invested_allocation_targets_pctg` applies to the *invested* portfolio
+      (= total portfolio value minus cash holdings). Must sum to 100.
+    - `equity_geo_targets_pctg` applies to the equity portion only. Must sum to 100.
+    - `target_cash_buffer_eur` is an absolute EUR amount, not a percentage.
+    """
+
+    # Rebalancing parameters
+    rebalancing_lump_sum_amount_eur: float = 0.0
     rebalancing_min_transaction_eur: float = 500.0
-    rebalancing_max_tolerance: float = 2.0
+    rebalancing_max_tolerance_pctg: float = 2.0
+    rebalancing_threshold_pctg: float = 5.0
+    rebalancing_precision_pctg: float = 0.5
     rebalancing_no_sell: bool = False
+
+    # Cash buffer (absolute EUR amount)
+    target_cash_buffer_eur: float = 0.0
+
+    # Invested allocation (% of invested portfolio, excluding cash)
+    invested_allocation_targets_pctg: dict[str, float] = field(
+        default_factory=lambda: dict(cfg.default_invested_allocation_targets_pctg())
+    )
+
+    # Equity geography (% of equity portion)
+    equity_geo_targets_pctg: dict[str, float] = field(
+        default_factory=lambda: dict(cfg.default_equity_geo_targets_pctg())
+    )
+
+    # Metadata
+    portfolio_inception_date: str = ""
     portfolio_backtest_period: str = ""
-    portfolio_inception: str = ""
 
     def __post_init__(self):
-        """Fill portfolio_backtest_period and portfolio_inception from configs.csv if not set."""
+        """Fill metadata from constants.yaml if not set explicitly."""
         if not self.portfolio_backtest_period:
             self.portfolio_backtest_period = cfg.portfolio_backtest_period()
-        if not self.portfolio_inception:
-            self.portfolio_inception = cfg.portfolio_inception()
+        if not self.portfolio_inception_date:
+            self.portfolio_inception_date = cfg.portfolio_inception_date()
 
+    # ------------------------------------------------------------------
+    # Public loaders
+    # ------------------------------------------------------------------
     @classmethod
     def from_csv(cls, path: str) -> "InvestorConfig":
         """Load investor config from a CSV key-value file."""
-        config = cls()
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = {
@@ -61,151 +91,144 @@ class InvestorConfig:
                 for row in reader
                 if "key" in row and "value" in row
             }
-
-        # Simple float fields
-        _set_float(config, rows, "rebalancing_lump_sum_amount")
-        _set_float(config, rows, "rebalancing_threshold")
-        _set_float(config, rows, "rebalancing_precision")
-        _set_float(config, rows, "rebalancing_min_transaction_eur")
-        _set_float(config, rows, "rebalancing_max_tolerance")
-
-        # Boolean flags
-        if "rebalancing_no_sell" in rows:
-            config.rebalancing_no_sell = str(rows["rebalancing_no_sell"]).strip().lower() in ("true", "1", "yes")
-
-        # String fields
-        if "portfolio_inception" in rows and rows["portfolio_inception"]:
-            config.portfolio_inception = rows["portfolio_inception"]
-
-        # Legacy JSON format (backward compatible)
-        _set_json_dict(config, rows, "geo_allocation", cfg.default_geo_allocation())
-        _set_json_dict(config, rows, "allocation_targets", cfg.default_allocation_targets())
-
-        # Flat key format: target_geo_allocation_* and target_asset_allocation_*
-        _parse_flat_geo(config, rows)
-        _parse_flat_allocation(config, rows)
-
-        # Normalize to 100%
-        total_alloc = sum(config.allocation_targets.values())
-        if abs(total_alloc - 100.0) > 0.01:
-            logger.warning("allocation_targets sum=%.2f%%, normalizing to 100%%", total_alloc)
-            config.allocation_targets = normalize_percentages(config.allocation_targets)
-
-        total_geo = sum(config.geo_allocation.values())
-        if abs(total_geo - 100.0) > 0.01:
-            logger.warning("geo_allocation sum=%.2f%%, normalizing to 100%%", total_geo)
-            config.geo_allocation = normalize_percentages(config.geo_allocation)
-
-        return config
+        return cls.from_dict(rows)
 
     @classmethod
     def from_dict(cls, rows: dict[str, str]) -> "InvestorConfig":
         """Load investor config from a pre-parsed key-value dict."""
         config = cls()
-        _set_float(config, rows, "rebalancing_lump_sum_amount")
-        _set_float(config, rows, "rebalancing_threshold")
-        _set_float(config, rows, "rebalancing_precision")
+
+        # Scalar fields
+        _set_float(config, rows, "rebalancing_lump_sum_amount_eur")
         _set_float(config, rows, "rebalancing_min_transaction_eur")
-        _set_float(config, rows, "rebalancing_max_tolerance")
+        _set_float(config, rows, "rebalancing_max_tolerance_pctg")
+        _set_float(config, rows, "rebalancing_threshold_pctg")
+        _set_float(config, rows, "rebalancing_precision_pctg")
+        _set_float(config, rows, "target_cash_buffer_eur")
 
         # Boolean flags
         if "rebalancing_no_sell" in rows:
-            config.rebalancing_no_sell = str(rows["rebalancing_no_sell"]).strip().lower() in ("true", "1", "yes")
+            config.rebalancing_no_sell = _parse_bool(rows["rebalancing_no_sell"])
 
-        # String fields
-        if "portfolio_inception" in rows and rows["portfolio_inception"]:
-            config.portfolio_inception = rows["portfolio_inception"]
+        # Date / string fields
+        if rows.get("portfolio_inception_date"):
+            config.portfolio_inception_date = rows["portfolio_inception_date"]
 
-        _set_json_dict(config, rows, "geo_allocation", cfg.default_geo_allocation())
-        _set_json_dict(config, rows, "allocation_targets", cfg.default_allocation_targets())
-        _parse_flat_geo(config, rows)
-        _parse_flat_allocation(config, rows)
+        # Dict fields
+        _parse_invested_allocation(config, rows)
+        _parse_equity_geo(config, rows)
 
-        total_alloc = sum(config.allocation_targets.values())
-        if abs(total_alloc - 100.0) > 0.01:
-            config.allocation_targets = normalize_percentages(config.allocation_targets)
-        total_geo = sum(config.geo_allocation.values())
-        if abs(total_geo - 100.0) > 0.01:
-            config.geo_allocation = normalize_percentages(config.geo_allocation)
+        # Warn on unknown keys
+        _warn_unknown_keys(rows)
+
+        # Validate sums
+        _validate_sum_to_100(
+            config.invested_allocation_targets_pctg,
+            "invested_allocation_targets_pctg",
+            normalize=True,
+        )
+        _validate_sum_to_100(
+            config.equity_geo_targets_pctg,
+            "equity_geo_targets_pctg",
+            normalize=True,
+        )
+
         return config
 
 
+# ---------------------------------------------------------------------------
+# Parsing helpers
+# ---------------------------------------------------------------------------
+
 def _set_float(config: InvestorConfig, rows: dict, key: str) -> None:
-    if key in rows:
+    if key in rows and rows[key] != "":
         try:
             setattr(config, key, float(rows[key]))
         except (ValueError, TypeError):
             logger.warning("Failed to parse %s='%s', using default", key, rows[key])
 
 
-def _set_str(config: InvestorConfig, rows: dict, key: str) -> None:
-    if key in rows and rows[key]:
-        setattr(config, key, rows[key])
+def _parse_bool(raw: str) -> bool:
+    return str(raw).strip().lower() in ("true", "1", "yes", "y", "t")
 
 
-def _set_json_dict(config: InvestorConfig, rows: dict, key: str, default: dict) -> None:
-    if key in rows:
-        try:
-            parsed = json.loads(rows[key])
-            if isinstance(parsed, dict):
-                setattr(config, key, {k: float(v) for k, v in parsed.items()})
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-
-
-# Flat key → canonical name mapping (supports both old and new prefixes)
-_GEO_KEY_MAP = {
-    "target_geo_allocation_usa": "USA",
-    "target_geo_allocation_japan": "Japan",
-    "target_geo_allocation_eurozone_emu": "Eurozone EMU",
-    "target_geo_allocation_dev_ex_usa_ex_emu_ex_jp": "Dev ex-USA ex-EMU ex-JP",
-    "target_geo_allocation_emerging_markets": "Emerging Markets",
-    # Legacy keys (backward compatible)
-    "geo_allocation_usa": "USA",
-    "geo_allocation_japan": "Japan",
-    "geo_allocation_eurozone_emu": "Eurozone EMU",
-    "geo_allocation_dev_ex_usa_ex_emu_ex_jp": "Dev ex-USA ex-EMU ex-JP",
-    "geo_allocation_emerging_markets": "Emerging Markets",
-}
-
-_ALLOC_KEY_MAP = {
-    "target_asset_allocation_equities": "Equities",
-    "target_asset_allocation_fixed_income": "Fixed Income",
-    "target_asset_allocation_cash": "Cash & Cash Equivalents",
-    "target_asset_allocation_gold": "Gold",
-    "target_asset_allocation_commodities": "Commodities",
-    "target_asset_allocation_alternative": "Alternative",
-    "target_asset_allocation_real_estate": "Real Estate",
-    # Legacy keys (backward compatible)
-    "allocation_target_equities": "Equities",
-    "allocation_target_fixed_income": "Fixed Income",
-    "allocation_target_cash": "Cash & Cash Equivalents",
-    "allocation_target_gold": "Gold",
-    "allocation_target_commodities": "Commodities",
-    "allocation_target_alternative": "Alternative",
-    "allocation_target_real_estate": "Real Estate",
+# Canonical asset-class names for the invested allocation section
+_INVESTED_ALLOC_KEYS: dict[str, str] = {
+    "target_invested_allocation_equities_pctg": "Equities",
+    "target_invested_allocation_fixed_income_pctg": "Fixed Income",
+    "target_invested_allocation_gold_pctg": "Gold",
+    "target_invested_allocation_commodities_pctg": "Commodities",
+    "target_invested_allocation_alternative_pctg": "Alternative",
+    "target_invested_allocation_real_estate_pctg": "Real Estate",
 }
 
 
-def _parse_flat_geo(config: InvestorConfig, rows: dict) -> None:
-    found = {}
-    for csv_key, canonical in _GEO_KEY_MAP.items():
-        if csv_key in rows:
+# Canonical region names for equity geography
+_EQUITY_GEO_KEYS: dict[str, str] = {
+    "target_equity_geo_usa_pctg": "USA",
+    "target_equity_geo_japan_pctg": "Japan",
+    "target_equity_geo_eurozone_emu_pctg": "Eurozone EMU",
+    "target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg": "Dev ex-USA ex-EMU ex-JP",
+    "target_equity_geo_emerging_markets_pctg": "Emerging Markets",
+}
+
+
+def _parse_invested_allocation(config: InvestorConfig, rows: dict) -> None:
+    found: dict[str, float] = {}
+    for csv_key, canonical in _INVESTED_ALLOC_KEYS.items():
+        if csv_key in rows and rows[csv_key] != "":
             try:
                 found[canonical] = float(rows[csv_key])
             except (ValueError, TypeError):
                 logger.warning("Failed to parse %s='%s'", csv_key, rows[csv_key])
     if found:
-        config.geo_allocation = found
+        config.invested_allocation_targets_pctg = found
 
 
-def _parse_flat_allocation(config: InvestorConfig, rows: dict) -> None:
-    found = {}
-    for csv_key, canonical in _ALLOC_KEY_MAP.items():
-        if csv_key in rows:
+def _parse_equity_geo(config: InvestorConfig, rows: dict) -> None:
+    found: dict[str, float] = {}
+    for csv_key, canonical in _EQUITY_GEO_KEYS.items():
+        if csv_key in rows and rows[csv_key] != "":
             try:
                 found[canonical] = float(rows[csv_key])
             except (ValueError, TypeError):
                 logger.warning("Failed to parse %s='%s'", csv_key, rows[csv_key])
     if found:
-        config.allocation_targets = found
+        config.equity_geo_targets_pctg = found
+
+
+_KNOWN_SCALAR_KEYS = frozenset({
+    "rebalancing_lump_sum_amount_eur",
+    "rebalancing_min_transaction_eur",
+    "rebalancing_max_tolerance_pctg",
+    "rebalancing_threshold_pctg",
+    "rebalancing_precision_pctg",
+    "rebalancing_no_sell",
+    "target_cash_buffer_eur",
+    "portfolio_inception_date",
+})
+
+
+def _known_keys() -> frozenset[str]:
+    return _KNOWN_SCALAR_KEYS | frozenset(_INVESTED_ALLOC_KEYS) | frozenset(_EQUITY_GEO_KEYS)
+
+
+def _warn_unknown_keys(rows: dict) -> None:
+    known = _known_keys()
+    for key in rows:
+        if key and key not in known:
+            logger.warning("Unknown target key '%s' — ignored", key)
+
+
+def _validate_sum_to_100(
+    d: dict[str, float], name: str, normalize: bool = False,
+) -> None:
+    if not d:
+        return
+    total = sum(d.values())
+    if abs(total - 100.0) > 0.01:
+        logger.warning("%s sums to %.2f%%, expected 100%%", name, total)
+        if normalize:
+            normalized = normalize_percentages(d)
+            d.clear()
+            d.update(normalized)

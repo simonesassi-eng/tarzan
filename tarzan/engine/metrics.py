@@ -139,7 +139,7 @@ class MetricsEngine:
 
         # Filter by inception date if configured
         ph = ph_full.copy()
-        inception = self.config.portfolio_inception if self.config else ""
+        inception = self.config.portfolio_inception_date if self.config else ""
         if inception:
             try:
                 inception_dt = pd.to_datetime(inception)
@@ -260,15 +260,15 @@ class MetricsEngine:
         by_geo = ctx["allocation_by_geo"]
         rows = []
         actual_class = dict(zip(by_class["category"], by_class["weight_pct"]))
-        for cat in sorted(set(self.config.allocation_targets) | set(actual_class)):
+        for cat in sorted(set(self.config.invested_allocation_targets_pctg) | set(actual_class)):
             actual = actual_class.get(cat, 0.0)
-            target = self.config.allocation_targets.get(cat, 0.0)
+            target = self.config.invested_allocation_targets_pctg.get(cat, 0.0)
             rows.append({"category": cat, "type": "asset_class",
                          "actual_pct": actual, "target_pct": target, "delta_pct": actual - target})
         actual_geo = dict(zip(by_geo["category"], by_geo["weight_pct"]))
-        for cat in sorted(set(self.config.geo_allocation) | set(actual_geo)):
+        for cat in sorted(set(self.config.equity_geo_targets_pctg) | set(actual_geo)):
             actual = actual_geo.get(cat, 0.0)
-            target = self.config.geo_allocation.get(cat, 0.0)
+            target = self.config.equity_geo_targets_pctg.get(cat, 0.0)
             rows.append({"category": cat, "type": "geography (equity only)",
                          "actual_pct": actual, "target_pct": target, "delta_pct": actual - target})
         ctx["goal_deltas"] = pd.DataFrame(rows)
@@ -282,7 +282,7 @@ class MetricsEngine:
             ctx["rebalancing_verifications"] = None
             return
         from tarzan.engine.rebalancer import compute_unified_rebalancing
-        lump = self.config.rebalancing_lump_sum_amount if self.config.rebalancing_lump_sum_amount > 0 else None
+        lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
         suggestions, verifications = compute_unified_rebalancing(
             self.holdings, self.config, ctx["total_value"], lump_sum=lump)
         ctx["rebalancing_suggestions"] = suggestions

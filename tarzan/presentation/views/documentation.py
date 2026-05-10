@@ -72,7 +72,7 @@ The rebalancer minimizes total transaction volume subject to constraints:
 6. **No sell** (optional) — forbid all sell actions, only allow buys
 7. **Frozen holdings** — `no_buy_no_sell=TRUE` excludes from rebalancing
 
-The solver progressively relaxes tolerance from 0.1% up to `rebalancing_max_tolerance`.
+The solver progressively relaxes tolerance from 0.1% up to `rebalancing_max_tolerance_pctg`.
 If no feasible solution exists, returns 0 actions (rather than forcing a bad trade).
         """
     )

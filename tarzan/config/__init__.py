@@ -167,14 +167,20 @@ def benchmark_details() -> dict[str, dict]:
 
 # --- Allocation defaults ---
 
-def default_allocation_targets() -> dict[str, float]:
-    return get("default_allocation_targets", {
-        "Equities": 60.0, "Fixed Income": 25.0,
-        "Cash & Cash Equivalents": 5.0, "Gold": 5.0, "Commodities": 0.0, "Alternative": 5.0,
+def default_invested_allocation_targets_pctg() -> dict[str, float]:
+    """Default allocation within the *invested* portion of the portfolio.
+
+    Must sum to 100. Cash is tracked separately via target_cash_buffer_eur.
+    """
+    return get("default_invested_allocation_targets_pctg", {
+        "Equities": 65.0, "Fixed Income": 25.0,
+        "Gold": 5.0, "Commodities": 0.0, "Alternative": 5.0,
     })
 
-def default_geo_allocation() -> dict[str, float]:
-    return get("default_geo_allocation", {
+
+def default_equity_geo_targets_pctg() -> dict[str, float]:
+    """Default geographic allocation within the equity portion. Must sum to 100."""
+    return get("default_equity_geo_targets_pctg", {
         "USA": 20.0, "Japan": 20.0, "Eurozone EMU": 20.0,
         "Dev ex-USA ex-EMU ex-JP": 20.0, "Emerging Markets": 20.0,
     })
@@ -220,6 +226,6 @@ def portfolio_backtest_period() -> str:
     """Default backtest period (5 years, hardcoded)."""
     return "5y"
 
-def portfolio_inception() -> str:
+def portfolio_inception_date() -> str:
     """Default inception date. Can be overridden by targets.csv."""
-    return str(get("portfolio_inception", ""))
+    return str(get("portfolio_inception_date", ""))

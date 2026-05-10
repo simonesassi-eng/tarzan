@@ -78,16 +78,18 @@ max_workers: 8                    # Parallel threads for yfinance API calls
 # =============================================================================
 # 3. DEFAULT ALLOCATION TARGETS
 # Used when targets.csv doesn't specify values.
+# invested_allocation targets apply to the invested portion (excluding cash).
+# equity_geo targets apply to the equity portion of the invested allocation.
 # =============================================================================
 
-default_allocation_targets:
+default_invested_allocation_targets_pctg:
   Equities: 65.0
   Fixed Income: 25.0
-  Cash & Cash Equivalents: 5.0
-  Commodities: 5.0
-  Alternative: 0.0
+  Gold: 5.0
+  Commodities: 0.0
+  Alternative: 5.0
 
-default_geo_exposure:
+default_equity_geo_targets_pctg:
   USA: 50.0
   Japan: 9.0
   Eurozone EMU: 16.0

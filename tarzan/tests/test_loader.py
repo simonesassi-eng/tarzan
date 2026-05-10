@@ -94,39 +94,39 @@ US0000000001,AAA.MI,100,5000,6000,EUR,25.5
 class TestConfigLoader:
     def test_config_from_csv(self):
         csv = """key,value
-rebalancing_lump_sum_amount,1000
+rebalancing_lump_sum_amount_eur,1000
 rebalancing_min_transaction_eur,500
-target_asset_allocation_equities,60
-target_asset_allocation_fixed_income,30
-target_asset_allocation_cash,10
-target_geo_allocation_usa,50
-target_geo_allocation_japan,10
-target_geo_allocation_eurozone_emu,20
-target_geo_allocation_dev_ex_usa_ex_emu_ex_jp,10
-target_geo_allocation_emerging_markets,10
+target_invested_allocation_equities_pctg,60
+target_invested_allocation_fixed_income_pctg,30
+target_invested_allocation_gold_pctg,10
+target_equity_geo_usa_pctg,50
+target_equity_geo_japan_pctg,10
+target_equity_geo_eurozone_emu_pctg,20
+target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg,10
+target_equity_geo_emerging_markets_pctg,10
 """
         config = load_config(_csv_bytesio(csv))
 
-        assert config.rebalancing_lump_sum_amount == 1000.0
+        assert config.rebalancing_lump_sum_amount_eur == 1000.0
         assert config.rebalancing_min_transaction_eur == 500.0
-        assert config.allocation_targets["Equities"] == 60.0
-        assert config.geo_allocation["USA"] == 50.0
+        assert config.invested_allocation_targets_pctg["Equities"] == 60.0
+        assert config.equity_geo_targets_pctg["USA"] == 50.0
 
     def test_config_normalizes_to_100_if_off(self):
         """If allocations don't sum to 100, they get normalized."""
         csv = """key,value
-target_asset_allocation_equities,50
-target_asset_allocation_fixed_income,25
-target_asset_allocation_cash,25
-target_geo_allocation_usa,50
-target_geo_allocation_japan,10
-target_geo_allocation_eurozone_emu,20
-target_geo_allocation_dev_ex_usa_ex_emu_ex_jp,10
-target_geo_allocation_emerging_markets,10
+target_invested_allocation_equities_pctg,50
+target_invested_allocation_fixed_income_pctg,25
+target_invested_allocation_gold_pctg,25
+target_equity_geo_usa_pctg,50
+target_equity_geo_japan_pctg,10
+target_equity_geo_eurozone_emu_pctg,20
+target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg,10
+target_equity_geo_emerging_markets_pctg,10
 """
         config = load_config(_csv_bytesio(csv))
 
-        total = sum(config.allocation_targets.values())
+        total = sum(config.invested_allocation_targets_pctg.values())
         assert abs(total - 100.0) < 0.01
 
     def test_config_boolean_no_sell(self):
@@ -140,4 +140,4 @@ rebalancing_no_sell,TRUE
         config = load_config(None)
         assert config is not None
         # Should have sensible defaults
-        assert config.rebalancing_lump_sum_amount == 0.0
+        assert config.rebalancing_lump_sum_amount_eur == 0.0
