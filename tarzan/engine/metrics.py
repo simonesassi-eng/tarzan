@@ -191,10 +191,10 @@ class MetricsEngine:
         if ph.empty:
             ctx["performance"] = {"cagr": 0.0, "ytd": None, "1d": None, "1w": None,
                                   "1m": None, "3m": None, "6m": None, "1y": None,
-                                  "3y": None, "5y": None, "irr": None}
+                                  "3y": None, "5y": None}
         else:
             periods = {"1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180, "1y": 365, "3y": 1095, "5y": 1825}
-            result = {"cagr": compute_cagr(ph), "ytd": compute_ytd_return(ph), "irr": None}
+            result = {"cagr": compute_cagr(ph), "ytd": compute_ytd_return(ph)}
             for key, days in periods.items():
                 result[key] = compute_period_return(ph, days)
             ctx["performance"] = result
@@ -336,25 +336,23 @@ class MetricsEngine:
                 "actual_eur": None, "target_eur": None, "delta_eur": None,
             })
 
-        # Cash buffer row: absolute EUR, no percentages. Pctg fields carry
-        # the relative deviation vs the target buffer so the traffic-light
-        # helper can reuse rebalancing_threshold_pctg.
+        # Cash buffer row (only when a target is configured): absolute EUR,
+        # no percentages. Pctg fields carry the relative deviation vs the
+        # target buffer so the traffic-light helper can reuse
+        # rebalancing_threshold_pctg.
         cash_value = ctx.get("cash_value", 0.0)
         cash_target = float(self.config.target_cash_buffer_eur or 0.0)
         if cash_target > 0:
             delta_eur = cash_value - cash_target
             delta_pct = delta_eur / cash_target * 100.0
-        else:
-            delta_eur = cash_value  # no target: any cash is a drift
-            delta_pct = 0.0
-        rows.append({
-            "category": "Cash Buffer", "type": "cash",
-            "actual_pct": None, "target_pct": None,
-            "delta_pct": delta_pct,
-            "actual_eur": cash_value,
-            "target_eur": cash_target,
-            "delta_eur": delta_eur,
-        })
+            rows.append({
+                "category": "Cash & Cash Equivalents", "type": "cash",
+                "actual_pct": None, "target_pct": None,
+                "delta_pct": delta_pct,
+                "actual_eur": cash_value,
+                "target_eur": cash_target,
+                "delta_eur": delta_eur,
+            })
 
         ctx["goal_deltas"] = pd.DataFrame(rows)
 
@@ -380,7 +378,6 @@ class MetricsEngine:
         ph = ctx.get("portfolio_history", pd.Series(dtype=float))
         if ph.empty:
             ctx["benchmark_comparison"] = pd.DataFrame()
-            ctx["what_if"] = pd.DataFrame()
             ctx["benchmark_histories"] = {}
             return
         initial_value = float(ph.iloc[0])
@@ -401,7 +398,6 @@ class MetricsEngine:
                 logger.warning("Benchmark %s failed: %s", name, e)
         _add_mix_to_histories(key_histories, initial_value)
         ctx["benchmark_comparison"] = pd.DataFrame(comp_rows)
-        ctx["what_if"] = pd.DataFrame()
         ctx["benchmark_histories"] = key_histories
 
     # ------------------------------------------------------------------
@@ -492,7 +488,6 @@ class MetricsEngine:
             rebalancing_suggestions=ctx.get("rebalancing_suggestions"),
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
-            what_if=ctx.get("what_if", pd.DataFrame()),
             portfolio_history=ctx.get("portfolio_history"),
             benchmark_histories=ctx.get("benchmark_histories", {}),
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),

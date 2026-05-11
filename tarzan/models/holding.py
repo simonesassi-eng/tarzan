@@ -70,6 +70,9 @@ class Holding:
     asset_type: Optional[str] = None
     current_price: Optional[float] = None
     current_value: Optional[float] = None
+    # Portfolio-relative weight: holding value / total portfolio value * 100.
+    # The invested-only variant lives on the computed holdings dataframe as
+    # `weight_of_invested_pctg` (NaN for cash rows).
     weight_pct: Optional[float] = None
     gain_pct: Optional[float] = None
     asset_class: Optional[AssetClass] = None

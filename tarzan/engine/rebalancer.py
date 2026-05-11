@@ -109,13 +109,10 @@ def compute_unified_rebalancing(
             "cash buffer target skipped for this run.",
             cash_value, cash_target,
         )
-    effective_net_inflow = explicit_lump + (cash_excess if enforce_cash_target else 0.0)
+    effective_net_inflow = explicit_lump + cash_excess
     is_lump_sum = effective_net_inflow > 0
 
-    # --- Phase 1: Check trigger (skip for lump sum) ---
-    # Always run the solver — min_transaction_eur handles filtering
-
-    # --- Phase 2: Solve MILP with progressive tolerance ---
+    # --- Solve MILP with progressive tolerance ---
     # Cap at user-configured max_tolerance to avoid solutions that worsen allocations.
     max_tol = config.rebalancing_max_tolerance_pctg
     tolerances = [t for t in [0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0] if t <= max_tol]
@@ -155,6 +152,32 @@ def compute_unified_rebalancing(
 
 def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq_value):
     actions = []
+    # Loop-invariant aggregates computed once for _build_reason.
+    invested_tv = float(sum(
+        values[j] for j, hh in enumerate(holdings)
+        if hh.asset_class != AssetClass.CASH_EQUIVALENTS
+    ))
+    fi_val = float(sum(
+        values[j] for j, hh in enumerate(holdings)
+        if hh.asset_class == AssetClass.FIXED_INCOME
+    ))
+    # Per-asset-class totals (invariant across the action loop).
+    class_sums: dict[str, float] = {}
+    for j, hh in enumerate(holdings):
+        key = hh.asset_class.value if hh.asset_class else "Alternative"
+        class_sums[key] = class_sums.get(key, 0.0) + float(values[j])
+    # Per-geography totals within equities (same for every action).
+    geo_totals = [
+        float(sum(geo_frac[j][g_idx] * values[j] for j, hh in enumerate(holdings)
+                  if hh.asset_class == AssetClass.EQUITIES))
+        for g_idx in range(len(all_geos))
+    ]
+    reason_ctx = {
+        "invested_tv": invested_tv,
+        "fi_val": fi_val,
+        "class_sums": class_sums,
+        "geo_totals": geo_totals,
+    }
     for i, h in enumerate(holdings):
         buy_i = result.x[i]
         sell_i = result.x[n + i]
@@ -170,39 +193,12 @@ def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq
         if abs(net) < 1.0:
             continue
         direction = "buy" if net > 0 else "sell"
-        reason = _build_reason(i, h, holdings, config, values, geo_frac, all_geos, eq_value)
+        reason = _build_reason(
+            i, h, config, values, geo_frac, all_geos, eq_value, reason_ctx,
+        )
         actions.append({"name": h.name or h.ticker, "ticker": h.ticker,
                         "direction": direction, "amount_eur": round(abs(net), 2), "reason": reason})
     return actions
-
-
-def _check_trigger(values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv, threshold):
-    invested_tv = sum(
-        values[i] for i, h in enumerate(holdings)
-        if h.asset_class != AssetClass.CASH_EQUIVALENTS
-    )
-    for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
-        ac_sum = sum(values[i] for i, h in enumerate(holdings)
-                     if (h.asset_class.value if h.asset_class else "Alternative") == ac_name)
-        if invested_tv > 0 and abs(ac_sum / invested_tv * 100 - target_pct) > threshold:
-            return True
-    if eq_value > 0:
-        for g_idx, gn in enumerate(all_geos):
-            actual = sum(geo_frac[i][g_idx] * values[i] for i, h in enumerate(holdings)
-                         if h.asset_class == AssetClass.EQUITIES) / eq_value * 100
-            if abs(actual - config.equity_geo_targets_pctg.get(gn, 0)) > threshold:
-                return True
-    if eq_value > 0:
-        for i, h in enumerate(holdings):
-            if h.target_equities is not None and h.asset_class == AssetClass.EQUITIES:
-                if abs(values[i] / eq_value * 100 - h.target_equities) > threshold:
-                    return True
-    if fi_value > 0:
-        for i, h in enumerate(holdings):
-            if h.target_fixed_income is not None and h.asset_class == AssetClass.FIXED_INCOME:
-                if abs(values[i] / fi_value * 100 - h.target_fixed_income) > threshold:
-                    return True
-    return False
 
 
 def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv,
@@ -386,37 +382,42 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
                 bounds=Bounds(lb, ub), options={"time_limit": 30, "mip_rel_gap": 1e-6})
 
 
-def _build_reason(idx, h, holdings, config, values, geo_frac, all_geos, eq_value):
+def _build_reason(idx, h, config, values, geo_frac, all_geos, eq_value, ctx):
+    """Format a short 'why' string for a suggested action.
+
+    ``ctx`` carries loop-invariant aggregates precomputed by ``_extract_actions``:
+    ``invested_tv`` (total minus cash), ``fi_val``, ``class_sums`` per class,
+    and ``geo_totals`` per equity-geography bucket.
+    """
     reasons = []
-    tv = values.sum()
-    # Invested portion (exclude cash) so reasons align with Optimizer table.
-    invested_tv = sum(
-        values[j] for j, hh in enumerate(holdings)
-        if hh.asset_class != AssetClass.CASH_EQUIVALENTS
-    )
+    invested_tv = ctx["invested_tv"]
+    fi_val = ctx["fi_val"]
+    class_sums = ctx["class_sums"]
+    geo_totals = ctx["geo_totals"]
+
     ac = h.asset_class.value if h.asset_class else "Alternative"
-    ac_sum = sum(values[j] for j, hh in enumerate(holdings)
-                 if (hh.asset_class.value if hh.asset_class else "Alternative") == ac)
+    ac_sum = class_sums.get(ac, 0.0)
     ac_actual = ac_sum / invested_tv * 100 if invested_tv > 0 else 0.0
     ac_target = config.invested_allocation_targets_pctg.get(ac, 0)
     if h.asset_class != AssetClass.CASH_EQUIVALENTS and abs(ac_actual - ac_target) > 0.5:
         reasons.append(f"{ac} at {ac_actual:.1f}% vs target {ac_target:.0f}%")
+
     if h.asset_class == AssetClass.EQUITIES and eq_value > 0:
         for g_idx, gn in enumerate(all_geos):
             frac = geo_frac[idx][g_idx]
             if frac > 0.1:
-                geo_actual = sum(geo_frac[j][g_idx] * values[j] for j, hh in enumerate(holdings)
-                                 if hh.asset_class == AssetClass.EQUITIES) / eq_value * 100
+                geo_actual = geo_totals[g_idx] / eq_value * 100
                 geo_target = config.equity_geo_targets_pctg.get(gn, 0)
                 if abs(geo_actual - geo_target) > 0.5:
                     reasons.append(f"{gn} at {geo_actual:.1f}% vs target {geo_target:.0f}%")
+
     if h.target_equities is not None and eq_value > 0:
         ph_actual = values[idx] / eq_value * 100
         if abs(ph_actual - h.target_equities) > 0.5:
             reasons.append(
                 f"Holding at {ph_actual:.1f}% vs target {h.target_equities:.0f}% of Equities"
             )
-    fi_val = sum(values[j] for j, hh in enumerate(holdings) if hh.asset_class == AssetClass.FIXED_INCOME)
+
     if h.target_fixed_income is not None and fi_val > 0:
         ph_actual = values[idx] / fi_val * 100
         if abs(ph_actual - h.target_fixed_income) > 0.5:
@@ -436,7 +437,9 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     ])
     cash_new = float((cash_mask * new_values).sum())
     invested_new = max(float(tv - cash_new), 0.0)
-    tol = 1.0  # 1% tolerance for verification display
+    # Use the same threshold as the Optimizer traffic-light so the verification
+    # "OK / PARTIAL" status does not contradict the user-facing colors.
+    tol = float(config.rebalancing_threshold_pctg)
 
     # Invested asset allocation: percentages relative to invested_new
     # (excludes cash). Cash is never in invested_allocation_targets_pctg.
@@ -483,7 +486,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         actual = new_values[i] / eq_total * 100 if eq_total > 0 else 0
         d = abs(actual - h.target_equities); max_ph = max(max_ph, d)
         ph_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_equities:.0f}%)")
-        ph_items.append({"category": h.ticker, "actual_pct": actual,
+        ph_items.append({"category": h.name or h.ticker, "actual_pct": actual,
                          "target_pct": float(h.target_equities)})
     verifications.append({"check": "Per-Holding Equity Targets", "kind": "per_holding_equity",
                           "status": "✓ OK" if max_ph <= tol else "⚠ PARTIAL",
@@ -500,7 +503,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         actual = new_values[i] / fi_total * 100 if fi_total > 0 else 0
         d = abs(actual - h.target_fixed_income); max_fi = max(max_fi, d)
         fi_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_fixed_income:.0f}%)")
-        fi_items.append({"category": h.ticker, "actual_pct": actual,
+        fi_items.append({"category": h.name or h.ticker, "actual_pct": actual,
                          "target_pct": float(h.target_fixed_income)})
     verifications.append({"check": "Per-Holding FI Targets", "kind": "per_holding_fi",
                           "status": "✓ OK" if max_fi <= tol else "⚠ PARTIAL",
@@ -512,14 +515,14 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     cash_delta_eur = cash_new - cash_target
     cash_ok = abs(cash_delta_eur) <= max(cash_target * 0.01, 1.0)  # 1% of target or 1 EUR
     verifications.append({
-        "check": "Cash Buffer", "kind": "cash",
+        "check": "Cash & Cash Equivalents", "kind": "cash",
         "status": "✓ OK" if cash_ok else "⚠ PARTIAL",
         "detail": (
             f"Cash {cash_new:.2f} EUR (tgt. {cash_target:.2f} EUR, "
             f"delta {cash_delta_eur:+.2f} EUR)"
         ),
         "items": [{
-            "category": "Cash Buffer",
+            "category": "Cash & Cash Equivalents",
             "actual_eur": cash_new,
             "target_eur": cash_target,
             "delta_eur": cash_delta_eur,

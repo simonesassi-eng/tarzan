@@ -38,9 +38,9 @@ class PortfolioMetrics:
         goal_deltas: Actual vs target allocation comparison. Rows carry a
             'type' column with values 'asset_class',
             'geography (equity only)' or 'cash' (cash row uses EUR deltas).
-        rebalancing_suggestions: Buy/sell suggestions exceeding threshold.
+        rebalancing_suggestions: Buy/sell suggestions whose amount exceeds
+            config.rebalancing_min_transaction_eur.
         benchmark_comparison: Portfolio vs benchmark metrics table.
-        what_if: Hypothetical value if invested in each benchmark.
         portfolio_history: Daily portfolio value time series.
         benchmark_histories: Dict of benchmark name → daily price series.
         acwi_geo: MSCI ACWI geographic breakdown for benchmark reference.
@@ -66,7 +66,6 @@ class PortfolioMetrics:
     rebalancing_suggestions: Optional[list] = None
     rebalancing_verifications: Optional[list] = None
     benchmark_comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
-    what_if: pd.DataFrame = field(default_factory=pd.DataFrame)
     portfolio_history: Optional[pd.Series] = None
     benchmark_histories: dict = field(default_factory=dict)
     acwi_geo: dict = field(default_factory=dict)

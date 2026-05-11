@@ -2,10 +2,10 @@
 
 Two-layer config:
 - constants.yaml: investment parameters (classification, metric thresholds, risk-free rate)
-- static.yaml: rarely-changed infrastructure mappings (exchanges, FIGI, colors)
+- static.yaml: rarely-changed infrastructure mappings (exchanges, FIGI)
 
-Benchmarks and geo references come from indexes.csv (is_benchmark, is_benchmark_beta,
-is_benchmark_geo_allocation columns).
+Benchmarks and geo references come from indexes.csv (is_benchmark,
+is_benchmark_alfa_and_beta, is_benchmark_geo_allocation columns).
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Optional
 import yaml
 import pandas as pd
 
-from tarzan.models.holding import AssetClass, Geography
+from tarzan.models.holding import Geography
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "constants.yaml")
 _STATIC_PATH = os.path.join(os.path.dirname(__file__), "static.yaml")
@@ -209,17 +209,11 @@ def figi_exchange_map() -> dict[str, str]:
 def figi_mic_map() -> dict[str, str]:
     return get("figi_mic_map", {})
 
-def asset_class_colors() -> dict[str, str]:
-    return get("asset_class_colors", {})
-
 def sheet_names() -> list[str]:
     return get("sheet_names", [
         "Dashboard", "Optimizer", "Holdings", "Performance",
         "Return Contribution",
     ])
-
-def top_and_bottom_performers_count() -> int:
-    return get("top_and_bottom_performers_count", 7)
 
 
 def portfolio_backtest_period() -> str:

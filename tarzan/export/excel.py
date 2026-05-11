@@ -25,7 +25,6 @@ from tarzan import config as cfg
 
 logger = logging.getLogger(__name__)
 
-ASSET_CLASS_COLORS = cfg.asset_class_colors()
 SHEET_NAMES = cfg.sheet_names()
 
 
@@ -65,7 +64,7 @@ TAB_COLORS = {
 # KPI value color map
 KPI_COLORS = {
     'Total Value': C['accent'], 'Sharpe': C['accent'], 'Sortino': C['accent'], 'Beta': C['accent'],
-    'Total Gain': C['green'], 'CAGR': C['green'], 'HPR': C['green'], 'Alpha': C['green'],
+    'Total Gain': C['green'], 'CAGR': C['green'], 'RTD': C['green'], 'Alpha': C['green'],
     'Max Drawdown': C['red'], 'VaR': C['red'], 'CVaR': C['red'],
     'Volatility': C['amber'],
 }
@@ -221,29 +220,6 @@ def _write_portfolio_row(ws, row, col_start, label, values, table_idx, num_fmt='
         c.alignment = px_align(h='center')
 
 
-def _write_kpi_pair(ws, row, col, label, value, kpi_label_hint=None):
-    """Write a KPI card pair: label cell + value cell."""
-    # Label cell
-    lc = ws.cell(row=row, column=col, value=label)
-    lc.font = px_font(size=10, bold=True, color=C['text_sec'])
-    lc.fill = px_fill(C['bg_alt'])
-    lc.alignment = px_align(h='left')
-    lc.border = px_border()
-    # Value cell
-    vc = ws.cell(row=row, column=col + 1, value=value)
-    kpi_color = _kpi_color(kpi_label_hint or label)
-    vc.font = px_font(size=14, bold=True, color=kpi_color)
-    vc.fill = px_fill(C['bg_card'])
-    vc.alignment = px_align(h='center')
-    vc.border = px_border()
-    if isinstance(value, (int, float)):
-        # EUR values get comma format, percentages/ratios get 0.00
-        if 'EUR' in label or 'Value' in label or 'Gain' in label:
-            vc.number_format = '#,##0.00'
-        else:
-            vc.number_format = '0.00'
-
-
 def _write_footer(ws, row, col):
     """Write the generation timestamp footer."""
     cell = ws.cell(row=row, column=col,
@@ -261,43 +237,6 @@ def _format_number(val, is_pct=False):
 
 
 # ── END STYLING ───────────────────────────────────────
-
-
-def _make_pie(title, sheet, cat_col, val_col, start_row, end_row, color_map, width=15, height=10):
-    """Create a bulletproof pie chart with % labels and proper sizing."""
-    chart = PieChart()
-    chart.title = title
-    chart.width = width
-    chart.height = height
-    chart.style = 10
-
-    cats = Reference(sheet, min_col=cat_col, min_row=start_row, max_row=end_row)
-    vals = Reference(sheet, min_col=val_col, min_row=start_row, max_row=end_row)
-    chart.add_data(vals, titles_from_data=False)
-    chart.set_categories(cats)
-
-    # Data labels: show category name + percentage, no value
-    chart.dataLabels = DataLabelList()
-    chart.dataLabels.showCatName = True
-    chart.dataLabels.showPercent = True
-    chart.dataLabels.showVal = False
-    chart.dataLabels.showSerName = False
-    chart.dataLabels.showLeaderLines = True
-    chart.dataLabels.separator = "\n"
-
-    # Hide legend (labels on chart are enough)
-    chart.legend = None
-
-    # Apply colors from map
-    n_rows = end_row - start_row + 1
-    for i in range(n_rows):
-        cat_cell = sheet.cell(row=start_row + i, column=cat_col).value
-        color = color_map.get(cat_cell, '808080')
-        pt = DataPoint(idx=i)
-        pt.graphicalProperties.solidFill = color
-        chart.series[0].data_points.append(pt)
-
-    return chart
 
 
 def _make_bar(title, sheet, cat_col, series_defs, start_row, end_row, width=18, height=12):
@@ -456,13 +395,10 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     _write_area_header(sheet, row, 1, 8, f"PORTFOLIO STATUS{inception_label}")
     row += 1
 
-    cash_delta_eur = metrics.cash_value - metrics.cash_target_eur
     hero_data = [
         ("Total Value (EUR)", metrics.total_value, None, "number"),
         ("Invested Value (EUR)", metrics.invested_value, None, "number"),
         ("Cash (EUR)", metrics.cash_value, None, "number"),
-        ("Cash Target (EUR)", metrics.cash_target_eur, None, "number"),
-        ("Cash Δ vs Target (EUR)", cash_delta_eur, None, "number_signed"),
         ("Total Gain (EUR)", total_gain, total_gain, "number_signed"),
         ("RTD (%)", rtd, total_gain, "number_signed"),
     ]
@@ -502,7 +438,7 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
             # cash type is rendered in the Cash Buffer section, not here
 
     header_row = row
-    for c, h in enumerate(["Asset Class", "Actual %", "Target %"], 1):
+    for c, h in enumerate(["Asset Class", "Actual (% / EUR)", "Target (% / EUR)"], 1):
         _apply_header(sheet, header_row, c, h)
     row += 1
 
@@ -521,6 +457,26 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
                              ti, is_number=target_pct is not None,
                              font_color=C['text_pri'] if target_pct is not None else None)
             row += 1
+
+    # Cash buffer row appended at the bottom of the Asset Class block
+    # (hybrid EUR values sharing the same two columns).
+    if config and config.target_cash_buffer_eur > 0:
+        ti_cash = (len(metrics.allocation_by_class)
+                   if not metrics.allocation_by_class.empty else 0)
+        cash_tgt = float(config.target_cash_buffer_eur)
+        cash_actual = metrics.cash_value
+        cash_delta_rel_pctg = (
+            (cash_actual - cash_tgt) / cash_tgt * 100.0 if cash_tgt > 0 else 0.0
+        )
+        cash_dev_color = _deviation_color(cash_delta_rel_pctg, tol)
+        _write_data_cell(sheet, row, 1, "Cash & Cash Equivalents", ti_cash,
+                         asset_class="Cash & Cash Equivalents")
+        _write_data_cell(sheet, row, 2, cash_actual, ti_cash, is_number=True,
+                         num_fmt='"€"#,##0.00', font_color=cash_dev_color)
+        _write_data_cell(sheet, row, 3, cash_tgt, ti_cash, is_number=True,
+                         num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+        row += 1
+
     ac_end_row = row
 
     row = header_row
@@ -616,125 +572,6 @@ def _write_area_header(ws, row, col_start, col_end, title):
 
 
 
-def _rate_metric(metric_key, value):
-    """Return (color_hex, label) for a metric value based on config thresholds."""
-    ratings_cfg = cfg.metric_ratings()
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return (C['amber'], "N/A")
-    rc = ratings_cfg.get(metric_key, {})
-    thresholds = rc.get("thresholds", [])
-    labels = rc.get("labels", ["Strong", "Fair", "Weak"])
-    invert = rc.get("invert", False)
-    if len(thresholds) < 2:
-        return (C['text_sec'], "")
-    good_t, warn_t = thresholds
-    if invert:
-        # "Lower is better" metrics. Use absolute values for comparison
-        # to handle both positive (volatility: 7%) and negative (max_dd: -19%) correctly.
-        av = abs(value)
-        ag = abs(good_t)
-        aw = abs(warn_t)
-        if av <= ag:
-            return (C['green'], labels[0])
-        elif av <= aw:
-            return (C['amber'], labels[1])
-        else:
-            return (C['red'], labels[2])
-    else:
-        if value > good_t:
-            return (C['green'], labels[0])
-        elif value > warn_t:
-            return (C['amber'], labels[1])
-        else:
-            return (C['red'], labels[2])
-
-
-def _write_card_header(ws, row, col_start, col_end, title):
-    """Write a card section header. If spanning across col D (spacer), split into two merges."""
-    spacer_col = 4  # column D
-    if col_start < spacer_col < col_end:
-        # Left half
-        ws.merge_cells(start_row=row, start_column=col_start, end_row=row, end_column=spacer_col - 1)
-        cell = ws.cell(row=row, column=col_start, value=title)
-        cell.font = px_font(size=11, bold=True, color=C['text_wht'])
-        cell.fill = px_fill(C['bg_header'])
-        cell.alignment = px_align(h='left', v='center')
-        cell.border = px_border_hdr()
-        for c in range(col_start + 1, spacer_col):
-            mc = ws.cell(row=row, column=c)
-            mc.fill = px_fill(C['bg_header'])
-            mc.border = px_border_hdr()
-        # Spacer D — page background
-        dc = ws.cell(row=row, column=spacer_col)
-        dc.fill = px_fill(C['bg_page'])
-        dc.border = px_no_border()
-        # Right half
-        ws.merge_cells(start_row=row, start_column=spacer_col + 1, end_row=row, end_column=col_end)
-        rc = ws.cell(row=row, column=spacer_col + 1)
-        rc.fill = px_fill(C['bg_header'])
-        rc.border = px_border_hdr()
-        for c in range(spacer_col + 2, col_end + 1):
-            mc = ws.cell(row=row, column=c)
-            mc.fill = px_fill(C['bg_header'])
-            mc.border = px_border_hdr()
-    else:
-        ws.merge_cells(start_row=row, start_column=col_start, end_row=row, end_column=col_end)
-        cell = ws.cell(row=row, column=col_start, value=title)
-        cell.font = px_font(size=11, bold=True, color=C['text_wht'])
-        cell.fill = px_fill(C['bg_header'])
-        cell.alignment = px_align(h='left', v='center')
-        cell.border = px_border_hdr()
-        for c in range(col_start + 1, col_end + 1):
-            mc = ws.cell(row=row, column=c)
-            mc.fill = px_fill(C['bg_header'])
-            mc.border = px_border_hdr()
-
-
-def _write_card_metric(ws, row, col_label, col_value, col_rating, label, value,
-                       metric_key=None, num_fmt='0.00', is_eur=False):
-    """Write a single metric row inside a card: label | value | rating badge."""
-    lc = ws.cell(row=row, column=col_label, value=label)
-    lc.font = px_font(size=10, bold=False, color=C['text_sec'])
-    lc.fill = px_fill(C['bg_card'])
-    lc.alignment = px_align(h='left')
-    lc.border = px_border()
-
-    vc = ws.cell(row=row, column=col_value, value=value)
-    vc.fill = px_fill(C['bg_card'])
-    vc.alignment = px_align(h='right')
-    vc.border = px_border()
-    if isinstance(value, (int, float)):
-        vc.number_format = num_fmt
-        if metric_key:
-            color, _ = _rate_metric(metric_key, value)
-            vc.font = px_font(size=11, bold=True, color=color)
-        else:
-            vc.font = px_font(size=11, bold=True, color=_num_color(value))
-    else:
-        vc.font = px_font(size=11, bold=True, color=C['text_pri'])
-
-    if metric_key and value is not None and not (isinstance(value, float) and pd.isna(value)):
-        color, rating_label = _rate_metric(metric_key, value)
-        rc = ws.cell(row=row, column=col_rating, value=f"\u25cf {rating_label}")
-        rc.font = px_font(size=9, bold=True, color=color, italic=True)
-    else:
-        rc = ws.cell(row=row, column=col_rating, value="")
-        rc.font = px_font(size=9, color=C['text_sec'])
-    rc.fill = px_fill(C['bg_card'])
-    rc.alignment = px_align(h='left')
-    rc.border = px_border()
-
-
-
-
-
-def _abs_eur(pct_val, total_value):
-    """Convert a percentage risk metric to absolute EUR value."""
-    if pct_val is None or (isinstance(pct_val, float) and pd.isna(pct_val)):
-        return None
-    return abs(pct_val / 100) * total_value
-
-
 def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
     """Holdings: full enriched table with instrument type, data source, timestamp."""
     df = metrics.holdings_df
@@ -745,42 +582,66 @@ def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
     _apply_title(sheet, 1, 1, "Holdings Detail")
 
     columns = [
-        ("Name", "name", False, None),
-        ("Ticker", "ticker", False, None),
-        ("ISIN", "isin", False, None),
-        ("Asset Class", "asset_class", False, None),
-        ("Security Type", "security_type", False, None),
-        ("Currency", "currency", False, None),
-        ("Quantity", "quantity", True, '#,##0.00'),
-        ("Avg Price", "avg_purchase_price", True, '#,##0.00'),
-        ("Current Price", "current_price", True, '#,##0.00'),
-        ("Cost Basis (EUR)", "cost_basis_eur", True, '#,##0.00'),
-        ("Value (EUR)", "current_value", True, '#,##0.00'),
-        ("% of Portfolio", "weight_pct", True, '0.00'),
-        ("% of Invested", "weight_of_invested_pctg", True, '0.00'),
-        ("% of Asset Class", "pct_of_class", True, '0.00'),
-        ("Gain (EUR)", "gain_eur", True, '#,##0.00'),
-        ("Gain %", "gain_pct", True, '0.00'),
-        ("Geography", "geography", False, None),
-        ("Geo Source", "geo_source", False, None),
-        ("Data Source", "data_source", False, None),
-        ("Fetch Time", "fetch_timestamp", False, None),
+        ("Name", "name", False, None, False, False),
+        ("Ticker", "ticker", False, None, False, False),
+        ("ISIN", "isin", False, None, False, False),
+        ("Asset Class", "asset_class", False, None, False, False),
+        ("Security Type", "security_type", False, None, False, False),
+        ("Currency", "currency", False, None, False, False),
+        ("Quantity", "quantity", True, '#,##0.00', False, False),
+        ("Avg Price", "avg_purchase_price", True, '#,##0.00', False, False),
+        ("Current Price", "current_price", True, '#,##0.00', False, False),
+        ("Cost Basis (EUR)", "cost_basis_eur", True, '#,##0.00', False, False),
+        ("Value (EUR)", "current_value", True, '#,##0.00', False, False),
+        ("% of Portfolio", "weight_pct", True, '0.00', False, False),
+        ("% of Invested", "weight_of_invested_pctg", True, '0.00', False, False),
+        ("% of Asset Class", "pct_of_class", True, '0.00', False, True),
+        ("Gain (EUR)", "gain_eur", True, '#,##0.00', True, False),
+        ("Gain %", "gain_pct", True, '0.00', True, False),
+        ("Geography", "geography", False, None, False, False),
+        ("Geo Source", "geo_source", False, None, False, False),
+        ("Data Source", "data_source", False, None, False, False),
+        ("Fetch Time", "fetch_timestamp", False, None, False, False),
     ]
 
     row = 3
-    for c, (header, _, _, _) in enumerate(columns):
+    for c, (header, _, _, _, _, _) in enumerate(columns):
         _apply_header(sheet, row, c + 1, header)
 
     for idx, (_, data_row) in enumerate(df.iterrows()):
         row = idx + 4
-        for c, (_, col_key, is_num, nf) in enumerate(columns):
+        for c, (_, col_key, is_num, nf, use_gain_color, use_class_color) in enumerate(columns):
             val = data_row.get(col_key)
             if val is None or (isinstance(val, float) and pd.isna(val)):
                 _write_data_cell(sheet, row, c + 1, "", idx)
-            else:
-                ac = data_row.get("asset_class") if col_key == "asset_class" else None
-                _write_data_cell(sheet, row, c + 1, val, idx, is_number=is_num,
+                continue
+
+            # The Asset Class text column uses its own class-colored label.
+            # The % of Asset Class numeric column keeps the numeric alignment
+            # (center) but picks up the asset class color via font_color.
+            ac = data_row.get("asset_class")
+            if col_key == "asset_class":
+                _write_data_cell(sheet, row, c + 1, val, idx,
                                  asset_class=ac, num_fmt=nf)
+                continue
+
+            if use_class_color and ac in ASSET_COLORS:
+                class_color = ASSET_COLORS[ac]
+                _write_data_cell(sheet, row, c + 1, val, idx,
+                                 is_number=is_num, num_fmt=nf,
+                                 font_color=class_color)
+                continue
+
+            # Gain columns keep the sign-based semaphore (green/red) via
+            # _num_color. All other numeric columns render in neutral text.
+            if use_gain_color:
+                font_color = None
+            elif is_num:
+                font_color = C['text_pri']
+            else:
+                font_color = None
+            _write_data_cell(sheet, row, c + 1, val, idx, is_number=is_num,
+                             num_fmt=nf, font_color=font_color)
 
     _write_footer(sheet, row + 2, 1)
 
@@ -947,13 +808,25 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                     float(it["actual_pct"]), float(it["target_pct"]),
                 )
 
-    # Define the four groups in the desired order
+    # Define the four groups in the desired order. Cash buffer is merged
+    # into the first (asset) group as an EUR-denominated row.
     groups = [
-        ("asset", "Asset Allocation", current_lookup),
+        ("asset", "Invested Allocation", current_lookup),
         ("geography", "Geography (equity only)", current_lookup),
         ("per_holding_equity", "Per-Holding Equity Targets", None),
         ("per_holding_fi", "Per-Holding Fixed Income Targets", None),
     ]
+
+    # Pull cash numbers once so we can inject a row in the asset group.
+    cash_actual = metrics.cash_value
+    cash_target_eur = metrics.cash_target_eur
+    cash_post = cash_actual
+    if metrics.rebalancing_verifications:
+        for v in metrics.rebalancing_verifications:
+            if v.get("kind") == "cash" and v.get("items"):
+                cash_post = float(v["items"][0].get("actual_eur", cash_actual))
+                break
+    cash_delta_eur = cash_post - cash_target_eur
 
     for kind, title, current_source in groups:
         # Collect categories: current_lookup keys for asset/geo, verifications items for per-holding
@@ -966,7 +839,8 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 if k == kind:
                     categories.append(cat)
 
-        if not categories:
+        # Skip group entirely if no categories AND (for asset) no cash row to add.
+        if not categories and not (kind == "asset" and cash_target_eur > 0):
             continue
 
         # Group header
@@ -978,10 +852,10 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 1
 
-        # Column headers
+        # Column headers: hybrid units (% for most rows, EUR for cash)
         col_headers = [
-            "Category", "Current %", "Target %",
-            "Post-rebal %", "Delta after rebal (pp)", "Status",
+            "Category", "Current (% / EUR)", "Target (% / EUR)",
+            "Post-rebal (% / EUR)", "Delta (pp / EUR)", "Status",
         ]
         for c, h in enumerate(col_headers, 1):
             _apply_header(sheet, row, c, h)
@@ -1032,7 +906,14 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             else:
                 status = "\u25cf Action"
 
-            _write_data_cell(sheet, row, 1, cat, ti)
+            # Match Dashboard look: color the Category label with the asset
+            # class or geography palette when applicable.
+            if kind == "asset":
+                _write_data_cell(sheet, row, 1, cat, ti, asset_class=cat)
+            elif kind == "geography":
+                _write_data_cell(sheet, row, 1, cat, ti, geography=cat)
+            else:
+                _write_data_cell(sheet, row, 1, cat, ti)
             _write_data_cell(sheet, row, 2,
                              current_pct if current_pct is not None else "",
                              ti, is_number=current_pct is not None,
@@ -1053,6 +934,32 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
             row += 1
 
+        # Append the Cash Buffer row at the bottom of the asset group.
+        if kind == "asset" and cash_target_eur > 0:
+            rel_dev = (cash_delta_eur / cash_target_eur) * 100.0
+            cash_color = _deviation_color(rel_dev, tol)
+            abs_rel = abs(rel_dev)
+            if abs_rel <= tol:
+                cash_status = "\u25cf Aligned"
+            elif abs_rel <= 2 * tol:
+                cash_status = "\u25cf Drift"
+            else:
+                cash_status = "\u25cf Action"
+            ti2 = len(categories)
+            _write_data_cell(sheet, row, 1, "Cash & Cash Equivalents", ti2,
+                             asset_class="Cash & Cash Equivalents")
+            _write_data_cell(sheet, row, 2, cash_actual, ti2, is_number=True,
+                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+            _write_data_cell(sheet, row, 3, cash_target_eur, ti2, is_number=True,
+                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+            _write_data_cell(sheet, row, 4, cash_post, ti2, is_number=True,
+                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+            _write_data_cell(sheet, row, 5, cash_delta_eur, ti2, is_number=True,
+                             num_fmt='"€"+#,##0.00;"€"-#,##0.00;"€"0.00',
+                             font_color=cash_color)
+            _write_data_cell(sheet, row, 6, cash_status, ti2, bold=True, font_color=cash_color)
+            row += 1
+
         row += 1  # spacer between groups
 
     if not current_lookup and not post_lookup:
@@ -1062,74 +969,6 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         nocell.border = px_no_border()
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 1
-
-    # =====================================================================
-    # CASH BUFFER — absolute EUR, no percentages
-    # =====================================================================
-    row += 2
-    _write_area_header(sheet, row, 1, 7, "CASH BUFFER")
-    row += 1
-    csubcell = sheet.cell(
-        row=row, column=1,
-        value=(
-            "Cash is not part of the invested allocation. The solver targets "
-            f"{_format_number(config.target_cash_buffer_eur)} EUR as cash buffer; "
-            "any excess or shortfall drives buy/sell suggestions above."
-        ),
-    )
-    csubcell.font = px_font(size=9, italic=True, color=C['text_sec'])
-    csubcell.fill = px_fill(C['bg_page'])
-    csubcell.border = px_no_border()
-    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
-    row += 2
-
-    cash_headers = [
-        "Category", "Current (EUR)", "Target (EUR)",
-        "Post-rebal (EUR)", "Delta (EUR)", "Status",
-    ]
-    for c, h in enumerate(cash_headers, 1):
-        _apply_header(sheet, row, c, h)
-    row += 1
-
-    # Find cash values: current from goal_deltas, post from verifications
-    cash_actual = metrics.cash_value
-    cash_target_eur = metrics.cash_target_eur
-    cash_post = cash_actual
-    if metrics.rebalancing_verifications:
-        for v in metrics.rebalancing_verifications:
-            if v.get("kind") == "cash" and v.get("items"):
-                cash_post = float(v["items"][0].get("actual_eur", cash_actual))
-                break
-    cash_delta_eur = cash_post - cash_target_eur
-    # Traffic-light: use the same rebalancing_threshold_pctg, applied to
-    # the relative deviation vs the target (or to the absolute delta when
-    # target is zero).
-    if cash_target_eur > 0:
-        rel_dev = abs(cash_delta_eur) / cash_target_eur * 100.0
-        cash_color = _deviation_color(
-            (cash_delta_eur / cash_target_eur) * 100.0, tol,
-        )
-    else:
-        rel_dev = abs(cash_delta_eur)
-        cash_color = C['text_pri'] if cash_actual == 0 else C['amber']
-    if rel_dev <= tol:
-        cash_status = "\u25cf Aligned"
-    elif rel_dev <= 2 * tol:
-        cash_status = "\u25cf Drift"
-    else:
-        cash_status = "\u25cf Action"
-
-    _write_data_cell(sheet, row, 1, "Cash Buffer", 0)
-    _write_data_cell(sheet, row, 2, cash_actual, 0, is_number=True,
-                     num_fmt='#,##0.00', font_color=C['text_pri'])
-    _write_data_cell(sheet, row, 3, cash_target_eur, 0, is_number=True,
-                     num_fmt='#,##0.00', font_color=C['text_pri'])
-    _write_data_cell(sheet, row, 4, cash_post, 0, is_number=True,
-                     num_fmt='#,##0.00', font_color=C['text_pri'])
-    _write_data_cell(sheet, row, 5, cash_delta_eur, 0, is_number=True,
-                     num_fmt='+#,##0.00;-#,##0.00;0.00', font_color=cash_color)
-    _write_data_cell(sheet, row, 6, cash_status, 0, bold=True, font_color=cash_color)
-    row += 1
 
     # =====================================================================
     # SOLVER INFO
@@ -1159,7 +998,7 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
          (f"{_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
           if config.rebalancing_lump_sum_amount_eur > 0 else "—"),
          "Additional cash to deploy in the rebalance"),
-        ("Cash buffer target",
+        ("Cash & Cash Equivalents target",
          (f"{_format_number(config.target_cash_buffer_eur)} EUR"
           if config.target_cash_buffer_eur > 0 else "—"),
          "Absolute cash target used by the solver (from target_cash_buffer_eur)"),
@@ -1266,13 +1105,17 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
     _apply_subtitle(sheet, row, 1, "Legend — Rating Thresholds")
     row += 1
 
-    legend_headers = ["Metric", "Description", "\u25cf Strong", "\u25cf Fair", "\u25cf Weak", "Source"]
-    # Column widths tuned for readability of Description
-    sheet.column_dimensions['A'].width = 22  # Metric
-    sheet.column_dimensions['B'].width = 80  # Description
-    for i in range(3, 6):
-        sheet.column_dimensions[get_column_letter(i)].width = 16
-    sheet.column_dimensions['F'].width = 34  # Source
+    legend_headers = [
+        "Metric", "\u25cf Strong", "\u25cf Fair", "\u25cf Weak", "Source", "Description",
+    ]
+    # Column widths: keep Metric/Strong/Fair/Weak/Source compact; give
+    # Description a very wide column so it fits on a single line without
+    # truncation.
+    sheet.column_dimensions['A'].width = 20  # Metric
+    for i in range(2, 5):
+        sheet.column_dimensions[get_column_letter(i)].width = 18  # Strong / Fair / Weak
+    sheet.column_dimensions['E'].width = 34  # Source
+    sheet.column_dimensions['F'].width = 130  # Description (single line)
     for c, h in enumerate(legend_headers, 1):
         _apply_header(sheet, row, c, h)
     row += 1
@@ -1351,142 +1194,18 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
             weak = f"< {fmt(warn_t)}"
 
         _write_data_cell(sheet, row, 1, metric_label, ti)
-        # Description cell: wrap text for readability
-        desc_cell = _write_data_cell(sheet, row, 2, description, ti)
-        desc_cell.alignment = px_align(h='left', wrap=True)
-        _write_data_cell(sheet, row, 3, strong, ti)
-        _write_data_cell(sheet, row, 4, fair, ti)
-        _write_data_cell(sheet, row, 5, weak, ti)
-        _write_data_cell(sheet, row, 6, source, ti)
-        sheet.row_dimensions[row].height = 48
+        _write_data_cell(sheet, row, 2, strong, ti)
+        _write_data_cell(sheet, row, 3, fair, ti)
+        _write_data_cell(sheet, row, 4, weak, ti)
+        _write_data_cell(sheet, row, 5, source, ti)
+        desc_cell = _write_data_cell(sheet, row, 6, description, ti)
+        # Single-line rendering: disable wrap so the column width controls
+        # the display. Rows keep the default height.
+        desc_cell.alignment = px_align(h='left', wrap=False)
         row += 1
 
     row += 2
     _write_footer(sheet, row, 1)
-
-
-def _write_period_charts(workbook, sheet, metrics, row):
-    """Write portfolio and holdings period charts."""
-    port_hist = metrics.portfolio_history
-    last_date = port_hist.index[-1]
-    chart_periods = [
-        ("1 Week", 7), ("1 Month", 30), ("3 Months", 90),
-        ("YTD", None), ("1 Year", 365),
-    ]
-
-    portfolio_charts = []
-    holdings_charts = []
-
-    for period_name, period_days in chart_periods:
-        cutoff = _get_cutoff(last_date, period_days)
-        port_period = port_hist[port_hist.index >= cutoff]
-        if len(port_period) < 2:
-            continue
-
-        port_norm = port_period / port_period.iloc[0] * 100
-        step = max(1, len(port_norm) // 25)
-        sampled = port_norm.iloc[::step]
-
-        _apply_header(sheet, row, 1, "Date")
-        _apply_header(sheet, row, 2, period_name)
-        data_row = row + 1
-        for dt_val, val in sampled.items():
-            _write_data_cell(sheet, data_row, 1, dt_val.strftime("%m-%d"), data_row - row - 1)
-            _write_data_cell(sheet, data_row, 2, float(val), data_row - row - 1, is_number=True)
-            data_row += 1
-
-        chart = LineChart()
-        chart.title = f"Portfolio: {period_name} (Base 100)"
-        chart.width = 15
-        chart.height = 10
-        chart.legend = None
-        cats = Reference(sheet, min_col=1, min_row=row + 1, max_row=data_row - 1)
-        vals = Reference(sheet, min_col=2, min_row=row + 1, max_row=data_row - 1)
-        chart.add_data(vals, titles_from_data=False)
-        chart.set_categories(cats)
-        chart.series[0].tx = SeriesLabel(v="Portfolio")
-        portfolio_charts.append(chart)
-        row = data_row + 1
-
-    # Position portfolio charts
-    chart_anchor_row = row
-    for i, chart in enumerate(portfolio_charts):
-        col_letter = get_column_letter(1 + i * 6)
-        # CHARTS DISABLED: sheet.add_chart(chart, f"{col_letter}{chart_anchor_row}")
-    row = chart_anchor_row + 16
-
-    # All holdings overlay charts
-    holding_data = _get_holdings_with_history(metrics)
-    if holding_data:
-        holding_histories = {hd["name"][:20]: hd["history"] for hd in holding_data}
-        for period_name, period_days in chart_periods:
-            cutoff = _get_cutoff(last_date, period_days)
-            series_data = {}
-            for name, hist in holding_histories.items():
-                period = hist[hist.index >= cutoff]
-                if len(period) >= 2:
-                    series_data[name] = period / period.iloc[0] * 100
-            if not series_data:
-                continue
-
-            combined = pd.DataFrame(series_data).ffill().bfill()
-            step = max(1, len(combined) // 25)
-            sampled = combined.iloc[::step]
-
-            _apply_header(sheet, row, 1, "Date")
-            for sc, sname in enumerate(sampled.columns):
-                _apply_header(sheet, row, 2 + sc, sname)
-            data_row = row + 1
-            for dt_val, vals in sampled.iterrows():
-                _write_data_cell(sheet, data_row, 1, dt_val.strftime("%m-%d"), data_row - row - 1)
-                for sc, sname in enumerate(sampled.columns):
-                    v = vals[sname]
-                    if pd.notna(v):
-                        _write_data_cell(sheet, data_row, 2 + sc, float(v), data_row - row - 1, is_number=True)
-                data_row += 1
-
-            chart = LineChart()
-            chart.title = f"All Holdings: {period_name} (Base 100)"
-            chart.width = 28
-            chart.height = 16
-            chart.y_axis.scaling.min = cfg.holdings_chart_y_min()
-            chart.y_axis.scaling.max = cfg.holdings_chart_y_max()
-            chart.y_axis.title = "Value"
-            cats = Reference(sheet, min_col=1, min_row=row + 1, max_row=data_row - 1)
-            for sc, sname in enumerate(sampled.columns):
-                vals_ref = Reference(sheet, min_col=2 + sc, min_row=row + 1, max_row=data_row - 1)
-                chart.add_data(vals_ref, titles_from_data=False)
-                chart.series[sc].tx = SeriesLabel(v=sname)
-            chart.set_categories(cats)
-            holdings_charts.append(chart)
-            row = data_row + 1
-
-        chart_anchor_row = row
-        for i, chart in enumerate(holdings_charts):
-            pass  # CHARTS DISABLED
-        row = chart_anchor_row + len(holdings_charts) * 24
-
-    return row
-
-
-def _get_cutoff(last_date, period_days):
-    """Compute the cutoff date for a chart period."""
-    if period_days is not None:
-        return last_date - pd.Timedelta(days=period_days)
-    return pd.Timestamp(
-        year=last_date.year, month=1, day=1,
-        tz=last_date.tz if hasattr(last_date, "tz") else None,
-    )
-
-
-def _get_holdings_with_history(metrics: PortfolioMetrics) -> list[dict]:
-    """Extract holdings that have price history for charting."""
-    return [
-        {"ticker": ticker, "name": data.get("name", ticker), "history": data["history"]}
-        for ticker, data in metrics.holding_histories.items()
-        if data.get("history") is not None and len(data["history"]) > 1
-    ]
-
 
 
 def _write_analysis(workbook, sheet, metrics: PortfolioMetrics):
@@ -1581,53 +1300,4 @@ def _write_analysis(workbook, sheet, metrics: PortfolioMetrics):
         row += 1
 
 
-
-def _write_benchmark(workbook, sheet, metrics: PortfolioMetrics):
-    """Benchmark: comparison table with Name, Ticker, Index, Description + metrics."""
-    _apply_title(sheet, 1, 1, "Benchmark Comparison")
-    row = 3
-
-    perf = metrics.performance
-    details = cfg.benchmark_details()
-
-    headers = ["Index", "Ticker", "1 Day", "1 Week", "1 Month", "3 Months",
-               "6 Months", "YTD", "1Y", "3Y", "5Y", "CAGR", "Volatility", "Sharpe",
-               "Max DD", "Description"]
-    for c, h in enumerate(headers):
-        _apply_header(sheet, row, c + 1, h)
-    row += 1
-
-    # Portfolio row
-    all_keys = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y", "cagr"]
-    port_vals = []
-    for key in all_keys:
-        port_vals.append(_format_number(perf.get(key), True))
-    port_vals.append(_format_number(metrics.risk.get("volatility", 0), True))
-    port_vals.append(_format_number(metrics.risk.get("sharpe", 0), True))
-    port_vals.append(_format_number(metrics.risk.get("max_drawdown", 0), True))
-    port_vals.append("")  # Description
-    # Insert empty Ticker before metrics
-    full_port_vals = [""] + port_vals
-    _write_portfolio_row(sheet, row, 1, "** YOUR PORTFOLIO **", full_port_vals, 0)
-    row += 1
-
-    # Benchmark rows
-    if not metrics.benchmark_comparison.empty:
-        for ti, (_, r) in enumerate(metrics.benchmark_comparison.iterrows()):
-            index_name = r.get("benchmark", "")
-            detail = details.get(index_name, {})
-            _write_data_cell(sheet, row, 1, index_name, ti)
-            _write_data_cell(sheet, row, 2, detail.get("ticker", ""), ti)
-            for c, key in enumerate(all_keys, 3):
-                val = r.get(key)
-                display = _format_number(val, True)
-                _write_data_cell(sheet, row, c, display, ti, is_number=isinstance(display, (int, float)))
-            _write_data_cell(sheet, row, 13, _format_number(r.get("volatility", 0), True), ti, is_number=True)
-            _write_data_cell(sheet, row, 14, _format_number(r.get("sharpe", 0), True), ti, is_number=True)
-            _write_data_cell(sheet, row, 15, _format_number(r.get("max_drawdown", 0), True), ti, is_number=True)
-            _write_data_cell(sheet, row, 16, detail.get("description", ""), ti)
-            row += 1
-
-    row += 2
-    _write_footer(sheet, row, 1)
 

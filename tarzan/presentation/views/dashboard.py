@@ -31,21 +31,12 @@ def render(metrics: PortfolioMetrics, config: InvestorConfig | None = None):
     col1, col2, col3 = st.columns(3)
     _hero_card(col1, "Total Value (EUR)", fmt_eur(metrics.total_value), None)
     _hero_card(col2, "Invested Value (EUR)", fmt_eur(metrics.invested_value), None)
-    cash_delta = metrics.cash_value - metrics.cash_target_eur
-    cash_hint = (
-        f"target {fmt_eur(metrics.cash_target_eur)} · Δ {cash_delta:+,.0f} EUR"
-        if metrics.cash_target_eur > 0
-        else "no target set"
-    )
-    _hero_card(
-        col3, "Cash (EUR)", fmt_eur(metrics.cash_value), None, hint=cash_hint,
-    )
+    _hero_card(col3, "Cash (EUR)", fmt_eur(metrics.cash_value), None)
 
-    # ── Row 2: Gain / RTD / (placeholder) ─────────────────────────────
+    # ── Row 2: Gain / RTD / Inception ─────────────────────────────────
     col4, col5, col6 = st.columns(3)
     _hero_card(col4, "Total Gain (EUR)", fmt_eur(total_gain), total_gain)
     _hero_card(col5, "RTD (%)", fmt_pct(rtd), total_gain)
-    # Leave the third column empty for balance, or show inception
     _hero_card(col6, "Inception", inception_str or "—", None)
 
     # ── Row 2: CAGR / YTD / Yield / TER ───────────────────────────────
