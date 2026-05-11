@@ -64,17 +64,6 @@ figi_mic_map:
   ETLX: ".MI"
 
 # ---------------------------------------------------------------------------
-# Asset class colors for charts
-# ---------------------------------------------------------------------------
-asset_class_colors:
-  Equities: "#00B050"
-  Fixed Income: "#0070C0"
-  Cash & Cash Equivalents: "#FFD700"
-  Commodities: "#D4AF37"
-  Real Estate: "#8B4513"
-  Alternative: "#808080"
-
-# ---------------------------------------------------------------------------
 # Excel sheet names
 # ---------------------------------------------------------------------------
 sheet_names:
@@ -84,5 +73,3 @@ sheet_names:
   - Performance
   - Return Contribution
 
-# Number of top/bottom performers shown on Dashboard
-top_and_bottom_performers_count: 7

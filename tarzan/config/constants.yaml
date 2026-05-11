@@ -183,9 +183,9 @@ classification:
   instrument_money_market: ["money market", "estr", "€str", "ester", "overnight", "cash"]
   instrument_gold_etc: ["gold", "oro"]
   instrument_commodities_etf: ["precious metal", "silver", "commodit"]
-  # Note: instrument_precious_etc still used for generic "Precious Metals ETC" label (silver, palladium, platinum)
+  # Note: instrument_precious_etc labels generic "Precious Metals ETC" (non-gold metals).
+  # Gold is handled separately via instrument_gold_etc to preserve the Gold / Commodities split.
   instrument_precious_etc: ["silver", "precious", "palladium", "platinum"]
-  instrument_precious_etc: ["gold", "silver", "precious", "palladium", "platinum"]
   instrument_equity_category: ["equity", "stock", "large", "small", "mid", "growth", "value", "blend"]
   # OpenFIGI security type mappings
   figi_fixed_income: ["govt", "sovereign", "corp", "corporate bond", "note", "medium-term note"]

@@ -161,23 +161,28 @@ convention so the unit is unambiguous:
 
 ### Benchmarks
 - Comparison against 20+ indexes (S&P 500, ACWI, VTI, AVUV, ...)
-- What-if analysis: hypothetical value if invested in each benchmark
 
 ## Output
 
-Excel file `portfolio_dashboard_[YYYYMMDD_HHMM].xlsx` with 8 sheets:
+Excel file `portfolio_dashboard_[YYYYMMDD_HHMM].xlsx` with 5 sheets:
 
-1. **Dashboard** — KPIs (VaR / CVaR included), donut chart, top / bottom
-   performers, goals
-2. **Holdings** — Full enriched table with data sources and timestamps
-3. **Allocations** — Pie / bar charts with actual vs target
-4. **Performance** — Cumulative returns, per-period grids, holdings overlay
-5. **Risk** — Full risk metrics, drawdown chart, risk-return scatter
-6. **Multi-Purpose Analysis** — Return contribution, breakdowns, rebalancing
-   actions
-7. **Benchmark** — Comparison vs 20+ benchmarks, cumulative performance,
-   what-if
-8. **Documentation** — Description and formula for every metric
+1. **Dashboard** — Hero KPIs (Total / Invested / Cash values, Total Gain, RTD),
+   invested allocation vs target (with cash buffer as an EUR row), geography
+   breakdown, top 5 holdings, rebalancing alert.
+2. **Optimizer** — Banner with traffic-light status, rebalancing actions
+   (buy / sell / amount / % of portfolio / reason), consolidated allocation
+   deviations grouped by type (invested asset classes incl. cash buffer in
+   EUR, equity geography, per-holding equity and fixed income targets),
+   and solver parameters.
+3. **Holdings** — Full enriched table (ticker, ISIN, asset class, quantity,
+   prices, values, % of portfolio, % of invested, % of asset class, gain,
+   geography, data source).
+4. **Performance** — Unified period returns + risk table (1D…5Y, CAGR,
+   Volatility, Sharpe, Sortino, Max DD, VaR 95%, CVaR 95%, Alpha, Beta) for
+   portfolio, holdings and benchmarks, plus a legend with investor-friendly
+   descriptions and rating thresholds.
+5. **Return Contribution** — Per-holding contribution to total return,
+   breakdowns by asset class and by equity geography.
 
 ## Exception hierarchy
 

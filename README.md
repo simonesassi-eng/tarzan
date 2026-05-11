@@ -20,12 +20,12 @@ multi-asset portfolios.
   realized volatility, Beta / Alpha vs S&P 500.
 - **Allocations** — By asset class, geography, and sector. Multi-geography ETFs
   are split proportionally. Delta vs target with rebalancing suggestions.
-- **Benchmarks** — Comparison against 20+ indexes (S&P 500, ACWI, VTI, AVUV, ...)
-  plus what-if analysis.
+- **Benchmarks** — Comparison against 20+ indexes (S&P 500, ACWI, VTI, AVUV, ...).
 - **Rebalancing engine** — Mixed-integer optimization (`scipy.milp`) for buy /
-  sell / lump-sum suggestions that respect user constraints.
+  sell / lump-sum suggestions that respect user constraints, including a
+  separate absolute cash buffer target.
 - **Two UIs** — Streamlit dashboard for interactive exploration, Excel export
-  (8-sheet workbook) for offline reporting.
+  (5-sheet workbook) for offline reporting.
 
 ## Quickstart
 

@@ -51,7 +51,6 @@ class InvestorConfig:
     rebalancing_min_transaction_eur: float = 500.0
     rebalancing_max_tolerance_pctg: float = 2.0
     rebalancing_threshold_pctg: float = 5.0
-    rebalancing_precision_pctg: float = 0.5
     rebalancing_no_sell: bool = False
 
     # Cash buffer (absolute EUR amount)
@@ -103,7 +102,6 @@ class InvestorConfig:
         _set_float(config, rows, "rebalancing_min_transaction_eur")
         _set_float(config, rows, "rebalancing_max_tolerance_pctg")
         _set_float(config, rows, "rebalancing_threshold_pctg")
-        _set_float(config, rows, "rebalancing_precision_pctg")
         _set_float(config, rows, "target_cash_buffer_eur")
 
         # Boolean flags
@@ -202,7 +200,6 @@ _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_min_transaction_eur",
     "rebalancing_max_tolerance_pctg",
     "rebalancing_threshold_pctg",
-    "rebalancing_precision_pctg",
     "rebalancing_no_sell",
     "target_cash_buffer_eur",
     "portfolio_inception_date",
