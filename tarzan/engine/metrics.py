@@ -138,17 +138,67 @@ class MetricsEngine:
     # Portfolio history
     # ------------------------------------------------------------------
     def _portfolio_history(self, ctx: dict) -> None:
-        series_list = []
+        # Holdings whose price history span is below this threshold are excluded
+        # from the TOTAL PORTFOLIO time series, otherwise they would force the
+        # whole portfolio history to be capped to their (short) window via the
+        # dropna(how="any") step below. They still appear in their own per-row
+        # metrics in the Performance tab.
+        min_history_days = 365
+
+        series_list: list = []
+        # Track per-ticker metadata so we can report which holdings were excluded.
+        # Tuple: (ticker, name, current_value_eur, span_days)
+        meta: list[tuple[str, str, float, int]] = []
         for h in self.holdings:
-            if h.price_history is not None and len(h.price_history) > 0:
-                s = h.price_history * h.quantity
-                s.name = h.ticker
-                series_list.append(s)
+            if h.price_history is None or len(h.price_history) == 0:
+                continue
+            ph = h.price_history
+            span_days = int((ph.index[-1] - ph.index[0]).days)
+            value = float(h.current_value if h.current_value is not None else h.market_value_eur)
+            s = ph * h.quantity
+            s.name = h.ticker
+            series_list.append(s)
+            meta.append((h.ticker, h.name or h.ticker, value, span_days))
+
         if not series_list:
             ctx["portfolio_history"] = pd.Series(dtype=float)
             ctx["portfolio_history_full"] = pd.Series(dtype=float)
+            ctx["excluded_short_tenure"] = []
             return
-        combined = pd.concat(series_list, axis=1).ffill()
+
+        # Identify holdings with insufficient history. If filtering them would
+        # leave us with nothing (e.g. brand-new portfolio), fall back to the
+        # full set so we still produce a series.
+        eligible_tickers = [
+            ticker for (ticker, _, _, span) in meta if span >= min_history_days
+        ]
+        excluded: list[dict] = []
+        kept_series = series_list
+        if eligible_tickers and len(eligible_tickers) < len(series_list):
+            kept_series = [s for s in series_list if s.name in eligible_tickers]
+            total_value = sum(v for (_, _, v, _) in meta) or 1.0
+            for (ticker, name, value, span) in meta:
+                if ticker in eligible_tickers:
+                    continue
+                excluded.append({
+                    "ticker": ticker,
+                    "name": name,
+                    "value_eur": value,
+                    "weight_pct": value / total_value * 100.0,
+                    "span_days": span,
+                })
+        ctx["excluded_short_tenure"] = excluded
+        if excluded:
+            names = ", ".join(item["name"] for item in excluded)
+            logger.info(
+                "TOTAL PORTFOLIO time series excludes %d holding(s) with <1Y "
+                "of price history (%.1f%% of AuM): %s",
+                len(excluded),
+                sum(item["weight_pct"] for item in excluded),
+                names,
+            )
+
+        combined = pd.concat(kept_series, axis=1).ffill()
         # Normalize the index to naive calendar days so that series coming from
         # different exchanges (with different timezones) align cleanly, and
         # drop any duplicate days created by timezone offsets.
@@ -493,6 +543,7 @@ class MetricsEngine:
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),
             holding_histories=ctx.get("holding_histories", {}),
             acwi_geo=ctx.get("acwi_geo", {}),
+            excluded_short_tenure=ctx.get("excluded_short_tenure", []),
         )
 
 
