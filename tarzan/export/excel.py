@@ -1051,6 +1051,27 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
     sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
     row = 4
 
+    # Warning banner: holdings excluded from the TOTAL PORTFOLIO time series
+    # because their price history span is below the 1Y threshold. Each row
+    # is still shown individually below in its own row with its real Period
+    # Used.
+    excluded = getattr(metrics, "excluded_short_tenure", []) or []
+    if excluded:
+        names = ", ".join(item.get("name", item.get("ticker", "?")) for item in excluded)
+        weight = sum(float(item.get("weight_pct", 0.0)) for item in excluded)
+        warn_text = (
+            f"\u26a0  TOTAL PORTFOLIO excludes {len(excluded)} holding"
+            f"{'s' if len(excluded) > 1 else ''} with <1Y of price history "
+            f"({weight:.1f}% of AuM): {names}. Each excluded holding is still "
+            f"shown in its own row below."
+        )
+        warn_cell = sheet.cell(row=row, column=1, value=warn_text)
+        warn_cell.font = px_font(size=9, italic=True, color=C['amber'])
+        warn_cell.alignment = px_align(h='left', wrap=True)
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
+        sheet.row_dimensions[row].height = 28
+        row += 2
+
     # Columns
     all_cols = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y",
                 "cagr", "volatility", "sharpe", "sortino", "max_drawdown",

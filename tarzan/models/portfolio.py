@@ -71,6 +71,11 @@ class PortfolioMetrics:
     acwi_geo: dict = field(default_factory=dict)
     holding_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     holding_histories: dict = field(default_factory=dict)
+    # Holdings excluded from the TOTAL PORTFOLIO time series because their
+    # price history span is below the minimum (used for the Performance tab
+    # warning banner). Each entry: {"ticker", "name", "value_eur",
+    # "weight_pct", "span_days"}.
+    excluded_short_tenure: list = field(default_factory=list)
 
     def to_summary_dict(self) -> dict:
         """Serialize key metrics to a JSON-compatible dictionary.
