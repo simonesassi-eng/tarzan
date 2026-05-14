@@ -494,28 +494,60 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
             largest = non_cash.iloc[non_cash["delta_pct"].abs().argmax()]
             delta = float(largest["delta_pct"])
             cat = largest["category"]
+            drift_type = str(largest["type"])
             sema = _semaphore(delta, tol)
             if sema != "green":
-                # Find a suggested rebalance for this category
-                action_text = ""
-                if m.rebalancing_suggestions:
-                    s = m.rebalancing_suggestions[0]
-                    direction = s["direction"].upper()
+                # Find a rebalancing suggestion that actually addresses this
+                # category, in the appropriate direction. Drift > 0 means
+                # we're overweight → we want a SELL on a holding of this
+                # category. Drift < 0 means underweight → we want a BUY.
+                target_direction = "sell" if delta > 0 else "buy"
+                chosen = None
+                if m.rebalancing_suggestions and not m.holdings_df.empty:
+                    df = m.holdings_df
+                    for s in m.rebalancing_suggestions:
+                        if s.get("direction", "").lower() != target_direction:
+                            continue
+                        match = df[df["ticker"] == s.get("ticker", "")]
+                        if match.empty:
+                            continue
+                        if drift_type == "asset_class":
+                            if str(match["asset_class"].iloc[0]) == cat:
+                                chosen = s
+                                break
+                        elif drift_type.startswith("geography"):
+                            geo_str = str(match["geography"].iloc[0])
+                            if cat in geo_str:
+                                chosen = s
+                                break
+                    # Fallback: any suggestion in the right direction.
+                    if chosen is None:
+                        for s in m.rebalancing_suggestions:
+                            if s.get("direction", "").lower() == target_direction:
+                                chosen = s
+                                break
+
+                if chosen is not None:
+                    verb = "Buy" if target_direction == "buy" else "Sell"
+                    ident = chosen.get("ticker") or chosen.get("name", "")
                     action_text = (
-                        f"Deploy {_eur(s['amount_eur'])} ({direction}) into "
-                        f"{s.get('ticker', s.get('name', ''))} to bring the bucket back toward target."
+                        f"{verb} {_eur(chosen['amount_eur'])} of "
+                        f"{ident} to bring the bucket back toward target."
                     )
                 else:
+                    direction_word = "buying more" if target_direction == "buy" else "trimming"
                     action_text = (
-                        f"Consider rebalancing your next contribution toward {cat}."
+                        f"Consider {direction_word} your {cat} exposure on the next contribution."
                     )
+
+                direction_word = "above" if delta > 0 else "below"
                 insights.append({
                     "kind": "action",
                     "icon": "⚡",
                     "color": PALETTE["amber"],
                     "bg": PALETTE["amber_bg"],
                     "category": "Action · Rebalance",
-                    "headline": f"{cat} is {abs(delta):.1f} pp {'above' if delta > 0 else 'below'} target — your largest drift.",
+                    "headline": f"{cat} is {abs(delta):.1f} pp {direction_word} target — your largest drift.",
                     "body": action_text,
                 })
 
