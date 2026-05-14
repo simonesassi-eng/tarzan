@@ -3,7 +3,7 @@ rebalancing_lump_sum_amount_eur,0
 rebalancing_min_transaction_eur,0
 rebalancing_max_tolerance_pctg,2.5
 rebalancing_threshold_pctg,2.5
-rebalancing_no_sell,TRUE
+rebalancing_no_sell,FALSE
 portfolio_inception_date,1/26/26
 target_cash_buffer_eur,10000
 target_invested_allocation_equities_pctg,70

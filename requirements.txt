@@ -6,3 +6,10 @@ python-dateutil>=2.8.0
 requests>=2.31.0
 pyyaml>=6.0.0
 scipy>=1.11.0
+jinja2>=3.1.0
+
+# Google Drive integration for the public-repo automation flow.
+# Used only by scripts/drive_loader.py when GOOGLE_DRIVE_CREDENTIALS_JSON
+# and DRIVE_FOLDER_ID are set. Local development does not need them.
+google-api-python-client>=2.100.0
+google-auth>=2.20.0

@@ -1,0 +1,152 @@
+# Tarzan — Weekly portfolio newsletter automation
+#
+# Three scheduled sends per day at Italian local time:
+#   09:05 (Italian market open)
+#   13:00 (mid-session)
+#   17:30 (post-close)
+#
+# Italy uses CET (UTC+1) in winter and CEST (UTC+2) in summer. GitHub cron
+# only understands UTC and does not handle DST. We therefore declare two
+# parallel sets of cron expressions (winter and summer) and let a guard
+# step skip whichever set does not match the active DST regime for "today".
+#
+# In addition:
+#   * workflow_dispatch  — manual trigger from the Actions UI.
+#   * repository_dispatch (event_type: send_now)
+#       — triggered by the Gmail Apps Script when you reply "Update" to a
+#       previous newsletter, for an on-demand send.
+
+name: Tarzan Newsletter
+
+on:
+  schedule:
+    # ── WINTER (CET = UTC+1) ────────────────────────────────────────────
+    - cron: "5 8 * * *"    # 09:05 CET
+    - cron: "0 12 * * *"   # 13:00 CET
+    - cron: "30 16 * * *"  # 17:30 CET
+    # ── SUMMER (CEST = UTC+2) ───────────────────────────────────────────
+    - cron: "5 7 * * *"    # 09:05 CEST
+    - cron: "0 11 * * *"   # 13:00 CEST
+    - cron: "30 15 * * *"  # 17:30 CEST
+  workflow_dispatch:
+    inputs:
+      trigger_label:
+        description: "Label for this run (shown in the email subject)"
+        default: "manual"
+        required: false
+  repository_dispatch:
+    types: [send_now]
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+
+    env:
+      # Email + SMTP — set these in repo Settings > Secrets and variables > Actions
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "465"
+      # Inputs from Google Drive (preferred for public repos).
+      # The service-account JSON must be the entire key, single-line,
+      # with newlines escaped as \n.
+      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+      GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
+      SUBJECT_PREFIX: "[Tarzan]"
+      # Issue counter — increments every send via $GITHUB_RUN_NUMBER
+      ISSUE_NUMBER: ${{ github.run_number }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Determine whether Europe/Rome is currently in CET or CEST and decide
+      # whether this scheduled job should actually run. For workflow_dispatch
+      # and repository_dispatch we always run (no schedule guard).
+      - name: Resolve trigger label and DST guard
+        id: trigger
+        env:
+          GH_EVENT: ${{ github.event_name }}
+          MANUAL_LABEL: ${{ github.event.inputs.trigger_label }}
+          REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
+        run: |
+          set -euo pipefail
+          # 1. Are we in CEST (summer) or CET (winter) today, in Europe/Rome?
+          DST_OFFSET=$(TZ=Europe/Rome date +%z)
+          if [[ "$DST_OFFSET" == "+0200" ]]; then
+            CURRENT_DST="cest"
+          else
+            CURRENT_DST="cet"
+          fi
+          echo "current_dst=$CURRENT_DST" >> "$GITHUB_OUTPUT"
+          echo "Italy is in $CURRENT_DST (offset $DST_OFFSET) right now"
+
+          # 2. Determine whether this run should proceed.
+          if [[ "$GH_EVENT" == "schedule" ]]; then
+            # The cron string that fired this run is exposed via github.event.schedule
+            FIRED_CRON='${{ github.event.schedule }}'
+            echo "Scheduled run fired by cron: $FIRED_CRON"
+            # Winter/CET set
+            WINTER_CRONS=("5 8 * * *" "0 12 * * *" "30 16 * * *")
+            # Summer/CEST set
+            SUMMER_CRONS=("5 7 * * *" "0 11 * * *" "30 15 * * *")
+            IS_WINTER=0
+            for c in "${WINTER_CRONS[@]}"; do
+              [[ "$FIRED_CRON" == "$c" ]] && IS_WINTER=1
+            done
+            IS_SUMMER=0
+            for c in "${SUMMER_CRONS[@]}"; do
+              [[ "$FIRED_CRON" == "$c" ]] && IS_SUMMER=1
+            done
+
+            if [[ "$CURRENT_DST" == "cet" && "$IS_WINTER" == "1" ]]; then
+              SHOULD_RUN=1
+            elif [[ "$CURRENT_DST" == "cest" && "$IS_SUMMER" == "1" ]]; then
+              SHOULD_RUN=1
+            else
+              SHOULD_RUN=0
+              echo "Skipping: cron $FIRED_CRON does not match current DST $CURRENT_DST"
+            fi
+
+            # Pick a friendly label based on the local hour.
+            HOUR=$(TZ=Europe/Rome date +%H%M)
+            case "$HOUR" in
+              09*) LABEL="morning" ;;
+              13*) LABEL="midday"  ;;
+              17*) LABEL="close"   ;;
+              *)   LABEL="scheduled" ;;
+            esac
+          elif [[ "$GH_EVENT" == "repository_dispatch" ]]; then
+            SHOULD_RUN=1
+            LABEL="${REPO_DISPATCH_LABEL:-on-demand}"
+          else
+            SHOULD_RUN=1
+            LABEL="${MANUAL_LABEL:-manual}"
+          fi
+
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+          echo "Will run? $SHOULD_RUN — label: $LABEL"
+
+      - name: Set up Python
+        if: steps.trigger.outputs.should_run == '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.trigger.outputs.should_run == '1'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Render & send newsletter
+        if: steps.trigger.outputs.should_run == '1'
+        env:
+          TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
+        run: python scripts/send_newsletter.py

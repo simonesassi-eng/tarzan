@@ -35,5 +35,11 @@ output/*
 output/sample/~$*
 input/.cache/
 input/holdings.csv
+input/targets.csv
 build.log
 analyzer.log
+
+# Personal inputs are NEVER committed — even to a private repo. The
+# automation pulls them from the configured Google Drive folder via
+# scripts/drive_loader.py at workflow runtime.
+.private/
