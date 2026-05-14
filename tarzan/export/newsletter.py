@@ -360,7 +360,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
             })
 
     # Stacked equity bar
-    stacked = [{"color": r["color"], "width": float(r["actual_pct"].rstrip("%"))} for r in rows]
+    stacked = [{"color": r["color"], "width": r["bar_width"]} for r in rows if r["bar_width"] > 0]
 
     return {
         "rows": rows,
