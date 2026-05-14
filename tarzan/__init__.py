@@ -1,7 +1,7 @@
 """Tarzan — Production-grade investment portfolio analysis engine.
 
-Provides data ingestion, enrichment, metric computation, and Streamlit UI
-for multi-asset portfolios with live market data integration.
+Provides data ingestion, enrichment, metric computation, and a 5-sheet
+Excel report for multi-asset portfolios with live market data integration.
 """
 
 from __future__ import annotations

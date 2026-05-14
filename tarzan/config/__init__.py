@@ -174,7 +174,7 @@ def default_invested_allocation_targets_pctg() -> dict[str, float]:
     """
     return get("default_invested_allocation_targets_pctg", {
         "Equities": 65.0, "Fixed Income": 25.0,
-        "Gold": 5.0, "Commodities": 0.0, "Alternative": 5.0,
+        "Gold": 5.0, "Commodities": 0.0, "Crypto": 0.0, "Alternative": 5.0,
     })
 
 

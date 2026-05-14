@@ -5,13 +5,12 @@ real personal data.
 
 ## Files
 
-- **`sample_holdings.csv`** — 10 positions across equities, fixed income,
-  gold, and cash. Uses real, liquid tickers (iShares, Vanguard,
-  Xtrackers) for realistic live market data.
-- **`sample_targets.csv`** — investor targets using the new typed-key
-  schema:
+- **`sample_holdings.csv`** — 11 positions across equities, fixed income,
+  gold, crypto and cash. Uses real, liquid tickers (iShares, Vanguard,
+  Xtrackers, ETC Group) for realistic live market data.
+- **`sample_targets.csv`** — investor targets using the typed-key schema:
   - Invested allocation (% of invested portfolio, excludes cash):
-    68% equities · 26% fixed income · 5% gold · 1% alternative.
+    66% equities · 25% fixed income · 5% gold · 3% crypto · 1% alternative.
   - `target_cash_buffer_eur = 3000` kept separately as an absolute
     buffer that the optimizer aims at.
   - Equity geography (% of equity portion): tilted to USA (55%).
@@ -31,18 +30,13 @@ Keys follow a typed-suffix convention so the unit is unambiguous:
 From the project root:
 
 ```bash
-# CLI
 python -m tarzan.main \
     --input_holdings input/sample/sample_holdings.csv \
     --input_config   input/sample/sample_targets.csv \
     --output         output/sample/
-
-# Streamlit
-streamlit run tarzan/presentation/app.py
-# then upload the two CSVs from this folder in the sidebar
 ```
 
-See the generated dashboard in [`output/sample/`](../../output/sample/).
+See the generated report in [`output/sample/`](../../output/sample/).
 
 ## Notes
 

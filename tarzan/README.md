@@ -13,8 +13,8 @@ tarzan/
 ├── exceptions.py                # Domain exception hierarchy (TarzanError)
 ├── config/
 │   ├── __init__.py              # Configuration loader (YAML → typed accessors)
-│   ├── constants.yaml           # Tunable parameters (risk-free rate, benchmarks, ...)
-│   └── static.yaml              # Rarely-changed mappings (exchanges, colors, ...)
+│   ├── constants.yaml           # Tunable parameters (risk-free rate, classification, ...)
+│   └── static.yaml              # Rarely-changed mappings (exchanges, FIGI, ...)
 ├── models/
 │   ├── holding.py               # Holding dataclass, AssetClass / Geography enums
 │   ├── investor_config.py       # InvestorConfig with CSV deserialization
@@ -29,23 +29,12 @@ tarzan/
 │   ├── metrics.py               # MetricsEngine: performance, risk, allocations
 │   └── rebalancer.py            # Mixed-integer rebalancing optimizer
 ├── export/
-│   └── excel.py                 # 8-sheet Excel dashboard generator
-├── presentation/
-│   ├── app.py                   # Streamlit entry point
-│   ├── charts.py                # Plotly chart factories (donut, line, drawdown)
-│   ├── formatters.py            # Number / currency / percent formatters
-│   ├── assets/                  # Logo and static assets
-│   └── views/                   # Per-page Streamlit views
-│       ├── dashboard.py
-│       ├── holdings.py
-│       ├── optimizer.py
-│       ├── performance.py
-│       ├── contribution.py
-│       └── documentation.py
+│   └── excel.py                 # 5-sheet Excel report generator
 └── tests/                       # Pytest suite
     ├── conftest.py
     ├── test_loader.py
     ├── test_metrics.py
+    ├── test_enricher.py
     └── test_rebalancer.py
 ```
 
@@ -66,13 +55,10 @@ python -m tarzan.main \
     --input_holdings input/sample/sample_holdings.csv \
     --input_config   input/sample/sample_targets.csv \
     --output         output/sample/
-
-# Streamlit dashboard
-streamlit run tarzan/presentation/app.py
 ```
 
 See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
-[`output/sample/`](../output/sample/) for a pre-generated Excel dashboard.
+[`output/sample/`](../output/sample/) for a pre-generated Excel report.
 
 ## Input
 
@@ -127,6 +113,7 @@ convention so the unit is unambiguous:
 | `target_invested_allocation_fixed_income_pctg`     | Target weight for fixed income  |
 | `target_invested_allocation_gold_pctg`             | Target weight for gold          |
 | `target_invested_allocation_commodities_pctg`      | Target weight for commodities   |
+| `target_invested_allocation_crypto_pctg`           | Target weight for crypto        |
 | `target_invested_allocation_alternative_pctg`      | Target weight for alternative   |
 
 **Equity geography (% of equity portion, must sum to 100)**

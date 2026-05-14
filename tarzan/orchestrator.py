@@ -1,6 +1,6 @@
 """Pipeline orchestrator: load → enrich → compute → PortfolioMetrics.
 
-Single entry point used by both CLI (main.py) and Streamlit (app.py).
+Single entry point used by the CLI (main.py).
 """
 
 from __future__ import annotations

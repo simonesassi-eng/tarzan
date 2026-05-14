@@ -87,6 +87,7 @@ default_invested_allocation_targets_pctg:
   Fixed Income: 25.0
   Gold: 5.0
   Commodities: 0.0
+  Crypto: 0.0
   Alternative: 5.0
 
 default_equity_geo_targets_pctg:
@@ -171,12 +172,14 @@ classification:
   asset_type_cash: ["money", "monetar", "cash", "t-bill", "certificate"]
   asset_type_gold: ["gold", "oro"]
   asset_type_commodities: ["silver", "precious", "metall", "argento", "commodity", "commodities"]
-  asset_type_alternative: ["etn", "alternative", "crypto"]
+  asset_type_crypto: ["crypto", "bitcoin", "ethereum"]
+  asset_type_alternative: ["etn", "alternative"]
   # Name-based classification
   name_fixed_income: ["bond", "btp", "treasury", "government bond", "obbligaz", "aggregate bond", "fixed income"]
   name_cash: ["money market", "estr", "€str", "ester", "overnight", "cash", "liquidity", "t-bill"]
   name_gold: ["gold", "oro"]
   name_commodities: ["silver", "precious", "palladium", "platinum", "commodity"]
+  name_crypto: ["bitcoin", "ethereum", "btc", "eth", "crypto"]
   name_equity_etf: ["msci", "s&p", "stoxx", "ftse", "russell", "nasdaq", "world", "emerging", "japan", "europe", "usa", "quality", "momentum", "value", "dividend"]
   # Instrument type inference
   instrument_bond_etf: ["bond", "fixed income", "treasury", "government", "aggregate bond"]

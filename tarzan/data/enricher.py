@@ -413,6 +413,9 @@ def _classify_figi_item(
         elif any(k in name_lower for k in kw.get("name_commodities", [])):
             info["asset_class"] = AssetClass.COMMODITIES
             info["instrument_type"] = "ETC"
+        elif any(k in name_lower for k in kw.get("name_crypto", [])):
+            info["asset_class"] = AssetClass.CRYPTO
+            info["instrument_type"] = "Crypto"
 
     return info
 
@@ -483,7 +486,7 @@ def _derive_security_type(holding: Holding) -> str:
         AssetClass.CASH_EQUIVALENTS: "Money Market ETF" if "etf" in it else "Money Market Instrument",
         AssetClass.GOLD: "Gold ETC",
         AssetClass.COMMODITIES: "ETC" if "etc" in it else "Commodity",
-        AssetClass.REAL_ESTATE: "REIT",
+        AssetClass.CRYPTO: "Crypto",
     }
     return type_map.get(ac, "Alternative") if ac else "Alternative"
 
@@ -513,6 +516,14 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClas
 
     # 2. quoteType-based
     if qt == "EQUITY":
+        # Crypto/gold/commodity ETPs are often listed as "EQUITY" on yfinance,
+        # so check their long name first to avoid bucketing them as equities.
+        if any(k in long_name for k in kw.get("name_crypto", [])):
+            return AssetClass.CRYPTO
+        if any(k in long_name for k in kw.get("name_gold", [])):
+            return AssetClass.GOLD
+        if any(k in long_name for k in kw.get("name_commodities", [])):
+            return AssetClass.COMMODITIES
         if any(k in long_name for k in kw.get("name_cash", [])):
             return AssetClass.CASH_EQUIVALENTS
         if any(k in long_name for k in kw.get("name_fixed_income", [])):
@@ -529,6 +540,8 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClas
         return AssetClass.GOLD
     if any(k in long_name for k in kw.get("name_commodities", [])):
         return AssetClass.COMMODITIES
+    if any(k in long_name for k in kw.get("name_crypto", [])):
+        return AssetClass.CRYPTO
     if any(k in long_name for k in kw.get("name_fixed_income", [])):
         return AssetClass.FIXED_INCOME
 
@@ -540,8 +553,10 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClas
             return AssetClass.EQUITIES
         return AssetClass.EQUITIES
 
-    if qt in ("ETN", "CRYPTOCURRENCY"):
+    if qt == "ETN":
         return AssetClass.ALTERNATIVE
+    if qt == "CRYPTOCURRENCY":
+        return AssetClass.CRYPTO
 
     return AssetClass.ALTERNATIVE
 
@@ -555,6 +570,7 @@ def _classify_from_hint(hint: str, kw: dict) -> Optional[AssetClass]:
         ("asset_type_cash", AssetClass.CASH_EQUIVALENTS),
         ("asset_type_gold", AssetClass.GOLD),
         ("asset_type_commodities", AssetClass.COMMODITIES),
+        ("asset_type_crypto", AssetClass.CRYPTO),
         ("asset_type_alternative", AssetClass.ALTERNATIVE),
     ]
     for key, ac in mapping:
@@ -569,14 +585,14 @@ def _classify_from_category(cat: str, sector: str) -> Optional[AssetClass]:
         return AssetClass.FIXED_INCOME
     if "money market" in cat:
         return AssetClass.CASH_EQUIVALENTS
+    if any(k in cat for k in ("crypto", "bitcoin", "ethereum")) or any(k in sector for k in ("crypto",)):
+        return AssetClass.CRYPTO
     if any(k in cat for k in ("gold",)) or any(k in sector for k in ("gold",)):
         return AssetClass.GOLD
     if any(k in cat for k in ("precious metal", "silver", "commodit")):
         return AssetClass.COMMODITIES
     if any(k in sector for k in ("precious metal",)):
         return AssetClass.COMMODITIES
-    if any(k in cat for k in ("real estate", "reit")):
-        return AssetClass.REAL_ESTATE
     return None
 
 
@@ -848,6 +864,8 @@ def _reclassify_by_name(holding: Holding) -> None:
         holding.asset_class = AssetClass.GOLD
     elif any(k in name_lower for k in kw.get("name_commodities", [])):
         holding.asset_class = AssetClass.COMMODITIES
+    elif any(k in name_lower for k in kw.get("name_crypto", [])):
+        holding.asset_class = AssetClass.CRYPTO
 
 
 def _apply_openfigi_fallback(holding: Holding) -> None:
