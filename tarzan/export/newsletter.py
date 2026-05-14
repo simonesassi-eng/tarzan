@@ -644,40 +644,180 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     }
 
 
-def _build_optimizer(ctx: _NewsletterContext) -> dict:
-    """Suggested action (top rebalancing suggestion)."""
+def _build_risk_vs_benchmarks(ctx: _NewsletterContext) -> dict:
+    """Build the side-by-side "Risk vs S&P 500" / "Risk vs MSCI ACWI" tables.
+
+    For each benchmark we expose CAGR, Volatility, Sharpe, and Max Drawdown
+    (the four metrics common to both PortfolioMetrics.risk/performance and
+    PortfolioMetrics.benchmark_comparison). VaR is intentionally omitted
+    because benchmark_comparison does not carry it.
+    """
     m = ctx.metrics
-    if not m.rebalancing_suggestions:
+    risk = m.risk or {}
+    perf = m.performance or {}
+    bench_cmp = m.benchmark_comparison
+
+    portfolio_cagr = perf.get("cagr") or perf.get("CAGR")
+    portfolio_vol = risk.get("volatility")
+    portfolio_sharpe = risk.get("sharpe")
+    portfolio_dd = risk.get("max_drawdown")
+
+    if (
+        bench_cmp is None or bench_cmp.empty
+        or "benchmark" not in bench_cmp.columns
+        or any(v is None for v in (portfolio_cagr, portfolio_vol,
+                                    portfolio_sharpe, portfolio_dd))
+    ):
+        return {"available": False, "tables": []}
+
+    def _row_for(name_substr: str) -> dict | None:
+        match = bench_cmp[
+            bench_cmp["benchmark"].astype(str).str.contains(
+                name_substr, case=False, na=False, regex=False,
+            )
+        ]
+        if match.empty:
+            return None
+        return match.iloc[0].to_dict()
+
+    bench_specs = [
+        ("S&P 500", "S&P 500", "α/β"),
+        ("MSCI ACWI", "MSCI ACWI", "GEO"),
+    ]
+    tables = []
+    for display_name, search_token, tag_label in bench_specs:
+        bench = _row_for(search_token)
+        if bench is None:
+            continue
+        # For each metric we compute the delta and decide if it's a
+        # win for the portfolio. Volatility and MaxDD are "lower is
+        # better"; CAGR and Sharpe are "higher is better".
+        rows = []
+        metric_specs = [
+            ("CAGR", portfolio_cagr, bench.get("cagr"), True, False),
+            ("Volatility", portfolio_vol, bench.get("volatility"), True, True),
+            ("Sharpe", portfolio_sharpe, bench.get("sharpe"), False, False),
+            ("Max Drawdown", portfolio_dd, bench.get("max_drawdown"), True, True),
+        ]
+        for label, port, bench_v, is_pct, lower_is_better in metric_specs:
+            if bench_v is None or pd.isna(bench_v):
+                continue
+            port_f = float(port)
+            bench_f = float(bench_v)
+            delta = port_f - bench_f
+            is_win = (delta < 0) if lower_is_better else (delta > 0)
+            verdict_color = PALETTE["green"] if is_win else PALETTE["amber"]
+            unit = "pp" if is_pct else ""
+            rows.append({
+                "label": label,
+                "portfolio": _pct(port_f) if is_pct else f"{port_f:.2f}",
+                "benchmark": _pct(bench_f) if is_pct else f"{bench_f:.2f}",
+                "verdict": _signed_pp(delta, decimals=2)
+                           + (f" {unit}" if unit else ""),
+                "verdict_color": verdict_color,
+                "is_loss_metric": lower_is_better,
+            })
+        if rows:
+            tables.append({
+                "name": display_name,
+                "tag": tag_label,
+                "rows": rows,
+            })
+
+    return {"available": bool(tables), "tables": tables}
+
+
+def _build_optimizer(ctx: _NewsletterContext) -> dict:
+    """Build the suggested-action card.
+
+    Shows up to ``MAX_ACTIONS`` rebalancing suggestions, ensuring the
+    user sees both BUY and SELL sides of the rebalance plan when both
+    exist. Suggestions are surfaced ordered by absolute amount so the
+    most impactful trades come first.
+    """
+    MAX_ACTIONS = 4
+    m = ctx.metrics
+    suggestions = list(m.rebalancing_suggestions or [])
+    if not suggestions:
         return {"available": False}
 
-    s = m.rebalancing_suggestions[0]
-    direction = s["direction"].upper()
-    amount = float(s["amount_eur"])
-    pct_of_port = (amount / m.total_value * 100) if m.total_value > 0 else 0.0
-
-    # Resolve asset class for the suggested ticker
     df = m.holdings_df
-    klass = "Equities"
-    if not df.empty:
-        match = df[df["ticker"] == s.get("ticker", "")]
-        if not match.empty:
-            klass = match["asset_class"].iloc[0]
+
+    # Compute totals across the whole plan (not just the displayed subset)
+    total_buy = sum(float(s["amount_eur"]) for s in suggestions
+                    if s["direction"].lower() == "buy")
+    total_sell = sum(float(s["amount_eur"]) for s in suggestions
+                     if s["direction"].lower() == "sell")
+
+    # Pick which actions to display: when the plan has both BUYs and
+    # SELLs we want both surfaced. Strategy:
+    #  - Sort all actions by absolute amount, descending.
+    #  - Take the largest BUY and the largest SELL first.
+    #  - Fill remaining slots with the next largest of either side.
+    by_amount = sorted(suggestions, key=lambda s: -float(s["amount_eur"]))
+    largest_buy = next((s for s in by_amount if s["direction"].lower() == "buy"), None)
+    largest_sell = next((s for s in by_amount if s["direction"].lower() == "sell"), None)
+
+    selected: list[dict] = []
+    if largest_buy:
+        selected.append(largest_buy)
+    if largest_sell:
+        selected.append(largest_sell)
+    for s in by_amount:
+        if s in selected:
+            continue
+        if len(selected) >= MAX_ACTIONS:
+            break
+        selected.append(s)
+    # Re-order selected by amount desc for display
+    selected.sort(key=lambda s: -float(s["amount_eur"]))
+
+    actions = []
+    for s in selected:
+        direction = s["direction"].upper()
+        amount = float(s["amount_eur"])
+        pct_of_port = (amount / m.total_value * 100) if m.total_value > 0 else 0.0
+        ticker = s.get("ticker", "")
+        klass = "Equities"
+        if not df.empty:
+            match = df[df["ticker"] == ticker]
+            if not match.empty:
+                klass = match["asset_class"].iloc[0]
+        actions.append({
+            "direction": direction,
+            "direction_color": PALETTE["green"] if direction == "BUY" else PALETTE["red"],
+            "direction_bg": PALETTE["green_bg"] if direction == "BUY" else PALETTE["red_bg"],
+            "name": s.get("name", ""),
+            "ticker": ticker,
+            "isin": s.get("isin", ""),
+            "asset_class": klass,
+            "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
+            # Always show amounts as positive — the colored chip already
+            # encodes the direction. Net is shown in the summary below.
+            "amount": _eur(amount, decimals=2),
+            "pct_of_portfolio": _pct(pct_of_port, decimals=1),
+            "reason": s.get("reason", ""),
+        })
+
+    n_total = len(suggestions)
+    n_buy = sum(1 for s in suggestions if s["direction"].lower() == "buy")
+    n_sell = n_total - n_buy
 
     return {
         "available": True,
-        "direction": direction,
-        "direction_color": PALETTE["green"] if direction == "BUY" else PALETTE["red"],
-        "direction_bg": PALETTE["green_bg"] if direction == "BUY" else PALETTE["red_bg"],
-        "name": s.get("name", ""),
-        "ticker": s.get("ticker", ""),
-        "isin": s.get("isin", ""),
-        "asset_class": klass,
-        "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-        "amount": _eur(amount, signed=(direction == "BUY")),
-        "pct_of_portfolio": _pct(pct_of_port, decimals=1),
-        "reason": s.get("reason", ""),
-        "n_actions": len(m.rebalancing_suggestions),
+        "actions": actions,
+        "n_total": n_total,
+        "n_buy": n_buy,
+        "n_sell": n_sell,
+        "n_displayed": len(actions),
+        "n_more": max(0, n_total - len(actions)),
+        "total_buy": _eur(total_buy, decimals=0),
+        "total_sell": _eur(total_sell, decimals=0),
+        "net": _eur(total_buy - total_sell, signed=True),
+        "net_color": (PALETTE["green"] if (total_buy - total_sell) >= 0
+                      else PALETTE["red"]),
     }
+
 
 
 def _build_return_contrib(ctx: _NewsletterContext) -> dict:
@@ -749,6 +889,7 @@ def build_context(
         "geography": _build_geography(nctx),
         "holdings": _build_holdings(nctx),
         "performance": _build_performance(nctx),
+        "risk_vs_benchmarks": _build_risk_vs_benchmarks(nctx),
         "optimizer": _build_optimizer(nctx),
         "return_contrib": _build_return_contrib(nctx),
         "preheader": _build_preheader(nctx, hero),
