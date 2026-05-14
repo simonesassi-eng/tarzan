@@ -37,6 +37,3 @@ input/.cache/
 input/holdings.csv
 build.log
 analyzer.log
-
-# Streamlit
-.streamlit/secrets.toml

@@ -121,7 +121,7 @@ class MetricsEngine:
 
         class_order = {v: i for i, v in enumerate([
             "Equities", "Fixed Income", "Cash & Cash Equivalents",
-            "Gold", "Commodities", "Real Estate", "Alternative",
+            "Gold", "Commodities", "Crypto", "Alternative",
         ])}
         if not df.empty:
             df["_sort"] = df["asset_class"].map(class_order).fillna(99)

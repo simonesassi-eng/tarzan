@@ -24,7 +24,7 @@ class AssetClass(str, Enum):
     CASH_EQUIVALENTS = "Cash & Cash Equivalents"
     GOLD = "Gold"
     COMMODITIES = "Commodities"
-    REAL_ESTATE = "Real Estate"
+    CRYPTO = "Crypto"
     ALTERNATIVE = "Alternative"
 
 

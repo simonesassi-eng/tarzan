@@ -156,8 +156,8 @@ _INVESTED_ALLOC_KEYS: dict[str, str] = {
     "target_invested_allocation_fixed_income_pctg": "Fixed Income",
     "target_invested_allocation_gold_pctg": "Gold",
     "target_invested_allocation_commodities_pctg": "Commodities",
+    "target_invested_allocation_crypto_pctg": "Crypto",
     "target_invested_allocation_alternative_pctg": "Alternative",
-    "target_invested_allocation_real_estate_pctg": "Real Estate",
 }
 
 
