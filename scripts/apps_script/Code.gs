@@ -18,7 +18,7 @@
  *                     scope on this repo (no other scopes needed).
  *      LABEL_NAME     Optional Gmail label applied to processed
  *                     threads. Default "tarzan-update-handled".
- *      SUBJECT_MATCH  Optional. Default "[Tarzan]" — only threads
+ *      SUBJECT_MATCH  Optional. Default "Tarzan Portfolio Digest" — only threads
  *                     whose subject contains this string are eligible.
  *      WORD_MATCH     Optional. Default "update" — body must contain
  *                     this token (case-insensitive, word boundary).
@@ -40,7 +40,7 @@
  */
 
 const DEFAULT_LABEL = 'tarzan-update-handled';
-const DEFAULT_SUBJECT_MATCH = '[Tarzan]';
+const DEFAULT_SUBJECT_MATCH = 'Tarzan Portfolio Digest';
 const DEFAULT_WORD_MATCH = 'update';
 // How far back we scan for new "Update" replies on each run. 1 day
 // is plenty given the 5-minute polling cadence and is a safety net
