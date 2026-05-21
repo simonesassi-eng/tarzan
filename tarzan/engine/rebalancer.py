@@ -113,11 +113,14 @@ def compute_unified_rebalancing(
     is_lump_sum = effective_net_inflow > 0
 
     # --- Solve MILP with progressive tolerance ---
-    # Cap at user-configured max_tolerance to avoid solutions that worsen allocations.
+    # Try a graded ladder of tolerances and stop at the first feasible one.
+    # The user-configured max_tolerance caps the ladder; we always include
+    # max_tol itself as the last step so the ladder reaches the configured
+    # ceiling exactly (otherwise an LP that is only feasible at e.g. 2.5%
+    # would be missed when the ladder stops at 2.0%).
     max_tol = config.rebalancing_max_tolerance_pctg
-    tolerances = [t for t in [0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0] if t <= max_tol]
-    if not tolerances:
-        tolerances = [max_tol]
+    base_steps = [0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+    tolerances = sorted({t for t in base_steps if t < max_tol} | {max_tol})
     actions = []
     used_tolerance = None
     for tol in tolerances:
