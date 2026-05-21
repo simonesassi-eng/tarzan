@@ -762,12 +762,9 @@ def _build_risk_vs_benchmarks(ctx: _NewsletterContext) -> dict:
 def _build_optimizer(ctx: _NewsletterContext) -> dict:
     """Build the suggested-action card.
 
-    Shows up to ``MAX_ACTIONS`` rebalancing suggestions, ensuring the
-    user sees both BUY and SELL sides of the rebalance plan when both
-    exist. Suggestions are surfaced ordered by absolute amount so the
-    most impactful trades come first.
+    Surfaces every rebalancing suggestion produced by the engine, ordered
+    by absolute amount so the most impactful trades come first.
     """
-    MAX_ACTIONS = 4
     m = ctx.metrics
     suggestions = list(m.rebalancing_suggestions or [])
     if not suggestions:
@@ -775,34 +772,14 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
 
     df = m.holdings_df
 
-    # Compute totals across the whole plan (not just the displayed subset)
+    # Plan totals across the entire suggestion set.
     total_buy = sum(float(s["amount_eur"]) for s in suggestions
                     if s["direction"].lower() == "buy")
     total_sell = sum(float(s["amount_eur"]) for s in suggestions
                      if s["direction"].lower() == "sell")
 
-    # Pick which actions to display: when the plan has both BUYs and
-    # SELLs we want both surfaced. Strategy:
-    #  - Sort all actions by absolute amount, descending.
-    #  - Take the largest BUY and the largest SELL first.
-    #  - Fill remaining slots with the next largest of either side.
-    by_amount = sorted(suggestions, key=lambda s: -float(s["amount_eur"]))
-    largest_buy = next((s for s in by_amount if s["direction"].lower() == "buy"), None)
-    largest_sell = next((s for s in by_amount if s["direction"].lower() == "sell"), None)
-
-    selected: list[dict] = []
-    if largest_buy:
-        selected.append(largest_buy)
-    if largest_sell:
-        selected.append(largest_sell)
-    for s in by_amount:
-        if s in selected:
-            continue
-        if len(selected) >= MAX_ACTIONS:
-            break
-        selected.append(s)
-    # Re-order selected by amount desc for display
-    selected.sort(key=lambda s: -float(s["amount_eur"]))
+    # Display order: largest absolute amount first.
+    selected = sorted(suggestions, key=lambda s: -float(s["amount_eur"]))
 
     actions = []
     for s in selected:
@@ -841,8 +818,6 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
         "n_total": n_total,
         "n_buy": n_buy,
         "n_sell": n_sell,
-        "n_displayed": len(actions),
-        "n_more": max(0, n_total - len(actions)),
         "total_buy": _eur(total_buy, decimals=0),
         "total_sell": _eur(total_sell, decimals=0),
         "net": _eur(total_buy - total_sell, signed=True),
