@@ -524,9 +524,6 @@
                 </tr>
               </table>
               {% endfor %}
-              {% if optimizer.n_more > 0 %}
-              <div style="margin-top:8px;font-size:11px;color:{{ palette.muted }};text-align:center;">+ {{ optimizer.n_more }} more action{{ 's' if optimizer.n_more != 1 else '' }} in the Optimizer tab</div>
-              {% endif %}
             </td>
           </tr>
           {% endif %}
