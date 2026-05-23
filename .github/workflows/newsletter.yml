@@ -1,20 +1,23 @@
-# Tarzan — Weekly portfolio newsletter automation
+# Tarzan — portfolio newsletter automation
 #
-# Three scheduled sends per day at Italian local time:
-#   09:05 (Italian market open)
-#   13:00 (mid-session)
-#   17:30 (post-close)
+# Scheduled sends, all in Italian local time:
+#   Mon–Fri  09:05  morning
+#   Mon–Fri  13:00  midday
+#   Mon–Fri  17:30  close
+#   Sat–Sun  09:05  morning  (weekend: only one send per day)
 #
-# Italy uses CET (UTC+1) in winter and CEST (UTC+2) in summer. GitHub cron
-# only understands UTC and does not handle DST. We therefore declare two
-# parallel sets of cron expressions (winter and summer) and let a guard
-# step skip whichever set does not match the active DST regime for "today".
+# GitHub Actions cron is UTC-only and does not follow DST. We declare
+# two parallel sets of cron expressions (CET=UTC+1 in winter and
+# CEST=UTC+2 in summer) so a slot fires at the same Italian local time
+# year-round. The first job step then guards against the wrong-season
+# half by checking the actual local time at execution rather than
+# trusting which cron fired.
 #
 # In addition:
 #   * workflow_dispatch  — manual trigger from the Actions UI.
 #   * repository_dispatch (event_type: send_now)
-#       — triggered by the Gmail Apps Script when you reply "Update" to a
-#       previous newsletter, for an on-demand send.
+#       — triggered by the Gmail Apps Script when you reply "Update" to
+#       a previous newsletter, for an on-demand send.
 
 name: Tarzan Newsletter
 
@@ -64,10 +67,20 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Determine whether Europe/Rome is currently in CET or CEST and decide
-      # whether this scheduled job should actually run. For workflow_dispatch
-      # and repository_dispatch we always run (no schedule guard).
-      - name: Resolve trigger label and DST guard
+      # Decide whether this scheduled run should actually proceed, and
+      # pick a friendly slot label. We do NOT rely on
+      # ``github.event.schedule`` because it is unreliable. Instead we
+      # look at the *local Italian time at which the runner started*
+      # and accept the run only if it falls inside one of the configured
+      # slots (±20 min tolerance to absorb GitHub's cron jitter).
+      #
+      # Slots:
+      #   morning  09:05 — sent every day
+      #   midday   13:00 — weekdays only (Mon–Fri)
+      #   close    17:30 — weekdays only
+      #
+      # workflow_dispatch and repository_dispatch always run.
+      - name: Resolve trigger label and time-window guard
         id: trigger
         env:
           GH_EVENT: ${{ github.event_name }}
@@ -75,51 +88,55 @@ jobs:
           REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
         run: |
           set -euo pipefail
-          # 1. Are we in CEST (summer) or CET (winter) today, in Europe/Rome?
-          DST_OFFSET=$(TZ=Europe/Rome date +%z)
-          if [[ "$DST_OFFSET" == "+0200" ]]; then
-            CURRENT_DST="cest"
-          else
-            CURRENT_DST="cet"
+          NOW=$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M %Z (%a)')
+          DOW=$(TZ=Europe/Rome date +%u)        # 1=Mon … 7=Sun
+          HOUR=$(TZ=Europe/Rome date +%H)
+          MIN=$(TZ=Europe/Rome date +%M)
+          # Convert HH:MM to absolute minutes since midnight for easy
+          # comparison with each slot ± tolerance.
+          NOW_MIN=$((10#$HOUR * 60 + 10#$MIN))
+          TOL=20  # ± 20 minutes
+
+          MORNING=$((9 * 60 + 5))    # 09:05
+          MIDDAY=$((13 * 60))        # 13:00
+          CLOSE=$((17 * 60 + 30))    # 17:30
+
+          # Returns 0 (true) if NOW_MIN is within ±TOL of TARGET.
+          in_window() {
+            local target=$1
+            local diff=$(( NOW_MIN > target ? NOW_MIN - target : target - NOW_MIN ))
+            [[ $diff -le $TOL ]]
+          }
+
+          SLOT=""
+          if in_window $MORNING; then
+            SLOT="morning"
+          elif in_window $MIDDAY; then
+            SLOT="midday"
+          elif in_window $CLOSE; then
+            SLOT="close"
           fi
-          echo "current_dst=$CURRENT_DST" >> "$GITHUB_OUTPUT"
-          echo "Italy is in $CURRENT_DST (offset $DST_OFFSET) right now"
 
-          # 2. Determine whether this run should proceed.
-          if [[ "$GH_EVENT" == "schedule" ]]; then
-            # The cron string that fired this run is exposed via github.event.schedule
-            FIRED_CRON='${{ github.event.schedule }}'
-            echo "Scheduled run fired by cron: $FIRED_CRON"
-            # Winter/CET set
-            WINTER_CRONS=("5 8 * * *" "0 12 * * *" "30 16 * * *")
-            # Summer/CEST set
-            SUMMER_CRONS=("5 7 * * *" "0 11 * * *" "30 15 * * *")
-            IS_WINTER=0
-            for c in "${WINTER_CRONS[@]}"; do
-              [[ "$FIRED_CRON" == "$c" ]] && IS_WINTER=1
-            done
-            IS_SUMMER=0
-            for c in "${SUMMER_CRONS[@]}"; do
-              [[ "$FIRED_CRON" == "$c" ]] && IS_SUMMER=1
-            done
-
-            if [[ "$CURRENT_DST" == "cet" && "$IS_WINTER" == "1" ]]; then
-              SHOULD_RUN=1
-            elif [[ "$CURRENT_DST" == "cest" && "$IS_SUMMER" == "1" ]]; then
-              SHOULD_RUN=1
-            else
-              SHOULD_RUN=0
-              echo "Skipping: cron $FIRED_CRON does not match current DST $CURRENT_DST"
+          # Weekend rule (Saturday=6, Sunday=7): only the morning slot
+          # ships. Skip everything else.
+          IS_WEEKEND=0
+          if [[ "$DOW" -ge 6 ]]; then
+            IS_WEEKEND=1
+            if [[ "$SLOT" != "morning" ]]; then
+              SLOT=""
             fi
+          fi
 
-            # Pick a friendly label based on the local hour.
-            HOUR=$(TZ=Europe/Rome date +%H%M)
-            case "$HOUR" in
-              09*) LABEL="morning" ;;
-              13*) LABEL="midday"  ;;
-              17*) LABEL="close"   ;;
-              *)   LABEL="scheduled" ;;
-            esac
+          echo "Now: $NOW (DoW=$DOW, weekend=$IS_WEEKEND, slot=${SLOT:-NONE})"
+
+          if [[ "$GH_EVENT" == "schedule" ]]; then
+            if [[ -z "$SLOT" ]]; then
+              SHOULD_RUN=0
+              echo "Skipping: current local time is outside any configured slot."
+            else
+              SHOULD_RUN=1
+            fi
+            LABEL="${SLOT:-scheduled}"
           elif [[ "$GH_EVENT" == "repository_dispatch" ]]; then
             SHOULD_RUN=1
             LABEL="${REPO_DISPATCH_LABEL:-on-demand}"
