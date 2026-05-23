@@ -1,5 +1,5 @@
 {# =============================================================================
-   Tarzan — Weekly Portfolio Digest (email-safe HTML, Jinja2 template)
+   Tarzan — Portfolio Digest (email-safe HTML, Jinja2 template)
    =============================================================================
 
    Context shape (see tarzan/export/newsletter.py::build_context):
@@ -16,7 +16,9 @@
      allocation       {rows[], stacked[], tolerance}
      geography        {rows[], stacked[], benchmark_name}
      holdings         {groups[], summary[], total_count}
-     performance      {portfolio_row, benchmark_rows[], risk_chips[],
+     performance      {portfolio_row, benchmark_rows[],
+                       benchmark_alpha_beta, benchmark_geo}
+     risk_profile     {available, headers[], rows[],
                        benchmark_alpha_beta, benchmark_geo}
      optimizer        {available, direction, name, ticker, ...}
      return_contrib   {winners[], laggards[]}
@@ -32,7 +34,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
-  <title>Tarzan — Weekly Portfolio Digest</title>
+  <title>Tarzan — Portfolio Digest</title>
   <style>
     body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif; }
     table { border-collapse: collapse; }
@@ -62,69 +64,78 @@
                 <tr>
                   <td align="left" style="vertical-align:middle;">
                     <div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:{{ palette.accent }};text-transform:uppercase;">🌿&nbsp;Tarzan</div>
-                    <div style="margin-top:4px;font-size:22px;font-weight:700;color:{{ palette.ink }};line-height:1.2;">Weekly Portfolio Digest</div>
+                    <div style="margin-top:4px;font-size:22px;font-weight:700;color:{{ palette.ink }};line-height:1.2;">Portfolio Digest</div>
                   </td>
                   <td align="right" style="vertical-align:middle;font-size:12px;color:{{ palette.muted }};line-height:1.4;">
                     <div>{{ header.date_short }}</div>
-                    <div>Issue #{{ header.issue_number }}{% if header.inception_date %} · since {{ header.inception_date }}{% endif %}</div>
+                    <div>Issue #{{ header.issue_number }}</div>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          {# ─── HERO ──────────────────────────────────────────── #}
+          {# ─── STATUS ─────────────────────────────────────── #}
+          {# Big number + brief return chip + 3 mini-tiles +
+             sparkline. Two-fold layout (Sketch C): everything
+             monitoring lives here; everything actionable lives
+             below in "Signals". #}
           <tr>
             <td class="px-32" style="padding:28px 32px 8px 32px;background:#FFFFFF;">
-              <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;color:{{ palette.muted }};text-transform:uppercase;">Total portfolio value</div>
-              <div style="margin-top:6px;font-size:40px;font-weight:700;color:{{ palette.ink }};line-height:1.1;letter-spacing:-0.01em;">{{ hero.total_value }}</div>
-              <div style="margin-top:8px;font-size:14px;color:{{ palette.ink }};">
-                <span style="display:inline-block;padding:3px 10px;background:{{ palette.green_bg if hero.is_positive else palette.red_bg }};color:{{ palette.green if hero.is_positive else palette.red }};border-radius:999px;font-weight:600;font-size:12px;">
-                  {{ '▲' if hero.is_positive else '▼' }} {{ hero.total_gain }} &nbsp;·&nbsp; {{ hero.gain_pct }}
-                </span>
-                <span style="color:{{ palette.muted }};font-size:12px;">&nbsp;since inception</span>
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Status</div>
+              <div style="margin-top:6px;font-size:40px;font-weight:700;color:{{ palette.ink }};line-height:1.05;letter-spacing:-0.01em;">{{ hero.total_value }}</div>
+              <div style="margin-top:6px;font-size:13px;color:{{ palette.ink }};">
+                <span style="color:{{ palette.green if hero.is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.is_positive else '▼' }} {{ hero.gain_pct }}</span>
+                <span style="color:{{ palette.muted }};">&nbsp;since inception</span>
+                {% if hero.week_return_pct and hero.week_return_pct != '—' %}
+                <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
+                <span style="color:{{ palette.green if hero.week_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_is_positive else '▼' }} {{ hero.week_return_pct }}</span>
+                <span style="color:{{ palette.muted }};">&nbsp;this week</span>
+                {% endif %}
               </div>
 
-              {# KPI grid #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
+              {# Three mini-tiles: Invested / Cash / Rebalance #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;">
                 <tr>
-                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <div style="font-size:11px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Invested</div>
-                    <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">{{ hero.invested_value }}</div>
-                    <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ hero.invested_pct }} of total</div>
+                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:12px 14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
+                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Invested</div>
+                    <div style="margin-top:2px;font-size:16px;font-weight:700;color:{{ palette.ink }};">{{ hero.invested_value }}</div>
                   </td>
-                  <td width="8"></td>
-                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <div style="font-size:11px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Cash</div>
-                    <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">{{ hero.cash_value }}</div>
+                  <td width="6"></td>
+                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:12px 14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
+                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Cash</div>
+                    <div style="margin-top:2px;font-size:16px;font-weight:700;color:{{ palette.ink }};">{{ hero.cash_value }}</div>
                     <div style="margin-top:2px;font-size:11px;color:{{ hero.cash_msg_color }};">{{ hero.cash_msg }}</div>
                   </td>
-                  <td width="8"></td>
-                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <div style="font-size:11px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">This Week</div>
-                    <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.green if hero.week_is_positive else palette.red }};">{{ hero.week_return_eur }}</div>
-                    <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ hero.week_return_pct }} (1W)</div>
+                  <td width="6"></td>
+                  <td class="kpi-cell" width="33%" style="vertical-align:top;padding:12px 14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
+                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Rebalance</div>
+                    <div style="margin-top:2px;font-size:16px;font-weight:700;color:{{ hero.rebal_color }};">● {{ hero.rebal_label }}</div>
+                    <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ hero.rebal_sublabel }}</div>
                   </td>
                 </tr>
               </table>
 
               {# Sparkline #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
                 <tr>
-                  <td style="padding:14px 16px 12px 16px;">
+                  <td style="padding:12px 14px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td style="vertical-align:middle;"><div style="font-size:11px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Last 30 days</div></td>
+                        <td style="vertical-align:middle;"><div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Last 30 days</div></td>
                         <td align="right" style="vertical-align:middle;">
                           <span style="font-size:11px;color:{{ palette.muted }};">{{ sparkline.start_value }}</span>
                           <span style="font-size:11px;color:{{ palette.subtle }};">&nbsp;→&nbsp;</span>
                           <span style="font-size:11px;color:{{ palette.ink }};font-weight:700;">{{ sparkline.end_value }}</span>
                           <span style="display:inline-block;margin-left:6px;padding:1px 6px;background:{{ palette.green_bg if sparkline.is_positive else palette.red_bg }};color:{{ palette.green if sparkline.is_positive else palette.red }};border-radius:4px;font-size:10px;font-weight:700;">{{ sparkline.change_pct }}</span>
+                          {% if sparkline.vs_bench %}
+                          <span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ sparkline.vs_bench.bg }};color:{{ sparkline.vs_bench.color }};border-radius:4px;font-size:10px;font-weight:700;">{{ sparkline.vs_bench.label }}: {{ sparkline.vs_bench.delta }}</span>
+                          {% endif %}
                         </td>
                       </tr>
                     </table>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                      <tr style="height:46px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
+                      <tr style="height:42px;">
                         {% for bar in sparkline.bars %}
                         <td valign="bottom" style="width:{{ (100 / sparkline.bars|length) - 0.33 }}%;font-size:0;line-height:0;"><div style="background:{{ palette.accent }};height:{{ bar.height }}px;border-radius:1px 1px 0 0;font-size:0;line-height:0;">&nbsp;</div></td>
                         {% if not loop.last %}<td style="width:0.33%;font-size:0;">&nbsp;</td>{% endif %}
@@ -143,26 +154,29 @@
             </td>
           </tr>
 
-          {# ─── SMART INSIGHTS ────────────────────────────────── #}
+          {# ─── SIGNALS ─────────────────────────────────────── #}
+          {# Conditional insights — each slot only renders when there
+             is something genuinely worth saying. The Action slot is an
+             "Observation" (contextual, not prescriptive); concrete
+             trades live in the Optimizer section below. #}
           {% if smart_insights %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Smart insights</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Three things worth your attention</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Auto-generated from your data and rebalancing rules.</div>
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Signals</div>
+              <div style="margin-top:4px;font-size:13px;color:{{ palette.muted }};">{{ smart_insights|length }} thing{{ 's' if smart_insights|length != 1 else '' }} worth your attention</div>
               {% for ins in smart_insights %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '14px' if loop.first else '8px' }};background:#FFFFFF;border:1px solid {{ palette.border }};border-left:4px solid {{ ins.color }};border-radius:8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '12px' if loop.first else '6px' }};background:#FFFFFF;border:1px solid {{ palette.border }};border-left:4px solid {{ ins.color }};border-radius:8px;">
                 <tr>
-                  <td style="padding:14px 16px;">
+                  <td style="padding:10px 14px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td style="vertical-align:top;width:36px;">
-                          <div style="width:28px;height:28px;background:{{ ins.bg }};border-radius:8px;text-align:center;line-height:28px;font-size:14px;color:{{ ins.color }};font-weight:700;">{{ ins.icon }}</div>
+                        <td style="vertical-align:top;width:32px;">
+                          <div style="width:24px;height:24px;background:{{ ins.bg }};border-radius:6px;text-align:center;line-height:24px;font-size:13px;color:{{ ins.color }};font-weight:700;">{{ ins.icon }}</div>
                         </td>
-                        <td style="vertical-align:top;padding-left:10px;">
-                          <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ ins.color }};text-transform:uppercase;">{{ ins.category }}</div>
-                          <div style="margin-top:2px;font-size:13px;font-weight:600;color:{{ palette.ink }};line-height:1.45;">{{ ins.headline }}</div>
-                          <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};line-height:1.5;">{{ ins.body }}</div>
+                        <td style="vertical-align:top;padding-left:8px;">
+                          <div style="font-size:9px;font-weight:700;letter-spacing:0.06em;color:{{ ins.color }};text-transform:uppercase;">{{ ins.category }}</div>
+                          <div style="margin-top:2px;font-size:13px;font-weight:600;color:{{ palette.ink }};line-height:1.4;">{{ ins.headline }}</div>
+                          <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};line-height:1.45;">{{ ins.body }}</div>
                         </td>
                       </tr>
                     </table>
@@ -174,49 +188,13 @@
           </tr>
           {% endif %}
 
-          {# ─── MOVERS THIS WEEK ──────────────────────────────── #}
-          {% if movers.available %}
-          <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Movers this week</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Best &amp; worst by 1W return</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
-                <tr>
-                  <td class="kpi-cell" width="50%" valign="top" style="padding-right:8px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;border:1px solid {{ palette.green_border }};border-radius:12px;">
-                      <tr><td style="padding:12px 14px 6px 14px;"><div style="font-size:10px;font-weight:700;letter-spacing:0.08em;color:{{ palette.green }};text-transform:uppercase;">▲ Best mover</div></td></tr>
-                      <tr><td style="padding:0 14px 12px 14px;">
-                        <div style="font-size:14px;font-weight:700;color:{{ palette.ink }};line-height:1.3;">{{ movers.best.name }}</div>
-                        <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ movers.best.ticker }} · <span style="color:{{ movers.best.asset_color }};font-weight:600;">● {{ movers.best.asset_class }}</span></div>
-                        <div style="margin-top:10px;display:inline-block;padding:6px 10px;background:{{ palette.green_bg }};color:{{ palette.green }};border-radius:8px;font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;">{{ movers.best.pct }}</div>
-                        <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">{{ movers.best.eur }} added</div>
-                      </td></tr>
-                    </table>
-                  </td>
-                  <td class="kpi-cell" width="50%" valign="top" style="padding-left:8px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;border:1px solid {{ palette.red_border }};border-radius:12px;">
-                      <tr><td style="padding:12px 14px 6px 14px;"><div style="font-size:10px;font-weight:700;letter-spacing:0.08em;color:{{ palette.red }};text-transform:uppercase;">▼ Worst mover</div></td></tr>
-                      <tr><td style="padding:0 14px 12px 14px;">
-                        <div style="font-size:14px;font-weight:700;color:{{ palette.ink }};line-height:1.3;">{{ movers.worst.name }}</div>
-                        <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ movers.worst.ticker }} · <span style="color:{{ movers.worst.asset_color }};font-weight:600;">● {{ movers.worst.asset_class }}</span></div>
-                        <div style="margin-top:10px;display:inline-block;padding:6px 10px;background:{{ palette.red_bg if not movers.worst.is_positive else palette.green_bg }};color:{{ palette.red if not movers.worst.is_positive else palette.green }};border-radius:8px;font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;">{{ movers.worst.pct }}</div>
-                        <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">{{ movers.worst.eur }} {{ 'lost' if not movers.worst.is_positive else 'added' }}</div>
-                      </td></tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          {% endif %}
 
-
-          {# ─── ALLOCATION BY ASSET CLASS ─────────────────────── #}
-          {% if allocation.rows %}
+          {# ─── DIVERSIFICATION (Asset Class + Geography, donut layout) ───── #}
+          {% if allocation.rows or geography.rows %}
           <tr>
             <td class="px-32" style="padding:28px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Allocation</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">By Asset Class</div>
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Diversification</div>
+              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How your portfolio is spread</div>
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">
                 Tolerance ±{{ allocation.tolerance }} &nbsp;·&nbsp;
                 <span style="color:{{ palette.green }};font-weight:600;">●</span> aligned &nbsp;·&nbsp;
@@ -224,103 +202,95 @@
                 <span style="color:{{ palette.red }};font-weight:600;">●</span> action
               </div>
 
-              {# Stacked bar #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;border-radius:8px;overflow:hidden;">
+              {% if allocation.rows %}
+              {# ── BY ASSET CLASS — donut + tabular list (same style
+                 as Geography below for visual consistency) ── #}
+              <div style="margin-top:18px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">By asset class</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
                 <tr>
-                  {% for seg in allocation.stacked %}
-                  <td style="background:{{ seg.color }};height:14px;width:{{ seg.width }}%;font-size:0;line-height:0;">&nbsp;</td>
-                  {% endfor %}
-                </tr>
-              </table>
-
-              {# Per-class rows #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;font-size:13px;">
-                {% for r in allocation.rows %}
-                <tr>
-                  <td style="padding:10px 0;{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <td width="180" valign="middle" style="padding-right:18px;">
+                    {# CSS conic-gradient donut. Modern Gmail/Apple Mail
+                       render this natively; legacy Outlook desktop falls
+                       back to a flat-color disc, which is acceptable. #}
+                    {% set ns = namespace(acc=0) %}
+                    {% set total = allocation.stacked|sum(attribute='width') or 100 %}
+                    <div style="width:160px;height:160px;border-radius:50%;background:conic-gradient({% for seg in allocation.stacked %}{{ seg.color }} {{ ns.acc }}% {{ ns.acc + (seg.width / total * 100) }}%{% set ns.acc = ns.acc + (seg.width / total * 100) %}{% if not loop.last %},{% endif %}{% endfor %});position:relative;margin:0 auto;">
+                      <div style="position:absolute;top:50%;left:50%;width:96px;height:96px;background:#FFFFFF;border-radius:50%;transform:translate(-50%,-50%);text-align:center;line-height:96px;font-size:11px;color:{{ palette.muted }};font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Invested</div>
+                    </div>
+                  </td>
+                  <td valign="middle">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px;border-collapse:collapse;">
                       <tr>
-                        <td style="vertical-align:middle;padding-right:8px;width:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};"></span></td>
-                        <td style="vertical-align:middle;font-weight:600;color:{{ r.color }};">{{ r.name }}</td>
-                        <td align="right" style="vertical-align:middle;color:{{ palette.muted }};font-size:12px;">{% if r.is_eur %}{{ r.target_pct }}{% else %}target {{ r.target_pct or '—' }}{% endif %}</td>
+                        <td style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Asset</td>
+                        <td align="right" style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">You</td>
+                        <td align="right" width="60" style="padding:0 0 6px 8px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Tgt</td>
+                        <td align="right" width="60" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Δ vs tgt</td>
                       </tr>
-                    </table>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
+                      {% for r in allocation.rows %}{% if not r.is_eur %}
                       <tr>
-                        <td>
-                          <div style="background:{{ palette.border }};border-radius:999px;height:8px;width:100%;">
-                            <div style="background:{{ r.color }};border-radius:999px;height:8px;width:{{ r.bar_width }}%;font-size:0;line-height:0;">&nbsp;</div>
-                          </div>
-                        </td>
-                        <td width="80" align="right" style="padding-left:12px;font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
-                        <td width="48" align="right" style="padding-left:8px;font-size:11px;font-weight:600;color:{{ r.delta_color }};">{% if r.delta %}●&nbsp;{{ r.delta }}{% endif %}</td>
+                        <td style="padding:5px 0;border-top:1px solid #F1F2F8;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name }}</span></td>
+                        <td align="right" style="padding:5px 0;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
+                        <td align="right" width="60" style="padding:5px 0 5px 8px;border-top:1px solid #F1F2F8;font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ r.target_pct }}</td>
+                        <td align="right" width="60" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
                       </tr>
+                      {% endif %}{% endfor %}
+                      {# Cash row — same 4-column layout, slightly
+                         heavier separator above so it reads as a
+                         distinct accounting bucket. #}
+                      {% for r in allocation.rows %}{% if r.is_eur %}
+                      <tr>
+                        <td style="padding:8px 0 5px 0;border-top:2px solid {{ palette.border }};"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name }}</span></td>
+                        <td align="right" style="padding:8px 0 5px 0;border-top:2px solid {{ palette.border }};font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
+                        <td align="right" width="60" style="padding:8px 0 5px 8px;border-top:2px solid {{ palette.border }};font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ r.target_pct }}</td>
+                        <td align="right" width="60" style="padding:8px 0 5px 6px;border-top:2px solid {{ palette.border }};font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
+                      </tr>
+                      {% endif %}{% endfor %}
                     </table>
                   </td>
                 </tr>
-                {% endfor %}
               </table>
+              {% endif %}
+
+              {% if geography.rows %}
+              {# ── BY GEOGRAPHY — donut + tabular list with ACWI column ── #}
+              <div style="margin-top:24px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">By geography <span style="font-weight:500;color:{{ palette.subtle }};letter-spacing:0;text-transform:none;">— equity portion</span></div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
+                <tr>
+                  <td width="180" valign="middle" style="padding-right:18px;">
+                    {% set ns = namespace(acc=0) %}
+                    {% set total = geography.stacked|sum(attribute='width') or 100 %}
+                    <div style="width:160px;height:160px;border-radius:50%;background:conic-gradient({% for seg in geography.stacked %}{{ seg.color }} {{ ns.acc }}% {{ ns.acc + (seg.width / total * 100) }}%{% set ns.acc = ns.acc + (seg.width / total * 100) %}{% if not loop.last %},{% endif %}{% endfor %});position:relative;margin:0 auto;">
+                      <div style="position:absolute;top:50%;left:50%;width:96px;height:96px;background:#FFFFFF;border-radius:50%;transform:translate(-50%,-50%);text-align:center;line-height:96px;font-size:11px;color:{{ palette.muted }};font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Equity</div>
+                    </div>
+                  </td>
+                  <td valign="middle">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px;border-collapse:collapse;">
+                      <tr>
+                        <td style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Region</td>
+                        <td align="right" style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">You</td>
+                        <td align="right" width="50" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Tgt</td>
+                        <td align="right" width="50" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">{{ geography.benchmark_name }}</td>
+                        <td align="right" width="60" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Δ vs tgt</td>
+                      </tr>
+                      {% for r in geography.rows %}
+                      <tr>
+                        <td style="padding:5px 0;border-top:1px solid #F1F2F8;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name|truncate(22, true, '…') }}</span></td>
+                        <td align="right" style="padding:5px 0;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
+                        <td align="right" width="50" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.muted }};font-size:11px;">{{ r.target_pct }}</td>
+                        <td align="right" width="50" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.subtle }};font-size:11px;">{{ r.acwi_pct }}</td>
+                        <td align="right" width="60" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
+                      </tr>
+                      {% endfor %}
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              {% endif %}
             </td>
           </tr>
           {% endif %}
 
-          {# ─── GEOGRAPHIC EXPOSURE ────────────────────────────── #}
-          {% if geography.rows %}
-          <tr>
-            <td class="px-32" style="padding:28px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Geographic exposure</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Equity by region</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">
-                Bar = your weight &nbsp;·&nbsp;
-                <span style="display:inline-block;width:2px;height:10px;background:{{ palette.subtle }};vertical-align:middle;"></span>
-                <span style="vertical-align:middle;">&nbsp;target tick</span>
-                &nbsp;·&nbsp;
-                <span style="display:inline-block;width:2px;height:10px;background:{{ palette.ink }};vertical-align:middle;"></span>
-                <span style="vertical-align:middle;">&nbsp;{{ geography.benchmark_name }} tick</span>
-              </div>
-
-              {# Stacked equity bar #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;border-radius:8px;overflow:hidden;">
-                <tr>
-                  {% for seg in geography.stacked %}
-                  <td style="background:{{ seg.color }};height:14px;width:{{ seg.width }}%;font-size:0;line-height:0;">&nbsp;</td>
-                  {% endfor %}
-                </tr>
-              </table>
-
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;font-size:13px;">
-                {% for r in geography.rows %}
-                <tr>
-                  <td style="padding:10px 0;{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td style="vertical-align:middle;padding-right:8px;width:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};"></span></td>
-                        <td style="vertical-align:middle;font-weight:600;color:{{ r.color }};">{{ r.name }}</td>
-                        <td align="right" style="vertical-align:middle;color:{{ palette.muted }};font-size:12px;">target {{ r.target_pct }} &nbsp;·&nbsp; {{ geography.benchmark_name }} {{ r.acwi_pct }}</td>
-                      </tr>
-                    </table>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
-                      <tr>
-                        <td>
-                          <div style="position:relative;background:{{ palette.border }};border-radius:999px;height:8px;width:100%;">
-                            <div style="background:{{ r.color }};border-radius:999px;height:8px;width:{{ r.bar_width }}%;font-size:0;line-height:0;">&nbsp;</div>
-                            <div style="position:absolute;top:-3px;left:{{ r.target_left }}%;width:2px;height:14px;background:{{ palette.subtle }};font-size:0;line-height:0;">&nbsp;</div>
-                            <div style="position:absolute;top:-3px;left:{{ r.acwi_left }}%;width:2px;height:14px;background:{{ palette.ink }};font-size:0;line-height:0;">&nbsp;</div>
-                          </div>
-                        </td>
-                        <td width="80" align="right" style="padding-left:12px;font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
-                        <td width="64" align="right" style="padding-left:8px;font-size:11px;font-weight:600;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-                {% endfor %}
-              </table>
-            </td>
-          </tr>
-          {% endif %}
-
-          {# ─── HOLDINGS ───────────────────────────────────────── #}
+          {# ─── HOLDINGS (grouped by class, compact rows) ────── #}
           {% if holdings.groups %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
@@ -328,7 +298,7 @@
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">All positions</div>
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ holdings.total_count }} holdings &nbsp;·&nbsp; {{ hero.total_value }} total</div>
 
-              {# Summary chips #}
+              {# Summary chips by asset class #}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
                 <tr>
                   {% for s in holdings.summary %}
@@ -341,46 +311,48 @@
                 </tr>
               </table>
 
-              {# Holdings table grouped by class #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">
-                {# Header row #}
+              {# Grouped holdings table — one block per asset class with
+                 a thin colored header strip carrying the group summary,
+                 then compact 5-column rows: name+ticker · Value · Weight
+                 (% portfolio) · % Class · Gain. #}
+              {% for g in holdings.groups %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '18px' if loop.first else '14px' }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;font-size:12px;">
+                {# Group header: subtle separator strip with class name +
+                   summary on the right. Lighter than the previous full
+                   colored block which felt too loud. #}
                 <tr>
-                  <td style="padding:8px 12px 8px 16px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Holding</td>
-                  <td align="right" style="padding:8px 8px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:90px;">Value €</td>
-                  <td align="right" style="padding:8px 8px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:60px;">Weight</td>
-                  <td align="right" style="padding:8px 12px 8px 8px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:64px;">Gain</td>
-                </tr>
-                {% for g in holdings.groups %}
-                {# Group separator #}
-                <tr>
-                  <td colspan="4" style="padding:10px 12px 8px 16px;background:#FFFFFF;{% if not loop.first %}border-top:1px solid #F1F2F8;{% endif %}border-bottom:1px solid #F1F2F8;border-left:4px solid {{ g.color }};">
+                  <td colspan="5" style="padding:8px 12px 8px 14px;background:#FFFFFF;border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td style="vertical-align:middle;font-size:11px;font-weight:700;letter-spacing:0.04em;color:{{ g.color }};text-transform:uppercase;">● {{ g.name }}</td>
-                        <td align="right" style="vertical-align:middle;font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ g.count }} {{ g.label }} &nbsp;·&nbsp; {{ g.total_value }} &nbsp;·&nbsp; {{ g.total_pct }} of portfolio</td>
+                        <td style="vertical-align:middle;font-size:11px;font-weight:700;letter-spacing:0.04em;color:{{ g.color }};text-transform:uppercase;">{{ g.name }}</td>
+                        <td align="right" style="vertical-align:middle;font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ g.count }} {{ g.label }} &nbsp;·&nbsp; {{ g.total_value }}{% if g.total_pct %} &nbsp;·&nbsp; {{ g.total_pct }} of invested{% endif %}</td>
                       </tr>
                     </table>
                   </td>
                 </tr>
+                {# Column headers #}
+                <tr>
+                  <td style="padding:6px 12px 6px 14px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Holding</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:80px;">Value €</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:62px;">% Inv.</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:54px;">% Class</td>
+                  <td align="right" style="padding:6px 12px 6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:60px;">Gain</td>
+                </tr>
+                {# Holding rows #}
                 {% for r in g.rows %}
                 <tr>
-                  <td style="padding:0;background:{% if r.alt_bg %}{{ palette.card_alt }}{% else %}#FFFFFF{% endif %};border-top:1px solid #F1F2F8;border-left:4px solid {{ g.color }};">
-                    <div style="padding:12px 12px 12px 12px;">
-                      <div style="font-size:13px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{{ r.name }}</div>
-                      <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};line-height:1.4;">
-                        {% if r.ticker %}{{ r.ticker }}{% endif %}{% if r.isin %} &nbsp;·&nbsp; {{ r.isin }}{% endif %}{% if r.quantity %} &nbsp;·&nbsp; {{ r.quantity|round(0)|int if r.quantity == r.quantity|round(0) else '%.2f'|format(r.quantity) }} units @ {{ r.avg_price }}{% endif %}
-                        <span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ g.bg }};color:{{ g.color }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;">{{ g.name|upper|truncate(14, true, '') }} · {{ r.pct_class }}</span>
-                      </div>
-                    </div>
+                  <td style="padding:8px 12px 8px 14px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}border-left:4px solid {{ g.color }};">
+                    <div style="font-size:12px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{{ r.name|truncate(48, true, '…') }}</div>
+                    <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.3;">{{ r.ticker }}</div>
                   </td>
-                  <td align="right" style="padding:12px 8px;background:{% if r.alt_bg %}{{ palette.card_alt }}{% else %}#FFFFFF{% endif %};border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};font-size:13px;">{{ r.value }}</td>
-                  <td align="right" style="padding:12px 8px;background:{% if r.alt_bg %}{{ palette.card_alt }}{% else %}#FFFFFF{% endif %};border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.ink }};font-size:13px;">{{ r.weight_pct }}</td>
-                  <td align="right" style="padding:12px 12px 12px 8px;background:{% if r.alt_bg %}{{ palette.card_alt }}{% else %}#FFFFFF{% endif %};border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;font-size:13px;">{{ r.gain_pct }}</td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.value }}</td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.ink }};">{{ r.weight_pct }}</td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;">{{ r.pct_class }}</td>
+                  <td align="right" style="padding:8px 12px 8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_pct }}</td>
                 </tr>
                 {% endfor %}
-                {% endfor %}
               </table>
-              <div style="margin-top:10px;font-size:11px;color:{{ palette.subtle }};line-height:1.5;">Color stripe = asset class &nbsp;·&nbsp; Sorted by class then value &nbsp;·&nbsp; Chip shows asset class and % within class</div>
+              {% endfor %}
             </td>
           </tr>
           {% endif %}
@@ -390,20 +362,20 @@
             <td class="px-32" style="padding:32px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Performance</div>
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Returns vs benchmarks</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">All values in %. Period returns computed on available history per instrument (cap 5Y).</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">All values in %. Benchmarks span the full 5Y window; your portfolio history is <strong>{{ performance.history_label }}</strong> — periods longer than that show "—" for the portfolio row. Portfolio cells colored by delta vs <strong>{{ performance.benchmark_alpha_beta }}</strong>: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat &nbsp;·&nbsp; <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line (±0.25 pp) &nbsp;·&nbsp; <span style="color:{{ palette.red }};font-weight:700;">●</span> underperform.</div>
 
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
-                  {% for p in ['1w', '1m', '3m', 'ytd', '1y', '3y', '5y'] %}
+                  {% for p in performance.periods %}
                   <td align="right" style="padding:8px 6px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
                   {% endfor %}
                 </tr>
                 {# Portfolio row (highlighted) #}
                 <tr>
                   <td style="padding:10px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ performance.portfolio_row.name }}</td>
-                  {% for p in ['1w', '1m', '3m', 'ytd', '1y', '3y', '5y'] %}
-                  <td align="right" style="padding:10px 6px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ palette.green }};font-weight:700;">{{ performance.portfolio_row.returns[p] }}</td>
+                  {% for p in performance.periods %}
+                  <td align="right" style="padding:10px 6px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ performance.portfolio_row.returns[p].color }};font-weight:700;">{{ performance.portfolio_row.returns[p].value }}</td>
                   {% endfor %}
                 </tr>
                 {% for r in performance.benchmark_rows %}
@@ -412,8 +384,8 @@
                     {{ r.name }}
                     {% if r.tag %}<span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ r.tag[2] }};color:{{ r.tag[1] }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;">{{ r.tag[0] }}</span>{% endif %}
                   </td>
-                  {% for p in ['1w', '1m', '3m', 'ytd', '1y', '3y', '5y'] %}
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.muted }};font-weight:600;{% if loop.index == 7 and loop.first %}border-bottom-right-radius:8px;{% endif %}">{{ r.returns[p] }}</td>
+                  {% for p in performance.periods %}
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};font-variant-numeric:tabular-nums;color:{{ r.returns[p].color }};font-weight:600;">{{ r.returns[p].value }}</td>
                   {% endfor %}
                 </tr>
                 {% endfor %}
@@ -421,69 +393,52 @@
             </td>
           </tr>
 
-          {# ─── RISK PROFILE CHIPS ──────────────────────────── #}
-          {% if performance.risk_chips %}
+          {# ─── RISK PROFILE — UNIFIED TABLE ────────────────── #}
+          {% if risk_profile.available %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Risk profile</div>
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How risky is your ride</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">α &amp; β computed vs {{ performance.benchmark_alpha_beta }}.</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Computed on the last 5 years of portfolio history (capped); holdings with &lt;1Y of data are excluded. ▲ = portfolio better than {{ risk_profile.benchmark_alpha_beta }}, ▼ = worse.</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:12px;border-collapse:separate;border-spacing:0;">
                 <tr>
-                  {% for chip in performance.risk_chips[:4] %}
-                  <td class="kpi-cell" width="25%" style="vertical-align:top;padding:14px 12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
-                    <div style="font-size:10px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">{{ chip.label }}</div>
-                    <div style="margin-top:2px;font-size:18px;font-weight:700;color:{{ chip.color }};font-variant-numeric:tabular-nums;">{{ chip.value }}</div>
-                  </td>
-                  {% if not loop.last %}<td width="6"></td>{% endif %}
+                  {% for h in risk_profile.headers %}
+                  <td {% if loop.index > 1 %}align="right"{% endif %} style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;{% if loop.first %}border-top-left-radius:8px;{% endif %}{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ h }}</td>
                   {% endfor %}
                 </tr>
-              </table>
-              {% if performance.risk_chips|length > 4 %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
-                <tr>
-                  {% for chip in performance.risk_chips[4:8] %}
-                  <td class="kpi-cell" width="25%" style="vertical-align:top;padding:14px 12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
-                    <div style="font-size:10px;font-weight:600;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">{{ chip.label }}</div>
-                    <div style="margin-top:2px;font-size:18px;font-weight:700;color:{{ chip.color }};font-variant-numeric:tabular-nums;">{{ chip.value }}</div>
-                  </td>
-                  {% if not loop.last %}<td width="6"></td>{% endif %}
-                  {% endfor %}
-                </tr>
-              </table>
-              {% endif %}
-            </td>
-          </tr>
-          {% endif %}
-
-          {# ─── RISK VS BENCHMARKS ────────────────────────── #}
-          {% if risk_vs_benchmarks.available %}
-          <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Risk vs benchmarks</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How you compare on the metrics that matter</div>
-              {% for tbl in risk_vs_benchmarks.tables %}
-              <div style="margin-top:18px;font-size:11px;font-weight:600;color:{{ palette.ink }};">
-                <span style="display:inline-block;padding:2px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;">{{ tbl.tag }}</span>
-                &nbsp;vs {{ tbl.name }}
-              </div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;font-size:12px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Metric</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;">You</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;">{{ tbl.name }}</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;border-top-right-radius:8px;">Verdict</td>
-                </tr>
-                {% for r in tbl.rows %}
+                {% for r in risk_profile.rows %}
                 <tr>
                   <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">{{ r.label }}</td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.portfolio }}</td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.muted }};">{{ r.benchmark }}</td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.verdict_color }};font-weight:700;{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ r.verdict }}</td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">
+                    {{ r.you }}{% if r.verdict_sp %} <span style="color:{{ r.verdict_sp_color }};font-weight:700;">{{ r.verdict_sp }}</span>{% endif %}
+                  </td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.muted }};">{{ r.sp500 }}</td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.muted }};{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ r.acwi }}</td>
                 </tr>
                 {% endfor %}
               </table>
-              {% endfor %}
+
+              {# Legend — same content as the Excel Performance tab Legend #}
+              {% if risk_profile.legend %}
+              <div style="margin-top:18px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Legend — what these metrics mean</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;font-size:11px;border-collapse:separate;border-spacing:0;">
+                {% for r in risk_profile.legend %}
+                <tr>
+                  <td style="padding:8px 10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};font-weight:600;vertical-align:top;width:120px;{% if loop.first %}border-top-left-radius:8px;{% endif %}{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">{{ r.label }}</td>
+                  <td style="padding:8px 10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.muted }};font-size:11px;line-height:1.5;vertical-align:top;{% if loop.first %}border-top-right-radius:8px;{% endif %}{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">
+                    {{ r.description }}
+                    <div style="margin-top:4px;font-variant-numeric:tabular-nums;font-size:10px;">
+                      <span style="color:{{ palette.green }};font-weight:700;">● {{ r.strong }}</span>
+                      &nbsp;·&nbsp;
+                      <span style="color:{{ palette.amber }};font-weight:700;">● {{ r.fair }}</span>
+                      &nbsp;·&nbsp;
+                      <span style="color:{{ palette.red }};font-weight:700;">● {{ r.weak }}</span>
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% endif %}
             </td>
           </tr>
           {% endif %}
@@ -500,30 +455,30 @@
                 <span style="color:{{ palette.red }};font-weight:600;">{{ optimizer.total_sell }}</span> out,
                 net <span style="color:{{ optimizer.net_color }};font-weight:600;">{{ optimizer.net }}</span>
               </div>
-              {% for a in optimizer.actions %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '14px' if loop.first else '8px' }};background:#FFFFFF;border:1px solid {{ palette.border }};border-left:4px solid {{ a.direction_color }};border-radius:8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:12px;border-collapse:separate;border-spacing:0;">
                 <tr>
-                  <td style="padding:14px 16px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td style="vertical-align:top;">
-                          <div style="display:inline-block;padding:3px 10px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:11px;letter-spacing:0.04em;">{{ a.direction }}</div>
-                          <div style="margin-top:8px;font-size:14px;font-weight:700;color:{{ palette.ink }};line-height:1.3;">{{ a.name }}</div>
-                          <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ a.ticker }}{% if a.isin %} · {{ a.isin }}{% endif %} · <span style="color:{{ a.asset_color }};font-weight:600;">● {{ a.asset_class }}</span></div>
-                        </td>
-                        <td align="right" style="vertical-align:top;width:130px;">
-                          <div style="font-size:18px;font-weight:700;color:{{ a.direction_color }};font-variant-numeric:tabular-nums;">{{ a.amount }}</div>
-                          <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};">{{ a.pct_of_portfolio }} of portfolio</div>
-                        </td>
-                      </tr>
-                    </table>
+                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;width:60px;">Action</td>
+                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Holding</td>
+                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:90px;">Amount</td>
+                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:60px;border-top-right-radius:8px;">% Port.</td>
+                </tr>
+                {% for a in optimizer.actions %}
+                <tr>
+                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
+                    <span style="display:inline-block;padding:3px 8px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:10px;letter-spacing:0.04em;">{{ a.direction }}</span>
+                  </td>
+                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;color:{{ palette.ink }};">
+                    <div style="font-weight:600;line-height:1.3;">{{ a.name }}</div>
+                    <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ a.ticker }} · <span style="color:{{ a.asset_color }};font-weight:600;">● {{ a.asset_class }}</span></div>
                     {% if a.reason %}
-                    <div style="margin-top:10px;padding:8px 12px;background:{{ palette.card_alt }};border-radius:6px;font-size:11px;color:{{ palette.ink }};line-height:1.5;">{{ a.reason }}</div>
+                    <div style="margin-top:4px;font-size:10px;color:{{ palette.subtle }};line-height:1.45;">{{ a.reason }}</div>
                     {% endif %}
                   </td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;color:{{ palette.muted }};{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ a.pct_of_portfolio }}</td>
                 </tr>
+                {% endfor %}
               </table>
-              {% endfor %}
             </td>
           </tr>
           {% endif %}
@@ -572,33 +527,19 @@
           </tr>
           {% endif %}
 
-          {# ─── CTA ───────────────────────────────────────── #}
-          <tr>
-            <td class="px-32" align="center" style="padding:32px 32px 8px 32px;">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td align="center" bgcolor="{{ palette.accent }}" style="border-radius:10px;">
-                    <a href="#" style="display:inline-block;padding:14px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;color:#FFFFFF;text-decoration:none;border-radius:10px;">Open full dashboard →</a>
-                  </td>
-                </tr>
-              </table>
-              <div style="margin-top:10px;font-size:11px;color:{{ palette.muted }};">{{ holdings.total_count }} holdings tracked · Excel report · Streamlit app</div>
-            </td>
-          </tr>
-
           {# ─── FOOTER ────────────────────────────────────── #}
           <tr>
             <td class="px-32" style="padding:24px 32px 32px 32px;border-top:1px solid {{ palette.border }};">
               <div style="font-size:11px;color:{{ palette.muted }};line-height:1.6;text-align:center;">
                 Generated {{ footer.generated_at }} · Tarzan {{ footer.version }}<br>
-                Personal portfolio analytics. Not investment advice.<br>
-                <a href="#" style="color:{{ palette.accent }};">Preferences</a>&nbsp;·&nbsp;<a href="#" style="color:{{ palette.accent }};">Unsubscribe</a>
+                {{ holdings.total_count }} holdings tracked · also exported as Excel report<br>
+                Personal portfolio analytics. Not investment advice.
               </div>
             </td>
           </tr>
 
         </table>
-        <div style="margin-top:14px;font-size:11px;color:{{ palette.subtle }};">🌿 Tarzan — Portfolio analysis for investors who swing smart.</div>
+        <div style="margin-top:14px;font-size:11px;color:{{ palette.subtle }};">🌿 Tarzan — Built for the long swing.</div>
       </td>
     </tr>
   </table>

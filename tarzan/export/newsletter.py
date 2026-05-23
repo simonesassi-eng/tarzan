@@ -1,4 +1,4 @@
-"""Generate the weekly portfolio digest newsletter (HTML email).
+"""Generate the portfolio digest newsletter (HTML email).
 
 This module renders an email-safe HTML newsletter from a PortfolioMetrics
 object, using a Jinja2 template. The output mirrors the look-and-feel of
@@ -91,12 +91,16 @@ GEO_COLORS = {
     "Japan": "#7C3AED",
 }
 
-# Asset class display order (matches tarzan/engine/metrics.py)
+# Asset class display order in the newsletter Holdings section.
+# Cash is shown after Gold so the invested asset classes flow visually
+# from highest-risk equity down to commodities/crypto/alternative; cash
+# is reported as a separate accounting entity (no "% of portfolio" so
+# it does not appear to compete with invested classes).
 ASSET_CLASS_ORDER = [
     "Equities",
     "Fixed Income",
-    "Cash & Cash Equivalents",
     "Gold",
+    "Cash & Cash Equivalents",
     "Commodities",
     "Crypto",
     "Alternative",
@@ -119,10 +123,68 @@ def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> st
     return formatted
 
 
+def _eur_smart(amount: Optional[float], signed: bool = False) -> str:
+    """Compact EUR formatter: shows ``€9.6k`` / ``€215k`` / ``€1.2M``
+    instead of the long-form ``€9,643.76``. Useful in dense rows where
+    the full localised amount would force unwanted wrapping.
+
+    Rules:
+      |amount| < 1,000      → €<int>           (e.g. €356)
+      |amount| < 1,000,000  → €<value>k        (1 decimal when non-integer)
+      |amount| >= 1,000,000 → €<value>M        (1 decimal when non-integer)
+
+    Always shows the sign with ``signed=True``; otherwise uses a
+    leading minus glyph for negative values.
+    """
+    if amount is None or (isinstance(amount, float) and pd.isna(amount)):
+        return "—"
+    abs_amt = abs(float(amount))
+    if abs_amt < 1_000:
+        body = f"€{abs_amt:,.0f}"
+    elif abs_amt < 1_000_000:
+        thousands = abs_amt / 1_000
+        if abs(thousands - round(thousands)) < 0.05:
+            body = f"€{thousands:.0f}k"
+        else:
+            body = f"€{thousands:.1f}k"
+    else:
+        millions = abs_amt / 1_000_000
+        if abs(millions - round(millions)) < 0.05:
+            body = f"€{millions:.0f}M"
+        else:
+            body = f"€{millions:.1f}M"
+    if signed:
+        sign = "+" if amount >= 0 else "−"
+        return f"{sign}{body}"
+    if amount < 0:
+        return f"−{body}"
+    return body
+
+
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
     """Format a percentage. Already in pp (e.g. 8.59 means 8.59%)."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"
+    if signed:
+        sign = "+" if value >= 0 else "−"
+        return f"{sign}{abs(value):.{decimals}f}%"
+    return f"{value:.{decimals}f}%"
+
+
+def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = False) -> str:
+    """Format a percentage with adaptive precision: drop the decimal
+    digits when the value is already integer (saves horizontal space).
+
+    Example with ``max_decimals=1``:
+      70.0  → "70%"
+      71.7  → "71.7%"
+      −1.6  → "−1.6%" (or "+1.7%" with signed=True)
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    rounded = round(float(value), max_decimals)
+    is_integer = abs(rounded - round(rounded)) < 10 ** (-(max_decimals + 1))
+    decimals = 0 if is_integer else max_decimals
     if signed:
         sign = "+" if value >= 0 else "−"
         return f"{sign}{abs(value):.{decimals}f}%"
@@ -167,53 +229,175 @@ class _NewsletterContext:
     benchmark_geo: str = "MSCI ACWI"
 
 
+def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
+    """Build the TL;DR headline shown above the Hero.
+
+    Synthesizes the week into a single narrative sentence: ``how the
+    portfolio moved + what to do next``. Designed to give the inbox
+    reader the pugno-nello-stomaco answer in 5 seconds.
+    """
+    m = ctx.metrics
+    perf_full = m.performance_full or {}
+    week_return = perf_full.get("1w")
+
+    parts: list[str] = []
+
+    # Movement clause
+    if week_return is None or (isinstance(week_return, float) and pd.isna(week_return)):
+        parts.append("Your portfolio is steady this week")
+    else:
+        wk_eur = m.total_value * float(week_return) / 100
+        if abs(float(week_return)) < 0.1:
+            parts.append("Your portfolio is essentially flat this week")
+        elif float(week_return) >= 0:
+            parts.append(
+                f"Your portfolio gained {_eur_smart(wk_eur)} "
+                f"({_pct(float(week_return), signed=True)}) this week"
+            )
+        else:
+            parts.append(
+                f"Your portfolio lost {_eur_smart(abs(wk_eur))} "
+                f"({_pct(float(week_return), signed=True)}) this week"
+            )
+
+    # Action clause
+    suggestions = list(m.rebalancing_suggestions or [])
+    if suggestions:
+        n = len(suggestions)
+        parts.append(
+            f"and the optimizer suggests {n} rebalancing action"
+            f"{'s' if n != 1 else ''} below"
+        )
+    else:
+        parts.append("and your allocation is on target")
+
+    return {
+        "text": ", ".join(parts) + ".",
+        "is_positive": (
+            week_return is None
+            or (isinstance(week_return, float) and pd.isna(week_return))
+            or float(week_return) >= 0
+        ),
+    }
+
+
 def _build_header(ctx: _NewsletterContext) -> dict:
+    """Build the header strip metadata.
+
+    Issue number is computed dynamically: weeks since
+    ``portfolio_inception_date`` when available, otherwise the ISO week
+    of the current year. The explicit ``ctx.issue_number`` value
+    overrides this only when greater than 1, so callers wishing to
+    pin a specific number still can.
+    """
     now = datetime.now()
+    issue_number = ctx.issue_number
+    if issue_number <= 1 and ctx.config.portfolio_inception_date:
+        try:
+            inception = pd.to_datetime(ctx.config.portfolio_inception_date)
+            weeks = max(1, int((now - inception.to_pydatetime()).days // 7) + 1)
+            issue_number = weeks
+        except Exception:
+            issue_number = now.isocalendar().week
+    elif issue_number <= 1:
+        issue_number = now.isocalendar().week
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
-        "issue_number": ctx.issue_number,
+        "issue_number": issue_number,
         "inception_date": ctx.config.portfolio_inception_date or "",
     }
 
 
 def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
+    cfg = ctx.config
     cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
     total_gain = m.total_value - cost
     gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
     cash_delta = m.cash_value - m.cash_target_eur
-    week_return = float(m.performance.get("1w") or m.performance.get("1W") or 0.0)
+    # 1W return is sourced from performance_full (same series as the
+    # Performance section and the Excel Performance tab) so the inbox
+    # preview and Hero stay consistent with the metrics shown below.
+    perf_full = m.performance_full or {}
+    week_return = float(perf_full.get("1w") or 0.0)
     week_eur = m.total_value * week_return / 100 if week_return else 0.0
 
     # Cash delta formatted message
     if abs(cash_delta) < 1.0:
         cash_msg, cash_msg_color = "on target", PALETTE["muted"]
     elif cash_delta > 0:
-        cash_msg = f"{_eur(cash_delta, 0)} above target"
+        cash_msg = f"{_eur_smart(cash_delta)} above target"
         cash_msg_color = PALETTE["amber"]
     else:
-        cash_msg = f"{_eur(abs(cash_delta), 0)} below target"
+        cash_msg = f"{_eur_smart(abs(cash_delta))} below target"
         cash_msg_color = PALETTE["amber"]
 
+    # Rebalance status: traffic-light derived from the largest non-cash
+    # drift in goal_deltas. Mirrors the banner shown in the Excel
+    # Optimizer tab so the two outputs agree.
+    tol = float(cfg.rebalancing_threshold_pctg or 0.0)
+    max_abs_delta = 0.0
+    if m.goal_deltas is not None and not m.goal_deltas.empty:
+        non_cash = m.goal_deltas[m.goal_deltas["type"] != "cash"]
+        if not non_cash.empty:
+            max_abs_delta = float(non_cash["delta_pct"].abs().max())
+    n_actions = len(m.rebalancing_suggestions or [])
+    if max_abs_delta <= tol:
+        rebal_label = "Aligned"
+        rebal_sublabel = f"max drift {max_abs_delta:.1f}pp · ±{tol:.1f}pp tol."
+        rebal_color = PALETTE["green"]
+        rebal_bg = PALETTE["green_bg"]
+    elif max_abs_delta <= 2 * tol:
+        rebal_label = "Drift"
+        rebal_sublabel = (
+            f"max drift {max_abs_delta:.1f}pp"
+            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+        )
+        rebal_color = PALETTE["amber"]
+        rebal_bg = PALETTE["amber_bg"]
+    else:
+        rebal_label = "Action"
+        rebal_sublabel = (
+            f"max drift {max_abs_delta:.1f}pp"
+            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+        )
+        rebal_color = PALETTE["red"]
+        rebal_bg = PALETTE["red_bg"]
+
     return {
+        # Hero big number keeps the full amount (€214,671.72): the
+        # entire visual hierarchy of the Status section depends on it.
         "total_value": _eur(m.total_value),
-        "total_gain": _eur(total_gain, signed=True),
+        # Everything else uses the compact form (€9.6k / €215k / €1.2M)
+        # so dense rows do not wrap.
+        "total_gain": _eur_smart(total_gain, signed=True),
         "gain_pct": _pct(gain_pct, signed=True),
         "is_positive": total_gain >= 0,
-        "invested_value": _eur(m.invested_value),
+        "invested_value": _eur_smart(m.invested_value),
         "invested_pct": _pct(invested_pct, decimals=1),
-        "cash_value": _eur(m.cash_value),
+        "cash_value": _eur_smart(m.cash_value),
         "cash_msg": cash_msg,
         "cash_msg_color": cash_msg_color,
-        "week_return_eur": _eur(week_eur, signed=True),
+        "week_return_eur": _eur_smart(week_eur, signed=True),
         "week_return_pct": _pct(week_return, signed=True),
         "week_is_positive": week_eur >= 0,
+        # Rebalance status KPI replaces the "This Week" KPI which was
+        # already covered by the TL;DR headline above.
+        "rebal_label": rebal_label,
+        "rebal_sublabel": rebal_sublabel,
+        "rebal_color": rebal_color,
+        "rebal_bg": rebal_bg,
     }
 
 
 def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
-    """Build the 30-day sparkline data (start/end values + bar heights)."""
+    """Build the 30-day sparkline data (start/end values + bar heights).
+
+    Includes a "vs benchmark" pill computed from the α/β benchmark over
+    the same 30-day window so the user can see at a glance whether the
+    portfolio outperformed the market for the period.
+    """
     m = ctx.metrics
     history = m.portfolio_history
     if history is None or len(history) < 2:
@@ -222,11 +406,12 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
             "available": False,
             "start_label": "",
             "end_label": "",
-            "start_value": _eur(m.total_value),
-            "end_value": _eur(m.total_value),
+            "start_value": _eur_smart(m.total_value),
+            "end_value": _eur_smart(m.total_value),
             "change_pct": "0.00%",
             "is_positive": True,
             "bars": [{"height": 22} for _ in range(n_days)],
+            "vs_bench": None,
         }
 
     last = history.tail(n_days)
@@ -241,15 +426,48 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         h = 12 + (float(v) - vmin) / rng * 32
         bars.append({"height": int(round(h))})
 
+    # vs-benchmark pill: compare same-window % change of the portfolio
+    # against the α/β benchmark. Uses benchmark_histories when present
+    # (already aligned to portfolio start in initial-value units).
+    vs_bench: Optional[dict] = None
+    bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    bench_hist = (m.benchmark_histories or {}).get(bench_name)
+    if bench_hist is not None and len(bench_hist) >= 2:
+        bench_window = bench_hist.tail(n_days)
+        if len(bench_window) >= 2:
+            bs, be = float(bench_window.iloc[0]), float(bench_window.iloc[-1])
+            if bs > 0:
+                bench_pct = (be - bs) / bs * 100
+                delta = change_pct - bench_pct
+                if abs(delta) <= 0.25:
+                    color = PALETTE["amber"]
+                    bg = PALETTE["amber_bg"]
+                    icon = "●"
+                elif delta > 0:
+                    color = PALETTE["green"]
+                    bg = PALETTE["green_bg"]
+                    icon = "▲"
+                else:
+                    color = PALETTE["red"]
+                    bg = PALETTE["red_bg"]
+                    icon = "▼"
+                vs_bench = {
+                    "label": f"vs {bench_name}",
+                    "delta": f"{icon} {_signed_pp(delta, decimals=2)} pp",
+                    "color": color,
+                    "bg": bg,
+                }
+
     return {
         "available": True,
         "start_label": last.index[0].strftime("%b %d") if hasattr(last.index[0], "strftime") else "",
         "end_label": last.index[-1].strftime("%b %d") if hasattr(last.index[-1], "strftime") else "",
-        "start_value": _eur(start_v, 0),
-        "end_value": _eur(end_v, 0),
+        "start_value": _eur_smart(start_v),
+        "end_value": _eur_smart(end_v),
         "change_pct": _pct(change_pct, signed=True),
         "is_positive": change_pct >= 0,
         "bars": bars,
+        "vs_bench": vs_bench,
     }
 
 
@@ -276,30 +494,44 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         rows.append({
             "name": klass,
             "color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-            "actual_pct": _pct(actual, decimals=1),
+            "actual_pct": _pct_smart(actual),
             "actual_pct_raw": actual,
-            "target_pct": _pct(target, decimals=1) if target is not None else None,
+            "target_pct": _pct_smart(target) if target is not None else None,
+            "target_left": (
+                min(max(float(target), 0), 100)
+                if target is not None else None
+            ),
             "delta": _signed_pp(delta) if delta is not None else None,
             "delta_color": _semaphore_color(sema),
             "bar_width": min(max(actual, 1), 100),
         })
 
-    # Cash buffer (EUR-based, appended after invested classes)
+    # Cash buffer (EUR-based, appended after invested classes).
+    # The bar width is scaled as % of total portfolio so cash visually
+    # matches the other rows (it would otherwise dominate the bar
+    # because target_cash_buffer_eur is small relative to invested
+    # value). Status color is still driven by the relative deviation
+    # vs the cash target via _semaphore.
     if cfg.target_cash_buffer_eur > 0:
         cash_actual = m.cash_value
         cash_tgt = cfg.target_cash_buffer_eur
         rel_dev = (cash_actual - cash_tgt) / cash_tgt * 100 if cash_tgt > 0 else 0
         sema = _semaphore(rel_dev, tol)
         delta_eur = cash_actual - cash_tgt
+        cash_pct_of_total = (cash_actual / m.total_value * 100) if m.total_value > 0 else 0
         rows.append({
-            "name": "Cash & Equivalents",
+            # Shorter label only inside the Diversification block where
+            # horizontal space is critical; other sections (Holdings,
+            # Optimizer, Insights) keep the full "Cash & Cash
+            # Equivalents" string.
+            "name": "Cash & Cash Eq.",
             "color": ASSET_COLORS["Cash & Cash Equivalents"],
-            "actual_pct": _eur(cash_actual, 0),
-            "actual_pct_raw": min((cash_actual / max(cash_tgt * 2, 1)) * 100, 100),
-            "target_pct": f"target {_eur(cash_tgt, 0)}",
-            "delta": ("+" if delta_eur >= 0 else "−") + _eur(abs(delta_eur), 0),
+            "actual_pct": _eur_smart(cash_actual),
+            "actual_pct_raw": cash_pct_of_total,
+            "target_pct": _eur_smart(cash_tgt),
+            "delta": _eur_smart(delta_eur, signed=True),
             "delta_color": _semaphore_color(sema),
-            "bar_width": min(max((cash_actual / max(cash_tgt * 2, 1)) * 100, 1), 100),
+            "bar_width": min(max(cash_pct_of_total, 1), 100),
             "is_eur": True,
         })
 
@@ -349,9 +581,9 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
             rows.append({
                 "name": region,
                 "color": GEO_COLORS.get(region, PALETTE["accent"]),
-                "actual_pct": _pct(actual, decimals=1),
-                "target_pct": _pct(target, decimals=1) if target is not None else "—",
-                "acwi_pct": _pct(acwi_v, decimals=2) if acwi_v is not None else "—",
+                "actual_pct": _pct_smart(actual),
+                "target_pct": _pct_smart(target) if target is not None else "—",
+                "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
                 "delta": _signed_pp(delta_target) if delta_target is not None else "—",
                 "delta_color": _semaphore_color(sema),
                 "bar_width": min(max(actual, 1), 100),
@@ -396,6 +628,12 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
         sub = df[df["asset_class"] == klass]
         if sub.empty:
             continue
+        # For invested classes the Weight column is reported as % of
+        # *invested* value (cash sits outside the invested portfolio).
+        # For cash the Weight column is shown as "—" because % of
+        # invested is undefined for the cash bucket.
+        is_cash_class = klass == "Cash & Cash Equivalents"
+        invested_base = m.invested_value if m.invested_value > 0 else 0.0
         rows = []
         for i, (_, h) in enumerate(sub.iterrows()):
             value = float(h["current_value"])
@@ -404,6 +642,12 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             quantity = float(h.get("quantity", 0) or 0)
             avg_price = float(h.get("avg_purchase_price", 0) or 0)
             gain_pct = h.get("gain_pct")
+            if is_cash_class:
+                weight_str = "—"
+            elif invested_base > 0:
+                weight_str = _pct(value / invested_base * 100, decimals=1)
+            else:
+                weight_str = "—"
             rows.append({
                 "name": h.get("name", ""),
                 "ticker": h.get("ticker", ""),
@@ -411,12 +655,25 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                 "quantity": quantity,
                 "avg_price": _eur(avg_price, 2),
                 "value": _eur(value, 2),
-                "weight_pct": _pct(float(h.get("weight_pct", 0) or 0), decimals=1),
+                "weight_pct": weight_str,
                 "gain_pct": _pct(gain_pct, signed=True) if gain_pct is not None and not pd.isna(gain_pct) else "—",
                 "gain_color": (PALETTE["green"] if (gain_pct or 0) >= 0 else PALETTE["red"]) if gain_pct is not None and not pd.isna(gain_pct) else PALETTE["muted"],
                 "pct_class": _pct(pct_class, decimals=1),
                 "alt_bg": i % 2 == 1,
             })
+        # Cash is reported as a separate entity, not part of the
+        # "invested" portfolio. Skip the share stat for the cash group
+        # so it does not appear to compete with invested classes; for
+        # everything else, express the share as % of *invested* value
+        # (consistent with the convention that cash sits outside the
+        # invested allocation, exactly like the Diversification and
+        # Optimizer sections).
+        is_cash = klass == "Cash & Cash Equivalents"
+        total_pct_str: Optional[str] = None
+        if not is_cash:
+            base = m.invested_value if m.invested_value > 0 else m.total_value
+            pct = (class_totals.get(klass, 0) / base * 100) if base > 0 else 0
+            total_pct_str = _pct(pct, decimals=1)
         groups.append({
             "name": klass,
             "name_short": "Cash & Cash Equivalents" if klass == "Cash & Cash Equivalents" else klass,
@@ -424,11 +681,9 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "bg": ASSET_BG.get(klass, PALETTE["accent_bg"]),
             "count": int(class_counts.get(klass, 0)),
             "label": "positions" if class_counts.get(klass, 0) != 1 else "position",
-            "total_value": _eur(class_totals.get(klass, 0), 0),
-            "total_pct": _pct(
-                class_totals.get(klass, 0) / m.total_value * 100 if m.total_value > 0 else 0,
-                decimals=1,
-            ),
+            "total_value": _eur_smart(class_totals.get(klass, 0)),
+            "total_pct": total_pct_str,
+            "is_cash": is_cash,
             "rows": rows,
         })
 
@@ -469,7 +724,7 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
             "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
             "pct": _pct(pct, signed=True),
             "is_positive": pct >= 0,
-            "eur": _eur(abs(eur), 0),
+            "eur": _eur_smart(abs(eur)),
         }
 
     return {
@@ -481,13 +736,27 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
 
 
 def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
-    """Generate up to 3 rule-based insights from metrics."""
+    """Generate up to 3 conditional insights — only those genuinely
+    worth surfacing are emitted, so the Signals section silently
+    contracts when there is nothing to say.
+
+    Slots, in priority order:
+      1. Observation (allocation drift) — contextual, NOT prescriptive.
+         Concrete trades live in the Optimizer section below; this one
+         only explains the drift in plain language.
+      2. Risk (concentration top-2 / drawdown / cash buffer breach) —
+         the strongest active risk signal that crosses a threshold.
+      3. Performance (vs MSCI ACWI) — symmetric: Win when beating on a
+         risk-adjusted basis, Underperform when below the noise floor,
+         silent when in line.
+    """
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.rebalancing_threshold_pctg
+    tol = float(cfg.rebalancing_threshold_pctg or 0.0)
     insights: list[dict] = []
 
-    # 1. Action — largest drift vs target
+    # 1. Observation: largest non-cash drift vs target. Phrased as a
+    # contextual observation, not as a trade instruction.
     if m.goal_deltas is not None and not m.goal_deltas.empty:
         non_cash = m.goal_deltas[m.goal_deltas["type"] != "cash"]
         if not non_cash.empty:
@@ -495,67 +764,52 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
             delta = float(largest["delta_pct"])
             cat = largest["category"]
             drift_type = str(largest["type"])
-            sema = _semaphore(delta, tol)
-            if sema != "green":
-                # Find a rebalancing suggestion that actually addresses this
-                # category, in the appropriate direction. Drift > 0 means
-                # we're overweight → we want a SELL on a holding of this
-                # category. Drift < 0 means underweight → we want a BUY.
-                target_direction = "sell" if delta > 0 else "buy"
-                chosen = None
-                if m.rebalancing_suggestions and not m.holdings_df.empty:
-                    df = m.holdings_df
-                    for s in m.rebalancing_suggestions:
-                        if s.get("direction", "").lower() != target_direction:
-                            continue
-                        match = df[df["ticker"] == s.get("ticker", "")]
-                        if match.empty:
-                            continue
-                        if drift_type == "asset_class":
-                            if str(match["asset_class"].iloc[0]) == cat:
-                                chosen = s
-                                break
-                        elif drift_type.startswith("geography"):
-                            geo_str = str(match["geography"].iloc[0])
-                            if cat in geo_str:
-                                chosen = s
-                                break
-                    # Fallback: any suggestion in the right direction.
-                    if chosen is None:
-                        for s in m.rebalancing_suggestions:
-                            if s.get("direction", "").lower() == target_direction:
-                                chosen = s
-                                break
-
-                if chosen is not None:
-                    verb = "Buy" if target_direction == "buy" else "Sell"
-                    ident = chosen.get("ticker") or chosen.get("name", "")
-                    action_text = (
-                        f"{verb} {_eur(chosen['amount_eur'])} of "
-                        f"{ident} to bring the bucket back toward target."
+            if abs(delta) > tol:
+                direction_word = "above" if delta > 0 else "below"
+                # Light explanation to give context without prescribing
+                # a trade. The Optimizer section already lists the
+                # concrete actions.
+                if drift_type == "asset_class":
+                    scope = "asset-class allocation"
+                    body_hint = (
+                        "Typical for rising markets — riskier classes drift up."
+                        if delta > 0
+                        else "Allocation has eroded relative to target. Optimizer suggests how to rebalance."
+                    )
+                elif drift_type.startswith("geography"):
+                    scope = "equity geography"
+                    body_hint = (
+                        "Currency, valuations and concentration in regional ETFs all contribute to drift."
                     )
                 else:
-                    direction_word = "buying more" if target_direction == "buy" else "trimming"
-                    action_text = (
-                        f"Consider {direction_word} your {cat} exposure on the next contribution."
+                    scope = "per-holding allocation"
+                    body_hint = (
+                        "See the Optimizer section below for concrete trade recommendations."
                     )
-
-                direction_word = "above" if delta > 0 else "below"
                 insights.append({
-                    "kind": "action",
-                    "icon": "⚡",
-                    "color": PALETTE["amber"],
-                    "bg": PALETTE["amber_bg"],
-                    "category": "Action · Rebalance",
-                    "headline": f"{cat} is {abs(delta):.1f} pp {direction_word} target — your largest drift.",
-                    "body": action_text,
+                    "kind": "observation",
+                    "icon": "📊",
+                    "color": PALETTE["accent"],
+                    "bg": PALETTE["accent_bg"],
+                    "category": "Observation · Drift",
+                    "headline": (
+                        f"{cat} is {abs(delta):.1f} pp {direction_word} target — "
+                        f"largest drift in your {scope}."
+                    ),
+                    "body": body_hint,
                 })
 
-    # 2. Risk — concentration in top 2 holdings
-    if not m.holdings_df.empty and len(m.holdings_df) >= 2:
+    # 2. Risk: pick the strongest active risk among (a) concentration,
+    # (b) deep drawdown, (c) cash buffer breach. Only the most
+    # actionable one is emitted to keep the section tight.
+    risk_pf = m.performance_full or {}
+    risk_emitted = False
+
+    # 2a. Concentration: top-2 weight ≥ 30% of portfolio.
+    if not m.holdings_df.empty and len(m.holdings_df) >= 2 and not risk_emitted:
         top2 = m.holdings_df.nlargest(2, "weight_pct")
         top2_pct = float(top2["weight_pct"].sum())
-        if top2_pct >= 30:  # threshold for raising concentration as insight
+        if top2_pct >= 30:
             names = " · ".join(
                 f"{r['ticker']} ({_pct(float(r['weight_pct']), 1)})"
                 for _, r in top2.iterrows()
@@ -563,22 +817,63 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
             insights.append({
                 "kind": "risk",
                 "icon": "◎",
-                "color": PALETTE["accent"],
-                "bg": PALETTE["accent_bg"],
+                "color": PALETTE["amber"],
+                "bg": PALETTE["amber_bg"],
                 "category": "Risk · Concentration",
-                "headline": f"Your top 2 positions hold {top2_pct:.0f}% of the portfolio.",
-                "body": f"{names}. Watch for overlap — concentrated weight raises portfolio-level swings.",
+                "headline": f"Top 2 positions hold {top2_pct:.0f}% of the portfolio.",
+                "body": (
+                    f"{names}. Concentrated weight amplifies portfolio-level swings; "
+                    "watch for overlap if both holdings are in the same asset class."
+                ),
             })
+            risk_emitted = True
 
-    # 3. Win — beating ACWI on risk-adjusted basis
-    risk = m.risk or {}
-    perf = m.performance_full or {}
-    sharpe = risk.get("sharpe")
-    cagr = perf.get("cagr")
+    # 2b. Deep drawdown: max DD beyond -25%.
+    max_dd = risk_pf.get("max_drawdown")
+    if (max_dd is not None and not (isinstance(max_dd, float) and pd.isna(max_dd))
+            and float(max_dd) <= -25.0 and not risk_emitted):
+        insights.append({
+            "kind": "risk",
+            "icon": "▼",
+            "color": PALETTE["amber"],
+            "bg": PALETTE["amber_bg"],
+            "category": "Risk · Drawdown",
+            "headline": f"Max drawdown reached {float(max_dd):.1f}% on the 5Y window.",
+            "body": (
+                "Deeper than the typical -20% baseline for diversified equity. "
+                "Consider whether your position sizing matches your stomach for that scenario."
+            ),
+        })
+        risk_emitted = True
+
+    # 2c. Cash buffer significantly off target (≥30% relative deviation).
+    cash_target = float(cfg.target_cash_buffer_eur or 0.0)
+    if cash_target > 0 and not risk_emitted:
+        cash_delta_eur = m.cash_value - cash_target
+        rel_dev = abs(cash_delta_eur) / cash_target * 100
+        if rel_dev >= 30:
+            sign_word = "above" if cash_delta_eur > 0 else "below"
+            insights.append({
+                "kind": "risk",
+                "icon": "💧",
+                "color": PALETTE["amber"],
+                "bg": PALETTE["amber_bg"],
+                "category": "Risk · Cash buffer",
+                "headline": f"Cash is {_eur_smart(abs(cash_delta_eur))} {sign_word} target ({rel_dev:.0f}% deviation).",
+                "body": (
+                    "A larger-than-usual cash gap can drag returns "
+                    "(if above target) or erode the safety buffer (if below). "
+                    "Direct your next contribution accordingly."
+                ),
+            })
+            risk_emitted = True
+
+    # 3. Performance vs MSCI ACWI — symmetric (Win / Underperform / silent).
+    sharpe = risk_pf.get("sharpe")
+    cagr = risk_pf.get("cagr")
+    vol = risk_pf.get("volatility")
     bench_cmp = m.benchmark_comparison
-    if not bench_cmp.empty and sharpe is not None and cagr is not None:
-        # The real pipeline uses 'benchmark' as the name column, while
-        # the test fixture uses 'name'. Support both for robustness.
+    if not bench_cmp.empty and sharpe is not None and cagr is not None and vol is not None:
         name_col = None
         for candidate in ("benchmark", "name"):
             if candidate in bench_cmp.columns:
@@ -593,23 +888,42 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
             if not acwi_row.empty:
                 acwi_cagr = acwi_row["cagr"].iloc[0] if "cagr" in acwi_row.columns else None
                 acwi_vol = acwi_row["volatility"].iloc[0] if "volatility" in acwi_row.columns else None
-                vol = risk.get("volatility")
-                if acwi_cagr is not None and acwi_vol is not None and vol is not None:
-                    cagr_delta = cagr - float(acwi_cagr)
-                    vol_delta = vol - float(acwi_vol)
-                    if cagr_delta > 0 and vol_delta < 0:
+                if acwi_cagr is not None and acwi_vol is not None:
+                    cagr_delta = float(cagr) - float(acwi_cagr)
+                    vol_delta = float(vol) - float(acwi_vol)
+                    cagr_threshold = 1.0
+                    vol_threshold = 0.5
+
+                    # Win: beating CAGR by margin AND lower vol by margin.
+                    if cagr_delta >= cagr_threshold and vol_delta <= -vol_threshold:
                         insights.append({
                             "kind": "win",
                             "icon": "✓",
                             "color": PALETTE["green"],
                             "bg": "#F0FDF4",
-                            "category": "Win · Risk-adjusted",
-                            "headline": "You're beating MSCI ACWI on risk-adjusted basis.",
+                            "category": "Performance · Risk-adjusted win",
+                            "headline": "Beating MSCI ACWI on a risk-adjusted basis.",
                             "body": (
                                 f"+{cagr_delta:.2f} pp CAGR with {vol_delta:.2f} pp lower volatility. "
-                                f"Sharpe {sharpe:.2f} vs ACWI implies real diversification benefit."
+                                f"Sharpe {float(sharpe):.2f} suggests real diversification benefit."
                             ),
                         })
+                    # Underperform: lower CAGR by margin (regardless of vol).
+                    elif cagr_delta <= -cagr_threshold:
+                        insights.append({
+                            "kind": "underperform",
+                            "icon": "▼",
+                            "color": PALETTE["red"],
+                            "bg": PALETTE["red_bg"],
+                            "category": "Performance · Below benchmark",
+                            "headline": f"Trailing MSCI ACWI by {abs(cagr_delta):.2f} pp CAGR.",
+                            "body": (
+                                f"Volatility {float(vol):.2f}% vs ACWI {float(acwi_vol):.2f}%. "
+                                "If the gap is consistent over multiple periods, review the "
+                                "tilt that's driving it (asset-class mix or geography)."
+                            ),
+                        })
+                    # Otherwise: silent — no Performance insight.
 
     return insights[:3]
 
@@ -618,18 +932,100 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     """Build returns table (portfolio + benchmarks) and risk metrics."""
     m = ctx.metrics
 
-    # Portfolio row
+    # Portfolio history span shown in the disclaimer. We use the
+    # ``period_used`` label produced by _populate_perf_row on
+    # performance_full, which reflects the same 5y-capped, holdings≥1Y
+    # window used for all the metrics in this section. Falls back to
+    # computing from portfolio_history_full when missing.
     pf = m.performance_full or {}
+    history_label = str(pf.get("period_used") or "—")
+    if history_label == "—":
+        ph_full = m.portfolio_history
+        if ph_full is not None and len(ph_full) >= 2:
+            days = int((ph_full.index[-1] - ph_full.index[0]).days)
+            yrs = days / 365.25
+            if yrs >= 4.9:
+                history_label = "5Y+"
+            elif yrs >= 1.0:
+                history_label = f"{yrs:.1f}Y"
+            elif days >= 30:
+                history_label = f"{int(round(days / 30))}M"
+            elif days > 0:
+                history_label = f"{days}D"
+
+    # Period order shown in the Returns table (mirrors the Excel
+    # Performance tab): 1D first, then progressively longer windows.
+    periods = ("1d", "1w", "1m", "3m", "ytd", "1y", "3y", "5y")
+
+    def _color_sign(value) -> str:
+        """Sign-aware color for a period return cell — used on benchmarks."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return PALETTE["muted"]
+        return PALETTE["green"] if float(value) >= 0 else PALETTE["red"]
+
+    # Locate the α/β benchmark row (S&P 500 by default) so the portfolio
+    # row can be colored "did we beat the benchmark on this period?"
+    # rather than just "is it positive?". Sign-based coloring on the
+    # portfolio row tends to look like a cheerleader — every positive
+    # period is green even when we underperform.
+    hp = m.holding_performance
+    ab_bench_returns: dict = {}
+    ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    if not hp.empty and "type" in hp.columns:
+        bench_match = hp[
+            hp["type"].astype(str).str.contains("enchmark", case=False, na=False)
+            & hp["name"].astype(str).str.contains(
+                ab_bench_name, case=False, na=False, regex=False,
+            )
+        ]
+        if not bench_match.empty:
+            ab_row = bench_match.iloc[0]
+            for p in periods:
+                ab_bench_returns[p] = ab_row.get(p)
+
+    def _color_vs_bench(value, bench_value) -> str:
+        """Color the portfolio cell by delta vs the α/β benchmark on the
+        same period: green if we beat by >0.25pp, amber within ±0.25pp
+        (statistical noise), red if we underperform. Falls back to
+        sign-based when the benchmark value is unavailable."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return PALETTE["muted"]
+        if (bench_value is None
+                or (isinstance(bench_value, float) and pd.isna(bench_value))):
+            return _color_sign(value)
+        delta = float(value) - float(bench_value)
+        if abs(delta) <= 0.25:
+            return PALETTE["amber"]
+        return PALETTE["green"] if delta > 0 else PALETTE["red"]
+
+    def _build_portfolio_returns_dict(source: dict) -> dict:
+        return {
+            p: {
+                "value": _pct(source.get(p), signed=True),
+                "color": _color_vs_bench(source.get(p), ab_bench_returns.get(p)),
+            }
+            for p in periods
+        }
+
+    def _build_bench_returns_dict(source: dict) -> dict:
+        return {
+            p: {
+                "value": _pct(source.get(p), signed=True),
+                "color": _color_sign(source.get(p)),
+            }
+            for p in periods
+        }
+
+    # Portfolio row
     portfolio_row = {
         "name": "Your portfolio",
         "tag": None,
         "is_portfolio": True,
-        "returns": {p: _pct(pf.get(p), signed=True) for p in ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")},
+        "returns": _build_portfolio_returns_dict(pf),
     }
 
     # Benchmark rows (from holding_performance, type contains 'enchmark')
     benchmark_rows = []
-    hp = m.holding_performance
     if not hp.empty and "type" in hp.columns:
         bench_df = hp[hp["type"].astype(str).str.contains("enchmark", case=False, na=False)]
         for _, r in bench_df.iterrows():
@@ -643,66 +1039,50 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "name": name,
                 "tag": tag,
                 "is_portfolio": False,
-                "returns": {p: _pct(r.get(p), signed=True) for p in ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")},
+                "returns": _build_bench_returns_dict(r.to_dict()),
             })
 
-    # Risk chips
-    risk = m.risk or {}
-    risk_chips = []
-    chip_specs = [
-        ("CAGR", "cagr", True, False),
-        ("Volatility", "volatility", True, False),
-        ("Sharpe", "sharpe", False, False),
-        ("Sortino", "sortino", False, False),
-        ("Max DD", "max_drawdown", True, True),
-        ("VaR 95%", "var_95", True, True),
-        ("CVaR 95%", "cvar_95", True, True),
-        ("β", "beta", False, False),
-    ]
-    for label, key, is_pct, is_neg in chip_specs:
-        v = pf.get(key) if key in pf else risk.get(key)
-        if v is None or (isinstance(v, float) and pd.isna(v)):
-            continue
-        formatted = _pct(v, decimals=2) if is_pct else f"{float(v):.2f}"
-        color = PALETTE["red"] if is_neg else (PALETTE["green"] if (key == "cagr" and v > 0) else PALETTE["ink"])
-        risk_chips.append({"label": label, "value": formatted, "color": color})
+    # Risk metrics are now rendered in their own unified Risk Profile
+    # section by ``_build_risk_profile``; we no longer return separate
+    # chip data here.
 
     return {
         "portfolio_row": portfolio_row,
-        "benchmark_rows": benchmark_rows[:8],  # Cap for layout
-        "risk_chips": risk_chips,
+        "benchmark_rows": benchmark_rows,  # show all configured benchmarks
+        "periods": list(periods),
+        "history_label": history_label,
         "benchmark_alpha_beta": ctx.benchmark_alpha_beta,
         "benchmark_geo": ctx.benchmark_geo,
     }
 
 
-def _build_risk_vs_benchmarks(ctx: _NewsletterContext) -> dict:
-    """Build the side-by-side "Risk vs S&P 500" / "Risk vs MSCI ACWI" tables.
+def _build_risk_profile(ctx: _NewsletterContext) -> dict:
+    """Build the unified Risk Profile table.
 
-    For each benchmark we expose CAGR, Volatility, Sharpe, and Max Drawdown
-    (the four metrics common to both PortfolioMetrics.risk/performance and
-    PortfolioMetrics.benchmark_comparison). VaR is intentionally omitted
-    because benchmark_comparison does not carry it.
+    A single table with rows per metric and columns: You / S&P 500 / MSCI
+    ACWI. The first four metrics (CAGR, Volatility, Sharpe, Max Drawdown)
+    are confronted with both benchmarks. The remaining four (Sortino,
+    VaR 95%, CVaR 95%, β) are portfolio-only and show "—" in the
+    benchmark columns to keep the layout consistent.
+
+    All portfolio numbers are sourced from ``performance_full`` (5y cap,
+    holdings <1Y excluded) so the rows are apples-to-apples with the
+    benchmark series and consistent with the Returns table above. β
+    naturally shows 1.00 under S&P 500 (the α/β benchmark) and "—" for
+    MSCI ACWI to make the relationship explicit.
     """
     m = ctx.metrics
-    risk = m.risk or {}
-    perf = m.performance or {}
+    perf_full = m.performance_full or {}
     bench_cmp = m.benchmark_comparison
 
-    portfolio_cagr = perf.get("cagr") or perf.get("CAGR")
-    portfolio_vol = risk.get("volatility")
-    portfolio_sharpe = risk.get("sharpe")
-    portfolio_dd = risk.get("max_drawdown")
-
     if (
-        bench_cmp is None or bench_cmp.empty
+        not perf_full
+        or bench_cmp is None or bench_cmp.empty
         or "benchmark" not in bench_cmp.columns
-        or any(v is None for v in (portfolio_cagr, portfolio_vol,
-                                    portfolio_sharpe, portfolio_dd))
     ):
-        return {"available": False, "tables": []}
+        return {"available": False, "rows": [], "headers": []}
 
-    def _row_for(name_substr: str) -> dict | None:
+    def _bench_row(name_substr: str) -> Optional[dict]:
         match = bench_cmp[
             bench_cmp["benchmark"].astype(str).str.contains(
                 name_substr, case=False, na=False, regex=False,
@@ -712,51 +1092,171 @@ def _build_risk_vs_benchmarks(ctx: _NewsletterContext) -> dict:
             return None
         return match.iloc[0].to_dict()
 
-    bench_specs = [
-        ("S&P 500", "S&P 500", "α/β"),
-        ("MSCI ACWI", "MSCI ACWI", "GEO"),
-    ]
-    tables = []
-    for display_name, search_token, tag_label in bench_specs:
-        bench = _row_for(search_token)
-        if bench is None:
-            continue
-        # For each metric we compute the delta and decide if it's a
-        # win for the portfolio. Volatility and MaxDD are "lower is
-        # better"; CAGR and Sharpe are "higher is better".
-        rows = []
-        metric_specs = [
-            ("CAGR", portfolio_cagr, bench.get("cagr"), True, False),
-            ("Volatility", portfolio_vol, bench.get("volatility"), True, True),
-            ("Sharpe", portfolio_sharpe, bench.get("sharpe"), False, False),
-            ("Max Drawdown", portfolio_dd, bench.get("max_drawdown"), True, True),
-        ]
-        for label, port, bench_v, is_pct, lower_is_better in metric_specs:
-            if bench_v is None or pd.isna(bench_v):
-                continue
-            port_f = float(port)
-            bench_f = float(bench_v)
-            delta = port_f - bench_f
-            is_win = (delta < 0) if lower_is_better else (delta > 0)
-            verdict_color = PALETTE["green"] if is_win else PALETTE["amber"]
-            unit = "pp" if is_pct else ""
-            rows.append({
-                "label": label,
-                "portfolio": _pct(port_f) if is_pct else f"{port_f:.2f}",
-                "benchmark": _pct(bench_f) if is_pct else f"{bench_f:.2f}",
-                "verdict": _signed_pp(delta, decimals=2)
-                           + (f" {unit}" if unit else ""),
-                "verdict_color": verdict_color,
-                "is_loss_metric": lower_is_better,
-            })
-        if rows:
-            tables.append({
-                "name": display_name,
-                "tag": tag_label,
-                "rows": rows,
-            })
+    sp500 = _bench_row("S&P 500") or {}
+    acwi = _bench_row("MSCI ACWI") or {}
 
-    return {"available": bool(tables), "tables": tables}
+    def _fmt_pct(v) -> str:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        return _pct(float(v))
+
+    def _fmt_num(v) -> str:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        return f"{float(v):.2f}"
+
+    def _verdict(port, bench, lower_is_better) -> tuple[str, str]:
+        """Return (symbol, color) for inline verdict on the You cell.
+
+        For "lower is better" metrics where the underlying values can be
+        negative (Max Drawdown is reported as a negative percentage —
+        −14.98 means a 14.98% peak-to-trough drop), comparing raw values
+        is wrong: −14.98 > −20.22 numerically, but −14.98 is the
+        shallower (better) drawdown. We compare absolute values so that
+        a smaller magnitude wins.
+        """
+        if (port is None or bench is None
+                or (isinstance(port, float) and pd.isna(port))
+                or (isinstance(bench, float) and pd.isna(bench))):
+            return ("", PALETTE["ink"])
+        port_f = float(port)
+        bench_f = float(bench)
+        if lower_is_better:
+            is_win = abs(port_f) < abs(bench_f)
+        else:
+            is_win = port_f > bench_f
+        return ("▲" if is_win else "▼",
+                PALETTE["green"] if is_win else PALETTE["amber"])
+
+    # Confrontable metrics: present in both perf_full and bench_cmp.
+    # Tuple: (label, perf_full key, bench_cmp key, is_pct, lower_is_better)
+    # The α/β labels include the configured benchmark name dynamically
+    # (default "S&P 500"). The benchmark name is also passed to the
+    # legend so the two stay in sync.
+    ab_name = ctx.benchmark_alpha_beta or "S&P 500"
+    confrontable = [
+        ("CAGR", "cagr", "cagr", True, False),
+        ("Volatility", "volatility", "volatility", True, True),
+        ("Sharpe", "sharpe", "sharpe", False, False),
+        ("Sortino", "sortino", "sortino", False, False),
+        ("Max Drawdown", "max_drawdown", "max_drawdown", True, True),
+        ("VaR 95%", "var_95", "var_95", True, True),
+        ("CVaR 95%", "cvar_95", "cvar_95", True, True),
+        # α and β are vs the configured α/β benchmark. By definition the
+        # α/β benchmark vs itself yields β=1.00 / α=0; α and β of any
+        # other series are computed against the same reference, so the
+        # columns are directly comparable.
+        # α: higher is better (positive alpha = excess return).
+        # β: lower is better in the Excel rating scale (Defensive at
+        # < 0.7 is the "Strong" outcome).
+        (f"\u03b1 (vs {ab_name})", "alpha", "alpha", True, False),
+        (f"\u03b2 (vs {ab_name})", "beta", "beta", False, True),
+    ]
+
+    rows = []
+    for label, port_key, bench_key, is_pct, lower_better in confrontable:
+        port_v = perf_full.get(port_key)
+        sp_v = sp500.get(bench_key)
+        acwi_v = acwi.get(bench_key)
+        sp_verdict_sym, sp_verdict_color = _verdict(port_v, sp_v, lower_better)
+        rows.append({
+            "label": label,
+            "you": _fmt_pct(port_v) if is_pct else _fmt_num(port_v),
+            "sp500": _fmt_pct(sp_v) if is_pct else _fmt_num(sp_v),
+            "acwi": _fmt_pct(acwi_v) if is_pct else _fmt_num(acwi_v),
+            "verdict_sp": sp_verdict_sym,
+            "verdict_sp_color": sp_verdict_color,
+        })
+
+    return {
+        "available": True,
+        "headers": ["Metric", "You", "S&P 500", "MSCI ACWI"],
+        "rows": rows,
+        "legend": _build_risk_legend(),
+        "benchmark_alpha_beta": ctx.benchmark_alpha_beta,
+        "benchmark_geo": ctx.benchmark_geo,
+    }
+
+
+def _build_risk_legend() -> list[dict]:
+    """Build the Risk Profile legend rows mirroring the Excel Performance
+    tab Legend. Sources thresholds and units from
+    ``constants.yaml::metric_ratings`` so the two stay in sync.
+
+    Each entry: {label, strong, fair, weak, description}. The α and β
+    rows here describe the metrics in general; the specific benchmark
+    used for α/β is shown in the table label above (e.g. "α (vs S&P 500)")
+    so the legend stays generic and reusable across configurations.
+    """
+    from tarzan import config as cfg
+    ratings = cfg.metric_ratings() or {}
+
+    # (label, ratings_key, description). Order matches the Risk Profile
+    # table above. Descriptions are kept short to fit a compact layout
+    # — the Excel Legend has the longer phrasing.
+    legend_specs = [
+        ("CAGR", "cagr",
+         "Compound Annual Growth Rate. Yearly return that would grow your "
+         "portfolio from start to end value, with compounding."),
+        ("Volatility", "volatility",
+         "Annualized standard deviation of daily returns. Equity indexes "
+         "~15–20%, bonds ~3–7%."),
+        ("Sharpe", "sharpe",
+         "(CAGR − risk-free rate) / Volatility. Return per unit of total "
+         "risk. >1 is good, >2 excellent."),
+        ("Sortino", "sortino",
+         "Like Sharpe but penalizes only downside volatility. Usually "
+         "higher than Sharpe — gap shows good (upside) volatility."),
+        ("Max Drawdown", "max_drawdown",
+         "Worst peak-to-trough loss over the period. -20% is typical for "
+         "diversified equity; deeper drops signal concentration risk."),
+        ("VaR 95%", "var_pct",
+         "Daily loss exceeded only 5% of the time (historical sim). "
+         "Non-parametric — no normal-distribution assumption."),
+        ("CVaR 95%", "cvar_pct",
+         "Average loss on the worst 5% of days. More negative than VaR — "
+         "captures tail risk."),
+        (f"\u03b1", "alpha",
+         "Extra annual return vs the benchmark, after adjusting for "
+         "portfolio risk (CAPM). Positive = beat the market on risk-adjusted basis."),
+        (f"\u03b2", "beta",
+         "How much the portfolio moves when the benchmark moves 1%. "
+         "β=1 in line, β=0.5 half as reactive, β≈0 uncorrelated."),
+    ]
+
+    def _fmt(value: Optional[float], unit: str) -> str:
+        if value is None:
+            return "—"
+        return f"{value:.1f}{unit}"
+
+    legend_rows = []
+    for label, key, description in legend_specs:
+        spec = ratings.get(key, {}) or {}
+        thresholds = spec.get("thresholds", [None, None])
+        invert = bool(spec.get("invert", False))
+        unit = spec.get("unit", "")
+        good_t, warn_t = (thresholds + [None, None])[:2]
+
+        if good_t is None or warn_t is None:
+            strong = fair = weak = "—"
+        elif invert:
+            # Lower-is-better metrics: better when below good threshold.
+            strong = f"< {_fmt(abs(good_t), unit)}"
+            fair = f"{_fmt(abs(warn_t), unit)} – {_fmt(abs(good_t), unit)}"
+            weak = f"> {_fmt(abs(warn_t), unit)}"
+        else:
+            strong = f"> {_fmt(good_t, unit)}"
+            fair = f"{_fmt(warn_t, unit)} – {_fmt(good_t, unit)}"
+            weak = f"< {_fmt(warn_t, unit)}"
+
+        legend_rows.append({
+            "label": label,
+            "strong": strong,
+            "fair": fair,
+            "weak": weak,
+            "description": description,
+        })
+    return legend_rows
 
 
 def _build_optimizer(ctx: _NewsletterContext) -> dict:
@@ -818,9 +1318,9 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
         "n_total": n_total,
         "n_buy": n_buy,
         "n_sell": n_sell,
-        "total_buy": _eur(total_buy, decimals=0),
-        "total_sell": _eur(total_sell, decimals=0),
-        "net": _eur(total_buy - total_sell, signed=True),
+        "total_buy": _eur_smart(total_buy),
+        "total_sell": _eur_smart(total_sell),
+        "net": _eur_smart(total_buy - total_sell, signed=True),
         "net_color": (PALETTE["green"] if (total_buy - total_sell) >= 0
                       else PALETTE["red"]),
     }
@@ -888,6 +1388,7 @@ def build_context(
     return {
         "palette": PALETTE,
         "header": _build_header(nctx),
+        "headline": _build_headline(nctx, hero),
         "hero": hero,
         "sparkline": _build_sparkline(nctx),
         "smart_insights": _build_smart_insights(nctx),
@@ -896,7 +1397,7 @@ def build_context(
         "geography": _build_geography(nctx),
         "holdings": _build_holdings(nctx),
         "performance": _build_performance(nctx),
-        "risk_vs_benchmarks": _build_risk_vs_benchmarks(nctx),
+        "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
         "return_contrib": _build_return_contrib(nctx),
         "preheader": _build_preheader(nctx, hero),
