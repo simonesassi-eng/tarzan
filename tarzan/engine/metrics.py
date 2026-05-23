@@ -434,6 +434,14 @@ class MetricsEngine:
         comp_rows = []
         key_histories: dict[str, pd.Series] = {}
         chart_benchmarks = set(cfg.chart_benchmarks())
+        # Fetch the α/β reference series once: every other benchmark row
+        # gets α/β computed against this same series, so the columns are
+        # comparable. The α/β benchmark vs itself yields β=1, α=0.
+        ab_benchmark = pd.Series(dtype=float)
+        try:
+            ab_benchmark = _fetch_benchmark_history(cfg.benchmark_beta())
+        except Exception as e:
+            logger.warning("α/β benchmark fetch failed: %s", e)
         for name, ticker in BENCHMARKS.items():
             try:
                 bench = _build_benchmark_series(name, ticker, initial_value)
@@ -441,7 +449,7 @@ class MetricsEngine:
                     continue
                 if name in chart_benchmarks:
                     key_histories[name] = bench
-                metrics = _compute_single_benchmark_metrics(bench)
+                metrics = _compute_single_benchmark_metrics(bench, ab_benchmark)
                 metrics["benchmark"] = name
                 comp_rows.append(metrics)
             except Exception as e:
@@ -581,12 +589,37 @@ def compute_cagr(series: pd.Series) -> float:
     return ((end / start) ** (1 / (days / 365.25)) - 1) * 100
 
 
-def compute_period_return(series: pd.Series, days: int) -> Optional[float]:
+def compute_period_return(
+    series: pd.Series, days: int, strict: bool = True,
+) -> Optional[float]:
+    """Return the % change over the last ``days`` calendar days.
+
+    Args:
+        series: Daily price series (datetime-indexed).
+        days: Lookback window in calendar days. ``1`` is a special case
+            that returns the last-trading-day change.
+        strict: When True (default), if the series does not actually
+            cover ``days`` of history we return ``None`` instead of
+            silently falling back to the full available window. This
+            avoids misleading comparisons (e.g. a 2Y portfolio reporting
+            "3Y" returns that are actually 2Y returns next to a 3Y
+            benchmark return).
+
+    Returns:
+        Percentage return over the period, or ``None`` if there is not
+        enough data.
+    """
     if series.empty or len(series) < 2:
         return None
     if days <= 1:
         start = float(series.iloc[-2])
         return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
+    if strict:
+        # Series must cover the full requested window. We allow a small
+        # slack (~7 days) to absorb weekends/holidays at the edges.
+        actual_span_days = (series.index[-1] - series.index[0]).days
+        if actual_span_days < days - 7:
+            return None
     cutoff = series.index[-1] - pd.Timedelta(days=days)
     subset = series[series.index >= cutoff]
     if subset.empty or len(subset) < 2:
@@ -745,11 +778,25 @@ def _build_benchmark_series(name: str, ticker: str, initial_value: float) -> pd.
     return bench * initial_value
 
 
-def _compute_single_benchmark_metrics(bench: pd.Series) -> dict:
+def _compute_single_benchmark_metrics(
+    bench: pd.Series,
+    ab_benchmark: Optional[pd.Series] = None,
+) -> dict:
+    """Compute the standard set of metrics for a benchmark series.
+
+    Args:
+        bench: The benchmark price series (in EUR).
+        ab_benchmark: Optional reference series used to compute α and β
+            for ``bench``. When provided, α/β are computed via the same
+            CAPM logic used for the portfolio (regression of daily
+            returns on overlap window; α annualized using benchmark
+            CAGR). Pass the same series as ``bench`` to get the trivial
+            β=1.00 / α=0 (vs itself).
+    """
     cagr = compute_cagr(bench)
     daily_ret = bench.pct_change().dropna()
     vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
-    return {
+    metrics = {
         "cagr": cagr,
         "1d": compute_period_return(bench, 1), "1w": compute_period_return(bench, 7),
         "1m": compute_period_return(bench, 30), "3m": compute_period_return(bench, 90),
@@ -757,8 +804,18 @@ def _compute_single_benchmark_metrics(bench: pd.Series) -> dict:
         "1y": compute_period_return(bench, 365), "3y": compute_period_return(bench, 1095),
         "5y": compute_period_return(bench, 1825),
         "volatility": vol, "sharpe": compute_sharpe(cagr, vol),
+        "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
         "max_drawdown": compute_max_drawdown(bench) * 100,
+        "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
+        "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
+        "alpha": float("nan"),
+        "beta": float("nan"),
     }
+    if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
+        beta, alpha = _compute_beta_alpha(daily_ret, ab_benchmark, cagr)
+        metrics["alpha"] = alpha
+        metrics["beta"] = beta
+    return metrics
 
 
 def _add_mix_to_histories(key_histories: dict, initial_value: float) -> None:
