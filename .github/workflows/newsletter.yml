@@ -1,10 +1,15 @@
 # Tarzan — portfolio newsletter automation
 #
 # Scheduled sends, all in Italian local time:
-#   Mon–Fri  09:05  morning
-#   Mon–Fri  13:00  midday
-#   Mon–Fri  17:30  close
-#   Sat–Sun  09:05  morning  (weekend: only one send per day)
+#   Mon–Fri  09:13  morning
+#   Mon–Fri  13:17  midday
+#   Mon–Fri  17:23  close
+#   Sat–Sun  09:13  morning  (weekend: only one send per day)
+#
+# Slot times are deliberately "off-the-hour" because GitHub Actions
+# scheduled runs are noticeably delayed (or sometimes silently
+# skipped) when triggered at minute 0 of the hour, which is the
+# busiest dispatch window for the whole platform.
 #
 # GitHub Actions cron is UTC-only and does not follow DST. We declare
 # two parallel sets of cron expressions (CET=UTC+1 in winter and
@@ -24,13 +29,13 @@ name: Tarzan Newsletter
 on:
   schedule:
     # ── WINTER (CET = UTC+1) ────────────────────────────────────────────
-    - cron: "5 8 * * *"    # 09:05 CET
-    - cron: "0 12 * * *"   # 13:00 CET
-    - cron: "30 16 * * *"  # 17:30 CET
+    - cron: "13 8 * * *"   # 09:13 CET
+    - cron: "17 12 * * *"  # 13:17 CET
+    - cron: "23 16 * * *"  # 17:23 CET
     # ── SUMMER (CEST = UTC+2) ───────────────────────────────────────────
-    - cron: "5 7 * * *"    # 09:05 CEST
-    - cron: "0 11 * * *"   # 13:00 CEST
-    - cron: "30 15 * * *"  # 17:30 CEST
+    - cron: "13 7 * * *"   # 09:13 CEST
+    - cron: "17 11 * * *"  # 13:17 CEST
+    - cron: "23 15 * * *"  # 17:23 CEST
   workflow_dispatch:
     inputs:
       trigger_label:
@@ -75,9 +80,9 @@ jobs:
       # slots (±20 min tolerance to absorb GitHub's cron jitter).
       #
       # Slots:
-      #   morning  09:05 — sent every day
-      #   midday   13:00 — weekdays only (Mon–Fri)
-      #   close    17:30 — weekdays only
+      #   morning  09:13 — sent every day
+      #   midday   13:17 — weekdays only (Mon–Fri)
+      #   close    17:23 — weekdays only
       #
       # workflow_dispatch and repository_dispatch always run.
       - name: Resolve trigger label and time-window guard
@@ -97,9 +102,9 @@ jobs:
           NOW_MIN=$((10#$HOUR * 60 + 10#$MIN))
           TOL=20  # ± 20 minutes
 
-          MORNING=$((9 * 60 + 5))    # 09:05
-          MIDDAY=$((13 * 60))        # 13:00
-          CLOSE=$((17 * 60 + 30))    # 17:30
+          MORNING=$((9 * 60 + 13))   # 09:13
+          MIDDAY=$((13 * 60 + 17))   # 13:17
+          CLOSE=$((17 * 60 + 23))    # 17:23
 
           # Returns 0 (true) if NOW_MIN is within ±TOL of TARGET.
           in_window() {
