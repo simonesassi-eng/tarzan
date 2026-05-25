@@ -48,15 +48,16 @@ class InvestorConfig:
 
     # Rebalancing parameters
     rebalancing_lump_sum_amount_eur: float = 0.0
-    rebalancing_max_tolerance_pctg: float = 2.0
-    # Cosmetic alert threshold used by the dashboard traffic-light
-    # logic (green ≤ alert, amber up to 2× alert, red beyond). It does
-    # NOT influence the optimizer; it is here next to the other
-    # display-affecting tunables so the config reads top-to-bottom in
-    # roughly the same order the user sees the output.
-    alert_threshold_pctg: float = 5.0
+    # Tolerance band around every allocation target. Used in two
+    # places: (1) as the LP solver's hard ceiling — the optimizer
+    # tries progressively tighter tolerances and stops at this
+    # value, (2) as the dashboard traffic-light threshold (green if
+    # |drift| ≤ tolerance, amber up to 2×, red beyond). Keeping the
+    # same value drives both the math and the visuals from a single
+    # knob, so what the user sees is what the solver enforces.
+    rebalancing_target_tolerance_pctg: float = 2.0
     rebalancing_no_sell: bool = False
-    # When the LP is infeasible at ``rebalancing_max_tolerance_pctg``,
+    # When the LP is infeasible at ``rebalancing_target_tolerance_pctg``,
     # auto-relax the tolerance up to ``rebalancing_relax_cap_pctg`` to
     # surface the smallest feasible plan rather than emitting nothing.
     rebalancing_auto_relax: bool = True
@@ -141,8 +142,7 @@ class InvestorConfig:
 
         # Scalar fields
         _set_float(config, rows, "rebalancing_lump_sum_amount_eur")
-        _set_float(config, rows, "rebalancing_max_tolerance_pctg")
-        _set_float(config, rows, "alert_threshold_pctg")
+        _set_float(config, rows, "rebalancing_target_tolerance_pctg")
         _set_float(config, rows, "rebalancing_relax_cap_pctg")
         _set_float(config, rows, "rebalancing_transaction_fee_buy_eur")
         _set_float(config, rows, "rebalancing_transaction_fee_sell_eur")
@@ -246,8 +246,7 @@ def _parse_equity_geo(config: InvestorConfig, rows: dict) -> None:
 
 _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_lump_sum_amount_eur",
-    "rebalancing_max_tolerance_pctg",
-    "alert_threshold_pctg",
+    "rebalancing_target_tolerance_pctg",
     "rebalancing_relax_cap_pctg",
     "rebalancing_no_sell",
     "rebalancing_auto_relax",

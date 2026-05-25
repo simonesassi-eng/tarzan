@@ -308,7 +308,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # Rebalance status: traffic-light derived from the largest non-cash
     # drift in goal_deltas. Mirrors the banner shown in the Excel
     # Optimizer tab so the two outputs agree.
-    tol = float(cfg.alert_threshold_pctg or 0.0)
+    tol = float(cfg.rebalancing_target_tolerance_pctg or 0.0)
     max_abs_delta = 0.0
     if m.goal_deltas is not None and not m.goal_deltas.empty:
         non_cash = m.goal_deltas[m.goal_deltas["type"] != "cash"]
@@ -339,7 +339,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         rebal_label = "Infeasible"
         rebal_sublabel = (
             f"max drift {max_abs_delta:.1f}pp · targets too tight for "
-            f"±{cfg.rebalancing_max_tolerance_pctg:.1f}pp ceiling"
+            f"±{cfg.rebalancing_target_tolerance_pctg:.1f}pp ceiling"
         )
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
@@ -484,7 +484,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     """Build asset-class allocation rows (Excel Dashboard pattern)."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.alert_threshold_pctg
+    tol = cfg.rebalancing_target_tolerance_pctg
 
     targets = cfg.invested_allocation_targets_pctg or {}
     alloc_df = m.allocation_by_class
@@ -570,7 +570,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
     """Build geographic equity rows with target & ACWI ticks."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.alert_threshold_pctg
+    tol = cfg.rebalancing_target_tolerance_pctg
 
     targets = cfg.equity_geo_targets_pctg or {}
     geo_df = m.allocation_by_geo
@@ -762,7 +762,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
     """
     m = ctx.metrics
     cfg = ctx.config
-    tol = float(cfg.alert_threshold_pctg or 0.0)
+    tol = float(cfg.rebalancing_target_tolerance_pctg or 0.0)
     insights: list[dict] = []
 
     # 1. Observation: largest non-cash drift vs target. Phrased as a
@@ -822,7 +822,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
     if not risk_emitted and m.rebalancing_verifications and any(
         v.get("no_solution") for v in m.rebalancing_verifications
     ):
-        max_tol = float(cfg.rebalancing_max_tolerance_pctg or 0.0)
+        max_tol = float(cfg.rebalancing_target_tolerance_pctg or 0.0)
         insights.append({
             "kind": "risk",
             "icon": "⚠",
@@ -835,7 +835,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
             "body": (
                 "At least one allocation drift is beyond the ceiling the "
                 "optimizer is allowed to plan around. Either raise "
-                "rebalancing_max_tolerance_pctg in your config to give "
+                "rebalancing_target_tolerance_pctg in your config to give "
                 "the solver more room, or relax overly tight per-holding "
                 "targets — see the Optimizer tab in the Excel report."
             ),
@@ -868,7 +868,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
                     "No feasible rebalance existed inside your configured "
                     "ceiling. The plan below uses a wider tolerance — "
                     "review per-holding targets if this is uncomfortable, "
-                    "or raise rebalancing_max_tolerance_pctg to make this "
+                    "or raise rebalancing_target_tolerance_pctg to make this "
                     "the official ceiling."
                 ),
             })

@@ -42,7 +42,7 @@ def test_lump_sum_buy_only(sample_holdings, sample_config):
     """With no_sell=True and lump_sum=5000, total buy should equal ~5000, total sell=0."""
     sample_config.rebalancing_no_sell = True
     sample_config.rebalancing_lump_sum_amount_eur = 5000.0
-    sample_config.rebalancing_max_tolerance_pctg = 5.0  # Loose tolerance for feasibility
+    sample_config.rebalancing_target_tolerance_pctg = 5.0  # Loose tolerance for feasibility
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=5000.0)
@@ -100,7 +100,7 @@ def test_all_frozen_no_crash(sample_holdings, sample_config):
 
 def test_max_tolerance_caps_solver(sample_holdings, sample_config):
     """With tight max_tolerance + auto-relax disabled, infeasible → 0 actions."""
-    sample_config.rebalancing_max_tolerance_pctg = 0.1  # very tight
+    sample_config.rebalancing_target_tolerance_pctg = 0.1  # very tight
     sample_config.rebalancing_auto_relax = False  # don't bail us out
     tv = _total_value(sample_holdings)
 

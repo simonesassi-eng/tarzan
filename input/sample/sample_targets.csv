@@ -1,18 +1,16 @@
 key,value,description
 
 rebalancing_lump_sum_amount_eur,1000,"Fresh cash injected at this rebalance. Combined with any cash above target, it forms the net inflow the optimizer must deploy (BUY - SELL = net inflow)."
-rebalancing_max_tolerance_pctg,2,"Hard ceiling on per-target deviation the LP is allowed to leave after rebalancing."
+rebalancing_target_tolerance_pctg,2.5,"Tolerance band around every allocation target. The LP uses it as the hard ceiling and the dashboard uses it as the traffic-light threshold."
 rebalancing_no_sell,TRUE,"If TRUE the optimizer can only buy. Useful for accumulation phases."
-rebalancing_auto_relax,TRUE,"If TRUE and the LP is infeasible at max_tolerance, search for the smallest feasible tolerance up to relax_cap."
+rebalancing_auto_relax,TRUE,"If TRUE and the LP is infeasible at target_tolerance, search for the smallest feasible tolerance up to relax_cap."
 rebalancing_relax_cap_pctg,10,"Upper safety bound for the auto-relax search."
-rebalancing_drift_penalty_weight,1.0,"Penalty in the LP objective for residual EUR drift between post-rebalance position and target. 0 = pure minimum-trading rebalance. 1 = balanced (default). Higher values push the optimizer to align targets even at the cost of more trades."
+rebalancing_drift_penalty_weight,1.0,"Penalty in the LP objective for residual EUR drift outside the tolerance band. 0 = pure minimum-trading rebalance. 1 = balanced (default). Higher values close out-of-band drift more aggressively."
 
 rebalancing_transaction_fee_buy_eur,0,"Fixed EUR fee paid for each executed BUY."
 rebalancing_transaction_fee_sell_eur,0,"Fixed EUR fee paid for each executed SELL."
 rebalancing_capital_gains_tax_standard_pctg,0,"Capital gains tax rate applied to ETFs and equities when selling at a profit."
 rebalancing_capital_gains_tax_government_pctg,0,"Capital gains tax rate applied to government bonds (typically lower than the standard rate)."
-
-alert_threshold_pctg,2.5,"Cosmetic alert threshold for the dashboard traffic-light. Does not affect the optimizer."
 
 portfolio_inception_date,1/1/24,"Reference date for portfolio age and inception-anchored stats."
 
