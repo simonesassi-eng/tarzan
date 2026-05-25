@@ -343,7 +343,44 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         if not non_cash.empty:
             max_abs_delta = float(non_cash["delta_pct"].abs().max())
     n_actions = len(m.rebalancing_suggestions or [])
-    if max_abs_delta <= tol:
+
+    # The engine flags every verification entry with no_solution=True
+    # when the LP returned 0 actions because no plan was feasible at
+    # the configured tolerance ceiling (distinct from "already
+    # aligned"). It flags ``relaxed=True`` when it had to widen the
+    # tolerance up to ``rebalancing_relax_cap_pctg`` to find a plan.
+    rebal_infeasible = bool(
+        m.rebalancing_verifications
+        and any(v.get("no_solution") for v in m.rebalancing_verifications)
+    )
+    rebal_relaxed_meta = None
+    if m.rebalancing_verifications:
+        for v in m.rebalancing_verifications:
+            if v.get("relaxed"):
+                rebal_relaxed_meta = (
+                    float(v.get("tolerance") or 0.0),
+                    float(v.get("configured_max_tolerance") or tol),
+                )
+                break
+
+    if rebal_infeasible:
+        rebal_label = "Infeasible"
+        rebal_sublabel = (
+            f"max drift {max_abs_delta:.1f}pp · targets too tight for "
+            f"±{cfg.rebalancing_max_tolerance_pctg:.1f}pp ceiling"
+        )
+        rebal_color = PALETTE["red"]
+        rebal_bg = PALETTE["red_bg"]
+    elif rebal_relaxed_meta is not None:
+        used_tol, cfg_tol = rebal_relaxed_meta
+        rebal_label = "Action (relaxed)"
+        rebal_sublabel = (
+            f"solved at ±{used_tol:.1f}% (cfg ±{cfg_tol:.1f}%)"
+            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+        )
+        rebal_color = PALETTE["amber"]
+        rebal_bg = PALETTE["amber_bg"]
+    elif max_abs_delta <= tol:
         rebal_label = "Aligned"
         rebal_sublabel = f"max drift {max_abs_delta:.1f}pp · ±{tol:.1f}pp tol."
         rebal_color = PALETTE["green"]
@@ -744,8 +781,9 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
       1. Observation (allocation drift) — contextual, NOT prescriptive.
          Concrete trades live in the Optimizer section below; this one
          only explains the drift in plain language.
-      2. Risk (concentration top-2 / drawdown / cash buffer breach) —
-         the strongest active risk signal that crosses a threshold.
+      2. Risk (rebalance infeasible / concentration top-2 / drawdown /
+         cash buffer breach) — the strongest active risk signal that
+         crosses a threshold.
       3. Performance (vs MSCI ACWI) — symmetric: Win when beating on a
          risk-adjusted basis, Underperform when below the noise floor,
          silent when in line.
@@ -799,13 +837,72 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
                     "body": body_hint,
                 })
 
-    # 2. Risk: pick the strongest active risk among (a) concentration,
-    # (b) deep drawdown, (c) cash buffer breach. Only the most
-    # actionable one is emitted to keep the section tight.
+    # 2. Risk: pick the strongest active risk among (a) infeasible
+    # rebalance, (b) concentration, (c) deep drawdown, (d) cash buffer
+    # breach. Only the most actionable one is emitted to keep the
+    # section tight.
     risk_pf = m.performance_full or {}
     risk_emitted = False
 
-    # 2a. Concentration: top-2 weight ≥ 30% of portfolio.
+    # 2a. Rebalance infeasible — the LP could not find a plan within
+    # the configured tolerance ceiling. Surfaces a strategic note
+    # because this is upstream of every concrete trade decision.
+    if not risk_emitted and m.rebalancing_verifications and any(
+        v.get("no_solution") for v in m.rebalancing_verifications
+    ):
+        max_tol = float(cfg.rebalancing_max_tolerance_pctg or 0.0)
+        insights.append({
+            "kind": "risk",
+            "icon": "⚠",
+            "color": PALETTE["red"],
+            "bg": PALETTE["red_bg"],
+            "category": "Risk · Rebalance infeasible",
+            "headline": (
+                f"No feasible rebalance within \u00b1{max_tol:.1f}% tolerance."
+            ),
+            "body": (
+                "At least one allocation drift is beyond the ceiling the "
+                "optimizer is allowed to plan around. Either raise "
+                "rebalancing_max_tolerance_pctg in your config to give "
+                "the solver more room, or relax overly tight per-holding "
+                "targets — see the Optimizer tab in the Excel report."
+            ),
+        })
+        risk_emitted = True
+
+    # 2a-bis. Rebalance solved at a relaxed tolerance — the LP found a
+    # plan only by widening the tolerance beyond the user's configured
+    # ceiling. Tell the user explicitly, not silently, so they can
+    # decide whether the relaxed solution is acceptable.
+    if not risk_emitted and m.rebalancing_verifications:
+        relaxed_v = next(
+            (v for v in m.rebalancing_verifications if v.get("relaxed")),
+            None,
+        )
+        if relaxed_v is not None:
+            used_tol = float(relaxed_v.get("tolerance") or 0.0)
+            cfg_tol = float(relaxed_v.get("configured_max_tolerance") or 0.0)
+            insights.append({
+                "kind": "risk",
+                "icon": "⚠",
+                "color": PALETTE["amber"],
+                "bg": PALETTE["amber_bg"],
+                "category": "Risk · Tolerance relaxed",
+                "headline": (
+                    f"Optimizer relaxed tolerance to \u00b1{used_tol:.1f}% "
+                    f"(configured \u00b1{cfg_tol:.1f}%) to find a plan."
+                ),
+                "body": (
+                    "No feasible rebalance existed inside your configured "
+                    "ceiling. The plan below uses a wider tolerance — "
+                    "review per-holding targets if this is uncomfortable, "
+                    "or raise rebalancing_max_tolerance_pctg to make this "
+                    "the official ceiling."
+                ),
+            })
+            risk_emitted = True
+
+    # 2b. Concentration: top-2 weight ≥ 30% of portfolio.
     if not m.holdings_df.empty and len(m.holdings_df) >= 2 and not risk_emitted:
         top2 = m.holdings_df.nlargest(2, "weight_pct")
         top2_pct = float(top2["weight_pct"].sum())
