@@ -730,7 +730,13 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         actual = new_values[i] / eq_total * 100 if eq_total > 0 else 0
         d = abs(actual - h.target_equities); max_ph = max(max_ph, d)
         ph_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_equities:.0f}%)")
-        ph_items.append({"category": h.name or h.ticker, "actual_pct": actual,
+        # ``ticker`` is included so renderers can correlate this entry
+        # with the pre-rebalancing snapshot in ``holdings_df``. Two
+        # holdings can share a name (e.g. two BTPs labelled "BUONI
+        # POLIENNALI DEL TES") so name alone is not a stable key.
+        ph_items.append({"category": h.name or h.ticker,
+                         "ticker": h.ticker,
+                         "actual_pct": actual,
                          "target_pct": float(h.target_equities)})
     verifications.append({"check": "Per-Holding Equity Targets", "kind": "per_holding_equity",
                           "status": "✓ OK" if max_ph <= tol else "⚠ PARTIAL",
@@ -747,7 +753,11 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         actual = new_values[i] / fi_total * 100 if fi_total > 0 else 0
         d = abs(actual - h.target_fixed_income); max_fi = max(max_fi, d)
         fi_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_fixed_income:.0f}%)")
-        fi_items.append({"category": h.name or h.ticker, "actual_pct": actual,
+        # See the per-holding equity comment above for the ``ticker``
+        # field rationale.
+        fi_items.append({"category": h.name or h.ticker,
+                         "ticker": h.ticker,
+                         "actual_pct": actual,
                          "target_pct": float(h.target_fixed_income)})
     verifications.append({"check": "Per-Holding FI Targets", "kind": "per_holding_fi",
                           "status": "✓ OK" if max_fi <= tol else "⚠ PARTIAL",

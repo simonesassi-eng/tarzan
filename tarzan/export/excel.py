@@ -857,17 +857,45 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 float(gd["actual_pct"]), float(gd["target_pct"]),
             )
 
-    # Build post-rebalancing lookup by (kind, category). Skip cash —
-    # its items use EUR fields and are rendered in the Cash Buffer section.
+    # Per-holding pre-rebalancing lookup, keyed by (kind, ticker). The
+    # ``actual_pct`` column in the verifications is post-rebalancing, so
+    # we recompute the pre-rebalancing within-class percentage from
+    # ``holdings_df`` here. ``ticker`` is used as the key (instead of
+    # name) because two holdings can share a name — for example a user
+    # holding two BTPs both labelled "BUONI POLIENNALI DEL TES" — but
+    # ticker is unique. Without this, the table showed identical values
+    # in the Current and Post-rebal columns for every per-holding row.
+    per_holding_pre_lookup: dict[tuple[str, str], float] = {}
+    df = metrics.holdings_df
+    if df is not None and not df.empty and "pct_of_class" in df.columns:
+        for _, hr in df.iterrows():
+            ac = hr.get("asset_class")
+            if ac == "Equities":
+                per_holding_pre_lookup[("per_holding_equity", hr["ticker"])] = float(hr["pct_of_class"])
+            elif ac == "Fixed Income":
+                per_holding_pre_lookup[("per_holding_fi", hr["ticker"])] = float(hr["pct_of_class"])
+
+    # Build post-rebalancing lookup by (kind, key). Skip cash — its items
+    # use EUR fields and are rendered in the Cash Buffer section. Asset
+    # and Geography kinds key off the bucket name. Per-holding kinds key
+    # off ``ticker`` to avoid collisions when two holdings share a name.
     post_lookup: dict[tuple[str, str], tuple[float, float]] = {}
+    # Per-holding rows also need a display label (the holding name) and
+    # the original verification entry order is preserved for stable sort.
+    per_holding_meta: dict[tuple[str, str], dict] = {}
     if metrics.rebalancing_verifications:
         for v in metrics.rebalancing_verifications:
             if v.get("kind") == "cash":
                 continue
             for it in v.get("items", []) or []:
-                post_lookup[(v["kind"], it["category"])] = (
+                key_id = it.get("ticker") if v["kind"].startswith("per_holding_") else it["category"]
+                post_lookup[(v["kind"], key_id)] = (
                     float(it["actual_pct"]), float(it["target_pct"]),
                 )
+                if v["kind"].startswith("per_holding_"):
+                    per_holding_meta[(v["kind"], key_id)] = {
+                        "name": it["category"],
+                    }
 
     # Define the four groups in the desired order. Cash buffer is merged
     # into the first (asset) group as an EUR-denominated row.
@@ -890,12 +918,13 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     cash_delta_eur = cash_post - cash_target_eur
 
     for kind, title, current_source in groups:
-        # Collect categories: current_lookup keys for asset/geo, verifications items for per-holding
+        # Collect categories: for asset/geography we use bucket names,
+        # for per-holding kinds we use tickers (and resolve the display
+        # name later from per_holding_meta).
         categories: list[str] = []
         if kind in ("asset", "geography"):
             categories = [cat for (tp, cat) in current_lookup if tp == kind]
         else:
-            # per-holding targets only come from the verifications pass
             for (k, cat) in post_lookup:
                 if k == kind:
                     categories.append(cat)
@@ -933,9 +962,15 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         categories.sort(key=_sort_key, reverse=True)
 
         for ti, cat in enumerate(categories):
-            # Current (pre-rebalancing)
+            # Current (pre-rebalancing). For asset/geography we use the
+            # goal_deltas snapshot; for per-holding rows we use the
+            # holdings_df pct-of-class column captured in
+            # per_holding_pre_lookup. ``cat`` is a bucket name for asset
+            # and geography, and a ticker for per-holding kinds.
             curr_tuple = current_source.get((kind, cat)) if current_source else None
             current_pct = curr_tuple[0] if curr_tuple else None
+            if current_pct is None and kind.startswith("per_holding_"):
+                current_pct = per_holding_pre_lookup.get((kind, cat))
             # Target + post from verifications (authoritative for per-holding)
             post_tuple = post_lookup.get((kind, cat))
             if post_tuple:
@@ -944,11 +979,20 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 post_pct = None
                 target_pct = curr_tuple[1] if curr_tuple else None
 
-            # When current is not in goal_deltas but we do have a post value
-            # (typical for per-holding targets), use post as current baseline so
-            # the Current column is not empty and confusing.
+            # Last-resort fallback: still no current after both sources
+            # have been tried. Use the post value so the column is not
+            # blank, which keeps the row legible even when something is
+            # missing from holdings_df (very rare).
             if current_pct is None and post_pct is not None:
                 current_pct = post_pct
+
+            # Resolve display label: bucket name as-is for asset/geo,
+            # the holding name (resolved from per_holding_meta) for
+            # per-holding rows.
+            if kind.startswith("per_holding_"):
+                display_label = per_holding_meta.get((kind, cat), {}).get("name", cat)
+            else:
+                display_label = cat
 
             # Delta logic
             #   * normal case: post_pct/target_pct both available → use
@@ -984,11 +1028,11 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             # Match Dashboard look: color the Category label with the asset
             # class or geography palette when applicable.
             if kind == "asset":
-                _write_data_cell(sheet, row, 1, cat, ti, asset_class=cat)
+                _write_data_cell(sheet, row, 1, display_label, ti, asset_class=display_label)
             elif kind == "geography":
-                _write_data_cell(sheet, row, 1, cat, ti, geography=cat)
+                _write_data_cell(sheet, row, 1, display_label, ti, geography=display_label)
             else:
-                _write_data_cell(sheet, row, 1, cat, ti)
+                _write_data_cell(sheet, row, 1, display_label, ti)
             _write_data_cell(sheet, row, 2,
                              current_pct if current_pct is not None else "",
                              ti, is_number=current_pct is not None,
