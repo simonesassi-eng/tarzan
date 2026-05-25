@@ -357,6 +357,40 @@
           </tr>
           {% endif %}
 
+          {# ─── RETURNS SNAPSHOT (per-holding × period) ─────── #}
+          {% if returns_snapshot.available %}
+          <tr>
+            <td class="px-32" style="padding:32px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
+              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How each holding is moving</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Returns over standard periods for every position, sorted by asset class and 1Y return. The Excel report carries the full risk-adjusted view.</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
+                <tr>
+                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Holding</td>
+                  {% for p in returns_snapshot.period_labels %}
+                  <td align="right" style="padding:8px 6px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p }}</td>
+                  {% endfor %}
+                </tr>
+                {% for r in returns_snapshot.rows %}
+                <tr>
+                  <td style="padding:8px;background:{% if r.is_portfolio %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
+                    <div style="font-size:11px;{% if r.is_portfolio %}font-weight:700;color:{{ palette.accent }};{% else %}font-weight:600;color:{{ palette.ink }};{% endif %}line-height:1.3;">{% if r.is_portfolio %}★ {% endif %}{{ r.name|truncate(40, true, '…') }}</div>
+                    {% if r.ticker or r.asset_class %}
+                    <div style="margin-top:2px;font-size:9px;color:{{ palette.muted }};">
+                      {% if r.ticker %}{{ r.ticker }}{% endif %}{% if r.ticker and r.asset_class %} · {% endif %}{% if r.asset_class %}<span style="color:{{ r.asset_color }};font-weight:600;">● {{ r.asset_class }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+                  </td>
+                  {% for c in r.cells %}
+                  <td align="right" style="padding:8px 6px;background:{% if r.is_portfolio %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-variant-numeric:tabular-nums;color:{{ c.color }};{% if r.is_portfolio %}font-weight:700;{% else %}font-weight:600;{% endif %}{% if loop.last %}{% endif %}">{{ c.value }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </table>
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── PERFORMANCE — RETURNS TABLE ──────────────────── #}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
