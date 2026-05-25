@@ -389,7 +389,7 @@ class MetricsEngine:
         # Cash buffer row (only when a target is configured): absolute EUR,
         # no percentages. Pctg fields carry the relative deviation vs the
         # target buffer so the traffic-light helper can reuse
-        # alert_threshold_pctg.
+        # rebalancing_target_tolerance_pctg.
         cash_value = ctx.get("cash_value", 0.0)
         cash_target = float(self.config.target_cash_buffer_eur or 0.0)
         if cash_target > 0:

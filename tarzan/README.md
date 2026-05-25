@@ -78,6 +78,28 @@ A `.csv` or `.xlsx` file with the following columns (case-insensitive):
 Geographic allocation is resolved automatically: first by ticker / ISIN
 lookup in `input/indexes.csv`, then via yfinance fund composition data.
 
+#### Optional: build holdings from a Fineco export
+
+Curating `holdings.csv` by hand is fine but tedious if you already get a
+"Portafoglio di sintesi" export from Fineco. The
+`scripts/preprocess_fineco.py` script normalises that export into the
+Tarzan schema and merges the per-holding targets you maintain in a
+separate CSV (joined by ISIN).
+
+Drop the two files into `input/fineco_raw/` and run:
+
+```bash
+python scripts/preprocess_fineco.py
+```
+
+Defaults read `input/fineco_raw/portafoglio-export.xls` and
+`input/fineco_raw/targets_per_holding.csv`, and write
+`input/holdings.csv` after timestamping a backup of any existing file.
+Override paths with `--input`, `--targets`, `--output` if needed.
+
+This step is **always optional** — `python -m tarzan.main` only ever
+reads `input/holdings.csv`, regardless of how it got there.
+
 ### Targets (optional)
 
 A `targets.csv` with key / value pairs. Keys follow a typed-suffix
@@ -93,15 +115,9 @@ convention so the unit is unambiguous:
 | Key                                  | Default | Description                                             |
 |--------------------------------------|---------|---------------------------------------------------------|
 | `rebalancing_lump_sum_amount_eur`    | `0`     | Extra cash to deploy in a rebalance                     |
-| `rebalancing_max_tolerance_pctg`     | `2.0`   | Cap on solver tolerance (progressive up to this value)  |
+| `rebalancing_target_tolerance_pctg`  | `2.0`   | Tolerance band around every allocation target. The LP uses it as the hard ceiling and the dashboard uses it as the traffic-light threshold. |
 | `rebalancing_no_sell`                | `false` | If true, solver can only buy                            |
 | `portfolio_inception_date`           | `""`    | Inception date used by performance charts               |
-
-**Display parameters**
-
-| Key                       | Default | Description                                                                       |
-|---------------------------|---------|-----------------------------------------------------------------------------------|
-| `alert_threshold_pctg`    | `5.0`   | Cosmetic alert threshold for the dashboard traffic-light. Does not influence the optimizer. |
 
 **Cash buffer (absolute EUR, tracked separately from invested %)**
 

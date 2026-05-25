@@ -36,6 +36,11 @@ output/sample/~$*
 input/.cache/
 input/holdings.csv
 input/targets.csv
+# Personal Fineco export staging area — the preprocessing step is
+# optional and only runs when the user invokes it explicitly.
+input/fineco_raw/
+# Timestamped backups created by scripts/preprocess_fineco.py
+input/*.bak.*
 build.log
 analyzer.log
 

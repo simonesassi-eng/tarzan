@@ -118,7 +118,7 @@ def _deviation_color(delta_pct, tolerance):
 
     Args:
         delta_pct: Actual - Target (percentage points, signed).
-        tolerance: Alert threshold in percentage points (from config.alert_threshold_pctg).
+        tolerance: Alert threshold in percentage points (from config.rebalancing_target_tolerance_pctg).
 
     Returns:
         Green if |delta| <= tolerance, amber if within 2× tolerance, red beyond.
@@ -444,7 +444,7 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         _apply_header(sheet, header_row, c, h)
     row += 1
 
-    tol = config.alert_threshold_pctg if config else 5.0
+    tol = config.rebalancing_target_tolerance_pctg if config else 5.0
     if not metrics.allocation_by_class.empty:
         sorted_ac = metrics.allocation_by_class.sort_values("weight_pct", ascending=False)
         for ti, (_, rd) in enumerate(sorted_ac.iterrows()):
@@ -737,7 +737,7 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     # readable without truncation.
     sheet.column_dimensions['H'].width = 45
 
-    tol = config.alert_threshold_pctg if config else 5.0
+    tol = config.rebalancing_target_tolerance_pctg if config else 5.0
 
     # =====================================================================
     # OVERVIEW banner — traffic-light status based on largest deviation
@@ -775,7 +775,7 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     if no_solution:
         banner_color = C['red']
         banner_icon = "\u26a0"  # warning triangle
-        max_tol = float(config.rebalancing_max_tolerance_pctg or 0.0)
+        max_tol = float(config.rebalancing_target_tolerance_pctg or 0.0)
         relax_cap = float(config.rebalancing_relax_cap_pctg or 0.0)
         if config.rebalancing_auto_relax and relax_cap > max_tol:
             banner_text = (
@@ -930,11 +930,11 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             row += 1
     else:
         if no_solution:
-            max_tol = float(config.rebalancing_max_tolerance_pctg or 0.0)
+            max_tol = float(config.rebalancing_target_tolerance_pctg or 0.0)
             no_msg = (
                 f"No feasible solution within \u00b1{max_tol:.1f}% tolerance. "
                 f"At least one allocation drift exceeds the ceiling — "
-                f"raise rebalancing_max_tolerance_pctg or relax per-holding "
+                f"raise rebalancing_target_tolerance_pctg or relax per-holding "
                 f"targets to obtain a plan."
             )
         else:
@@ -1354,15 +1354,14 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         tol_used = metrics.rebalancing_verifications[0].get("tolerance")
 
     info_rows = [
-        ("Alert threshold",
-         f"\u00b1{tol:.1f}%",
-         "Deviation at which a category turns amber (green below, red beyond 2\u00d7)"),
+        ("Target tolerance",
+         f"\u00b1{config.rebalancing_target_tolerance_pctg:.1f}%",
+         "Tolerance band around every allocation target. The LP uses it "
+         "as the hard ceiling and the dashboard uses it as the "
+         "traffic-light threshold (green ≤ value, amber up to 2×, red beyond)."),
         ("Solver tolerance",
          (f"\u00b1{tol_used:.1f}%" if tol_used is not None else "n/a"),
-         "Actual tolerance the optimizer converged at (progressive up to max)"),
-        ("Max tolerance",
-         f"\u00b1{config.rebalancing_max_tolerance_pctg:.1f}%",
-         "Cap on solver tolerance (from config.rebalancing_max_tolerance_pctg)"),
+         "Actual tolerance the optimizer converged at (progressive up to target)"),
         ("Lump sum",
          (f"{_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
           if config.rebalancing_lump_sum_amount_eur > 0 else "—"),
@@ -1376,9 +1375,9 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
          "If enabled, the solver can only buy, never sell"),
         ("Drift-penalty weight",
          f"{getattr(config, 'rebalancing_drift_penalty_weight', 0.0):g}",
-         "Cost in the LP objective for residual EUR drift after rebalancing. "
-         "0 = pure minimum trading. 1 = balanced (default). "
-         "Higher values aggressively close drift even at the cost of more trades."),
+         "Cost in the LP objective for residual EUR drift outside the "
+         "tolerance band. 0 = pure minimum trading. 1 = balanced (default). "
+         "Higher values close out-of-band drift more aggressively."),
     ]
 
     for c, h in enumerate(["Parameter", "Value", "", "", "", "", "Description"], 1):
