@@ -65,6 +65,10 @@ class PortfolioMetrics:
     goal_deltas: Optional[pd.DataFrame] = None
     rebalancing_suggestions: Optional[list] = None
     rebalancing_verifications: Optional[list] = None
+    # Drift-penalty sensitivity sweep: list of regimes describing how
+    # the optimization changes as ``rebalancing_drift_penalty_weight``
+    # varies. Used by the Optimizer tab to surface tuning hints.
+    rebalancing_sensitivity: Optional[list] = None
     benchmark_comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
     portfolio_history: Optional[pd.Series] = None
     benchmark_histories: dict = field(default_factory=dict)

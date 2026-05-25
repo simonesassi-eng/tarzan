@@ -58,6 +58,34 @@ class InvestorConfig:
     rebalancing_auto_relax: bool = True
     rebalancing_relax_cap_pctg: float = 10.0
 
+    # Trade frictions injected into the LP objective. The fees are
+    # fixed amounts paid per executed buy/sell (regardless of size) and
+    # are modelled via the existing zb/zs binary variables. The capital
+    # gains rates are applied proportionally to the EUR amount sold of
+    # any holding currently in profit; the standard rate covers ETFs
+    # and most equities while the government rate (typically lower in
+    # several jurisdictions) is applied when ``instrument_type`` is a
+    # government bond. All four parameters default to 0 so the
+    # behavior is unchanged unless the user opts in.
+    rebalancing_transaction_fee_buy_eur: float = 0.0
+    rebalancing_transaction_fee_sell_eur: float = 0.0
+    rebalancing_capital_gains_tax_standard_pctg: float = 0.0
+    rebalancing_capital_gains_tax_government_pctg: float = 0.0
+
+    # Soft penalty on the residual distance from each allocation
+    # target. With ``drift_penalty_weight = 0`` the solver only
+    # minimises trade volume and is happy as long as every category
+    # stays inside its tolerance band, even if some are at the band
+    # edge. With positive weights the solver also pays for any EUR
+    # of drift left between the post-rebalancing position and the
+    # target, so the lump sum tends to be distributed across all
+    # under-target buckets rather than concentrated on the few that
+    # would otherwise breach the band. The default of 1.0 means
+    # "1 EUR of residual drift costs the same as 1 EUR of trade
+    # volume" — a balanced trade-off between rebalancing strictness
+    # and growth-oriented deployment of fresh capital.
+    rebalancing_drift_penalty_weight: float = 1.0
+
     # Cash buffer (absolute EUR amount)
     target_cash_buffer_eur: float = 0.0
 
@@ -87,13 +115,18 @@ class InvestorConfig:
     # ------------------------------------------------------------------
     @classmethod
     def from_csv(cls, path: str) -> "InvestorConfig":
-        """Load investor config from a CSV key-value file."""
+        """Load investor config from a CSV key-value file.
+
+        The CSV must have ``key`` and ``value`` columns. Any other
+        columns (e.g. ``description``) are ignored, so users can keep
+        a self-documented config file without the parser caring.
+        """
         with open(path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = {
                 row["key"].strip(): row["value"].strip()
                 for row in reader
-                if "key" in row and "value" in row
+                if row.get("key") and "value" in row
             }
         return cls.from_dict(rows)
 
@@ -108,6 +141,11 @@ class InvestorConfig:
         _set_float(config, rows, "rebalancing_max_tolerance_pctg")
         _set_float(config, rows, "rebalancing_threshold_pctg")
         _set_float(config, rows, "rebalancing_relax_cap_pctg")
+        _set_float(config, rows, "rebalancing_transaction_fee_buy_eur")
+        _set_float(config, rows, "rebalancing_transaction_fee_sell_eur")
+        _set_float(config, rows, "rebalancing_capital_gains_tax_standard_pctg")
+        _set_float(config, rows, "rebalancing_capital_gains_tax_government_pctg")
+        _set_float(config, rows, "rebalancing_drift_penalty_weight")
         _set_float(config, rows, "target_cash_buffer_eur")
 
         # Boolean flags
@@ -211,6 +249,11 @@ _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_relax_cap_pctg",
     "rebalancing_no_sell",
     "rebalancing_auto_relax",
+    "rebalancing_transaction_fee_buy_eur",
+    "rebalancing_transaction_fee_sell_eur",
+    "rebalancing_capital_gains_tax_standard_pctg",
+    "rebalancing_capital_gains_tax_government_pctg",
+    "rebalancing_drift_penalty_weight",
     "target_cash_buffer_eur",
     "portfolio_inception_date",
 })
