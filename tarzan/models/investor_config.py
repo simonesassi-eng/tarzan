@@ -52,6 +52,11 @@ class InvestorConfig:
     rebalancing_max_tolerance_pctg: float = 2.0
     rebalancing_threshold_pctg: float = 5.0
     rebalancing_no_sell: bool = False
+    # When the LP is infeasible at ``rebalancing_max_tolerance_pctg``,
+    # auto-relax the tolerance up to ``rebalancing_relax_cap_pctg`` to
+    # surface the smallest feasible plan rather than emitting nothing.
+    rebalancing_auto_relax: bool = True
+    rebalancing_relax_cap_pctg: float = 10.0
 
     # Cash buffer (absolute EUR amount)
     target_cash_buffer_eur: float = 0.0
@@ -102,11 +107,14 @@ class InvestorConfig:
         _set_float(config, rows, "rebalancing_min_transaction_eur")
         _set_float(config, rows, "rebalancing_max_tolerance_pctg")
         _set_float(config, rows, "rebalancing_threshold_pctg")
+        _set_float(config, rows, "rebalancing_relax_cap_pctg")
         _set_float(config, rows, "target_cash_buffer_eur")
 
         # Boolean flags
         if "rebalancing_no_sell" in rows:
             config.rebalancing_no_sell = _parse_bool(rows["rebalancing_no_sell"])
+        if "rebalancing_auto_relax" in rows:
+            config.rebalancing_auto_relax = _parse_bool(rows["rebalancing_auto_relax"])
 
         # Date / string fields
         if rows.get("portfolio_inception_date"):
@@ -200,7 +208,9 @@ _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_min_transaction_eur",
     "rebalancing_max_tolerance_pctg",
     "rebalancing_threshold_pctg",
+    "rebalancing_relax_cap_pctg",
     "rebalancing_no_sell",
+    "rebalancing_auto_relax",
     "target_cash_buffer_eur",
     "portfolio_inception_date",
 })

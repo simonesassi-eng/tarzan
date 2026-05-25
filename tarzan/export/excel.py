@@ -676,7 +676,54 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             max_abs_delta = float(non_cash["delta_pct"].abs().max())
     n_actions = len(metrics.rebalancing_suggestions) if metrics.rebalancing_suggestions else 0
 
-    if max_abs_delta <= tol:
+    # When the engine returned 0 actions but at least one verification
+    # row carries ``no_solution=True``, the LP was infeasible at the
+    # configured tolerance ceiling — distinct from "already aligned".
+    no_solution = bool(
+        metrics.rebalancing_verifications
+        and any(v.get("no_solution") for v in metrics.rebalancing_verifications)
+    )
+    # When the LP needed to relax the user-configured tolerance to find
+    # a plan, surface this clearly so the user does not silently accept
+    # a wider drift than they asked for.
+    relaxed_meta = None
+    if metrics.rebalancing_verifications:
+        for v in metrics.rebalancing_verifications:
+            if v.get("relaxed"):
+                relaxed_meta = (
+                    float(v.get("tolerance") or 0.0),
+                    float(v.get("configured_max_tolerance") or tol),
+                )
+                break
+
+    if no_solution:
+        banner_color = C['red']
+        banner_icon = "\u26a0"  # warning triangle
+        max_tol = float(config.rebalancing_max_tolerance_pctg or 0.0)
+        relax_cap = float(config.rebalancing_relax_cap_pctg or 0.0)
+        if config.rebalancing_auto_relax and relax_cap > max_tol:
+            banner_text = (
+                f"No feasible rebalance even at the auto-relax cap "
+                f"\u00b1{relax_cap:.1f}%. Targets are too aggressive — "
+                f"review per-holding targets in the deviations table below."
+            )
+        else:
+            banner_text = (
+                f"No feasible rebalance — at least one allocation drift "
+                f"exceeds \u00b1{max_tol:.1f}%. Consider raising max tolerance, "
+                f"enabling rebalancing_auto_relax, or relaxing per-holding "
+                f"targets."
+            )
+    elif relaxed_meta is not None:
+        used_tol, cfg_tol = relaxed_meta
+        banner_color = C['amber']
+        banner_icon = "\u26a0"
+        banner_text = (
+            f"Relaxed solution — solved at \u00b1{used_tol:.1f}% (configured "
+            f"ceiling \u00b1{cfg_tol:.1f}%). Review per-holding targets if "
+            f"this gap is uncomfortable."
+        )
+    elif max_abs_delta <= tol:
         banner_color = C['green']
         banner_icon = "\u25cf"  # filled circle
         banner_text = f"Aligned — all allocations within \u00b1{tol:.1f}%"
@@ -756,10 +803,19 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             _write_data_cell(sheet, row, 7, s.get("reason", ""), ti)
             row += 1
     else:
-        nocell = sheet.cell(
-            row=row, column=1,
-            value="No actions within the current tolerance and no-sell / min-transaction constraints.",
-        )
+        if no_solution:
+            max_tol = float(config.rebalancing_max_tolerance_pctg or 0.0)
+            no_msg = (
+                f"No feasible solution within \u00b1{max_tol:.1f}% tolerance. "
+                f"At least one allocation drift exceeds the ceiling — "
+                f"raise rebalancing_max_tolerance_pctg or relax per-holding "
+                f"targets to obtain a plan."
+            )
+        else:
+            no_msg = (
+                "Portfolio already aligned within tolerance — no actions needed."
+            )
+        nocell = sheet.cell(row=row, column=1, value=no_msg)
         nocell.font = px_font(size=10, italic=True, color=C['text_sec'])
         nocell.fill = px_fill(C['bg_page'])
         nocell.border = px_no_border()
@@ -772,13 +828,17 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     row += 2
     _write_area_header(sheet, row, 1, 7, "ALLOCATION DEVIATIONS")
     row += 1
-    subcell = sheet.cell(
-        row=row, column=1,
-        value=(
-            f"Status color based on delta after rebalancing vs target. "
-            f"Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red)."
-        ),
+    subcell_text = (
+        f"Status color based on delta after rebalancing vs target. "
+        f"Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red)."
     )
+    if no_solution:
+        subcell_text = (
+            f"No feasible rebalance — Post-rebal column omitted. "
+            f"Status color based on the current drift vs target. "
+            f"Threshold \u00b1{tol:.1f}% (green), \u00b1{2 * tol:.1f}% (amber), beyond (red)."
+        )
+    subcell = sheet.cell(row=row, column=1, value=subcell_text)
     subcell.font = px_font(size=9, italic=True, color=C['text_sec'])
     subcell.fill = px_fill(C['bg_page'])
     subcell.border = px_no_border()
@@ -890,13 +950,27 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             if current_pct is None and post_pct is not None:
                 current_pct = post_pct
 
-            # Delta after rebal drives color and status
-            if post_pct is not None and target_pct is not None:
-                delta_after = post_pct - target_pct
-            elif current_pct is not None and target_pct is not None:
-                delta_after = current_pct - target_pct
+            # Delta logic
+            #   * normal case: post_pct/target_pct both available → use
+            #     post-rebal delta to drive color and status.
+            #   * no-solution case: actions=[] and the LP was infeasible
+            #     → post_pct equals current_pct (no rebalance happened).
+            #     We hide the Post-rebal column and report Delta from the
+            #     current values so the user sees the live drift.
+            if no_solution:
+                post_pct_display = None
+                if current_pct is not None and target_pct is not None:
+                    delta_after = current_pct - target_pct
+                else:
+                    delta_after = 0.0
             else:
-                delta_after = 0.0
+                post_pct_display = post_pct
+                if post_pct is not None and target_pct is not None:
+                    delta_after = post_pct - target_pct
+                elif current_pct is not None and target_pct is not None:
+                    delta_after = current_pct - target_pct
+                else:
+                    delta_after = 0.0
 
             color = _deviation_color(delta_after, tol)
             abs_d = abs(delta_after)
@@ -926,9 +1000,9 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                              num_fmt='0.00' if target_pct is not None else None,
                              font_color=C['text_pri'])
             _write_data_cell(sheet, row, 4,
-                             post_pct if post_pct is not None else "",
-                             ti, is_number=post_pct is not None,
-                             num_fmt='0.00' if post_pct is not None else None,
+                             post_pct_display if post_pct_display is not None else "—",
+                             ti, is_number=post_pct_display is not None,
+                             num_fmt='0.00' if post_pct_display is not None else None,
                              font_color=C['text_pri'])
             _write_data_cell(sheet, row, 5, delta_after, ti, is_number=True,
                              num_fmt='+0.00;-0.00;0.00', font_color=color)
@@ -953,8 +1027,14 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                              num_fmt='"€"#,##0.00', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 3, cash_target_eur, ti2, is_number=True,
                              num_fmt='"€"#,##0.00', font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 4, cash_post, ti2, is_number=True,
-                             num_fmt='"€"#,##0.00', font_color=C['text_pri'])
+            # Hide the Post-rebal cash value when the LP was infeasible
+            # (it would equal the current value and falsely suggest a
+            # rebalance happened).
+            if no_solution:
+                _write_data_cell(sheet, row, 4, "—", ti2)
+            else:
+                _write_data_cell(sheet, row, 4, cash_post, ti2, is_number=True,
+                                 num_fmt='"€"#,##0.00', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 5, cash_delta_eur, ti2, is_number=True,
                              num_fmt='"€"+#,##0.00;"€"-#,##0.00;"€"0.00',
                              font_color=cash_color)

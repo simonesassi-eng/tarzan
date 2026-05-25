@@ -123,6 +123,7 @@ def compute_unified_rebalancing(
     tolerances = sorted({t for t in base_steps if t < max_tol} | {max_tol})
     actions = []
     used_tolerance = None
+    relaxed = False
     for tol in tolerances:
         result = _solve_lp(n, values, holdings, config, geo_frac, all_geos,
                            eq_value, fi_value, tv, tol,
@@ -136,9 +137,110 @@ def compute_unified_rebalancing(
             mode = "lump sum" if is_lump_sum else "rebalancing"
             logger.info("LP %s solved with precision=%.1f%%", mode, tol)
             break
-    else:
-        logger.info("No rebalancing solution within %.1f%% max tolerance — portfolio is close enough "
-                     "given min_transaction constraint", max_tol)
+
+    # --- Auto-relax phase ---
+    # If the configured ceiling cannot host any feasible plan, optionally
+    # search for the *smallest* tolerance >max_tol that does, capped at
+    # ``rebalancing_relax_cap_pctg`` (10% by default). The intent is to
+    # surface SOMETHING actionable rather than a silent "no actions",
+    # while making it absolutely clear in the output that the configured
+    # ceiling was crossed.
+    if used_tolerance is None and config.rebalancing_auto_relax:
+        relax_cap = max(float(config.rebalancing_relax_cap_pctg or 0.0), max_tol)
+        if relax_cap > max_tol:
+            logger.info(
+                "LP infeasible at ±%.1f%% — auto-relax search up to ±%.1f%%.",
+                max_tol, relax_cap,
+            )
+            tol_relaxed = _find_min_feasible_tolerance(
+                lo=max_tol, hi=relax_cap, precision=0.5,
+                solve=lambda t: _solve_lp(
+                    n, values, holdings, config, geo_frac, all_geos,
+                    eq_value, fi_value, tv, t,
+                    cash_value=cash_value,
+                    invested_value=invested_value,
+                    net_inflow=effective_net_inflow,
+                    lock_cash_holdings=(
+                        config.rebalancing_no_sell or not enforce_cash_target
+                    ),
+                ),
+            )
+            if tol_relaxed is not None:
+                # Re-solve at the found tolerance to get the actual
+                # solution (binary search may have stopped at a slightly
+                # higher value due to precision rounding — re-solving at
+                # the rounded value gives us a clean optimum).
+                final = _solve_lp(
+                    n, values, holdings, config, geo_frac, all_geos,
+                    eq_value, fi_value, tv, tol_relaxed,
+                    cash_value=cash_value,
+                    invested_value=invested_value,
+                    net_inflow=effective_net_inflow,
+                    lock_cash_holdings=(
+                        config.rebalancing_no_sell or not enforce_cash_target
+                    ),
+                )
+                if final is not None and final.success:
+                    actions = _extract_actions(
+                        final, n, holdings, config, values, geo_frac,
+                        all_geos, eq_value,
+                    )
+                    used_tolerance = tol_relaxed
+                    relaxed = True
+                    logger.warning(
+                        "LP solved at relaxed tolerance ±%.1f%% (configured "
+                        "ceiling ±%.1f%%). Review your per-holding targets "
+                        "or raise rebalancing_max_tolerance_pctg.",
+                        tol_relaxed, max_tol,
+                    )
+
+    # Final fallback log when nothing worked, in either auto-relax or
+    # auto-relax-disabled mode.
+    if used_tolerance is None:
+        if _max_drift_exceeds_tolerance(
+            values, holdings, config,
+            invested_value=invested_value,
+            eq_value=eq_value, fi_value=fi_value,
+            cash_value=cash_value,
+        ):
+            relax_cap = max(float(config.rebalancing_relax_cap_pctg or 0.0), max_tol)
+            if config.rebalancing_auto_relax and relax_cap > max_tol:
+                logger.warning(
+                    "No feasible rebalancing solution even at the auto-relax "
+                    "cap ±%.1f%%. Targets are too aggressive — review them.",
+                    relax_cap,
+                )
+            else:
+                logger.warning(
+                    "No feasible rebalancing solution within max tolerance "
+                    "±%.1f%%. At least one allocation drift exceeds the "
+                    "ceiling — raise rebalancing_max_tolerance_pctg, enable "
+                    "rebalancing_auto_relax, or relax per-holding targets.",
+                    max_tol,
+                )
+        else:
+            logger.info(
+                "Portfolio already aligned within ±%.1f%% — no rebalancing needed.",
+                max_tol,
+            )
+
+    # Distinguish two cases for the UI:
+    #   1. "Already aligned" — every category is within ±tolerance of
+    #      its target, so the solver returned 0 actions because none
+    #      were needed. ``infeasible`` is False.
+    #   2. "Infeasible" — at least one category is beyond the
+    #      tolerance ceiling, so the targets cannot be reached within
+    #      ``rebalancing_max_tolerance_pctg``. The solver returned 0
+    #      actions because no feasible plan exists. The Excel/newsletter
+    #      should NOT render post-rebalancing values in this case
+    #      (they would look identical to current and falsely suggest
+    #      a rebalance happened).
+    infeasible = (used_tolerance is None) and bool(_max_drift_exceeds_tolerance(
+        values, holdings, config,
+        invested_value=invested_value,
+        eq_value=eq_value, fi_value=fi_value,
+        cash_value=cash_value,
+    ))
 
     # Verification
     new_values = values.copy()
@@ -149,8 +251,147 @@ def compute_unified_rebalancing(
     if used_tolerance is not None:
         for v in verifications:
             v["tolerance"] = used_tolerance
+            if relaxed:
+                v["relaxed"] = True
+                v["configured_max_tolerance"] = max_tol
+    if infeasible:
+        # Mark every verification entry so downstream renderers know
+        # post-rebalancing values are not actionable.
+        for v in verifications:
+            v["no_solution"] = True
 
     return actions, verifications
+
+
+def _find_min_feasible_tolerance(lo: float, hi: float, precision: float,
+                                 solve) -> Optional[float]:
+    """Binary-search the smallest feasible tolerance for the LP.
+
+    Args:
+        lo: Lower bound (already known to be infeasible).
+        hi: Upper bound — the largest tolerance we are willing to accept.
+        precision: Stop when the bracket is smaller than this (in pp).
+        solve: Callable ``f(tolerance)`` returning the scipy.optimize
+            result (or None). The result is feasible iff
+            ``result is not None and result.success``.
+
+    Returns:
+        The smallest feasible tolerance rounded up to ``precision``,
+        or ``None`` if even ``hi`` is infeasible.
+    """
+    # Quick check: does the cap itself work?
+    res_hi = solve(hi)
+    if not (res_hi is not None and res_hi.success):
+        return None
+
+    # Binary search between lo (infeasible) and hi (feasible).
+    feasible_hi = hi
+    while (feasible_hi - lo) > precision:
+        mid = (lo + feasible_hi) / 2.0
+        res_mid = solve(mid)
+        if res_mid is not None and res_mid.success:
+            feasible_hi = mid
+        else:
+            lo = mid
+
+    # Round up to the requested precision so the caller can re-solve at
+    # a clean tolerance value.
+    return round(feasible_hi + precision / 2.0 - 1e-9, 1)
+
+
+def _max_drift_exceeds_tolerance(values, holdings, config, *,
+                                 invested_value: float, eq_value: float,
+                                 fi_value: float, cash_value: float) -> bool:
+    """Return True if at least one allocation category has a drift
+    larger than ``rebalancing_max_tolerance_pctg`` (or, for cash, a
+    relative deviation greater than the same percentage).
+
+    Used to distinguish "no actions because the portfolio is already
+    aligned" from "no actions because the LP is infeasible at the
+    configured tolerance ceiling". The first case should still report
+    post-rebalancing values (they happen to equal current values); the
+    second case should mark them as not actionable so the UI does not
+    look like a rebalance was applied.
+    """
+    max_tol = float(config.rebalancing_max_tolerance_pctg or 0.0)
+    if max_tol <= 0:
+        return False
+    inv = float(invested_value or 0.0)
+    eq = float(eq_value or 0.0)
+    fi = float(fi_value or 0.0)
+    if inv <= 0:
+        return False
+
+    # Asset-class drift on invested portion.
+    class_actual: dict[str, float] = {}
+    for i, h in enumerate(holdings):
+        if h.asset_class == AssetClass.CASH_EQUIVALENTS:
+            continue
+        ac = h.asset_class.value if h.asset_class else "Alternative"
+        class_actual[ac] = class_actual.get(ac, 0.0) + float(values[i]) / inv * 100.0
+    for ac, target in (config.invested_allocation_targets_pctg or {}).items():
+        if abs(class_actual.get(ac, 0.0) - float(target)) > max_tol:
+            return True
+
+    # Equity geography drift.
+    if eq > 0:
+        # Already imported numpy as np at top of module.
+        all_geos = sorted((config.equity_geo_targets_pctg or {}).keys())
+        for g_idx, gn in enumerate(all_geos):
+            target = float(config.equity_geo_targets_pctg.get(gn, 0.0))
+            actual = sum(
+                _geo_share(holdings[i], gn) * float(values[i])
+                for i in range(len(holdings))
+                if holdings[i].asset_class == AssetClass.EQUITIES
+            ) / eq * 100.0
+            if abs(actual - target) > max_tol:
+                return True
+
+    # Per-holding equity targets.
+    if eq > 0:
+        for i, h in enumerate(holdings):
+            if h.target_equities is None or h.asset_class != AssetClass.EQUITIES:
+                continue
+            actual = float(values[i]) / eq * 100.0
+            if abs(actual - float(h.target_equities)) > max_tol:
+                return True
+
+    # Per-holding fixed-income targets.
+    if fi > 0:
+        for i, h in enumerate(holdings):
+            if h.target_fixed_income is None or h.asset_class != AssetClass.FIXED_INCOME:
+                continue
+            actual = float(values[i]) / fi * 100.0
+            if abs(actual - float(h.target_fixed_income)) > max_tol:
+                return True
+
+    # Cash buffer relative deviation (skip when no target is set).
+    cash_target = float(config.target_cash_buffer_eur or 0.0)
+    if cash_target > 0:
+        rel_dev = abs(cash_value - cash_target) / cash_target * 100.0
+        if rel_dev > max_tol:
+            return True
+
+    return False
+
+
+def _geo_share(h, geo_name: str) -> float:
+    """Return the share (0..1) of holding ``h``'s value attributable to
+    ``geo_name``. Falls back to 1.0 when the holding's geography label
+    matches and no breakdown is available.
+    """
+    if h.geo_breakdown:
+        total = sum(h.geo_breakdown.values()) or 0
+        if total > 0:
+            for geo, pct in h.geo_breakdown.items():
+                gn = geo.value if hasattr(geo, "value") else str(geo)
+                if gn == geo_name:
+                    return float(pct) / float(total)
+        return 0.0
+    if h.geography:
+        gn = h.geography.value if hasattr(h.geography, "value") else str(h.geography)
+        return 1.0 if gn == geo_name else 0.0
+    return 0.0
 
 
 def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq_value):
