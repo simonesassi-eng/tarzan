@@ -766,43 +766,40 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     rows: list[dict] = []
     rows.append(_row("Total Portfolio", "", "", port_full, is_portfolio=True))
 
-    if hp is not None and not hp.empty:
-        # The Excel `holding_performance` frame uses string labels for
-        # the type column; normalise both possible spellings to the
-        # ones the renderer cares about.
+    # Use ``holdings_df`` as the source of truth for ordering and
+    # membership, then enrich each row with the per-period returns
+    # from ``holding_performance``. Going holdings-first guarantees
+    # the snapshot lists every position the user sees in the
+    # "All positions" table — even the ones (typically illiquid
+    # single bonds) that Yahoo cannot price, which would otherwise
+    # be silently dropped because ``holding_performance`` only
+    # contains tickers with usable history.
+    df = m.holdings_df
+    if df is None or df.empty:
+        return {
+            "available": False,
+            "period_labels": period_labels,
+            "rows": rows,
+        }
+
+    perf_by_ticker: dict[str, dict] = {}
+    if hp is not None and not hp.empty and "ticker" in hp.columns:
         type_col = hp["type"].astype(str).str.lower() if "type" in hp.columns else None
         is_holding = type_col.str.contains("portfolio") if type_col is not None else None
+        holdings_perf = hp[is_holding] if is_holding is not None else hp
+        for _, pr in holdings_perf.iterrows():
+            perf_by_ticker[str(pr.get("ticker", ""))] = {
+                k: pr.get(k) for k in period_keys
+            }
 
-        # Cross-reference holdings_df to get the asset class — Excel's
-        # holding_performance does not carry that column, but the
-        # newsletter wants the class chip next to each name.
-        df = m.holdings_df
-        ticker_to_class = {}
-        if df is not None and not df.empty and "ticker" in df.columns and "asset_class" in df.columns:
-            ticker_to_class = dict(zip(df["ticker"], df["asset_class"]))
-
-        # Show only the user's positions in this snapshot. Benchmarks
-        # already appear in the "Performance — Returns vs benchmarks"
-        # section right below; duplicating them here would just bloat
-        # the email.
-        holdings_df = hp[is_holding].copy() if is_holding is not None else hp.copy()
-
-        if not holdings_df.empty:
-            holdings_df["_asset_class"] = holdings_df["ticker"].map(ticker_to_class).fillna("")
-            holdings_df["_sort_1y"] = pd.to_numeric(holdings_df.get("1y"), errors="coerce")
-            holdings_df = holdings_df.sort_values(
-                by=["_asset_class", "_sort_1y"],
-                ascending=[True, False],
-                kind="stable",
-                na_position="last",
-            )
-            for _, r in holdings_df.iterrows():
-                rows.append(_row(
-                    str(r.get("name", "") or r.get("ticker", "")),
-                    str(r.get("ticker", "") or ""),
-                    str(r.get("_asset_class", "") or ""),
-                    {k: r.get(k) for k in period_keys},
-                ))
+    for _, h in df.iterrows():
+        ticker = str(h.get("ticker", "") or "")
+        rows.append(_row(
+            str(h.get("name", "") or ticker),
+            ticker,
+            str(h.get("asset_class", "") or ""),
+            perf_by_ticker.get(ticker, {}),
+        ))
 
     return {
         "available": len(rows) > 1,  # at least one holding/benchmark beyond the portfolio row
