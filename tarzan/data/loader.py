@@ -77,10 +77,13 @@ def load_config(source: Optional[Union[str, io.BytesIO]] = None) -> InvestorConf
     source.seek(0)
     text = source.read().decode("utf-8")
     reader = csv_mod.DictReader(io.StringIO(text))
+    # Only ``key`` and ``value`` columns are required. Extra columns
+    # (e.g. ``description``) are tolerated so the config file can be
+    # self-documenting without breaking the parser.
     rows = {
         row["key"].strip(): row["value"].strip()
         for row in reader
-        if "key" in row and "value" in row
+        if row.get("key") and "value" in row
     }
     return InvestorConfig.from_dict(rows)
 
@@ -106,20 +109,52 @@ def _read_source(source: Union[str, io.BytesIO], filename: str) -> pd.DataFrame:
 
 
 def _parse_row(idx: int, row: pd.Series, columns) -> Optional[Holding]:
-    """Parse a single row into a Holding, returning None if invalid."""
+    """Parse a single row into a Holding, returning None if invalid.
+
+    A row with ``quantity <= 0`` is normally skipped, but kept when it
+    carries a strictly positive target (``target_equities`` or
+    ``target_fixed_income``). This lets users declare a holding they
+    want to start building — the rebalancer will then propose buys
+    into it from cash or from over-target holdings.
+    """
     qty = _parse_number_safe(row["quantity"], "quantity", idx)
+
+    # Detect "target-only" placeholder rows: qty == 0 (or invalid)
+    # but at least one of the target columns is positive.
+    has_positive_target = False
+    for col in ("target_equities", "target_fixed_income"):
+        if col in columns:
+            try:
+                val = _parse_number(row[col])
+                if val is not None and val > 0:
+                    has_positive_target = True
+                    break
+            except (ValueError, TypeError):
+                continue
+
     if qty is None or qty <= 0:
-        if qty is not None:
-            logger.warning("Row %d: quantity %.4f <= 0, skipping", idx, qty)
-        return None
+        if not has_positive_target:
+            if qty is not None:
+                logger.warning("Row %d: quantity %.4f <= 0, skipping", idx, qty)
+            return None
+        # qty <= 0 but the user has expressed a target — keep the row
+        # as a zero-balance placeholder so the optimizer can buy into
+        # it. Force qty/cost/value to 0 to avoid downstream surprises.
+        logger.info(
+            "Row %d: quantity 0 with positive target — kept as target placeholder.",
+            idx,
+        )
+        qty = 0.0
+        cost_basis = 0.0
+        market_value = 0.0
+    else:
+        cost_basis = _parse_number_safe(row["cost_basis_eur"], "cost_basis_eur", idx)
+        if cost_basis is None:
+            return None
 
-    cost_basis = _parse_number_safe(row["cost_basis_eur"], "cost_basis_eur", idx)
-    if cost_basis is None:
-        return None
-
-    market_value = _parse_number_safe(row["market_value_eur"], "market_value_eur", idx)
-    if market_value is None:
-        return None
+        market_value = _parse_number_safe(row["market_value_eur"], "market_value_eur", idx)
+        if market_value is None:
+            return None
 
     isin = str(row.get("isin", "")).strip()
     ticker = str(row.get("ticker", "")).strip()
