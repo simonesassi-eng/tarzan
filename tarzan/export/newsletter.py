@@ -343,12 +343,30 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         )
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
+    elif n_actions == 0:
+        # The LP solved cleanly and emitted no trades. Any drift left
+        # at this point is either inside the tolerance band (the
+        # solver was happy) or outside but pinned by locked holdings
+        # (``no_buy_no_sell``) or by the auto-relax kicking in to
+        # confirm there is nothing actionable. In none of those
+        # cases is there an action for the user to take, so the KPI
+        # reads "Aligned" and the sublabel explains why drift may be
+        # showing.
+        rebal_label = "Aligned"
+        if max_abs_delta > tol:
+            rebal_sublabel = (
+                f"max drift {max_abs_delta:.1f}pp · pinned by locked positions"
+            )
+        else:
+            rebal_sublabel = f"max drift {max_abs_delta:.1f}pp · ±{tol:.1f}pp tol."
+        rebal_color = PALETTE["green"]
+        rebal_bg = PALETTE["green_bg"]
     elif rebal_relaxed_meta is not None:
         used_tol, cfg_tol = rebal_relaxed_meta
         rebal_label = "Action (relaxed)"
         rebal_sublabel = (
-            f"solved at ±{used_tol:.1f}% (cfg ±{cfg_tol:.1f}%)"
-            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+            f"solved at ±{used_tol:.1f}% (cfg ±{cfg_tol:.1f}%) · "
+            f"{n_actions} action{'s' if n_actions != 1 else ''}"
         )
         rebal_color = PALETTE["amber"]
         rebal_bg = PALETTE["amber_bg"]
@@ -360,16 +378,14 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     elif max_abs_delta <= 2 * tol:
         rebal_label = "Drift"
         rebal_sublabel = (
-            f"max drift {max_abs_delta:.1f}pp"
-            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+            f"max drift {max_abs_delta:.1f}pp · {n_actions} action{'s' if n_actions != 1 else ''}"
         )
         rebal_color = PALETTE["amber"]
         rebal_bg = PALETTE["amber_bg"]
     else:
         rebal_label = "Action"
         rebal_sublabel = (
-            f"max drift {max_abs_delta:.1f}pp"
-            + (f" · {n_actions} action{'s' if n_actions != 1 else ''}" if n_actions else "")
+            f"max drift {max_abs_delta:.1f}pp · {n_actions} action{'s' if n_actions != 1 else ''}"
         )
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
@@ -697,6 +713,102 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
         })
 
     return {"groups": groups, "summary": summary, "total_count": int(len(df))}
+
+
+def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
+    """Build the per-holding returns snapshot table.
+
+    Mirrors the Excel ``Performance`` tab but trimmed to the columns
+    that actually fit in an email: name, ticker, asset class, then
+    the 1D / 1W / 1M / 3M / YTD / 1Y returns. Risk metrics (Sharpe,
+    Vol, alpha, beta) are not included — the Excel report keeps the
+    detailed view for users who need it.
+
+    The TOTAL PORTFOLIO row anchors the table at the top, then each
+    holding sorted by asset class (matching the Holdings section
+    above), then the benchmarks at the bottom.
+    """
+    m = ctx.metrics
+    hp = m.holding_performance
+    port_full = m.performance_full or {}
+
+    period_keys = ["1d", "1w", "1m", "3m", "ytd", "1y"]
+    period_labels = ["1D", "1W", "1M", "3M", "YTD", "1Y"]
+
+    def _row(name: str, ticker: str, asset_class: str, source: dict, *,
+             is_portfolio: bool = False, is_benchmark: bool = False) -> dict:
+        cells = []
+        for key in period_keys:
+            val = source.get(key) if source else None
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                cells.append({"value": "—", "color": PALETTE["subtle"], "is_positive": True})
+                continue
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                cells.append({"value": "—", "color": PALETTE["subtle"], "is_positive": True})
+                continue
+            cells.append({
+                "value": _pct(v, signed=True, decimals=2),
+                "color": PALETTE["green"] if v >= 0 else PALETTE["red"],
+                "is_positive": v >= 0,
+            })
+        return {
+            "name": name,
+            "ticker": ticker,
+            "asset_class": asset_class,
+            "asset_color": ASSET_COLORS.get(asset_class, PALETTE["accent"]),
+            "is_portfolio": is_portfolio,
+            "is_benchmark": is_benchmark,
+            "cells": cells,
+        }
+
+    rows: list[dict] = []
+    rows.append(_row("Total Portfolio", "", "", port_full, is_portfolio=True))
+
+    if hp is not None and not hp.empty:
+        # The Excel `holding_performance` frame uses string labels for
+        # the type column; normalise both possible spellings to the
+        # ones the renderer cares about.
+        type_col = hp["type"].astype(str).str.lower() if "type" in hp.columns else None
+        is_holding = type_col.str.contains("portfolio") if type_col is not None else None
+
+        # Cross-reference holdings_df to get the asset class — Excel's
+        # holding_performance does not carry that column, but the
+        # newsletter wants the class chip next to each name.
+        df = m.holdings_df
+        ticker_to_class = {}
+        if df is not None and not df.empty and "ticker" in df.columns and "asset_class" in df.columns:
+            ticker_to_class = dict(zip(df["ticker"], df["asset_class"]))
+
+        # Show only the user's positions in this snapshot. Benchmarks
+        # already appear in the "Performance — Returns vs benchmarks"
+        # section right below; duplicating them here would just bloat
+        # the email.
+        holdings_df = hp[is_holding].copy() if is_holding is not None else hp.copy()
+
+        if not holdings_df.empty:
+            holdings_df["_asset_class"] = holdings_df["ticker"].map(ticker_to_class).fillna("")
+            holdings_df["_sort_1y"] = pd.to_numeric(holdings_df.get("1y"), errors="coerce")
+            holdings_df = holdings_df.sort_values(
+                by=["_asset_class", "_sort_1y"],
+                ascending=[True, False],
+                kind="stable",
+                na_position="last",
+            )
+            for _, r in holdings_df.iterrows():
+                rows.append(_row(
+                    str(r.get("name", "") or r.get("ticker", "")),
+                    str(r.get("ticker", "") or ""),
+                    str(r.get("_asset_class", "") or ""),
+                    {k: r.get(k) for k in period_keys},
+                ))
+
+    return {
+        "available": len(rows) > 1,  # at least one holding/benchmark beyond the portfolio row
+        "period_labels": period_labels,
+        "rows": rows,
+    }
 
 
 def _build_movers(ctx: _NewsletterContext) -> dict:
@@ -1344,6 +1456,18 @@ def _build_sensitivity(ctx: _NewsletterContext) -> dict:
     if not sensitivity:
         return {"available": False}
 
+    # If every regime in the sweep produces zero trades, the
+    # sensitivity card has nothing useful to say — typical when the
+    # portfolio is already inside the tolerance band at every weight.
+    # Hide the section in that case so the email isn't bloated by an
+    # empty diagnostic.
+    has_trades = any(
+        (r.get("n_buy", 0) + r.get("n_sell", 0)) > 0
+        for r in sensitivity
+    )
+    if not has_trades:
+        return {"available": False}
+
     configured_w = float(getattr(cfg, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
 
     def _net_by_class_str(d: dict, min_eur: float = 0.5) -> str:
@@ -1521,6 +1645,7 @@ def build_context(
         "allocation": _build_allocation(nctx),
         "geography": _build_geography(nctx),
         "holdings": _build_holdings(nctx),
+        "returns_snapshot": _build_returns_snapshot(nctx),
         "performance": _build_performance(nctx),
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),

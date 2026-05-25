@@ -790,6 +790,25 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 f"enabling rebalancing_auto_relax, or relaxing per-holding "
                 f"targets."
             )
+    elif n_actions == 0:
+        # The LP solved cleanly and emitted no trades. Drift left is
+        # either inside the band or pinned by locked positions —
+        # either way, nothing actionable. Read as "Aligned" so the
+        # banner does not contradict the empty actions table below.
+        banner_color = C['green']
+        banner_icon = "\u25cf"  # filled circle
+        if max_abs_delta > 2 * tol:
+            banner_text = (
+                f"Aligned — largest reachable drift {max_abs_delta:.1f}% "
+                f"is pinned by locked positions; nothing actionable."
+            )
+        elif max_abs_delta > tol:
+            banner_text = (
+                f"Aligned — drift of {max_abs_delta:.1f}% is within reach "
+                f"of the tolerance band; no trades needed."
+            )
+        else:
+            banner_text = f"Aligned — all allocations within \u00b1{tol:.1f}%"
     elif relaxed_meta is not None:
         used_tol, cfg_tol = relaxed_meta
         banner_color = C['amber']
@@ -1252,7 +1271,15 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     # vs. less leftover drift).
     # =====================================================================
     sensitivity = getattr(metrics, "rebalancing_sensitivity", None)
-    if sensitivity:
+    # Hide the sensitivity card when every regime produces zero
+    # trades — typical when the portfolio is already inside the
+    # tolerance band at every weight. Otherwise the section ships an
+    # empty diagnostic that wastes vertical space.
+    has_trades = bool(sensitivity) and any(
+        (r.get("n_buy", 0) + r.get("n_sell", 0)) > 0
+        for r in sensitivity
+    )
+    if sensitivity and has_trades:
         from tarzan.export._format import eur_smart as _eur_compact
         row += 2
         _write_area_header(sheet, row, 1, 7, "DRIFT-PENALTY SENSITIVITY")
