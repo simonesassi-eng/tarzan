@@ -33,7 +33,7 @@ the tracked artifact.
   little between runs.
 - The `CASH-EUR` pseudo-ticker fails to resolve on Yahoo (by design); the
   pipeline falls back to `market_value_eur` from the CSV for that row.
-- The sample uses a `rebalancing_threshold_pctg` of 2.5% to demonstrate
+- The sample uses an `alert_threshold_pctg` of 2.5% to demonstrate
   the green / amber / red coloring on the dashboard allocation tables,
   and `target_cash_buffer_eur` = 3000 so the Cash Buffer section shows
   a drift (actual 5000, target 3000).

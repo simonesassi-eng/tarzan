@@ -14,7 +14,7 @@ real personal data.
   - `target_cash_buffer_eur = 3000` kept separately as an absolute
     buffer that the optimizer aims at.
   - Equity geography (% of equity portion): tilted to USA (55%).
-  - `rebalancing_threshold_pctg = 2.5` drives the traffic-light colors.
+  - `alert_threshold_pctg = 2.5` drives the traffic-light colors.
 
 ## Target CSV key convention
 

@@ -38,8 +38,8 @@ class PortfolioMetrics:
         goal_deltas: Actual vs target allocation comparison. Rows carry a
             'type' column with values 'asset_class',
             'geography (equity only)' or 'cash' (cash row uses EUR deltas).
-        rebalancing_suggestions: Buy/sell suggestions whose amount exceeds
-            config.rebalancing_min_transaction_eur.
+        rebalancing_suggestions: Buy/sell suggestions emitted by the
+            optimizer (one per executed trade).
         benchmark_comparison: Portfolio vs benchmark metrics table.
         portfolio_history: Daily portfolio value time series.
         benchmark_histories: Dict of benchmark name → daily price series.

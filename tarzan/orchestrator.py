@@ -40,7 +40,7 @@ def run(
     logger.info("Loaded %d holdings", len(holdings))
 
     config = load_config(config_source)
-    logger.info("Config loaded (threshold=%.1f%%)", config.rebalancing_threshold_pctg)
+    logger.info("Config loaded (alert threshold=%.1f%%)", config.alert_threshold_pctg)
 
     # 2. Enrich
     from tarzan.data.enricher import enrich_holdings, set_portfolio_backtest_period

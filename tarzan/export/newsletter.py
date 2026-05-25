@@ -308,7 +308,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # Rebalance status: traffic-light derived from the largest non-cash
     # drift in goal_deltas. Mirrors the banner shown in the Excel
     # Optimizer tab so the two outputs agree.
-    tol = float(cfg.rebalancing_threshold_pctg or 0.0)
+    tol = float(cfg.alert_threshold_pctg or 0.0)
     max_abs_delta = 0.0
     if m.goal_deltas is not None and not m.goal_deltas.empty:
         non_cash = m.goal_deltas[m.goal_deltas["type"] != "cash"]
@@ -484,7 +484,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     """Build asset-class allocation rows (Excel Dashboard pattern)."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.rebalancing_threshold_pctg
+    tol = cfg.alert_threshold_pctg
 
     targets = cfg.invested_allocation_targets_pctg or {}
     alloc_df = m.allocation_by_class
@@ -570,7 +570,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
     """Build geographic equity rows with target & ACWI ticks."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.rebalancing_threshold_pctg
+    tol = cfg.alert_threshold_pctg
 
     targets = cfg.equity_geo_targets_pctg or {}
     geo_df = m.allocation_by_geo
@@ -762,7 +762,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
     """
     m = ctx.metrics
     cfg = ctx.config
-    tol = float(cfg.rebalancing_threshold_pctg or 0.0)
+    tol = float(cfg.alert_threshold_pctg or 0.0)
     insights: list[dict] = []
 
     # 1. Observation: largest non-cash drift vs target. Phrased as a

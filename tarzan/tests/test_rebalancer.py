@@ -72,20 +72,6 @@ def test_zero_sum_rebalancing(sample_holdings, sample_config):
     )
 
 
-def test_min_transaction_respected(sample_holdings, sample_config):
-    """No action should be below min_transaction_eur."""
-    sample_config.rebalancing_min_transaction_eur = 500.0
-    sample_config.rebalancing_lump_sum_amount_eur = 2000.0
-    tv = _total_value(sample_holdings)
-
-    actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv, lump_sum=2000.0)
-
-    for a in actions:
-        assert a["amount_eur"] >= 500.0 - 0.01, (
-            f"Action {a['ticker']} {a['direction']} {a['amount_eur']} < min_tx=500"
-        )
-
-
 def test_no_buy_no_sell_frozen(sample_holdings, sample_config):
     """Holdings with no_buy_no_sell=True should have zero buy AND zero sell."""
     sample_holdings[0].no_buy_no_sell = True  # Freeze USA_ETF
@@ -113,9 +99,9 @@ def test_all_frozen_no_crash(sample_holdings, sample_config):
 
 
 def test_max_tolerance_caps_solver(sample_holdings, sample_config):
-    """With tight max_tolerance and min_transaction, infeasible → return 0 actions."""
-    sample_config.rebalancing_min_transaction_eur = 100000.0  # absurdly high
+    """With tight max_tolerance + auto-relax disabled, infeasible → 0 actions."""
     sample_config.rebalancing_max_tolerance_pctg = 0.1  # very tight
+    sample_config.rebalancing_auto_relax = False  # don't bail us out
     tv = _total_value(sample_holdings)
 
     actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv)

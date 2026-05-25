@@ -25,7 +25,6 @@ def sample_config() -> InvestorConfig:
         "Emerging Markets": 10.0,
     }
     config.target_cash_buffer_eur = 1000.0
-    config.rebalancing_min_transaction_eur = 0.0
     config.rebalancing_max_tolerance_pctg = 2.0
     config.rebalancing_no_sell = False
     config.rebalancing_lump_sum_amount_eur = 0.0
