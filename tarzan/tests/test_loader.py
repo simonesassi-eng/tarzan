@@ -95,7 +95,7 @@ class TestConfigLoader:
     def test_config_from_csv(self):
         csv = """key,value
 rebalancing_lump_sum_amount_eur,1000
-rebalancing_min_transaction_eur,500
+rebalancing_max_tolerance_pctg,3.5
 target_invested_allocation_equities_pctg,60
 target_invested_allocation_fixed_income_pctg,30
 target_invested_allocation_gold_pctg,10
@@ -108,7 +108,7 @@ target_equity_geo_emerging_markets_pctg,10
         config = load_config(_csv_bytesio(csv))
 
         assert config.rebalancing_lump_sum_amount_eur == 1000.0
-        assert config.rebalancing_min_transaction_eur == 500.0
+        assert config.rebalancing_max_tolerance_pctg == 3.5
         assert config.invested_allocation_targets_pctg["Equities"] == 60.0
         assert config.equity_geo_targets_pctg["USA"] == 50.0
 

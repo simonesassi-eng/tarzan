@@ -93,11 +93,15 @@ convention so the unit is unambiguous:
 | Key                                  | Default | Description                                             |
 |--------------------------------------|---------|---------------------------------------------------------|
 | `rebalancing_lump_sum_amount_eur`    | `0`     | Extra cash to deploy in a rebalance                     |
-| `rebalancing_min_transaction_eur`    | `500`   | Trades below this amount are skipped                    |
 | `rebalancing_max_tolerance_pctg`     | `2.0`   | Cap on solver tolerance (progressive up to this value)  |
-| `rebalancing_threshold_pctg`         | `5.0`   | Alert threshold for traffic-light colors                |
 | `rebalancing_no_sell`                | `false` | If true, solver can only buy                            |
 | `portfolio_inception_date`           | `""`    | Inception date used by performance charts               |
+
+**Display parameters**
+
+| Key                       | Default | Description                                                                       |
+|---------------------------|---------|-----------------------------------------------------------------------------------|
+| `alert_threshold_pctg`    | `5.0`   | Cosmetic alert threshold for the dashboard traffic-light. Does not influence the optimizer. |
 
 **Cash buffer (absolute EUR, tracked separately from invested %)**
 

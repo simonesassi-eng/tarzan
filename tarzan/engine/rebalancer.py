@@ -619,29 +619,24 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             row = np.zeros(2 * n); row[n + i] = 1.0
             A_eq_rows.append(row); b_eq_vals.append(0.0)
 
-    # MILP: min_tx binary linking for BOTH buy and sell
-    # Variables: [buy_0..n-1, sell_0..n-1, zb_0..n-1, zs_0..n-1]  (4n total)
-    # zb[i]=1 if buying i, zs[i]=1 if selling i. Both binary.
-    # Constraints: buy[i] >= min_tx * zb[i], buy[i] <= M * zb[i]
-    #              sell[i] >= min_tx * zs[i], sell[i] <= value[i] * zs[i]
-    #              zb[i] + zs[i] <= 1  (can't buy and sell same holding)
-    min_tx = config.rebalancing_min_transaction_eur
+    # MILP binary linking. zb[i]=1 if buying i, zs[i]=1 if selling i.
+    # The binaries are needed so the cash-flow constraint can charge a
+    # fixed buy/sell fee per executed trade (fee enters as
+    # ``fee_buy * zb[i] + fee_sell * zs[i]``). They are also used to
+    # enforce mutual exclusion (no holding can be simultaneously
+    # bought and sold in the same plan).
+    #
+    # Variables: [buy_0..n-1, sell_0..n-1, zb_0..n-1, zs_0..n-1]  (4n).
     M = new_tv
     for i in range(n):
-        # Buy linking: buy[i] <= M * zb[i]
-        row = np.zeros(4 * n); row[i] = 1.0; row[2*n+i] = -M
-        A_ub_rows.append(row); b_ub_vals.append(0.0)
-        # Buy min: buy[i] >= min_tx * zb[i]  →  -buy[i] + min_tx*zb[i] <= 0
-        row = np.zeros(4 * n); row[i] = -1.0; row[2*n+i] = min_tx
+        # Buy linking: buy[i] <= M * zb[i]  →  buy[i] - M*zb[i] <= 0
+        row = np.zeros(4 * n); row[i] = 1.0; row[2 * n + i] = -M
         A_ub_rows.append(row); b_ub_vals.append(0.0)
         # Sell linking: sell[i] <= value[i] * zs[i]
-        row = np.zeros(4 * n); row[n+i] = 1.0; row[3*n+i] = -float(values[i])
-        A_ub_rows.append(row); b_ub_vals.append(0.0)
-        # Sell min: sell[i] >= min_tx * zs[i]  →  -sell[i] + min_tx*zs[i] <= 0
-        row = np.zeros(4 * n); row[n+i] = -1.0; row[3*n+i] = min_tx
+        row = np.zeros(4 * n); row[n + i] = 1.0; row[3 * n + i] = -float(values[i])
         A_ub_rows.append(row); b_ub_vals.append(0.0)
         # Mutual exclusion: zb[i] + zs[i] <= 1
-        row = np.zeros(4 * n); row[2*n+i] = 1.0; row[3*n+i] = 1.0
+        row = np.zeros(4 * n); row[2 * n + i] = 1.0; row[3 * n + i] = 1.0
         A_ub_rows.append(row); b_ub_vals.append(1.0)
 
     # Pad existing constraint rows up to the full variable width.
@@ -797,7 +792,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     invested_new = max(float(tv - cash_new), 0.0)
     # Use the same threshold as the Optimizer traffic-light so the verification
     # "OK / PARTIAL" status does not contradict the user-facing colors.
-    tol = float(config.rebalancing_threshold_pctg)
+    tol = float(config.alert_threshold_pctg)
 
     # Invested asset allocation: percentages relative to invested_new
     # (excludes cash). Cash is never in invested_allocation_targets_pctg.
