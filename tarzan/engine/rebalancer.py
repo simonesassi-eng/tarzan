@@ -12,6 +12,7 @@ Supports two modes:
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Optional
 
@@ -469,12 +470,62 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     A_eq_rows, b_eq_vals = [], []
     A_ub_rows, b_ub_vals = [], []
 
-    # Cash flow: sum(buy) - sum(sell) = net_inflow  (net_inflow already includes
-    # the explicit lump sum + any excess cash being moved into invested assets).
-    row = np.zeros(2 * n)
-    row[:n] = 1.0
-    row[n:] = -1.0
-    A_eq_rows.append(row)
+    # Drift-tracking specs collected while constraints are built. Each
+    # entry is a tuple (coeff_2n, target_val) describing a linear
+    # combination of buy/sell variables whose post-rebalancing value
+    # we want close to ``target_val``. After the LP is fully built we
+    # expand the variable vector with one positive- and one negative-
+    # slack per drift, and add a `drift_penalty_weight * (gp + gn)`
+    # term to the objective. With weight 0 the slacks are unconstrained
+    # at zero cost so the LP behaves exactly as before.
+    drift_w = float(getattr(config, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
+    drift_specs: list[tuple[np.ndarray, float]] = []
+
+    # ------------------------------------------------------------------
+    # Per-holding trade frictions: capital gains tax and fixed fees.
+    # Computed once and used in two places — the cash-flow constraint
+    # (so the proceeds from a sell are NET of taxes and fees) and the
+    # objective (so the solver pays a small extra weight per executed
+    # transaction). Holdings currently in loss have ``tax_i = 0``
+    # because realising the loss does not generate a tax bill.
+    # ------------------------------------------------------------------
+    fee_buy = float(config.rebalancing_transaction_fee_buy_eur or 0.0)
+    fee_sell = float(config.rebalancing_transaction_fee_sell_eur or 0.0)
+    cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
+    cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
+
+    tax_per_unit_sold = np.zeros(n)
+    for i, h in enumerate(holdings):
+        # Pro-rata realised gain per euro sold. If gain_pct is None or
+        # ≤ 0 the position is not in profit and no tax is due.
+        gp = float(h.gain_pct or 0.0)
+        if gp <= 0:
+            continue
+        gain_frac = gp / 100.0
+        instr = (h.instrument_type or "").lower()
+        rate = cg_gov if "government bond" in instr else cg_std
+        tax_per_unit_sold[i] = rate * gain_frac
+
+    # ------------------------------------------------------------------
+    # Cash flow constraint. Selling EUR `sell[i]` yields proceeds of
+    # (1 - tax_i) * sell[i] (tax is withheld). Each executed buy/sell
+    # pays a fixed fee that reduces available cash by `fee_buy * zb[i]`
+    # or `fee_sell * zs[i]`. The cash equation is therefore:
+    #
+    #     Σ (1 - tax_i) * sell[i]  +  net_inflow
+    #         = Σ buy[i]  +  fee_buy * Σ zb[i]  +  fee_sell * Σ zs[i]
+    #
+    # Re-arranged so all variables are on the LHS (4n columns):
+    #
+    #     Σ buy[i] - Σ (1 - tax_i) * sell[i]
+    #         + fee_buy * Σ zb[i] + fee_sell * Σ zs[i] = net_inflow
+    # ------------------------------------------------------------------
+    cash_row = np.zeros(4 * n)
+    cash_row[:n] = 1.0
+    cash_row[n:2 * n] = -(1.0 - tax_per_unit_sold)
+    cash_row[2 * n:3 * n] = fee_buy
+    cash_row[3 * n:4 * n] = fee_sell
+    A_eq_rows.append(cash_row)
     b_eq_vals.append(net_inflow)
 
     # Invested asset-class constraints: applied on invested_value_after.
@@ -493,6 +544,14 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         b_ub_vals.append(target_val + tol_val - current_sum)
         A_ub_rows.append(-row_upper)
         b_ub_vals.append(current_sum - (target_val - tol_val))
+        # Track residual drift relative to ``target_val``. The 2n
+        # coefficient row times [buy, sell] equals the *change* in the
+        # asset-class sum due to trades; its post-rebal value is
+        # ``current_sum + change``. We want ``current_sum + change``
+        # close to ``target_val``, i.e. drift = (current_sum + change)
+        # - target_val. Stored as (coeff_2n, target - current).
+        if drift_w > 0:
+            drift_specs.append((row_upper.copy(), target_val - current_sum))
 
     # Geo constraints
     new_eq_value = eq_value + net_inflow * (eq_value / tv) if tv > 0 else eq_value
@@ -511,6 +570,8 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             b_ub_vals.append(target_val + tol_val - current_sum)
             A_ub_rows.append(-row_upper)
             b_ub_vals.append(current_sum - (target_val - tol_val))
+            if drift_w > 0:
+                drift_specs.append((row_upper.copy(), target_val - current_sum))
 
     # Per-holding equity constraints
     if geo_ref > 0:
@@ -526,6 +587,8 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             b_ub_vals.append(target_val + tol_val - values[i])
             A_ub_rows.append(-row_upper)
             b_ub_vals.append(values[i] - (target_val - tol_val))
+            if drift_w > 0:
+                drift_specs.append((row_upper.copy(), target_val - values[i]))
 
     # Per-holding FI constraints
     new_fi_value = fi_value + net_inflow * (fi_value / tv) if tv > 0 else fi_value
@@ -543,6 +606,8 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             b_ub_vals.append(target_val + tol_val - values[i])
             A_ub_rows.append(-row_upper)
             b_ub_vals.append(values[i] - (target_val - tol_val))
+            if drift_w > 0:
+                drift_specs.append((row_upper.copy(), target_val - values[i]))
 
     # Cash holdings cannot be traded by the solver — the cash buffer is
     # handled via net_inflow (as an external cash flow). Forbid buy/sell
@@ -579,30 +644,79 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         row = np.zeros(4 * n); row[2*n+i] = 1.0; row[3*n+i] = 1.0
         A_ub_rows.append(row); b_ub_vals.append(1.0)
 
-    # Pad existing constraint rows from 2n to 4n columns
-    padded_eq = [np.concatenate([r, np.zeros(2*n)]) for r in A_eq_rows]
+    # Pad existing constraint rows up to the full variable width.
+    # Layout: [buy(n), sell(n), zb(n), zs(n), gp(K), gn(K)] where K is
+    # the number of drift specs collected. With ``drift_w == 0`` we
+    # skip the slack expansion entirely (K = 0) so the LP is identical
+    # to the previous formulation.
+    K = len(drift_specs)
+    total_vars = 4 * n + 2 * K
+    padded_eq = []
+    for r in A_eq_rows:
+        if len(r) == total_vars:
+            padded_eq.append(r)
+        elif len(r) == 2 * n:
+            padded_eq.append(np.concatenate([r, np.zeros(total_vars - 2 * n)]))
+        else:
+            padded_eq.append(np.concatenate([r, np.zeros(total_vars - len(r))]))
     padded_ub = []
     for r in A_ub_rows:
-        if len(r) == 2 * n:
-            padded_ub.append(np.concatenate([r, np.zeros(2*n)]))
-        elif len(r) == 4 * n:
+        if len(r) == total_vars:
             padded_ub.append(r)
+        elif len(r) == 2 * n:
+            padded_ub.append(np.concatenate([r, np.zeros(total_vars - 2 * n)]))
+        elif len(r) == 4 * n:
+            padded_ub.append(np.concatenate([r, np.zeros(total_vars - 4 * n)]))
         else:
-            padded_ub.append(np.concatenate([r, np.zeros(4*n - len(r))]))
+            padded_ub.append(np.concatenate([r, np.zeros(total_vars - len(r))]))
 
-    # Objective: minimize buy + sell (z variables have 0 cost)
-    c = np.zeros(4 * n); c[:2*n] = 1.0
+    # Drift-tracking equalities. For each spec (coeff_2n, residual)
+    # add the constraint
+    #     coeff_2n · [buy, sell] + gp_k - gn_k = residual
+    # so that gp_k - gn_k captures the "target - post-rebal" delta and
+    # the |drift| can be charged in the objective via gp_k + gn_k.
+    for k, (coeff_2n, residual) in enumerate(drift_specs):
+        row = np.zeros(total_vars)
+        row[:2 * n] = coeff_2n
+        row[4 * n + k] = 1.0          # gp_k
+        row[4 * n + K + k] = -1.0     # gn_k
+        padded_eq.append(row)
+        b_eq_vals.append(residual)
+
+    # Objective: minimise total trade volume, optionally penalising
+    # the absolute drift left at each tracked target. Friction costs
+    # (fees and capital-gains taxes) are folded into the cash-flow
+    # constraint rather than the objective so we don't double-count
+    # their effect — a sell of a profitable position has to be larger
+    # to fund the same buy because part of the proceeds goes to the
+    # tax authority, and each transaction reduces the available cash
+    # by the fixed fee.
+    #
+    # The drift penalty makes the LP prefer plans that pull every
+    # tracked target *closer* to its desired value rather than only
+    # ensuring the tolerance band is respected. With weight 0 the
+    # solver behaves like the legacy "minimum-trading" optimiser; with
+    # weight 1 a EUR of leftover drift costs the same as a EUR of
+    # trade volume; higher values aggressively close drift even at
+    # the price of more trades.
+    c = np.zeros(total_vars)
+    c[:2 * n] = 1.0  # buy and sell penalised at unit weight (volume)
+    if K > 0:
+        c[4 * n:4 * n + K] = drift_w        # gp_k
+        c[4 * n + K:4 * n + 2 * K] = drift_w  # gn_k
 
     # Bounds
-    lb = np.zeros(4 * n)
-    ub = np.full(4 * n, np.inf)
+    lb = np.zeros(total_vars)
+    ub = np.full(total_vars, np.inf)
     ub[n:2*n] = values      # sell <= current value
     ub[2*n:3*n] = 1.0       # zb <= 1
     ub[3*n:4*n] = 1.0       # zs <= 1
+    # gp_k and gn_k are non-negative slacks with no upper bound.
 
-    # Integer constraints: zb and zs are binary
-    integrality = np.zeros(4 * n)
-    integrality[2*n:] = 1   # all z variables are integers
+    # Integer constraints: only zb and zs are binary; the slack
+    # variables remain continuous.
+    integrality = np.zeros(total_vars)
+    integrality[2*n:4*n] = 1   # zb and zs are integers
 
     # Freeze holdings with no_buy_no_sell=True
     for i, h in enumerate(holdings):
@@ -784,3 +898,144 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     })
 
     return verifications
+
+
+
+def compute_drift_penalty_sensitivity(
+    holdings: list[Holding],
+    config: InvestorConfig,
+    total_value: float,
+    lump_sum: Optional[float] = None,
+    weights: Optional[list[float]] = None,
+) -> list[dict]:
+    """Run the optimizer at a series of drift-penalty weights.
+
+    Returns a list of *regimes* — distinct optimization outcomes
+    aggregated by the range of weights that produce them. Two
+    consecutive sweep points produce the same regime when their
+    actions are identical (within €1 tolerance) for every holding.
+
+    The sweep covers a coarse-but-meaningful set of weights so the
+    user can spot turning points without an explosion of rows. With
+    LPs being piecewise-constant in this parameter, increasing
+    granularity beyond this set rarely uncovers new behaviour.
+
+    Each returned dict carries:
+        - ``weight_min``, ``weight_max``: the inclusive range of
+          weights that selects this regime.
+        - ``actions``: trade list (same shape as the main optimizer).
+        - ``n_buy``, ``n_sell``: count of executed buys/sells.
+        - ``total_buy``, ``total_sell``: gross EUR volumes.
+        - ``total_tax``, ``total_fee``: friction breakdown computed
+          using the same formulas as the main solver.
+        - ``max_drift_pp``: largest absolute drift the plan leaves on
+          any tracked target (asset class, geography, per-holding).
+        - ``buy_by_class``: total BUY volume grouped by asset class.
+
+    The ``weights`` argument lets callers customize the scan.
+    """
+    if not holdings:
+        return []
+
+    if weights is None:
+        # Default sweep: dense around the typical "balanced" regime
+        # (0–2) and sparse beyond. Adjust if you need finer detail.
+        weights = [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 7.0, 10.0]
+    weights = sorted(set(round(float(w), 4) for w in weights))
+
+    fee_buy = float(config.rebalancing_transaction_fee_buy_eur or 0.0)
+    fee_sell = float(config.rebalancing_transaction_fee_sell_eur or 0.0)
+    cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
+    cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
+
+    def _summarise(actions: list[dict], verifications: list[dict]) -> dict:
+        n_buy = sum(1 for a in actions if a["direction"] == "buy")
+        n_sell = sum(1 for a in actions if a["direction"] == "sell")
+        total_buy = sum(a["amount_eur"] for a in actions if a["direction"] == "buy")
+        total_sell = sum(a["amount_eur"] for a in actions if a["direction"] == "sell")
+        total_fee = n_buy * fee_buy + n_sell * fee_sell
+        total_tax = 0.0
+        buy_by_class: dict[str, float] = {}
+        sell_by_class: dict[str, float] = {}
+        ticker_to_holding = {h.ticker: h for h in holdings}
+        for a in actions:
+            h = ticker_to_holding.get(a["ticker"])
+            ac = h.asset_class.value if h and h.asset_class else "—"
+            if a["direction"] == "buy":
+                buy_by_class[ac] = buy_by_class.get(ac, 0.0) + a["amount_eur"]
+            else:
+                sell_by_class[ac] = sell_by_class.get(ac, 0.0) + a["amount_eur"]
+                if not h:
+                    continue
+                gp = float(h.gain_pct or 0.0)
+                if gp <= 0:
+                    continue
+                instr = (h.instrument_type or "").lower()
+                rate = cg_gov if "government bond" in instr else cg_std
+                total_tax += a["amount_eur"] * (gp / 100.0) * rate
+
+        max_drift_pp = 0.0
+        for v in verifications:
+            if v.get("kind") not in ("asset", "geography",
+                                     "per_holding_equity", "per_holding_fi"):
+                continue
+            for it in v.get("items", []) or []:
+                d = abs(float(it["actual_pct"]) - float(it["target_pct"]))
+                if d > max_drift_pp:
+                    max_drift_pp = d
+        return {
+            "actions": actions,
+            "n_buy": n_buy,
+            "n_sell": n_sell,
+            "total_buy": total_buy,
+            "total_sell": total_sell,
+            "total_tax": total_tax,
+            "total_fee": total_fee,
+            "max_drift_pp": max_drift_pp,
+            "buy_by_class": buy_by_class,
+            "sell_by_class": sell_by_class,
+            # Net change per asset class (BUY − SELL). Positive values
+            # mean the class grows after the rebalance, negative means
+            # it shrinks. Cleaner to read than two separate columns
+            # when the user only cares about the resulting drift.
+            "net_by_class": {
+                ac: buy_by_class.get(ac, 0.0) - sell_by_class.get(ac, 0.0)
+                for ac in set(buy_by_class) | set(sell_by_class)
+            },
+        }
+
+    def _action_signature(actions: list[dict]) -> tuple:
+        # Round amounts to nearest EUR so micro-numerical wiggles do
+        # not split otherwise-identical regimes.
+        return tuple(sorted(
+            (a["ticker"], a["direction"], round(a["amount_eur"]))
+            for a in actions
+        ))
+
+    samples = []
+    for w in weights:
+        sweep_cfg = copy.copy(config)
+        sweep_cfg.rebalancing_drift_penalty_weight = float(w)
+        actions, verifs = compute_unified_rebalancing(
+            holdings, sweep_cfg, total_value, lump_sum=lump_sum,
+        )
+        summary = _summarise(actions, verifs)
+        summary["weight"] = float(w)
+        summary["signature"] = _action_signature(actions)
+        samples.append(summary)
+
+    # Group consecutive samples that share the same action signature.
+    regimes: list[dict] = []
+    for s in samples:
+        if regimes and regimes[-1]["signature"] == s["signature"]:
+            regimes[-1]["weight_max"] = s["weight"]
+        else:
+            entry = {k: v for k, v in s.items() if k != "weight"}
+            entry["weight_min"] = s["weight"]
+            entry["weight_max"] = s["weight"]
+            regimes.append(entry)
+
+    # Drop the signature key — it's an internal grouping device.
+    for r in regimes:
+        r.pop("signature", None)
+    return regimes

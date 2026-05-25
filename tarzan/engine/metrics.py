@@ -413,13 +413,29 @@ class MetricsEngine:
         if self.config is None:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_sensitivity"] = None
             return
-        from tarzan.engine.rebalancer import compute_unified_rebalancing
+        from tarzan.engine.rebalancer import (
+            compute_unified_rebalancing,
+            compute_drift_penalty_sensitivity,
+        )
         lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
         suggestions, verifications = compute_unified_rebalancing(
             self.holdings, self.config, ctx["total_value"], lump_sum=lump)
         ctx["rebalancing_suggestions"] = suggestions
         ctx["rebalancing_verifications"] = verifications
+
+        # Drift-penalty sensitivity sweep — surfaces the optimization
+        # turning points so the user can pick the weight that matches
+        # their preferences (more trades / less drift vs. fewer
+        # trades / more leftover drift). Cheap enough to always run.
+        try:
+            ctx["rebalancing_sensitivity"] = compute_drift_penalty_sensitivity(
+                self.holdings, self.config, ctx["total_value"], lump_sum=lump,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning("Drift-penalty sensitivity sweep failed: %s", exc)
+            ctx["rebalancing_sensitivity"] = None
 
     # ------------------------------------------------------------------
     # Benchmarks
@@ -545,6 +561,7 @@ class MetricsEngine:
             goal_deltas=ctx.get("goal_deltas"),
             rebalancing_suggestions=ctx.get("rebalancing_suggestions"),
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
+            rebalancing_sensitivity=ctx.get("rebalancing_sensitivity"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
             portfolio_history=ctx.get("portfolio_history"),
             benchmark_histories=ctx.get("benchmark_histories", {}),

@@ -483,6 +483,55 @@
           </tr>
           {% endif %}
 
+          {# ─── DRIFT-PENALTY SENSITIVITY ──────────────── #}
+          {% if sensitivity.available %}
+          <tr>
+            <td class="px-32" style="padding:32px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Tuning</div>
+              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Drift-penalty sensitivity</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};line-height:1.45;">
+                Each row is a regime — a range of weights producing the same plan. Your active weight is
+                <span style="color:{{ palette.ink }};font-weight:700;">{{ sensitivity.active_weight }}</span>
+                (highlighted with ▶). Higher weights close more drift at the cost of more trades, taxes, and fees.
+              </div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
+                <tr>
+                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Weight</td>
+                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Trades</td>
+                  <td align="right" style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Buy</td>
+                  <td align="right" style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Sell</td>
+                  <td align="right" style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Tax+Fee</td>
+                  <td align="right" style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-right-radius:8px;">Drift</td>
+                </tr>
+                {% for r in sensitivity.rows %}
+                <tr>
+                  <td style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-weight:{% if r.is_active %}700{% else %}500{% endif %};color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">{% if r.is_active %}▶ {% endif %}{{ r.weight_range }}</td>
+                  <td style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}color:{{ palette.muted }};">{{ r.actions }}</td>
+                  <td align="right" style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.green }};font-weight:600;">{{ r.buy_total }}</td>
+                  <td align="right" style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.red }};font-weight:600;">{{ r.sell_total }}</td>
+                  <td align="right" style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.muted }};">{{ r.friction }}</td>
+                  <td align="right" style="padding:8px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.ink }};font-weight:600;{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ r.max_drift }}</td>
+                </tr>
+                {% if r.net_by_class and r.net_by_class != '—' %}
+                <tr>
+                  <td colspan="6" style="padding:0 10px 8px 10px;background:{% if r.is_active %}{{ palette.accent_bg }}{% elif loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}font-size:10px;color:{{ palette.subtle }};line-height:1.4;">
+                    <span style="color:{{ palette.muted }};font-weight:600;">Net change:</span> {{ r.net_by_class }}
+                  </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+              </table>
+              {% if sensitivity.notes %}
+              <div style="margin-top:12px;padding:12px 14px;background:{{ palette.card_alt }};border-radius:8px;font-size:11px;color:{{ palette.muted }};line-height:1.6;">
+                {% for note in sensitivity.notes %}
+                <div{% if not loop.first %} style="margin-top:4px;"{% endif %}>{{ note }}</div>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── RETURN CONTRIBUTION ──────────────────────── #}
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>

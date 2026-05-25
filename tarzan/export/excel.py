@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 from openpyxl import Workbook
@@ -648,18 +649,93 @@ def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
 
 
 
+def _build_sensitivity_notes(sensitivity: list[dict], configured_w: float) -> list[str]:
+    """Generate plain-language hints comparing the active drift-penalty
+    regime to the immediate alternatives.
+
+    The notes are designed to fit on one or two lines each so the user
+    can skim them. They quantify the trade-off ("paying €X more in
+    friction buys you Y pp less drift") rather than offering opinions.
+
+    Returns an empty list when no actionable comparison exists, e.g.
+    when there is only one regime in the sweep.
+    """
+    if not sensitivity or len(sensitivity) < 2:
+        return []
+
+    # Find the index of the active regime.
+    active_idx = None
+    for i, r in enumerate(sensitivity):
+        if float(r["weight_min"]) <= configured_w <= float(r["weight_max"]):
+            active_idx = i
+            break
+    if active_idx is None:
+        return []
+
+    from tarzan.export._format import eur_smart as _eur
+
+    notes: list[str] = []
+    active = sensitivity[active_idx]
+
+    def _delta_summary(other: dict, direction: str) -> Optional[str]:
+        a_friction = float(active["total_tax"]) + float(active["total_fee"])
+        o_friction = float(other["total_tax"]) + float(other["total_fee"])
+        d_friction = o_friction - a_friction
+        d_drift_pp = float(other["max_drift_pp"]) - float(active["max_drift_pp"])
+        d_actions = (other["n_buy"] + other["n_sell"]) - (active["n_buy"] + active["n_sell"])
+        # Range label of the candidate regime.
+        wmin = float(other["weight_min"])
+        wmax = float(other["weight_max"])
+        range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g}–{wmax:g}"
+        if direction == "down":
+            cost_word = "save" if d_friction < 0 else "spend"
+            drift_word = "loosen" if d_drift_pp > 0 else "tighten"
+            return (
+                f"\u2193 Lowering to {range_str}: "
+                f"{cost_word} {_eur(abs(d_friction))} in friction, "
+                f"{drift_word} drift by {abs(d_drift_pp):.2f} pp, "
+                f"{abs(d_actions):+d} actions."
+            ).replace("+-", "−")
+        else:
+            cost_word = "spend" if d_friction > 0 else "save"
+            drift_word = "tighten" if d_drift_pp < 0 else "loosen"
+            return (
+                f"\u2191 Raising to {range_str}: "
+                f"{cost_word} {_eur(abs(d_friction))} more in friction, "
+                f"{drift_word} drift by {abs(d_drift_pp):.2f} pp, "
+                f"{abs(d_actions):+d} actions."
+            ).replace("+-", "−")
+
+    if active_idx > 0:
+        prev = sensitivity[active_idx - 1]
+        notes.append(_delta_summary(prev, "down"))
+    if active_idx < len(sensitivity) - 1:
+        nxt = sensitivity[active_idx + 1]
+        notes.append(_delta_summary(nxt, "up"))
+    return [n for n in notes if n]
+
+
 def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: InvestorConfig):
     """Optimizer: status overview, rebalancing actions, consolidated deviations table."""
     _apply_title(sheet, 1, 1, "Portfolio Optimizer")
 
-    # Column widths
-    sheet.column_dimensions['A'].width = 36   # Category / Holding
-    sheet.column_dimensions['B'].width = 13   # Current %
-    sheet.column_dimensions['C'].width = 13   # Target %
-    sheet.column_dimensions['D'].width = 16   # Post-rebal %
-    sheet.column_dimensions['E'].width = 16   # Delta after rebal
-    sheet.column_dimensions['F'].width = 12   # Status
-    sheet.column_dimensions['G'].width = 45   # Reason / Notes
+    # Column widths. Both Allocation Deviations and Rebalancing Actions
+    # tables now share the same 7-column layout (Ticker is in column B
+    # for every row, kept empty for asset/geography buckets). The same
+    # widths are reused for the Actions table where col G holds the
+    # "Reason" string — that column is set to a wide enough size for
+    # both purposes.
+    sheet.column_dimensions['A'].width = 36   # Category / Holding name
+    sheet.column_dimensions['B'].width = 13   # Ticker
+    sheet.column_dimensions['C'].width = 13   # Current % (Allocation) | Direction (Actions)
+    sheet.column_dimensions['D'].width = 16   # Target %               | Amount EUR
+    sheet.column_dimensions['E'].width = 16   # Post-rebal %           | % of Portfolio
+    sheet.column_dimensions['F'].width = 13   # Delta                  | Tax EUR
+    sheet.column_dimensions['G'].width = 45   # Status                 | Reason
+    # Column H is used by the drift-penalty sensitivity table for
+    # the SELL-by-class summary; widen it so the EUR breakdown is
+    # readable without truncation.
+    sheet.column_dimensions['H'].width = 45
 
     tol = config.rebalancing_threshold_pctg if config else 5.0
 
@@ -768,13 +844,55 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
     row += 1
 
     if metrics.rebalancing_suggestions:
+        # Compute totals + capital-gains tax / fee impact in the same way
+        # the LP solver applies them, so the summary line matches the
+        # solver's view of friction.
+        cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
+        cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
+        fee_buy = float(config.rebalancing_transaction_fee_buy_eur or 0.0)
+        fee_sell = float(config.rebalancing_transaction_fee_sell_eur or 0.0)
+
         total_buy = sum(s["amount_eur"] for s in metrics.rebalancing_suggestions if s["direction"] == "buy")
         total_sell = sum(s["amount_eur"] for s in metrics.rebalancing_suggestions if s["direction"] == "sell")
-        summary = (
-            f"Total BUY: {_format_number(total_buy)} EUR"
-            f"  \u00b7  Total SELL: {_format_number(total_sell)} EUR"
-            f"  \u00b7  Net: {_format_number(total_buy - total_sell)} EUR"
-        )
+
+        # Per-row tax = gross × max(0, gain_pct/100) × cg_rate. Used both
+        # for the per-row "Tax (EUR)" column and for the summary total.
+        df = metrics.holdings_df
+        per_row_tax: dict[str, float] = {}
+        total_tax = 0.0
+        for s in metrics.rebalancing_suggestions:
+            if s["direction"] != "sell":
+                per_row_tax[s["ticker"]] = 0.0
+                continue
+            row_df = df[df["ticker"] == s["ticker"]]
+            if row_df.empty:
+                per_row_tax[s["ticker"]] = 0.0
+                continue
+            hr = row_df.iloc[0]
+            gain = float(hr.get("gain_pct") or 0.0)
+            if gain <= 0:
+                per_row_tax[s["ticker"]] = 0.0
+                continue
+            instr = (hr.get("instrument_type") or "").lower()
+            rate = cg_gov if "government bond" in instr else cg_std
+            t = s["amount_eur"] * (gain / 100.0) * rate
+            per_row_tax[s["ticker"]] = t
+            total_tax += t
+
+        n_buy = sum(1 for s in metrics.rebalancing_suggestions if s["direction"] == "buy")
+        n_sell = sum(1 for s in metrics.rebalancing_suggestions if s["direction"] == "sell")
+        total_fee = n_buy * fee_buy + n_sell * fee_sell
+
+        summary_parts = [
+            f"Total BUY: {_format_number(total_buy)} EUR",
+            f"Total SELL: {_format_number(total_sell)} EUR",
+            f"Net: {_format_number(total_buy - total_sell)} EUR",
+        ]
+        if total_tax > 0:
+            summary_parts.append(f"Tax: {_format_number(total_tax)} EUR")
+        if total_fee > 0:
+            summary_parts.append(f"Fees: {_format_number(total_fee)} EUR")
+        summary = "  \u00b7  ".join(summary_parts)
         scell = sheet.cell(row=row, column=1, value=summary)
         scell.font = px_font(size=10, bold=True, color=C['text_sec'])
         scell.fill = px_fill(C['bg_page'])
@@ -784,22 +902,30 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         row += 2
 
         for c, h in enumerate(
-            ["Holding", "Direction", "Amount (EUR)", "% of Portfolio", "", "", "Reason"], 1
+            ["Holding", "Ticker", "Direction", "Amount (EUR)", "% of Portfolio", "Tax (EUR)", "Reason"], 1
         ):
-            if h:
-                _apply_header(sheet, row, c, h)
+            _apply_header(sheet, row, c, h)
         row += 1
         total_value = metrics.total_value or 1.0
         for ti, s in enumerate(metrics.rebalancing_suggestions):
             direction = s["direction"].upper()
             pct_of_port = (s["amount_eur"] / total_value) * 100 if total_value > 0 else 0
             dir_color = C['green'] if direction == "BUY" else C['red']
+            tax_value = per_row_tax.get(s["ticker"], 0.0)
             _write_data_cell(sheet, row, 1, s.get("name", ""), ti)
-            _write_data_cell(sheet, row, 2, direction, ti, bold=True, font_color=dir_color)
-            _write_data_cell(sheet, row, 3, s["amount_eur"], ti, is_number=True,
+            _write_data_cell(sheet, row, 2, s.get("ticker", ""), ti, font_color=C['text_sec'])
+            _write_data_cell(sheet, row, 3, direction, ti, bold=True, font_color=dir_color)
+            _write_data_cell(sheet, row, 4, s["amount_eur"], ti, is_number=True,
                              num_fmt='#,##0.00', font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 4, pct_of_port, ti, is_number=True,
+            _write_data_cell(sheet, row, 5, pct_of_port, ti, is_number=True,
                              num_fmt='0.00', font_color=C['text_pri'])
+            # Always write a numeric value so the column reads
+            # consistently — show "0.00" for buys and for sells of
+            # positions in loss (where realising the loss generates
+            # no capital gains tax). The legend in the dashboard makes
+            # it clear that 0 means "no taxable gain".
+            _write_data_cell(sheet, row, 6, tax_value, ti, is_number=True,
+                             num_fmt='#,##0.00', font_color=C['text_pri'])
             _write_data_cell(sheet, row, 7, s.get("reason", ""), ti)
             row += 1
     else:
@@ -942,9 +1068,17 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 1
 
-        # Column headers: hybrid units (% for most rows, EUR for cash)
+        # Column headers. All four sub-tables share the same 7-column
+        # layout so the numeric columns line up vertically across
+        # groups (asset class, geography, per-holding equity, per-
+        # holding FI). The Ticker column is empty for asset/geo rows
+        # and populated for per-holding rows. Header label switches
+        # between "Category" and "Holding" depending on the section.
+        is_per_holding = kind.startswith("per_holding_")
+        row_label_header = "Holding" if is_per_holding else "Category"
         col_headers = [
-            "Category", "Current (% / EUR)", "Target (% / EUR)",
+            row_label_header, "Ticker",
+            "Current (% / EUR)", "Target (% / EUR)",
             "Post-rebal (% / EUR)", "Delta (pp / EUR)", "Status",
         ]
         for c, h in enumerate(col_headers, 1):
@@ -1026,31 +1160,43 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
                 status = "\u25cf Action"
 
             # Match Dashboard look: color the Category label with the asset
-            # class or geography palette when applicable.
+            # class or geography palette when applicable. For per-holding
+            # tables the row label is the holding name (no palette tag)
+            # and the Ticker cell carries the ticker. For asset/geo
+            # rows the Ticker cell is blank but kept so that numeric
+            # columns line up across all four sub-tables.
             if kind == "asset":
                 _write_data_cell(sheet, row, 1, display_label, ti, asset_class=display_label)
             elif kind == "geography":
                 _write_data_cell(sheet, row, 1, display_label, ti, geography=display_label)
             else:
                 _write_data_cell(sheet, row, 1, display_label, ti)
-            _write_data_cell(sheet, row, 2,
+
+            # Ticker cell. Always written so column B has consistent
+            # styling across rows; empty string for asset/geo, the
+            # actual ticker for per-holding rows.
+            ticker_value = cat if is_per_holding else ""
+            _write_data_cell(sheet, row, 2, ticker_value, ti, font_color=C['text_sec'])
+            col_current, col_target, col_post, col_delta, col_status = 3, 4, 5, 6, 7
+
+            _write_data_cell(sheet, row, col_current,
                              current_pct if current_pct is not None else "",
                              ti, is_number=current_pct is not None,
                              num_fmt='0.00' if current_pct is not None else None,
                              font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 3,
+            _write_data_cell(sheet, row, col_target,
                              target_pct if target_pct is not None else "",
                              ti, is_number=target_pct is not None,
                              num_fmt='0.00' if target_pct is not None else None,
                              font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 4,
+            _write_data_cell(sheet, row, col_post,
                              post_pct_display if post_pct_display is not None else "—",
                              ti, is_number=post_pct_display is not None,
                              num_fmt='0.00' if post_pct_display is not None else None,
                              font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 5, delta_after, ti, is_number=True,
+            _write_data_cell(sheet, row, col_delta, delta_after, ti, is_number=True,
                              num_fmt='+0.00;-0.00;0.00', font_color=color)
-            _write_data_cell(sheet, row, 6, status, ti, bold=True, font_color=color)
+            _write_data_cell(sheet, row, col_status, status, ti, bold=True, font_color=color)
             row += 1
 
         # Append the Cash Buffer row at the bottom of the asset group.
@@ -1065,24 +1211,28 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
             else:
                 cash_status = "\u25cf Action"
             ti2 = len(categories)
+            # Cash row uses the same 7-column layout: empty Ticker
+            # (col 2) keeps the numeric columns lined up with the
+            # rest of the Allocation Deviations section.
             _write_data_cell(sheet, row, 1, "Cash & Cash Equivalents", ti2,
                              asset_class="Cash & Cash Equivalents")
-            _write_data_cell(sheet, row, 2, cash_actual, ti2, is_number=True,
+            _write_data_cell(sheet, row, 2, "", ti2)
+            _write_data_cell(sheet, row, 3, cash_actual, ti2, is_number=True,
                              num_fmt='"€"#,##0.00', font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 3, cash_target_eur, ti2, is_number=True,
+            _write_data_cell(sheet, row, 4, cash_target_eur, ti2, is_number=True,
                              num_fmt='"€"#,##0.00', font_color=C['text_pri'])
             # Hide the Post-rebal cash value when the LP was infeasible
             # (it would equal the current value and falsely suggest a
             # rebalance happened).
             if no_solution:
-                _write_data_cell(sheet, row, 4, "—", ti2)
+                _write_data_cell(sheet, row, 5, "—", ti2)
             else:
-                _write_data_cell(sheet, row, 4, cash_post, ti2, is_number=True,
+                _write_data_cell(sheet, row, 5, cash_post, ti2, is_number=True,
                                  num_fmt='"€"#,##0.00', font_color=C['text_pri'])
-            _write_data_cell(sheet, row, 5, cash_delta_eur, ti2, is_number=True,
+            _write_data_cell(sheet, row, 6, cash_delta_eur, ti2, is_number=True,
                              num_fmt='"€"+#,##0.00;"€"-#,##0.00;"€"0.00',
                              font_color=cash_color)
-            _write_data_cell(sheet, row, 6, cash_status, ti2, bold=True, font_color=cash_color)
+            _write_data_cell(sheet, row, 7, cash_status, ti2, bold=True, font_color=cash_color)
             row += 1
 
         row += 1  # spacer between groups
@@ -1094,6 +1244,103 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         nocell.border = px_no_border()
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         row += 1
+
+    # =====================================================================
+    # DRIFT-PENALTY SENSITIVITY — show the user how the optimization
+    # changes as ``rebalancing_drift_penalty_weight`` varies, so they
+    # can pick the value that matches their preference (more trades
+    # vs. less leftover drift).
+    # =====================================================================
+    sensitivity = getattr(metrics, "rebalancing_sensitivity", None)
+    if sensitivity:
+        from tarzan.export._format import eur_smart as _eur_compact
+        row += 2
+        _write_area_header(sheet, row, 1, 7, "DRIFT-PENALTY SENSITIVITY")
+        row += 1
+        configured_w = float(getattr(config, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
+        subcell_text = (
+            f"Each row is a regime — a range of weights producing the "
+            f"same plan. Active weight: {configured_w:g} (highlighted with \u25b6). "
+            f"Higher weights close more drift at the cost of more trades, "
+            f"taxes, and fees."
+        )
+        subcell = sheet.cell(row=row, column=1, value=subcell_text)
+        subcell.font = px_font(size=9, italic=True, color=C['text_sec'])
+        subcell.fill = px_fill(C['bg_page'])
+        subcell.border = px_no_border()
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        row += 2
+
+        sens_headers = [
+            "Weight range",
+            "Actions (B/S)",
+            "BUY total",
+            "SELL total",
+            "Tax + Fee",
+            "Max drift",
+            "Net change by class",
+        ]
+        for c, h in enumerate(sens_headers, 1):
+            _apply_header(sheet, row, c, h)
+        row += 1
+
+        def _net_by_class_str(d: dict, min_eur: float = 0.5) -> str:
+            """Render a class-net dict as ``Equ +€1.9k  ·  FI −€20.1k``.
+
+            Sorted by descending absolute volume; entries below
+            ``min_eur`` are dropped (numerical noise from the LP
+            solver). Sign comes from BUY − SELL: positive values mean
+            the class grows, negative shrinks.
+            """
+            items = sorted((d or {}).items(), key=lambda x: -abs(x[1]))
+            return "  \u00b7  ".join(
+                f"{ac} {_eur_compact(v, signed=True)}"
+                for ac, v in items
+                if abs(v) > min_eur
+            ) or "—"
+
+        for ti, regime in enumerate(sensitivity):
+            wmin = float(regime["weight_min"])
+            wmax = float(regime["weight_max"])
+            range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g} – {wmax:g}"
+            actions_str = f"{regime['n_buy']}B / {regime['n_sell']}S"
+            buy = float(regime["total_buy"])
+            sell = float(regime["total_sell"])
+            friction = float(regime["total_tax"]) + float(regime["total_fee"])
+            drift = float(regime["max_drift_pp"])
+            net_str = _net_by_class_str(regime.get("net_by_class") or {})
+
+            is_active = (wmin <= configured_w <= wmax)
+            label_color = C['text_pri'] if is_active else C['text_sec']
+            range_value = f"\u25b6 {range_str}" if is_active else range_str
+            _write_data_cell(sheet, row, 1, range_value, ti, bold=is_active,
+                             font_color=label_color)
+            _write_data_cell(sheet, row, 2, actions_str, ti, font_color=label_color)
+            _write_data_cell(sheet, row, 3, _eur_compact(buy), ti,
+                             font_color=label_color)
+            _write_data_cell(sheet, row, 4, _eur_compact(sell), ti,
+                             font_color=label_color)
+            _write_data_cell(sheet, row, 5, _eur_compact(friction), ti,
+                             font_color=label_color)
+            _write_data_cell(sheet, row, 6, drift, ti, is_number=True,
+                             num_fmt='0.00"%"', font_color=label_color)
+            _write_data_cell(sheet, row, 7, net_str, ti, font_color=label_color)
+            row += 1
+
+        # Dynamic insight: compare the active regime to one notch up
+        # and one notch down so the user sees what changing the weight
+        # would buy them.
+        notes = _build_sensitivity_notes(sensitivity, configured_w)
+        if notes:
+            row += 1
+            for note in notes:
+                ncell = sheet.cell(row=row, column=1, value=note)
+                ncell.font = px_font(size=10, italic=True, color=C['text_sec'])
+                ncell.fill = px_fill(C['bg_page'])
+                ncell.alignment = px_align(h='left', wrap=True)
+                ncell.border = px_no_border()
+                sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+                row += 1
 
     # =====================================================================
     # SOLVER INFO
@@ -1130,6 +1377,11 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         ("No-sell mode",
          ("enabled" if config.rebalancing_no_sell else "disabled"),
          "If enabled, the solver can only buy, never sell"),
+        ("Drift-penalty weight",
+         f"{getattr(config, 'rebalancing_drift_penalty_weight', 0.0):g}",
+         "Cost in the LP objective for residual EUR drift after rebalancing. "
+         "0 = pure minimum trading. 1 = balanced (default). "
+         "Higher values aggressively close drift even at the cost of more trades."),
     ]
 
     for c, h in enumerate(["Parameter", "Value", "", "", "", "", "Description"], 1):

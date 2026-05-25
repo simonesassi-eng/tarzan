@@ -124,41 +124,13 @@ def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> st
 
 
 def _eur_smart(amount: Optional[float], signed: bool = False) -> str:
-    """Compact EUR formatter: shows ``€9.6k`` / ``€215k`` / ``€1.2M``
-    instead of the long-form ``€9,643.76``. Useful in dense rows where
-    the full localised amount would force unwanted wrapping.
+    """Compact EUR formatter — see :func:`tarzan.export._format.eur_smart`.
 
-    Rules:
-      |amount| < 1,000      → €<int>           (e.g. €356)
-      |amount| < 1,000,000  → €<value>k        (1 decimal when non-integer)
-      |amount| >= 1,000,000 → €<value>M        (1 decimal when non-integer)
-
-    Always shows the sign with ``signed=True``; otherwise uses a
-    leading minus glyph for negative values.
+    Kept as a thin wrapper for backwards compatibility with the
+    several call sites in this module.
     """
-    if amount is None or (isinstance(amount, float) and pd.isna(amount)):
-        return "—"
-    abs_amt = abs(float(amount))
-    if abs_amt < 1_000:
-        body = f"€{abs_amt:,.0f}"
-    elif abs_amt < 1_000_000:
-        thousands = abs_amt / 1_000
-        if abs(thousands - round(thousands)) < 0.05:
-            body = f"€{thousands:.0f}k"
-        else:
-            body = f"€{thousands:.1f}k"
-    else:
-        millions = abs_amt / 1_000_000
-        if abs(millions - round(millions)) < 0.05:
-            body = f"€{millions:.0f}M"
-        else:
-            body = f"€{millions:.1f}M"
-    if signed:
-        sign = "+" if amount >= 0 else "−"
-        return f"{sign}{body}"
-    if amount < 0:
-        return f"−{body}"
-    return body
+    from tarzan.export._format import eur_smart as _impl
+    return _impl(amount, signed=signed)
 
 
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
@@ -1356,6 +1328,62 @@ def _build_risk_legend() -> list[dict]:
     return legend_rows
 
 
+def _build_sensitivity(ctx: _NewsletterContext) -> dict:
+    """Build the drift-penalty sensitivity card.
+
+    Mirrors the Excel "Drift-penalty sensitivity" table so the
+    newsletter reader has the same view of the optimization regimes
+    available with the current portfolio. The active regime is
+    highlighted, and dynamic notes compare it to its immediate
+    neighbours so the user can decide whether to tighten or loosen
+    ``rebalancing_drift_penalty_weight`` in the next run.
+    """
+    m = ctx.metrics
+    cfg = ctx.config
+    sensitivity = getattr(m, "rebalancing_sensitivity", None)
+    if not sensitivity:
+        return {"available": False}
+
+    configured_w = float(getattr(cfg, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
+
+    def _net_by_class_str(d: dict, min_eur: float = 0.5) -> str:
+        items = sorted((d or {}).items(), key=lambda x: -abs(x[1]))
+        return "  \u00b7  ".join(
+            f"{ac} {_eur_smart(v, signed=True)}"
+            for ac, v in items
+            if abs(v) > min_eur
+        ) or "—"
+
+    rows = []
+    for r in sensitivity:
+        wmin = float(r["weight_min"])
+        wmax = float(r["weight_max"])
+        is_active = (wmin <= configured_w <= wmax)
+        range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g} – {wmax:g}"
+        rows.append({
+            "is_active": is_active,
+            "weight_range": range_str,
+            "actions": f"{r['n_buy']}B / {r['n_sell']}S",
+            "buy_total": _eur_smart(float(r["total_buy"])),
+            "sell_total": _eur_smart(float(r["total_sell"])),
+            "friction": _eur_smart(float(r["total_tax"]) + float(r["total_fee"])),
+            "max_drift": f"{float(r['max_drift_pp']):.2f}%",
+            "net_by_class": _net_by_class_str(r.get("net_by_class") or {}),
+        })
+
+    # Reuse the Excel helper for the dynamic notes so phrasing stays
+    # in lock-step between the two surfaces.
+    from tarzan.export.excel import _build_sensitivity_notes
+    notes = _build_sensitivity_notes(sensitivity, configured_w)
+
+    return {
+        "available": True,
+        "active_weight": f"{configured_w:g}",
+        "rows": rows,
+        "notes": notes,
+    }
+
+
 def _build_optimizer(ctx: _NewsletterContext) -> dict:
     """Build the suggested-action card.
 
@@ -1496,6 +1524,7 @@ def build_context(
         "performance": _build_performance(nctx),
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
+        "sensitivity": _build_sensitivity(nctx),
         "return_contrib": _build_return_contrib(nctx),
         "preheader": _build_preheader(nctx, hero),
         "footer": {

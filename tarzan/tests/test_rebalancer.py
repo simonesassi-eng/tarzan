@@ -24,7 +24,14 @@ def test_empty_portfolio(sample_config):
 
 
 def test_zero_total_value(sample_holdings, sample_config):
-    """Portfolio with zero total value should return empty actions."""
+    """Portfolio with zero total value should return empty actions.
+
+    The default drift penalty pushes the solver to close residual
+    drift even within the tolerance band. This test isolates the
+    zero-total-value path by disabling that penalty so the legacy
+    "minimum trading" objective is in effect.
+    """
+    sample_config.rebalancing_drift_penalty_weight = 0.0
     actions, verifications = compute_unified_rebalancing(
         sample_holdings, sample_config, 0.0
     )

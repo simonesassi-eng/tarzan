@@ -1,19 +1,26 @@
-key,value
-rebalancing_lump_sum_amount_eur,1000
-rebalancing_min_transaction_eur,0
-rebalancing_max_tolerance_pctg,2
-rebalancing_threshold_pctg,2.5
-rebalancing_no_sell,TRUE
-portfolio_inception_date,1/1/24
-target_cash_buffer_eur,3000
-target_invested_allocation_equities_pctg,66
-target_invested_allocation_fixed_income_pctg,25
-target_invested_allocation_gold_pctg,5
-target_invested_allocation_commodities_pctg,0
-target_invested_allocation_crypto_pctg,3
-target_invested_allocation_alternative_pctg,1
-target_equity_geo_usa_pctg,55
-target_equity_geo_japan_pctg,8
-target_equity_geo_eurozone_emu_pctg,14
-target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg,12
-target_equity_geo_emerging_markets_pctg,11
+key,value,description
+rebalancing_lump_sum_amount_eur,1000,"Fresh cash injected at this rebalance. Combined with any cash above target, it forms the net inflow the optimizer must deploy (BUY - SELL = net inflow)."
+rebalancing_min_transaction_eur,0,"Trades smaller than this EUR amount are forbidden by the optimizer. Use 0 to allow any trade size."
+rebalancing_max_tolerance_pctg,2,"Hard ceiling on per-target deviation the LP is allowed to leave after rebalancing."
+rebalancing_threshold_pctg,2.5,"Cosmetic alert threshold for the dashboard. Does not affect optimization."
+rebalancing_no_sell,TRUE,"If TRUE the optimizer can only buy. Useful for accumulation phases."
+rebalancing_auto_relax,TRUE,"If TRUE and the LP is infeasible at max_tolerance, search for the smallest feasible tolerance up to relax_cap."
+rebalancing_relax_cap_pctg,10,"Upper safety bound for the auto-relax search."
+rebalancing_transaction_fee_buy_eur,0,"Fixed EUR fee paid for each executed BUY."
+rebalancing_transaction_fee_sell_eur,0,"Fixed EUR fee paid for each executed SELL."
+rebalancing_capital_gains_tax_standard_pctg,0,"Capital gains tax rate applied to ETFs and equities when selling at a profit."
+rebalancing_capital_gains_tax_government_pctg,0,"Capital gains tax rate applied to government bonds (typically lower than the standard rate)."
+rebalancing_drift_penalty_weight,1.0,"Penalty in the LP objective for residual EUR drift between post-rebalance position and target. 0 = pure minimum-trading rebalance. 1 = balanced (default). Higher values push the optimizer to align targets even at the cost of more trades."
+portfolio_inception_date,1/1/24,"Reference date for portfolio age and inception-anchored stats."
+target_cash_buffer_eur,3000,"Absolute EUR cash buffer kept in the portfolio."
+target_invested_allocation_equities_pctg,66,"Target weight of equities in the invested portfolio. All target_invested_allocation_*_pctg keys must sum to 100."
+target_invested_allocation_fixed_income_pctg,25,"Target weight of fixed income in the invested portfolio."
+target_invested_allocation_gold_pctg,5,"Target weight of gold in the invested portfolio."
+target_invested_allocation_commodities_pctg,0,"Target weight of broad commodities in the invested portfolio."
+target_invested_allocation_crypto_pctg,3,"Target weight of crypto in the invested portfolio."
+target_invested_allocation_alternative_pctg,1,"Target weight of alternative assets in the invested portfolio."
+target_equity_geo_usa_pctg,55,"Target weight of US equities within the equity sleeve. All target_equity_geo_*_pctg keys must sum to 100."
+target_equity_geo_japan_pctg,8,"Target weight of Japanese equities within the equity sleeve."
+target_equity_geo_eurozone_emu_pctg,14,"Target weight of Eurozone (EMU) equities within the equity sleeve."
+target_equity_geo_dev_ex_usa_ex_emu_ex_jp_pctg,12,"Target weight of developed markets ex-US ex-EMU ex-Japan."
+target_equity_geo_emerging_markets_pctg,11,"Target weight of emerging market equities."
