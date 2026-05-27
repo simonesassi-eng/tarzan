@@ -970,7 +970,7 @@ def _build_smart_insights(ctx: _NewsletterContext) -> list[dict]:
                 "bg": PALETTE["amber_bg"],
                 "category": "Risk · Tolerance relaxed",
                 "headline": (
-                    f"Optimizer relaxed tolerance to \u00b1{used_tol:.1f}% "
+                    f"Optimizer relaxed tolerance to \u00b1{used_tol:.2f}% "
                     f"(configured \u00b1{cfg_tol:.1f}%) to find a plan."
                 ),
                 "body": (

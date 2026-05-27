@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from typing import Optional
 
 import numpy as np
@@ -94,24 +95,17 @@ def compute_unified_rebalancing(
     is_fi = np.array([1.0 if h.asset_class == AssetClass.FIXED_INCOME else 0.0 for h in holdings])
     fi_value = (values * is_fi).sum()
 
-    # --- Effective net inflow: explicit lump sum + excess cash above target ---
-    # In no-sell mode with cash already below target, we cannot shrink cash
-    # further; treat cash as 'locked at current level' and skip the cash
-    # constraint (the solver will still respect the explicit lump_sum).
+    # Lump sum is the only external cash flow we treat as "must
+    # deploy in full". The cash holdings (e.g. money-market sweep)
+    # are now ordinary tradeable instruments controlled by the
+    # ``target_cash_buffer_eur`` constraint, so the solver can
+    # explicitly buy or sell them like any other holding. The
+    # legacy ``cash_excess`` shortcut disappears: if cash is above
+    # the buffer target, the solver will propose a SELL on the
+    # cash holding (and a matching BUY elsewhere); if it is below,
+    # a BUY on the cash holding.
     explicit_lump = float(lump_sum or 0.0)
-    cash_excess = cash_value - cash_target
-    enforce_cash_target = True
-    if config.rebalancing_no_sell and cash_excess < 0:
-        # Cash is below target and solver cannot sell to generate more.
-        enforce_cash_target = False
-        cash_excess = 0.0
-        logger.info(
-            "Cash (%.2f EUR) is below target (%.2f EUR) and no-sell mode is on; "
-            "cash buffer target skipped for this run.",
-            cash_value, cash_target,
-        )
-    effective_net_inflow = explicit_lump + cash_excess
-    is_lump_sum = effective_net_inflow > 0
+    is_lump_sum = explicit_lump > 0
 
     # --- Solve MILP with progressive tolerance ---
     # Try a graded ladder of tolerances and stop at the first feasible one.
@@ -130,8 +124,8 @@ def compute_unified_rebalancing(
                            eq_value, fi_value, tv, tol,
                            cash_value=cash_value,
                            invested_value=invested_value,
-                           net_inflow=effective_net_inflow,
-                           lock_cash_holdings=config.rebalancing_no_sell or not enforce_cash_target)
+                           lump_sum=explicit_lump,
+                           no_sell_mode=config.rebalancing_no_sell)
         if result is not None and result.success:
             actions = _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq_value)
             used_tolerance = tol
@@ -150,20 +144,18 @@ def compute_unified_rebalancing(
         relax_cap = max(float(config.rebalancing_relax_cap_pctg or 0.0), max_tol)
         if relax_cap > max_tol:
             logger.info(
-                "LP infeasible at ±%.1f%% — auto-relax search up to ±%.1f%%.",
+                "LP infeasible at ±%.2f%% — auto-relax search up to ±%.2f%%.",
                 max_tol, relax_cap,
             )
             tol_relaxed = _find_min_feasible_tolerance(
-                lo=max_tol, hi=relax_cap, precision=0.5,
+                lo=max_tol, hi=relax_cap, precision=0.025,
                 solve=lambda t: _solve_lp(
                     n, values, holdings, config, geo_frac, all_geos,
                     eq_value, fi_value, tv, t,
                     cash_value=cash_value,
                     invested_value=invested_value,
-                    net_inflow=effective_net_inflow,
-                    lock_cash_holdings=(
-                        config.rebalancing_no_sell or not enforce_cash_target
-                    ),
+                    lump_sum=explicit_lump,
+                    no_sell_mode=config.rebalancing_no_sell,
                 ),
             )
             if tol_relaxed is not None:
@@ -176,10 +168,8 @@ def compute_unified_rebalancing(
                     eq_value, fi_value, tv, tol_relaxed,
                     cash_value=cash_value,
                     invested_value=invested_value,
-                    net_inflow=effective_net_inflow,
-                    lock_cash_holdings=(
-                        config.rebalancing_no_sell or not enforce_cash_target
-                    ),
+                    lump_sum=explicit_lump,
+                    no_sell_mode=config.rebalancing_no_sell,
                 )
                 if final is not None and final.success:
                     actions = _extract_actions(
@@ -189,8 +179,8 @@ def compute_unified_rebalancing(
                     used_tolerance = tol_relaxed
                     relaxed = True
                     logger.warning(
-                        "LP solved at relaxed tolerance ±%.1f%% (configured "
-                        "ceiling ±%.1f%%). Review your per-holding targets "
+                        "LP solved at relaxed tolerance ±%.2f%% (configured "
+                        "ceiling ±%.2f%%). Review your per-holding targets "
                         "or raise rebalancing_target_tolerance_pctg.",
                         tol_relaxed, max_tol,
                     )
@@ -208,20 +198,20 @@ def compute_unified_rebalancing(
             if config.rebalancing_auto_relax and relax_cap > max_tol:
                 logger.warning(
                     "No feasible rebalancing solution even at the auto-relax "
-                    "cap ±%.1f%%. Targets are too aggressive — review them.",
+                    "cap ±%.2f%%. Targets are too aggressive — review them.",
                     relax_cap,
                 )
             else:
                 logger.warning(
                     "No feasible rebalancing solution within target tolerance "
-                    "±%.1f%%. At least one allocation drift exceeds the "
+                    "±%.2f%%. At least one allocation drift exceeds the "
                     "ceiling — raise rebalancing_target_tolerance_pctg, enable "
                     "rebalancing_auto_relax, or relax per-holding targets.",
                     max_tol,
                 )
         else:
             logger.info(
-                "Portfolio already aligned within ±%.1f%% — no rebalancing needed.",
+                "Portfolio already aligned within ±%.2f%% — no rebalancing needed.",
                 max_tol,
             )
 
@@ -243,11 +233,19 @@ def compute_unified_rebalancing(
         cash_value=cash_value,
     ))
 
-    # Verification
+    # Verification. With the new LP formulation, every holding —
+    # including the cash buffer holdings — is tradeable, so
+    # ``new_values`` already reflects the post-rebal position once we
+    # apply each action's amount. No special cash bookkeeping is
+    # required here; the LP guarantees that the lump sum exactly
+    # matches the net trade flow via the cash-flow equality.
     new_values = values.copy()
     for a in actions:
         idx = next(j for j, h in enumerate(holdings) if h.ticker == a["ticker"])
-        new_values[idx] += a["amount_eur"] if a["direction"] == "buy" else -a["amount_eur"]
+        if a["direction"] == "buy":
+            new_values[idx] += float(a["amount_eur"])
+        else:
+            new_values[idx] -= float(a["amount_eur"])
     verifications = _verify(new_values, holdings, config, geo_frac, all_geos, fi_value)
     if used_tolerance is not None:
         for v in verifications:
@@ -272,13 +270,17 @@ def _find_min_feasible_tolerance(lo: float, hi: float, precision: float,
         lo: Lower bound (already known to be infeasible).
         hi: Upper bound — the largest tolerance we are willing to accept.
         precision: Stop when the bracket is smaller than this (in pp).
+            Also defines the grid the returned value is snapped onto.
         solve: Callable ``f(tolerance)`` returning the scipy.optimize
             result (or None). The result is feasible iff
             ``result is not None and result.success``.
 
     Returns:
-        The smallest feasible tolerance rounded up to ``precision``,
-        or ``None`` if even ``hi`` is infeasible.
+        The smallest feasible tolerance snapped UP to the next
+        multiple of ``precision`` (so the caller can re-solve at a
+        clean tolerance value that is guaranteed to be ≥ the binary
+        search's feasible upper bound), or ``None`` if even ``hi`` is
+        infeasible.
     """
     # Quick check: does the cap itself work?
     res_hi = solve(hi)
@@ -295,9 +297,13 @@ def _find_min_feasible_tolerance(lo: float, hi: float, precision: float,
         else:
             lo = mid
 
-    # Round up to the requested precision so the caller can re-solve at
-    # a clean tolerance value.
-    return round(feasible_hi + precision / 2.0 - 1e-9, 1)
+    # Snap UP to the next multiple of ``precision`` so the caller can
+    # re-solve at a clean grid value while staying ≥ feasible_hi (which
+    # is known feasible). Subtracting a tiny epsilon before the ceil
+    # avoids a spurious extra step when feasible_hi already sits
+    # exactly on the grid.
+    snapped = precision * math.ceil(feasible_hi / precision - 1e-9)
+    return round(snapped, 6)
 
 
 def _max_drift_exceeds_tolerance(values, holdings, config, *,
@@ -448,23 +454,26 @@ def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq
 
 def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_value, tv,
               opt_tolerance, cash_value=0.0, invested_value=0.0,
-              net_inflow=0.0, lock_cash_holdings=False):
+              lump_sum=0.0, no_sell_mode=False):
     """Build and solve the MILP for a given precision.
 
-    The invested allocation percentages apply to ``invested_value_after``,
-    i.e. (total_value + net_inflow - cash_after), where ``cash_after`` is
-    either the cash target (if the cash constraint is enforced) or the
-    current cash value (if cash is locked).
+    The optimizer treats every holding (including cash) uniformly: each
+    holding has its own buy/sell variables, the cash holdings get a
+    target via ``target_cash_buffer_eur`` just like any asset class
+    target, and the cash flow constraint enforces strict conservation
+    of the explicit ``lump_sum``. Setting cash aside for the buffer
+    is therefore an ordinary BUY action on the cash instrument(s),
+    visible to the user in the actions table.
     """
     tol_frac = opt_tolerance / 100.0
     cash_target = float(config.target_cash_buffer_eur or 0.0)
-    new_tv = tv + net_inflow
+    new_tv = tv + lump_sum
 
-    # Cash position after rebalancing. When the cash constraint is enforced,
-    # the solver effectively moves (cash_value - cash_target) from cash into
-    # the rest of the portfolio, so cash_after == cash_target. When cash is
-    # locked (no-sell + cash below target), cash stays at cash_value.
-    cash_after = cash_target if not lock_cash_holdings else cash_value
+    # The invested portfolio (= total portfolio − cash buffer)
+    # determines the EUR scale of the asset-class targets. We pin
+    # ``cash_after`` to the user's buffer target since the LP will
+    # actively steer the cash position there via its constraint.
+    cash_after = cash_target
     invested_value_after = max(new_tv - cash_after, 0.0)
 
     A_eq_rows, b_eq_vals = [], []
@@ -508,56 +517,54 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         tax_per_unit_sold[i] = rate * gain_frac
 
     # ------------------------------------------------------------------
-    # Cash flow constraint as a band — symmetric with the rest of the
-    # allocation targets. The user's cash buffer is just another
-    # target the optimizer must hit; tying it to the same tolerance
-    # everyone else gets prevents pathological micro-trades whose
-    # only purpose is to land cash exactly on target.
+    # Cash flow conservation. The lump_sum is the only external cash
+    # injection: every euro of it must end up *somewhere* in the
+    # portfolio (invested holdings or the cash buffer). Internally the
+    # net flow between holdings nets to zero. The constraint is
+    # therefore a strict equality:
     #
-    # Derivation. Every euro that enters or leaves an invested
-    # holding moves cash by the same amount:
+    #     Σ buy[i] − Σ (1 - tax_i) · sell[i]
+    #         + fee_buy · Σ zb[i] + fee_sell · Σ zs[i] = lump_sum
     #
-    #     cash_finale = cash_value + explicit_lump
-    #                   − Σ buy[i]
-    #                   + Σ (1 - tax_i) · sell[i]
-    #                   − fee_buy · Σ zb[i]
-    #                   − fee_sell · Σ zs[i]
-    #
-    # We require ``target − cash_band ≤ cash_finale ≤ target + cash_band``
-    # where ``cash_band = tol_frac × cash_target``. Re-arranging both
-    # ends gives two LP-friendly inequalities on the trade variables.
-    #
-    # When the cash buffer is locked (no-sell mode + cash already
-    # below target), we keep the legacy semantics and force zero net
-    # inflow into invested holdings — the band collapses to {0}.
+    # No band, no slack. If the user gives EUR 1,000 of fresh cash, the
+    # LP must allocate exactly EUR 1,000 of net trade flow.
     # ------------------------------------------------------------------
-    cash_band = abs(tol_frac * cash_target) if not lock_cash_holdings else 0.0
-    # ``net_inflow`` already equals ``explicit_lump + cash_excess``,
-    # i.e. the centre of the cash-balance band — see how the caller
-    # builds it above. We keep the band tied to that value so the
-    # cash buffer follows the same tolerance every other target gets.
-    rhs_center = float(net_inflow)
+    cash_row = np.zeros(4 * n)
+    cash_row[:n] = 1.0
+    cash_row[n:2 * n] = -(1.0 - tax_per_unit_sold)
+    cash_row[2 * n:3 * n] = fee_buy
+    cash_row[3 * n:4 * n] = fee_sell
+    A_eq_rows.append(cash_row)
+    b_eq_vals.append(float(lump_sum))
 
-    # Upper bound: cash_finale ≤ target + band
-    #   ⇔ Σbuy − Σ(1-tax)·sell + fee·zb + fee·zs ≥ rhs_center − band
-    #   ⇔ -Σbuy + Σ(1-tax)·sell − fee·zb − fee·zs ≤ -(rhs_center − band)
-    row = np.zeros(4 * n)
-    row[:n] = -1.0
-    row[n:2 * n] = (1.0 - tax_per_unit_sold)
-    row[2 * n:3 * n] = -fee_buy
-    row[3 * n:4 * n] = -fee_sell
-    A_ub_rows.append(row)
-    b_ub_vals.append(-(rhs_center - cash_band))
-
-    # Lower bound: cash_finale ≥ target − band
-    #   ⇔ Σbuy − Σ(1-tax)·sell + fee·zb + fee·zs ≤ rhs_center + band
-    row = np.zeros(4 * n)
-    row[:n] = 1.0
-    row[n:2 * n] = -(1.0 - tax_per_unit_sold)
-    row[2 * n:3 * n] = fee_buy
-    row[3 * n:4 * n] = fee_sell
-    A_ub_rows.append(row)
-    b_ub_vals.append(rhs_center + cash_band)
+    # ------------------------------------------------------------------
+    # Cash buffer target. The cash holdings (typically a money-market
+    # ETF like MONEY.MI) are treated as an ordinary asset class with
+    # a symmetric tolerance band around ``target_cash_buffer_eur``.
+    # No privileged "fallback" behaviour for the cash position: if
+    # the LP cannot fit the lump sum into invested holdings within
+    # tolerance, the auto-relax phase widens the band for every
+    # target uniformly until a feasible plan exists (or the relax
+    # cap is hit and the run is reported as infeasible).
+    # ------------------------------------------------------------------
+    cash_mask = np.array([
+        1.0 if h.asset_class == AssetClass.CASH_EQUIVALENTS else 0.0
+        for h in holdings
+    ])
+    cash_pre_total = float((cash_mask * values).sum())
+    cash_band = abs(tol_frac * cash_target)
+    if cash_target > 0:
+        # Upper: cash_finale ≤ target + band
+        row = np.zeros(2 * n)
+        row[:n] = cash_mask
+        row[n:] = -cash_mask
+        A_ub_rows.append(row)
+        b_ub_vals.append(cash_target + cash_band - cash_pre_total)
+        # Lower: cash_finale ≥ target − band
+        A_ub_rows.append(-row)
+        b_ub_vals.append(cash_pre_total - (cash_target - cash_band))
+        if drift_w > 0:
+            drift_specs.append((row.copy(), cash_target - cash_pre_total, cash_band))
 
     # Invested asset-class constraints: applied on invested_value_after.
     for ac_name, target_pct in config.invested_allocation_targets_pctg.items():
@@ -596,15 +603,16 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     #
     # which expands to a linear inequality once we substitute
     # ``geo_finale = geo_pre + Σ gf[i] × (buy[i] - sell[i])`` and
-    # ``eq_finale = eq_pre + Σ is_eq[i] × (buy[i] - sell[i])`` (the
-    # ``net_inflow`` is exogenous to the per-class accounting because
-    # cash trades are forbidden — the inflow lands as buys on
-    # invested holdings).
+    # ``eq_finale = eq_pre + Σ is_eq[i] × (buy[i] - sell[i])``. The
+    # cash flow injected by the user (``lump_sum``) lands wherever
+    # the LP wants — including the cash buffer holding when nothing
+    # better is available — so the equity sleeve only changes via
+    # actual trades on equity holdings.
     is_eq_arr = np.array([
         1.0 if h.asset_class == AssetClass.EQUITIES else 0.0 for h in holdings
     ])
     eq_pre = float((is_eq_arr * values).sum())
-    if eq_pre + net_inflow > 0:  # there's an equity sleeve to constrain
+    if eq_pre + lump_sum > 0:  # there's an equity sleeve to constrain
         for g_idx, geo_name in enumerate(all_geos):
             target_pct = config.equity_geo_targets_pctg.get(geo_name, 0)
             tf = target_pct / 100.0
@@ -646,7 +654,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     # Per-holding equity constraints — same dynamic-ratio formulation.
     # ``target_equities`` is a percentage of the equity sleeve, so the
     # denominator is again ``eq_finale``.
-    if eq_pre + net_inflow > 0:
+    if eq_pre + lump_sum > 0:
         for i, h in enumerate(holdings):
             if h.target_equities is None or h.asset_class != AssetClass.EQUITIES:
                 continue
@@ -681,7 +689,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         1.0 if h.asset_class == AssetClass.FIXED_INCOME else 0.0 for h in holdings
     ])
     fi_pre = float((is_fi_arr * values).sum())
-    if fi_pre + net_inflow > 0:
+    if fi_pre + lump_sum > 0:
         for i, h in enumerate(holdings):
             if h.target_fixed_income is None or h.asset_class != AssetClass.FIXED_INCOME:
                 continue
@@ -710,16 +718,6 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
                 coeff[n:] = -(holding_indicator - tf * is_fi_arr)
                 drift_specs.append((coeff, tf * fi_pre - values[i], tol_frac * fi_pre))
 
-    # Cash holdings cannot be traded by the solver — the cash buffer is
-    # handled via net_inflow (as an external cash flow). Forbid buy/sell
-    # on cash instruments explicitly to avoid double-counting.
-    for i, h in enumerate(holdings):
-        if h.asset_class == AssetClass.CASH_EQUIVALENTS:
-            row = np.zeros(2 * n); row[i] = 1.0
-            A_eq_rows.append(row); b_eq_vals.append(0.0)
-            row = np.zeros(2 * n); row[n + i] = 1.0
-            A_eq_rows.append(row); b_eq_vals.append(0.0)
-
     # MILP binary linking. zb[i]=1 if buying i, zs[i]=1 if selling i.
     # The binaries are needed so the cash-flow constraint can charge a
     # fixed buy/sell fee per executed trade (fee enters as
@@ -727,26 +725,49 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     # enforce mutual exclusion (no holding can be simultaneously
     # bought and sold in the same plan).
     #
+    # We link the binaries to the trade variables in *both*
+    # directions:
+    #
+    #   * upper:  buy[i] ≤ M · zb[i]   — zb must be 1 when we trade
+    #   * lower:  buy[i] ≥ ε · zb[i]   — zb cannot be 1 with no trade
+    #
+    # The lower bound stops the solver from "padding" the cash-flow
+    # constraint by raising idle binaries: every euro of fee in the
+    # cash equation has to be balanced by at least ``ε`` euros of
+    # actual trade volume, so spurious zb=1 / zs=1 with zero trade
+    # are no longer optimal.
+    #
     # Variables: [buy_0..n-1, sell_0..n-1, zb_0..n-1, zs_0..n-1]  (4n).
     M = new_tv
+    eps = 1.0  # EUR — minimum trade for a binary to flip on
     for i in range(n):
-        # Buy linking: buy[i] <= M * zb[i]  →  buy[i] - M*zb[i] <= 0
+        # Buy upper link: buy[i] - M*zb[i] ≤ 0
         row = np.zeros(4 * n); row[i] = 1.0; row[2 * n + i] = -M
         A_ub_rows.append(row); b_ub_vals.append(0.0)
-        # Sell linking: sell[i] <= value[i] * zs[i]
+        # Buy lower link: ε*zb[i] - buy[i] ≤ 0
+        row = np.zeros(4 * n); row[i] = -1.0; row[2 * n + i] = eps
+        A_ub_rows.append(row); b_ub_vals.append(0.0)
+        # Sell upper link: sell[i] - value[i]*zs[i] ≤ 0
         row = np.zeros(4 * n); row[n + i] = 1.0; row[3 * n + i] = -float(values[i])
+        A_ub_rows.append(row); b_ub_vals.append(0.0)
+        # Sell lower link: ε*zs[i] - sell[i] ≤ 0
+        row = np.zeros(4 * n); row[n + i] = -1.0; row[3 * n + i] = eps
         A_ub_rows.append(row); b_ub_vals.append(0.0)
         # Mutual exclusion: zb[i] + zs[i] <= 1
         row = np.zeros(4 * n); row[2 * n + i] = 1.0; row[3 * n + i] = 1.0
         A_ub_rows.append(row); b_ub_vals.append(1.0)
 
     # Pad existing constraint rows up to the full variable width.
-    # Layout: [buy(n), sell(n), zb(n), zs(n), gp(K), gn(K)] where K is
-    # the number of drift specs collected. With ``drift_w == 0`` we
-    # skip the slack expansion entirely (K = 0) so the LP is identical
-    # to the previous formulation.
+    # Layout:
+    #   [buy(n), sell(n), zb(n), zs(n),
+    #    over_pos(K), over_neg(K),    ← out-of-band overshoot slacks
+    #    abs_pos(K),  abs_neg(K),     ← absolute-drift slacks (= |drift|)
+    #    u(K)]                        ← quadratic envelope u_k ≈ |drift_k|²
+    # where K is the number of drift specs collected. With
+    # ``drift_w == 0`` we skip the slack expansion entirely (K = 0)
+    # so the LP is identical to the previous formulation.
     K = len(drift_specs)
-    total_vars = 4 * n + 2 * K
+    total_vars = 4 * n + 5 * K
     padded_eq = []
     for r in A_eq_rows:
         if len(r) == total_vars:
@@ -783,6 +804,14 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     # the band. With ``drift_w == 0`` the slacks are unconstrained at
     # zero cost so the LP behaves like the legacy minimum-trading
     # solver.
+    #
+    # We also linearise ``|drift_value|`` itself (without any band)
+    # via two extra non-negative slacks ``abs_pos_k`` / ``abs_neg_k``
+    # which act as a tie-breaker: when several plans would all keep
+    # every position inside the tolerance band, the LP prefers the
+    # one that minimises *total* drift, not just out-of-band drift.
+    # The in-band penalty weight is set to a small fraction of
+    # ``drift_w`` so out-of-band drift still dominates.
     for k, (coeff_2n, residual, band_eur) in enumerate(drift_specs):
         # Positive overshoot: drift > band  →  drift - over_pos ≤ band
         row = np.zeros(total_vars)
@@ -796,6 +825,44 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
         row[4 * n + K + k] = -1.0
         padded_ub.append(row)
         b_ub_vals.append(-residual + band_eur)
+        # Absolute drift (no band): drift ≤ abs_pos
+        row = np.zeros(total_vars)
+        row[:2 * n] = coeff_2n
+        row[4 * n + 2 * K + k] = -1.0
+        padded_ub.append(row)
+        b_ub_vals.append(residual)
+        # Absolute drift (no band): -drift ≤ abs_neg
+        row = np.zeros(total_vars)
+        row[:2 * n] = -coeff_2n
+        row[4 * n + 3 * K + k] = -1.0
+        padded_ub.append(row)
+        b_ub_vals.append(-residual)
+        # Quadratic envelope on |drift| via tangent lines at
+        # breakpoints b_m: we want u_k ≈ |drift_k|², achieved by
+        # constraining u_k from below with the tangent line of x²
+        # at each breakpoint. For x ≥ 0:
+        #
+        #     u_k ≥ 2·b_m · x - b_m²    for every breakpoint b_m
+        #     where x = abs_pos_k + abs_neg_k = |drift_k|
+        #
+        # The LP minimises u_k subject to these, so u_k tracks the
+        # upper envelope of the tangents — a piecewise-linear convex
+        # under-approximation of x² that gets tighter with more
+        # breakpoints. The breakpoints are anchored around the
+        # tolerance band so the approximation is precise where it
+        # matters (on the spectrum from "in-band" to "out-of-band").
+        # When ``band_eur`` is zero (e.g. cash target = 0) we skip
+        # the envelope; the `abs_pos`/`abs_neg` slacks are still
+        # constrained but contribute nothing to the objective.
+        if band_eur > 0:
+            for fraction in (0.5, 1.0, 2.0, 4.0):
+                b_m = band_eur * fraction
+                row = np.zeros(total_vars)
+                row[4 * n + 2 * K + k] = 2.0 * b_m
+                row[4 * n + 3 * K + k] = 2.0 * b_m
+                row[4 * n + 4 * K + k] = -1.0
+                padded_ub.append(row)
+                b_ub_vals.append(b_m * b_m)
 
     # Objective: minimise total trade volume, optionally penalising
     # the EUR drift that leaves the tolerance band of each tracked
@@ -814,11 +881,61 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
     # optimiser; with weight 1 a EUR of out-of-band drift costs the
     # same as a EUR of trade volume; higher values close out-of-band
     # drift more aggressively at the price of more trades.
+    #
+    # An additional in-band drift penalty acts as a tie-breaker. When
+    # the LP has multiple plans that all stay inside every tolerance
+    # band, it picks the one that *also* minimises total drift across
+    # all categories. The penalty is QUADRATIC in the residual drift,
+    # implemented via the ``u_k`` slacks bounded below by the upper
+    # envelope of tangent lines to ``x²``. Quadratic shape gives a
+    # gradient of ``2·|drift|`` so the LP prefers closing 1 EUR off a
+    # large drift over 1 EUR off a small one — exactly what a human
+    # rebalancer would do. Without this term the cash-flow equality
+    # (which forces ``Σ buy = lump_sum``) leaves several optima of
+    # equal value, and the solver may emit fragmented plans like
+    # "BUY XS5E 999 + BUY AGGH 1" or pick an asset that fails to
+    # close the dominant drift. The in-band weight is a fraction
+    # of ``drift_w`` so out-of-band drift always dominates the
+    # decision; in-band drift only breaks ties.
     c = np.zeros(total_vars)
     c[:2 * n] = 1.0  # buy and sell penalised at unit weight (volume)
+    # Per-trade fixed cost (epsilon × binary). Acts as a second
+    # tie-breaker against fragmented plans: any extra holding the LP
+    # adds to the plan pays a tiny "activation" cost regardless of
+    # its trade size, so a 1 EUR top-up that does not improve the
+    # main objective is no longer optimal. The cost is small enough
+    # that genuinely useful trades (≥ a few EUR of drift improvement)
+    # are still preferred over the no-op plan.
+    binary_activation_cost = 0.01
+    c[2 * n:4 * n] = binary_activation_cost
+    # Note: we deliberately do NOT charge a per-trade *fee* in the
+    # objective. The fee is already a real cash outflow captured in
+    # the cash-flow equality (every executed trade subtracts
+    # ``fee_buy`` or ``fee_sell`` from the cash buffer), and adding
+    # the same fee a second time in the objective would over-
+    # penalise legitimate sells — making the LP avoid trades that
+    # are economically necessary to close drifts. The reverse
+    # binary linking (``buy[i] >= eps · zb[i]``) prevents the LP
+    # from flipping ``zb_i`` / ``zs_i`` to 1 with zero trade.
     if K > 0:
+        # Out-of-band overshoot: full drift_w weight, linear in EUR.
         c[4 * n:4 * n + K] = drift_w        # over_pos_k
         c[4 * n + K:4 * n + 2 * K] = drift_w  # over_neg_k
+        # In-band quadratic envelope: small tie-breaker weight.
+        # ``u_k ≈ |drift_k|²`` so this contributes ``inband_w · drift²``
+        # to the objective. The unit of u_k is EUR² which makes the
+        # raw weight tiny in absolute terms, so we scale it back by a
+        # representative band size to keep the magnitude comparable
+        # to the linear penalties — a 1 EUR drift inside a 100 EUR
+        # band contributes roughly the same as the linear penalty
+        # would have.
+        # Use the smallest non-zero band as the reference scale; for
+        # typical portfolios all bands are within an order of
+        # magnitude so the choice is not critical.
+        bands = [b for (_, _, b) in drift_specs if b > 0]
+        ref_band = min(bands) if bands else 1.0
+        inband_w = 0.1 * drift_w / max(ref_band, 1.0)
+        c[4 * n + 4 * K:4 * n + 5 * K] = inband_w  # u_k
 
     # Bounds
     lb = np.zeros(total_vars)
@@ -844,7 +961,7 @@ def _solve_lp(n, values, holdings, config, geo_frac, all_geos, eq_value, fi_valu
             ub[3*n + i] = 0.0  # zs[i] = 0
 
     # Global no_sell flag: forbid all sell actions
-    if config.rebalancing_no_sell:
+    if no_sell_mode:
         for i in range(n):
             ub[n + i] = 0.0      # sell[i] = 0
             ub[3*n + i] = 0.0    # zs[i] = 0
