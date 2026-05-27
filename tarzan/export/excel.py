@@ -1387,7 +1387,7 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
          "as the hard ceiling and the dashboard uses it as the "
          "traffic-light threshold (green ≤ value, amber up to 2×, red beyond)."),
         ("Solver tolerance",
-         (f"\u00b1{tol_used:.1f}%" if tol_used is not None else "n/a"),
+         (f"\u00b1{tol_used:.2f}%" if tol_used is not None else "n/a"),
          "Actual tolerance the optimizer converged at (progressive up to target)"),
         ("Lump sum",
          (f"{_format_number(config.rebalancing_lump_sum_amount_eur)} EUR"
