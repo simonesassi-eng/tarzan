@@ -73,61 +73,85 @@ jobs:
         uses: actions/checkout@v4
 
       # Decide whether this scheduled run should actually proceed, and
-      # pick a friendly slot label. We do NOT rely on
-      # ``github.event.schedule`` because it is unreliable. Instead we
-      # look at the *local Italian time at which the runner started*
-      # and accept the run only if it falls inside one of the configured
-      # slots (±20 min tolerance to absorb GitHub's cron jitter).
+      # pick a friendly slot label.
+      #
+      # Strategy: identify the *intended* slot by the cron expression
+      # GitHub passes in ``github.event.schedule`` rather than by the
+      # wall-clock time when the runner actually starts. GitHub's
+      # scheduled-trigger dispatcher is heavily backlogged at peak
+      # hours and routinely fires runs hours late, so a ±20 min
+      # window guard against the runner clock skips most of them.
+      # The cron expression is the reliable signal because it is
+      # baked into the workflow definition and travels with the
+      # event payload regardless of dispatch lag.
       #
       # Slots:
-      #   morning  09:13 — sent every day
-      #   midday   13:17 — weekdays only (Mon–Fri)
-      #   close    17:23 — weekdays only
+      #   morning  09:13 (CET 13 8 / CEST 13 7) — sent every day
+      #   midday   13:17 (CET 17 12 / CEST 17 11) — weekdays only
+      #   close    17:23 (CET 23 16 / CEST 23 15) — weekdays only
       #
       # workflow_dispatch and repository_dispatch always run.
       - name: Resolve trigger label and time-window guard
         id: trigger
         env:
           GH_EVENT: ${{ github.event_name }}
+          GH_SCHEDULE: ${{ github.event.schedule }}
           MANUAL_LABEL: ${{ github.event.inputs.trigger_label }}
           REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
         run: |
           set -euo pipefail
           NOW=$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M %Z (%a)')
           DOW=$(TZ=Europe/Rome date +%u)        # 1=Mon … 7=Sun
-          HOUR=$(TZ=Europe/Rome date +%H)
-          MIN=$(TZ=Europe/Rome date +%M)
-          # Convert HH:MM to absolute minutes since midnight for easy
-          # comparison with each slot ± tolerance.
-          NOW_MIN=$((10#$HOUR * 60 + 10#$MIN))
-          TOL=20  # ± 20 minutes
 
-          MORNING=$((9 * 60 + 13))   # 09:13
-          MIDDAY=$((13 * 60 + 17))   # 13:17
-          CLOSE=$((17 * 60 + 23))    # 17:23
-
-          # Returns 0 (true) if NOW_MIN is within ±TOL of TARGET.
-          in_window() {
-            local target=$1
-            local diff=$(( NOW_MIN > target ? NOW_MIN - target : target - NOW_MIN ))
-            [[ $diff -le $TOL ]]
-          }
+          # Map each known cron expression to a slot label. Both
+          # winter (CET = UTC+1) and summer (CEST = UTC+2) variants
+          # land on the same slot; the active season is whichever
+          # cron actually fires on a given day, GitHub takes care of
+          # picking one of them based on the runner's UTC clock.
+          declare -A CRON_TO_SLOT=(
+            ["13 8 * * *"]="morning"   # 09:13 CET
+            ["13 7 * * *"]="morning"   # 09:13 CEST
+            ["17 12 * * *"]="midday"   # 13:17 CET
+            ["17 11 * * *"]="midday"   # 13:17 CEST
+            ["23 16 * * *"]="close"    # 17:23 CET
+            ["23 15 * * *"]="close"    # 17:23 CEST
+          )
 
           SLOT=""
-          if in_window $MORNING; then
-            SLOT="morning"
-          elif in_window $MIDDAY; then
-            SLOT="midday"
-          elif in_window $CLOSE; then
-            SLOT="close"
+          if [[ "$GH_EVENT" == "schedule" ]]; then
+            if [[ -n "${GH_SCHEDULE:-}" && -n "${CRON_TO_SLOT[${GH_SCHEDULE}]:-}" ]]; then
+              SLOT="${CRON_TO_SLOT[${GH_SCHEDULE}]}"
+              echo "Cron '${GH_SCHEDULE}' maps to slot: $SLOT"
+            else
+              # ``github.event.schedule`` is empty in some edge cases
+              # (e.g. event.schedule renamed by GitHub in the future).
+              # Fall back to the slot whose configured local time is
+              # closest to the current runner clock, with no window
+              # cap — better to send a slightly off-time newsletter
+              # than to skip silently.
+              HOUR=$(TZ=Europe/Rome date +%H)
+              MIN=$(TZ=Europe/Rome date +%M)
+              NOW_MIN=$((10#$HOUR * 60 + 10#$MIN))
+              MORNING=$((9 * 60 + 13))
+              MIDDAY=$((13 * 60 + 17))
+              CLOSE=$((17 * 60 + 23))
+              best_slot="morning"; best_diff=$(( NOW_MIN > MORNING ? NOW_MIN - MORNING : MORNING - NOW_MIN ))
+              diff=$(( NOW_MIN > MIDDAY ? NOW_MIN - MIDDAY : MIDDAY - NOW_MIN ))
+              [[ $diff -lt $best_diff ]] && { best_slot="midday"; best_diff=$diff; }
+              diff=$(( NOW_MIN > CLOSE ? NOW_MIN - CLOSE : CLOSE - NOW_MIN ))
+              [[ $diff -lt $best_diff ]] && { best_slot="close"; best_diff=$diff; }
+              SLOT="$best_slot"
+              echo "Empty cron expression — fell back to nearest slot by clock: $SLOT (lag ${best_diff}m)"
+            fi
           fi
 
           # Weekend rule (Saturday=6, Sunday=7): only the morning slot
-          # ships. Skip everything else.
+          # ships. Midday and close are skipped on weekends.
           IS_WEEKEND=0
           if [[ "$DOW" -ge 6 ]]; then
             IS_WEEKEND=1
-            if [[ "$SLOT" != "morning" ]]; then
+            if [[ "$SLOT" == "midday" || "$SLOT" == "close" ]]; then
+              echo "Weekend ($NOW): skipping $SLOT slot, only morning runs on Sat/Sun."
               SLOT=""
             fi
           fi
@@ -137,7 +161,7 @@ jobs:
           if [[ "$GH_EVENT" == "schedule" ]]; then
             if [[ -z "$SLOT" ]]; then
               SHOULD_RUN=0
-              echo "Skipping: current local time is outside any configured slot."
+              echo "Skipping: weekend midday/close slot or unknown cron."
             else
               SHOULD_RUN=1
             fi
