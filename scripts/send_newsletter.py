@@ -39,6 +39,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Ensure tarzan package is importable when invoked from repo root, plus
 # scripts/ itself so we can import drive_loader as a sibling module.
@@ -67,6 +68,18 @@ def _env(name: str, default: str | None = None, required: bool = False) -> str:
     return value or ""
 
 
+def _now_local() -> datetime:
+    """Return the current time in Europe/Rome.
+
+    GitHub Actions runners are in UTC, so calling ``datetime.now()``
+    directly produces times that are 1–2 hours behind Italian local
+    time depending on DST. The whole pipeline (subject line, output
+    filenames, run logs the user reads) makes more sense in the
+    user's wall-clock time, not the runner's.
+    """
+    return datetime.now(ZoneInfo("Europe/Rome"))
+
+
 def _build_subject(metrics, prefix: str, trigger_label: str) -> str:
     """Build the newsletter subject line.
 
@@ -75,7 +88,7 @@ def _build_subject(metrics, prefix: str, trigger_label: str) -> str:
     cost = float(metrics.holdings_df["cost_basis_eur"].sum()) if not metrics.holdings_df.empty else 0.0
     total_gain = metrics.total_value - cost
     gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
-    generated_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+    generated_at = _now_local().strftime("%d/%m/%Y %H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 
     parts = [prefix or "Tarzan Portfolio Digest", generated_at, f"RTD {sign}{abs(gain_pct):.2f}%"]
@@ -182,7 +195,7 @@ def main() -> int:
     # 3. Optionally write a local copy for traceability (CI artifacts)
     output_dir = ROOT / "output"
     output_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = _now_local().strftime("%Y%m%d_%H%M")
     artifact = output_dir / f"newsletter_{timestamp}.html"
     artifact.write_text(html, encoding="utf-8")
     logger.info("Saved local copy: %s", artifact)
