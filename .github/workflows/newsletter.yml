@@ -75,20 +75,29 @@ jobs:
       # Decide whether this scheduled run should actually proceed, and
       # pick a friendly slot label.
       #
-      # Strategy: identify the *intended* slot by the cron expression
-      # GitHub passes in ``github.event.schedule`` rather than by the
-      # wall-clock time when the runner actually starts. GitHub's
-      # scheduled-trigger dispatcher is heavily backlogged at peak
-      # hours and routinely fires runs hours late, so a ±20 min
-      # window guard against the runner clock skips most of them.
-      # The cron expression is the reliable signal because it is
-      # baked into the workflow definition and travels with the
-      # event payload regardless of dispatch lag.
+      # Strategy: identify the *intended* slot by mapping the cron
+      # expression GitHub passes in ``github.event.schedule`` to the
+      # local Italian time it fires today, then matching that local
+      # time against the configured slot. This serves two purposes:
+      #
+      #   1. The cron expression is the reliable signal regardless of
+      #      when the run actually starts. GitHub's scheduled-trigger
+      #      dispatcher is heavily backlogged at peak hours and
+      #      routinely fires runs hours late, so a window guard
+      #      against the runner clock skips most of them.
+      #
+      #   2. We declare two cron variants per slot — one calibrated
+      #      for CET (UTC+1, winter) and one for CEST (UTC+2, summer)
+      #      — so each slot fires at the same local time year-round.
+      #      Only the variant that actually maps to the slot's local
+      #      hour:minute on the current day passes; the off-season
+      #      variant lands one hour off and is skipped. Without this
+      #      filter we would send a duplicate every day during DST.
       #
       # Slots:
-      #   morning  09:13 (CET 13 8 / CEST 13 7) — sent every day
-      #   midday   13:17 (CET 17 12 / CEST 17 11) — weekdays only
-      #   close    17:23 (CET 23 16 / CEST 23 15) — weekdays only
+      #   morning  09:13 — sent every day
+      #   midday   13:17 — weekdays only
+      #   close    17:23 — weekdays only
       #
       # workflow_dispatch and repository_dispatch always run.
       - name: Resolve trigger label and time-window guard
@@ -103,28 +112,29 @@ jobs:
           NOW=$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M %Z (%a)')
           DOW=$(TZ=Europe/Rome date +%u)        # 1=Mon … 7=Sun
 
-          # Map each known cron expression to a slot label. Both
-          # winter (CET = UTC+1) and summer (CEST = UTC+2) variants
-          # land on the same slot; the active season is whichever
-          # cron actually fires on a given day, GitHub takes care of
-          # picking one of them based on the runner's UTC clock.
-          declare -A CRON_TO_SLOT=(
-            ["13 8 * * *"]="morning"   # 09:13 CET
-            ["13 7 * * *"]="morning"   # 09:13 CEST
-            ["17 12 * * *"]="midday"   # 13:17 CET
-            ["17 11 * * *"]="midday"   # 13:17 CEST
-            ["23 16 * * *"]="close"    # 17:23 CET
-            ["23 15 * * *"]="close"    # 17:23 CEST
-          )
-
           SLOT=""
           if [[ "$GH_EVENT" == "schedule" ]]; then
-            if [[ -n "${GH_SCHEDULE:-}" && -n "${CRON_TO_SLOT[${GH_SCHEDULE}]:-}" ]]; then
-              SLOT="${CRON_TO_SLOT[${GH_SCHEDULE}]}"
-              echo "Cron '${GH_SCHEDULE}' maps to slot: $SLOT"
+            if [[ -n "${GH_SCHEDULE:-}" ]]; then
+              # Compute the Italian local time this cron's UTC moment
+              # corresponds to today, using Python so we don't have
+              # to wrestle with date(1) syntax differences across
+              # platforms. With two cron variants per slot only the
+              # season-appropriate one matches; the other lands one
+              # hour off and is rejected.
+              LOCAL_TIME=$(GH_SCHEDULE="$GH_SCHEDULE" python3 -c 'import os; from datetime import datetime, timezone; from zoneinfo import ZoneInfo; c=os.environ["GH_SCHEDULE"].split(); t=datetime.now(timezone.utc).date(); d=datetime(t.year,t.month,t.day,int(c[1]),int(c[0]),tzinfo=timezone.utc); print(d.astimezone(ZoneInfo("Europe/Rome")).strftime("%H:%M"))')
+
+              case "$LOCAL_TIME" in
+                09:13) SLOT="morning" ;;
+                13:17) SLOT="midday" ;;
+                17:23) SLOT="close" ;;
+                *)
+                  echo "Cron '$GH_SCHEDULE' fires at $LOCAL_TIME local — off-season variant, skipping."
+                  SLOT=""
+                  ;;
+              esac
+              [[ -n "$SLOT" ]] && echo "Cron '$GH_SCHEDULE' fires at $LOCAL_TIME local → slot: $SLOT"
             else
-              # ``github.event.schedule`` is empty in some edge cases
-              # (e.g. event.schedule renamed by GitHub in the future).
+              # ``github.event.schedule`` is empty in some edge cases.
               # Fall back to the slot whose configured local time is
               # closest to the current runner clock, with no window
               # cap — better to send a slightly off-time newsletter
@@ -161,7 +171,7 @@ jobs:
           if [[ "$GH_EVENT" == "schedule" ]]; then
             if [[ -z "$SLOT" ]]; then
               SHOULD_RUN=0
-              echo "Skipping: weekend midday/close slot or unknown cron."
+              echo "Skipping: off-season cron variant or weekend midday/close."
             else
               SHOULD_RUN=1
             fi
