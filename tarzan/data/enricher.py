@@ -708,9 +708,31 @@ def _enrich_single(holding: Holding) -> Holding:
         currency = info.get("currency", holding.currency or "EUR")
         _set_price_data(holding, history, info, currency)
 
-        # Value and gain
+        # Value and gain. For bonds resolved via yfinance the
+        # ``current_price`` is a clean quote per 100 of face value
+        # (the same convention Borsa Italiana uses for our bond
+        # fallback). The holding's ``quantity`` is the bond's
+        # nominal amount, not a unit count, so the EUR value is
+        # ``quantity × price / 100``. Without this scaling, BTPs
+        # come out 100× over-valued.
         if holding.current_price is not None:
-            holding.current_value = holding.quantity * holding.current_price
+            quote_type = (info.get("quoteType") or "").upper()
+            sec_type = (info.get("typeDisp") or "").upper()
+            is_bond = (
+                "BOND" in quote_type
+                or "BOND" in sec_type
+                or "TREASURY" in sec_type
+            )
+            if is_bond:
+                holding.current_value = holding.quantity * holding.current_price / 100.0
+                # Rescale the price history the same way so downstream
+                # code that multiplies it by ``quantity`` (e.g. the
+                # rebalancer's drift simulation) reads correct EUR.
+                if holding.price_history is not None and len(holding.price_history) > 0:
+                    holding.price_history = holding.price_history / 100.0
+                holding.current_price = holding.current_price / 100.0
+            else:
+                holding.current_value = holding.quantity * holding.current_price
             holding.data_source = data_source
         else:
             # Fallback: try Terrapin Finance API for bonds
