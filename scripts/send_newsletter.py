@@ -1,7 +1,10 @@
 """Run the Tarzan pipeline and email the newsletter as inline HTML.
 
-This script is the entry point for both scheduled (cron) runs and
-on-demand runs triggered by replying "Update" to a previous newsletter.
+This script is the entry point for every newsletter send. It is invoked
+by GitHub Actions, which acts purely as a runner: all scheduling lives
+in the Gmail Apps Script, which fires a `repository_dispatch` (event
+type ``send_now``) at each market slot and for on-demand "Update"
+replies. A manual ``workflow_dispatch`` run also lands here.
 
 Required environment variables (provided by GitHub Actions secrets):
     SMTP_USER       Gmail account that sends the newsletter

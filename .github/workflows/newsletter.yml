@@ -1,41 +1,35 @@
 # Tarzan — portfolio newsletter automation
 #
-# Scheduled sends, all in Italian local time:
-#   Mon–Fri  09:13  morning
-#   Mon–Fri  13:17  midday
-#   Mon–Fri  17:23  close
-#   Sat–Sun  09:13  morning  (weekend: only one send per day)
+# SCHEDULING LIVES OUTSIDE THIS WORKFLOW.
 #
-# Slot times are deliberately "off-the-hour" because GitHub Actions
-# scheduled runs are noticeably delayed (or sometimes silently
-# skipped) when triggered at minute 0 of the hour, which is the
-# busiest dispatch window for the whole platform.
+# GitHub Actions' built-in `schedule:` cron is best-effort: it goes into
+# backlog under load and then releases the queued runs in a burst, which
+# is exactly what caused multiple newsletters to arrive back-to-back.
+# It also can't express a local timezone, forcing a brittle winter/summer
+# double-cron + DST guard.
 #
-# GitHub Actions cron is UTC-only and does not follow DST. We declare
-# two parallel sets of cron expressions (CET=UTC+1 in winter and
-# CEST=UTC+2 in summer) so a slot fires at the same Italian local time
-# year-round. The first job step then guards against the wrong-season
-# half by checking the actual local time at execution rather than
-# trusting which cron fired.
+# So this workflow no longer schedules itself. A punctual external
+# scheduler — the Gmail Apps Script in scripts/apps_script/Code.gs,
+# running on Google's reliable time-driven triggers in Europe/Rome —
+# owns the *when*. It fires a `repository_dispatch` (event_type:
+# send_now) at each market slot, carrying the slot name as the payload
+# label. This workflow is now a pure *runner*: it executes whenever it
+# is told to, by one of three triggers:
 #
-# In addition:
-#   * workflow_dispatch  — manual trigger from the Actions UI.
-#   * repository_dispatch (event_type: send_now)
-#       — triggered by the Gmail Apps Script when you reply "Update" to
-#       a previous newsletter, for an on-demand send.
+#   * repository_dispatch (send_now)  — scheduled slots (morning / midday
+#       / close) AND on-demand "Update" replies, both from Apps Script.
+#       The slot/label travels in client_payload.label.
+#   * workflow_dispatch               — manual "Run workflow" button.
+#
+# The Apps Script scheduler is idempotent per (date, slot): each slot is
+# dispatched at most once per day regardless of polling jitter or
+# retries, so duplicates/bursts cannot reach this workflow. The
+# concurrency group below is a second line of defence — it serializes
+# runs so two dispatches arriving close together never overlap.
 
 name: Tarzan Newsletter
 
 on:
-  schedule:
-    # ── WINTER (CET = UTC+1) ────────────────────────────────────────────
-    - cron: "13 8 * * *"   # 09:13 CET
-    - cron: "17 12 * * *"  # 13:17 CET
-    - cron: "23 16 * * *"  # 17:23 CET
-    # ── SUMMER (CEST = UTC+2) ───────────────────────────────────────────
-    - cron: "13 7 * * *"   # 09:13 CEST
-    - cron: "17 11 * * *"  # 13:17 CEST
-    - cron: "23 15 * * *"  # 17:23 CEST
   workflow_dispatch:
     inputs:
       trigger_label:
@@ -44,6 +38,13 @@ on:
         required: false
   repository_dispatch:
     types: [send_now]
+
+# Serialize newsletter runs. If two dispatches land close together the
+# second queues behind the first instead of running in parallel, so we
+# never send two overlapping renders.
+concurrency:
+  group: tarzan-newsletter
+  cancel-in-progress: false
 
 jobs:
   send:
@@ -72,137 +73,43 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Decide whether this scheduled run should actually proceed, and
-      # pick a friendly slot label.
+      # Resolve a friendly slot label for the email subject. Scheduling
+      # decisions (which slot, weekend rule, DST) are made upstream by
+      # the Apps Script scheduler — this step only picks the label to
+      # display, it never decides whether to run.
       #
-      # Strategy: identify the *intended* slot by mapping the cron
-      # expression GitHub passes in ``github.event.schedule`` to the
-      # local Italian time it fires today, then matching that local
-      # time against the configured slot. This serves two purposes:
-      #
-      #   1. The cron expression is the reliable signal regardless of
-      #      when the run actually starts. GitHub's scheduled-trigger
-      #      dispatcher is heavily backlogged at peak hours and
-      #      routinely fires runs hours late, so a window guard
-      #      against the runner clock skips most of them.
-      #
-      #   2. We declare two cron variants per slot — one calibrated
-      #      for CET (UTC+1, winter) and one for CEST (UTC+2, summer)
-      #      — so each slot fires at the same local time year-round.
-      #      Only the variant that actually maps to the slot's local
-      #      hour:minute on the current day passes; the off-season
-      #      variant lands one hour off and is skipped. Without this
-      #      filter we would send a duplicate every day during DST.
-      #
-      # Slots:
-      #   morning  09:13 — sent every day
-      #   midday   13:17 — weekdays only
-      #   close    17:23 — weekdays only
-      #
-      # workflow_dispatch and repository_dispatch always run.
-      - name: Resolve trigger label and time-window guard
+      #   repository_dispatch → client_payload.label
+      #       ("morning" / "midday" / "close" for scheduled slots,
+      #        "on-demand" for an "Update" reply)
+      #   workflow_dispatch   → the manual trigger_label input
+      - name: Resolve trigger label
         id: trigger
         env:
           GH_EVENT: ${{ github.event_name }}
-          GH_SCHEDULE: ${{ github.event.schedule }}
           MANUAL_LABEL: ${{ github.event.inputs.trigger_label }}
           REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
         run: |
           set -euo pipefail
-          NOW=$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M %Z (%a)')
-          DOW=$(TZ=Europe/Rome date +%u)        # 1=Mon … 7=Sun
-
-          SLOT=""
-          if [[ "$GH_EVENT" == "schedule" ]]; then
-            if [[ -n "${GH_SCHEDULE:-}" ]]; then
-              # Compute the Italian local time this cron's UTC moment
-              # corresponds to today, using Python so we don't have
-              # to wrestle with date(1) syntax differences across
-              # platforms. With two cron variants per slot only the
-              # season-appropriate one matches; the other lands one
-              # hour off and is rejected.
-              LOCAL_TIME=$(GH_SCHEDULE="$GH_SCHEDULE" python3 -c 'import os; from datetime import datetime, timezone; from zoneinfo import ZoneInfo; c=os.environ["GH_SCHEDULE"].split(); t=datetime.now(timezone.utc).date(); d=datetime(t.year,t.month,t.day,int(c[1]),int(c[0]),tzinfo=timezone.utc); print(d.astimezone(ZoneInfo("Europe/Rome")).strftime("%H:%M"))')
-
-              case "$LOCAL_TIME" in
-                09:13) SLOT="morning" ;;
-                13:17) SLOT="midday" ;;
-                17:23) SLOT="close" ;;
-                *)
-                  echo "Cron '$GH_SCHEDULE' fires at $LOCAL_TIME local — off-season variant, skipping."
-                  SLOT=""
-                  ;;
-              esac
-              [[ -n "$SLOT" ]] && echo "Cron '$GH_SCHEDULE' fires at $LOCAL_TIME local → slot: $SLOT"
-            else
-              # ``github.event.schedule`` is empty in some edge cases.
-              # Fall back to the slot whose configured local time is
-              # closest to the current runner clock, with no window
-              # cap — better to send a slightly off-time newsletter
-              # than to skip silently.
-              HOUR=$(TZ=Europe/Rome date +%H)
-              MIN=$(TZ=Europe/Rome date +%M)
-              NOW_MIN=$((10#$HOUR * 60 + 10#$MIN))
-              MORNING=$((9 * 60 + 13))
-              MIDDAY=$((13 * 60 + 17))
-              CLOSE=$((17 * 60 + 23))
-              best_slot="morning"; best_diff=$(( NOW_MIN > MORNING ? NOW_MIN - MORNING : MORNING - NOW_MIN ))
-              diff=$(( NOW_MIN > MIDDAY ? NOW_MIN - MIDDAY : MIDDAY - NOW_MIN ))
-              [[ $diff -lt $best_diff ]] && { best_slot="midday"; best_diff=$diff; }
-              diff=$(( NOW_MIN > CLOSE ? NOW_MIN - CLOSE : CLOSE - NOW_MIN ))
-              [[ $diff -lt $best_diff ]] && { best_slot="close"; best_diff=$diff; }
-              SLOT="$best_slot"
-              echo "Empty cron expression — fell back to nearest slot by clock: $SLOT (lag ${best_diff}m)"
-            fi
-          fi
-
-          # Weekend rule (Saturday=6, Sunday=7): only the morning slot
-          # ships. Midday and close are skipped on weekends.
-          IS_WEEKEND=0
-          if [[ "$DOW" -ge 6 ]]; then
-            IS_WEEKEND=1
-            if [[ "$SLOT" == "midday" || "$SLOT" == "close" ]]; then
-              echo "Weekend ($NOW): skipping $SLOT slot, only morning runs on Sat/Sun."
-              SLOT=""
-            fi
-          fi
-
-          echo "Now: $NOW (DoW=$DOW, weekend=$IS_WEEKEND, slot=${SLOT:-NONE})"
-
-          if [[ "$GH_EVENT" == "schedule" ]]; then
-            if [[ -z "$SLOT" ]]; then
-              SHOULD_RUN=0
-              echo "Skipping: off-season cron variant or weekend midday/close."
-            else
-              SHOULD_RUN=1
-            fi
-            LABEL="${SLOT:-scheduled}"
-          elif [[ "$GH_EVENT" == "repository_dispatch" ]]; then
-            SHOULD_RUN=1
+          if [[ "$GH_EVENT" == "repository_dispatch" ]]; then
             LABEL="${REPO_DISPATCH_LABEL:-on-demand}"
           else
-            SHOULD_RUN=1
             LABEL="${MANUAL_LABEL:-manual}"
           fi
-
-          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "label=$LABEL" >> "$GITHUB_OUTPUT"
-          echo "Will run? $SHOULD_RUN — label: $LABEL"
+          echo "Event: $GH_EVENT — resolved label: $LABEL"
 
       - name: Set up Python
-        if: steps.trigger.outputs.should_run == '1'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
-        if: steps.trigger.outputs.should_run == '1'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Render & send newsletter
-        if: steps.trigger.outputs.should_run == '1'
         env:
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
         run: python scripts/send_newsletter.py
