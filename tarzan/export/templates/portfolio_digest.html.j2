@@ -363,35 +363,37 @@
             <td class="px-32" style="padding:32px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How each holding is moving</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Returns over standard periods for every position, in the same order as the All positions table above. The Excel report carries the full risk-adjusted view.</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Per-instrument returns are the security's own market return over each window (a 5Y column shows the full 5 years even if you've held it less), colored by sign. Your <strong>Total Portfolio</strong> row is the consolidated history, capped to the youngest holding with ≥1Y of data — currently <strong>{{ returns_snapshot.history_label }}</strong> — so longer periods show "—"; its cells are colored by delta vs <strong>{{ returns_snapshot.benchmark_alpha_beta }}</strong> (<span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under). Holdings with &lt;1Y of history don't shorten it.</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;table-layout:fixed;">
+                <colgroup>
+                  <col style="width:22%;">
                   {% for p in returns_snapshot.period_labels %}
-                  <td align="right" style="padding:8px 6px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
+                  <col style="width:{{ (78 / returns_snapshot.period_labels|length)|round(3) }}%;">
+                  {% endfor %}
+                </colgroup>
+                <tr>
+                  <td style="padding:8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
+                  {% for p in returns_snapshot.period_labels %}
+                  <td align="right" style="padding:8px 3px;background:{{ palette.ink }};color:#FFFFFF;font-size:9px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
                   {% endfor %}
                 </tr>
                 {% for r in returns_snapshot.rows %}
                 {% if r.is_portfolio %}
                 {# Portfolio row (highlighted) — same styling as the Performance table below. #}
                 <tr>
-                  <td style="padding:10px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ r.name }}</td>
+                  <td style="padding:9px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ r.name }}</td>
                   {% for c in r.cells %}
-                  <td align="right" style="padding:10px 6px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ c.color }};font-weight:700;">{{ c.value }}</td>
+                  <td align="right" style="padding:9px 3px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;color:{{ c.color }};font-weight:700;">{{ c.value }}</td>
                   {% endfor %}
                 </tr>
                 {% else %}
                 <tr>
                   <td style="padding:8px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
-                    <div>{{ r.name|truncate(40, true, '…') }}</div>
-                    {% if r.ticker or r.asset_class %}
-                    <div style="margin-top:2px;font-size:9px;color:{{ palette.muted }};">
-                      {% if r.ticker %}{{ r.ticker }}{% endif %}{% if r.ticker and r.asset_class %} · {% endif %}{% if r.asset_class %}<span style="color:{{ r.asset_color }};font-weight:600;">● {{ r.asset_class }}</span>{% endif %}
-                    </div>
-                    {% endif %}
+                    <div>{{ r.name }}</div>
+                    {% if r.ticker %}<div style="margin-top:2px;font-size:9px;color:{{ palette.muted }};">{{ r.ticker }}</div>{% endif %}
                   </td>
                   {% for c in r.cells %}
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ c.color }};font-weight:600;">{{ c.value }}</td>
+                  <td align="right" style="padding:8px 3px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;color:{{ c.color }};font-weight:600;">{{ c.value }}</td>
                   {% endfor %}
                 </tr>
                 {% endif %}
@@ -408,28 +410,34 @@
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Returns vs benchmarks</div>
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">All values in %. Benchmarks span the full 5Y window; your portfolio history is <strong>{{ performance.history_label }}</strong> — periods longer than that show "—" for the portfolio row. Portfolio cells colored by delta vs <strong>{{ performance.benchmark_alpha_beta }}</strong>: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat &nbsp;·&nbsp; <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line (±0.25 pp) &nbsp;·&nbsp; <span style="color:{{ palette.red }};font-weight:700;">●</span> underperform.</div>
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;table-layout:fixed;">
+                <colgroup>
+                  <col style="width:22%;">
                   {% for p in performance.periods %}
-                  <td align="right" style="padding:8px 6px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
+                  <col style="width:{{ (78 / performance.periods|length)|round(3) }}%;">
+                  {% endfor %}
+                </colgroup>
+                <tr>
+                  <td style="padding:8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
+                  {% for p in performance.periods %}
+                  <td align="right" style="padding:8px 3px;background:{{ palette.ink }};color:#FFFFFF;font-size:9px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
                   {% endfor %}
                 </tr>
                 {# Portfolio row (highlighted) #}
                 <tr>
-                  <td style="padding:10px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ performance.portfolio_row.name }}</td>
+                  <td style="padding:9px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ performance.portfolio_row.name }}</td>
                   {% for p in performance.periods %}
-                  <td align="right" style="padding:10px 6px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ performance.portfolio_row.returns[p].color }};font-weight:700;">{{ performance.portfolio_row.returns[p].value }}</td>
+                  <td align="right" style="padding:9px 3px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;color:{{ performance.portfolio_row.returns[p].color }};font-weight:700;">{{ performance.portfolio_row.returns[p].value }}</td>
                   {% endfor %}
                 </tr>
                 {% for r in performance.benchmark_rows %}
                 <tr>
                   <td style="padding:8px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
                     {{ r.name }}
-                    {% if r.tag %}<span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ r.tag[2] }};color:{{ r.tag[1] }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;">{{ r.tag[0] }}</span>{% endif %}
+                    {% for t in r.tags %}<span style="display:inline-block;margin-left:3px;padding:1px 5px;background:{{ t[2] }};color:{{ t[1] }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;">{{ t[0] }}</span>{% endfor %}
                   </td>
                   {% for p in performance.periods %}
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};font-variant-numeric:tabular-nums;color:{{ r.returns[p].color }};font-weight:600;">{{ r.returns[p].value }}</td>
+                  <td align="right" style="padding:8px 3px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;color:{{ r.returns[p].color }};font-weight:600;">{{ r.returns[p].value }}</td>
                   {% endfor %}
                 </tr>
                 {% endfor %}
