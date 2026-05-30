@@ -6,7 +6,8 @@ with on-demand "Update" replies wired in.
 
 > **Time required:** ~30 minutes the first time.
 > **What you'll have at the end:**
-> - 3× scheduled sends per day (09:05, 13:00, 17:30 Europe/Rome)
+> - 3× scheduled sends per day (09:05, 13:00, 17:35 Europe/Rome),
+>   driven by the Gmail Apps Script — never duplicated, never bursty
 > - Reply "Update" to any newsletter → fresh send within ~5 minutes
 > - One manual "Run workflow" button in the GitHub Actions UI
 > - Your portfolio data stays in your private Google Drive — the
@@ -15,6 +16,14 @@ with on-demand "Update" replies wired in.
 ---
 
 ## 0. Architecture in one diagram
+
+The Gmail Apps Script is the **single scheduler**: it fires the three
+daily market slots (and on-demand "Update" replies) by posting a
+`repository_dispatch` to GitHub. GitHub Actions is a pure **runner** —
+it has no `schedule:` cron of its own. This is deliberate: GitHub's
+built-in cron is best-effort and releases backlogged runs in a burst,
+which is what previously caused several newsletters to arrive
+back-to-back.
 
 ```
                                                           .──────────.
@@ -28,17 +37,25 @@ with on-demand "Update" replies wired in.
    │   └── targets.csv       │                          │        │
    └─────────────────────────┘                          │        │
                                                 ┌───────┴────────┴───┐
-   schedule (3× day)                            │   GitHub Actions   │ ◄── repository_dispatch
-   ─────────────────────────────────────────►   │  newsletter.yml    │
-                                                │                    │       (event: send_now)
-   manual click ───────────────────────────►    │  • download Drive  │             ▲
-                                                │  • run pipeline    │             │
-                                                │  • render HTML     │             │
-                                                │  • SMTP send       │      ┌──────┴──────────┐
-                                                └────────────────────┘      │ Gmail Apps      │
-                                                                            │ Script polls    │
-                                                                            │ for "Update"    │
-                                                                            └─────────────────┘
+   manual click ────────────────────────────►   │   GitHub Actions   │
+                                                │  newsletter.yml    │
+                                                │  (runner only)     │
+                                                │  • download Drive  │
+                                                │  • run pipeline    │
+                                                │  • render HTML     │
+                                                │  • SMTP send       │
+                                                └─────────┬──────────┘
+                                                          ▲
+                                       repository_dispatch│ (event: send_now)
+                                                          │ label = slot / on-demand
+                                                ┌─────────┴──────────┐
+                                                │ Gmail Apps Script  │
+                                                │ tick() every 5 min:│
+                                                │ • checkSchedule()  │ ← 3 daily slots,
+                                                │     (Europe/Rome)  │   idempotent per
+                                                │ • processInbox()   │   (date, slot)
+                                                │     ("Update")     │
+                                                └────────────────────┘
 ```
 
 Three things never enter git:
@@ -161,9 +178,11 @@ In your repo on github.com:
 
 ---
 
-## 6. Wire up the "Update" reply trigger
+## 6. Wire up the Gmail Apps Script (scheduler + "Update" replies)
 
-This turns a Gmail reply into an on-demand newsletter send.
+This single Apps Script does two jobs: it **schedules** the three daily
+sends, and it turns a Gmail "Update" reply into an on-demand send. Both
+fire the same GitHub workflow via `repository_dispatch`.
 
 ### 6a. Create a fine-grained PAT for Apps Script
 
@@ -182,7 +201,7 @@ This turns a Gmail reply into an on-demand newsletter send.
 2. **New project**.
 3. Replace the contents of `Code.gs` with the contents of
    `scripts/apps_script/Code.gs` from this repo. (Just copy and paste.)
-4. Rename the project to `Tarzan Update Listener` (top-left).
+4. Rename the project to `Tarzan Scheduler` (top-left).
 
 ### 6c. Set Script Properties
 
@@ -198,49 +217,67 @@ sidebar) → scroll to **Script Properties** → **Edit** → **Add property**:
 The other properties (`LABEL_NAME`, `SUBJECT_MATCH`, `WORD_MATCH`)
 have sensible defaults — leave them blank.
 
+> **Slot times** (09:05 / 13:00 / 17:35 Europe/Rome, weekend = morning
+> only) live in the `SLOTS` constant at the top of `Code.gs`. Edit
+> there if you want different hours; no other change needed.
+
 ### 6d. Approve OAuth and install the trigger
 
 1. In `Code.gs`, the function dropdown at the top → pick `installTrigger`
    → click **Run**.
 2. Apps Script asks for permissions. Approve all
    (Gmail read, UrlFetch).
-3. After it completes, switch the dropdown to `processInbox` and
-   **Run** once. This catches any "Update" reply already in your inbox.
+3. This installs a single `tick()` trigger that runs every 5 minutes
+   and handles both the schedule and "Update" replies. You can run
+   `checkSchedule` or `processInbox` manually from the dropdown to test
+   either path on demand.
 
 ### 6e. End-to-end test
 
 1. Open the email you received in step 5.
 2. Hit **Reply**, type literally `Update`, send.
-3. Within 5 minutes Apps Script polls Gmail, sees the reply, posts to GitHub.
+3. Within 5 minutes the `tick()` trigger sees the reply and posts to GitHub.
 4. **Actions** tab on GitHub → new run with event `repository_dispatch`.
 5. Within ~3 more minutes, a fresh newsletter lands in your inbox.
 
 That's it. Going forward:
 
-- **Three sends per day, automatic** (09:05, 13:00, 17:30 Europe/Rome).
+- **Three sends per day, automatic** (09:05, 13:00, 17:35 Europe/Rome),
+  each fired at most once per day — no duplicates, no bursts.
 - **Reply "Update"** → fresh send within ~8 minutes total.
 - **Click "Run workflow"** in the Actions UI for an instant manual send.
 - **Edit the CSVs in your Drive folder** — next run picks up the changes.
 
 ---
 
-## How DST is handled
+## How scheduling and DST are handled
 
-GitHub cron is UTC-only and doesn't follow daylight saving. The
-workflow declares two parallel sets of cron expressions — one for CET
-(winter) and one for CEST (summer) — and the first job step checks
-which DST regime is active in `Europe/Rome` and skips whichever set
-doesn't match. You'll never get duplicate sends.
+Scheduling lives entirely in the Gmail Apps Script, **not** in GitHub
+Actions. The script's `tick()` trigger runs every 5 minutes and, for
+each market slot, dispatches a send only when:
 
-| Italian time | UTC (winter, CET) | UTC (summer, CEST) |
-|--------------|-------------------|--------------------|
-| 09:05        | 08:05             | 07:05              |
-| 13:00        | 12:00             | 11:00              |
-| 17:30        | 16:30             | 15:30              |
+- the current `Europe/Rome` time is at or after the slot time, but
+  within `MAX_LAG_MINUTES` (default 90) of it;
+- weekend rules allow it (Sat/Sun = morning only); and
+- no send has already happened for that `(date, slot)` — an idempotency
+  marker in Script Properties guarantees **at most one send per slot per
+  day**, no matter how the polling jitters or retries.
 
-> **Note on timing accuracy:** GitHub Actions schedules are best-effort
-> and can drift 5–30 minutes during peak load. Don't rely on
-> "exactly 09:05" — think "~9 AM-ish".
+Because the script formats time in `Europe/Rome`, **DST is handled
+natively** — a slot fires at the same wall-clock time year-round. There
+is no UTC double-cron and no DST guard to maintain.
+
+| Slot    | Italian time | Days       |
+|---------|--------------|------------|
+| morning | 09:05        | every day  |
+| midday  | 13:00        | weekdays   |
+| close   | 17:35        | weekdays   |
+
+> **Why not GitHub's built-in cron?** It's UTC-only and best-effort: it
+> queues runs under load and then releases them in a burst, which is
+> what caused multiple newsletters to arrive back-to-back. A punctual
+> external scheduler plus per-slot idempotency removes that failure mode
+> at the root.
 
 ---
 
@@ -274,12 +311,23 @@ For local development, keep using `input/holdings.csv` and
 ### Email never arrives
 - Check the GitHub Actions log for `"Sent newsletter to ..."`. If it
   says that, the issue is on Gmail's side — check Spam.
-- If the log says `"Skipping: cron ... does not match current DST"`,
-  the wrong DST cron fired. That's by design — wait or trigger manually.
+- If a scheduled slot didn't fire at all, open Apps Script →
+  **Executions** and check the recent `tick()` runs. A slot is skipped
+  (logged `too-late`) if the trigger didn't run within 90 minutes of the
+  slot time; trigger manually with "Run workflow" if you need that send.
+
+### A scheduled send was missed
+- Apps Script triggers are reliable but not instantaneous; a slot fires
+  on the first `tick()` at or after its time, within a 90-minute window.
+- Check Apps Script → **Executions** for `checkSchedule` log lines like
+  `Dispatched slot "midday" ...` or `Slot "..." skipped: ...`.
+- To force a slot to re-send today, delete its `sent:YYYY-MM-DD:slot`
+  entry under **Project Settings → Script Properties**, or just use the
+  "Run workflow" button.
 
 ### Apps Script doesn't dispatch
 - In Apps Script: **Executions** (left sidebar). Look for failed
-  `processInbox` runs. The error column tells you what went wrong.
+  `tick()` runs. The error column tells you what went wrong.
 - Common: `GH_TOKEN` expired or wrongly scoped. Recreate the PAT
   (step 6a) and update the Script Property.
 - The label `tarzan-update-handled` is added to threads we've
