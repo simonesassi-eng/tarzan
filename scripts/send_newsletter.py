@@ -184,13 +184,24 @@ def main() -> int:
         logger.error("Pipeline produced empty metrics. Aborting send.")
         return 1
 
-    # 2. Render newsletter HTML
+    # 2. Render newsletter HTML.
+    # The α/β and geo benchmark names are read from configuration
+    # (indexes.csv: is_benchmark_alfa_and_beta / is_benchmark_geo_allocation)
+    # rather than hardcoded, so the labels and the cells they color match
+    # the benchmark the engine actually computed against.
+    from tarzan import config as tarzan_config
+
+    benchmark_alpha_beta = tarzan_config.benchmark_beta_name()
+    benchmark_geo = tarzan_config.benchmark_geo_allocation()
+    logger.info(
+        "Benchmarks — α/β: %s | geo: %s", benchmark_alpha_beta, benchmark_geo
+    )
     html = render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=issue_number,
-        benchmark_alpha_beta="S&P 500",
-        benchmark_geo="MSCI ACWI",
+        benchmark_alpha_beta=benchmark_alpha_beta,
+        benchmark_geo=benchmark_geo,
     )
 
     subject = _build_subject(metrics, subject_prefix, trigger_label)

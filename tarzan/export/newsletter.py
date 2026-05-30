@@ -143,6 +143,33 @@ def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str
     return f"{value:.{decimals}f}%"
 
 
+def _pct_compact(value: Optional[float], signed: bool = True) -> str:
+    """Percentage with width-aware precision for the dense returns grids.
+
+    The 8-column returns tables (snapshot + performance) must fit eight
+    values inside a 600px email. Two decimals are fine for normal
+    returns, but three-digit values like ``+126.17%`` overflow the
+    fixed cell width. So we taper precision by magnitude:
+
+        |v| < 100   → 2 decimals   (+8.59%, −1.62%)
+        |v| < 1000  → 1 decimal    (+126.2%)
+        |v| >= 1000 → 0 decimals   (+1234%)
+
+    This trims width exactly where it's needed without losing
+    meaningful precision (a few basis points on a >100% multi-year
+    return are noise).
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    v = float(value)
+    av = abs(v)
+    decimals = 2 if av < 100 else (1 if av < 1000 else 0)
+    if signed:
+        sign = "+" if v >= 0 else "−"
+        return f"{sign}{av:.{decimals}f}%"
+    return f"{v:.{decimals}f}%"
+
+
 def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = False) -> str:
     """Format a percentage with adaptive precision: drop the decimal
     digits when the value is already integer (saves horizontal space).
@@ -718,22 +745,66 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
 def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     """Build the per-holding returns snapshot table.
 
-    Mirrors the Excel ``Performance`` tab but trimmed to the columns
-    that actually fit in an email: name, ticker, asset class, then
-    the 1D / 1W / 1M / 3M / YTD / 1Y returns. Risk metrics (Sharpe,
-    Vol, alpha, beta) are not included — the Excel report keeps the
-    detailed view for users who need it.
+    Mirrors the Excel ``Performance`` tab and uses the exact same eight
+    time-return columns as the "Returns vs benchmarks" table below —
+    1D / 1W / 1M / 3M / YTD / 1Y / 3Y / 5Y — so the two newsletter
+    tables read as one consistent view. Risk metrics (Sharpe, Vol,
+    alpha, beta) are not included here — the Excel report keeps the
+    detailed risk-adjusted view for users who need it.
 
     The TOTAL PORTFOLIO row anchors the table at the top, then each
     holding sorted by asset class (matching the Holdings section
     above), then the benchmarks at the bottom.
+
+    Periods longer than a holding's (or the portfolio's) available
+    history render as "—", exactly like the Performance table.
     """
     m = ctx.metrics
     hp = m.holding_performance
     port_full = m.performance_full or {}
+    from tarzan.export._format import short_instrument_name
 
-    period_keys = ["1d", "1w", "1m", "3m", "ytd", "1y"]
-    period_labels = ["1D", "1W", "1M", "3M", "YTD", "1Y"]
+    # Same history span label the Performance section shows in its
+    # disclaimer (e.g. "2.0Y"): the consolidated portfolio history is
+    # bounded by the youngest holding with >=1Y of data, so the
+    # portfolio row's longer periods read "—". Surfacing it here keeps
+    # the snapshot honest about why the Total Portfolio row can stop
+    # short of the per-instrument columns.
+    history_label = str(port_full.get("period_used") or "—")
+
+    # Keep these aligned with ``_build_performance``'s ``periods`` tuple
+    # so both tables always show the same columns in the same order.
+    period_keys = ["1d", "1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
+    period_labels = ["1D", "1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
+
+    # Locate the α/β benchmark's per-period returns so the Total
+    # Portfolio row can be colored "did we beat the benchmark this
+    # period?" — identical logic to the Performance table below, so the
+    # two tables agree. Per-instrument rows stay colored by sign.
+    ab_bench_returns: dict = {}
+    ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    if hp is not None and not hp.empty and "type" in hp.columns and "name" in hp.columns:
+        bench_match = hp[
+            hp["type"].astype(str).str.contains("enchmark", case=False, na=False)
+            & hp["name"].astype(str).str.contains(
+                ab_bench_name, case=False, na=False, regex=False,
+            )
+        ]
+        if not bench_match.empty:
+            ab_row = bench_match.iloc[0]
+            for key in period_keys:
+                ab_bench_returns[key] = ab_row.get(key)
+
+    def _vs_bench_color(value: float, bench_value) -> str:
+        """Green if we beat the α/β benchmark by >0.25pp this period,
+        amber within ±0.25pp (noise), red if we underperform. Falls back
+        to sign-based coloring when the benchmark value is missing."""
+        if bench_value is None or (isinstance(bench_value, float) and pd.isna(bench_value)):
+            return PALETTE["green"] if value >= 0 else PALETTE["red"]
+        delta = value - float(bench_value)
+        if abs(delta) <= 0.25:
+            return PALETTE["amber"]
+        return PALETTE["green"] if delta > 0 else PALETTE["red"]
 
     def _row(name: str, ticker: str, asset_class: str, source: dict, *,
              is_portfolio: bool = False, is_benchmark: bool = False) -> dict:
@@ -748,9 +819,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             except (TypeError, ValueError):
                 cells.append({"value": "—", "color": PALETTE["subtle"], "is_positive": True})
                 continue
+            if is_portfolio:
+                color = _vs_bench_color(v, ab_bench_returns.get(key))
+            else:
+                color = PALETTE["green"] if v >= 0 else PALETTE["red"]
             cells.append({
-                "value": _pct(v, signed=True, decimals=2),
-                "color": PALETTE["green"] if v >= 0 else PALETTE["red"],
+                "value": _pct_compact(v, signed=True),
+                "color": color,
                 "is_positive": v >= 0,
             })
         return {
@@ -779,6 +854,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         return {
             "available": False,
             "period_labels": period_labels,
+            "history_label": history_label,
+            "benchmark_alpha_beta": ab_bench_name,
             "rows": rows,
         }
 
@@ -794,8 +871,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
 
     for _, h in df.iterrows():
         ticker = str(h.get("ticker", "") or "")
+        raw_name = str(h.get("name", "") or ticker)
         rows.append(_row(
-            str(h.get("name", "") or ticker),
+            short_instrument_name(raw_name),
             ticker,
             str(h.get("asset_class", "") or ""),
             perf_by_ticker.get(ticker, {}),
@@ -804,6 +882,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     return {
         "available": len(rows) > 1,  # at least one holding/benchmark beyond the portfolio row
         "period_labels": period_labels,
+        "history_label": history_label,
+        "benchmark_alpha_beta": ab_bench_name,
         "rows": rows,
     }
 
@@ -1179,7 +1259,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     def _build_portfolio_returns_dict(source: dict) -> dict:
         return {
             p: {
-                "value": _pct(source.get(p), signed=True),
+                "value": _pct_compact(source.get(p), signed=True),
                 "color": _color_vs_bench(source.get(p), ab_bench_returns.get(p)),
             }
             for p in periods
@@ -1188,7 +1268,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     def _build_bench_returns_dict(source: dict) -> dict:
         return {
             p: {
-                "value": _pct(source.get(p), signed=True),
+                "value": _pct_compact(source.get(p), signed=True),
                 "color": _color_sign(source.get(p)),
             }
             for p in periods
@@ -1205,17 +1285,25 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # Benchmark rows (from holding_performance, type contains 'enchmark')
     benchmark_rows = []
     if not hp.empty and "type" in hp.columns:
+        ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
+        geo_name = (ctx.benchmark_geo or "").strip().lower()
         bench_df = hp[hp["type"].astype(str).str.contains("enchmark", case=False, na=False)]
         for _, r in bench_df.iterrows():
             name = str(r.get("name") or r.get("ticker", ""))
-            tag = None
-            if "S&P 500" in name or "S&P500" in name:
-                tag = ("α/β", PALETTE["accent"], PALETTE["accent_bg"])
-            elif "ACWI" in name and "ACWI ex" not in name:
-                tag = ("GEO", PALETTE["accent"], PALETTE["accent_bg"])
+            name_norm = name.strip().lower()
+            # Tag the configured benchmarks. The same index can be both
+            # the α/β and the geo reference (e.g. MSCI ACWI), so we may
+            # show both tags on one row.
+            tags = []
+            if ab_name and name_norm == ab_name:
+                tags.append(("α/β", PALETTE["accent"], PALETTE["accent_bg"]))
+            if geo_name and name_norm == geo_name:
+                tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             benchmark_rows.append({
                 "name": name,
-                "tag": tag,
+                "tags": tags,
+                # Back-compat single tag (first one) for any old template ref.
+                "tag": tags[0] if tags else None,
                 "is_portfolio": False,
                 "returns": _build_bench_returns_dict(r.to_dict()),
             })
