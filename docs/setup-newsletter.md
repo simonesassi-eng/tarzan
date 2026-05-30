@@ -329,10 +329,42 @@ For local development, keep using `input/holdings.csv` and
 - In Apps Script: **Executions** (left sidebar). Look for failed
   `tick()` runs. The error column tells you what went wrong.
 - Common: `GH_TOKEN` expired or wrongly scoped. Recreate the PAT
-  (step 6a) and update the Script Property.
+  (see "Rotating the `GH_TOKEN`" below) and update the Script Property.
 - The label `tarzan-update-handled` is added to threads we've
   processed. To re-test the same reply, remove the label from the
   thread in Gmail.
+
+### Rotating the `GH_TOKEN`
+The fine-grained PAT that lets Apps Script trigger the workflow expires
+(1 year by default). GitHub shows a token's value **only once at
+creation** — it cannot be retrieved later, so when it expires you
+generate a fresh one. Symptoms of an expired/invalid token: Apps Script
+**Executions** show `tick()` failing with `GitHub dispatch failed with
+HTTP 401` (or `403`), and scheduled sends stop arriving.
+
+To rotate it:
+
+1. Go to <https://github.com/settings/personal-access-tokens/new>
+   (signed in as the repo owner, e.g. `simonesassi-eng`).
+2. Set:
+   - **Token name:** `tarzan-apps-script`
+   - **Expiration:** 1 year (or "No expiration" to avoid repeating this)
+   - **Repository access:** "Only select repositories" → the `tarzan` repo
+   - **Repository permissions → Actions → Read and write** (this is the
+     only permission needed; leave everything else at "No access")
+3. Click **Generate token** and **copy the value** (`github_pat_...`)
+   immediately — you won't see it again.
+4. In Apps Script: **Project Settings** (gear icon) → **Script
+   Properties** → **Edit** → replace the `GH_TOKEN` value with the new
+   token → **Save**.
+5. Verify: in the editor, select `checkSchedule` (or `processInbox`) and
+   **Run**, or trigger **Run workflow** on GitHub. A successful
+   `tick()`/dispatch confirms the new token works.
+
+> Existing fine-grained PATs are listed at
+> <https://github.com/settings/tokens?type=beta> with their name and
+> expiry — but the token **value** is never shown there. If you don't
+> have the value saved, just generate a new one with the steps above.
 
 ### "Run workflow" button is missing
 The `workflow_dispatch` trigger requires the workflow file to be on the
