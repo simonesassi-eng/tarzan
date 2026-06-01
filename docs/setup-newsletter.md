@@ -191,8 +191,13 @@ fire the same GitHub workflow via `repository_dispatch`.
    - **Token name:** `tarzan-apps-script`
    - **Expiration:** 1 year
    - **Repository access:** "Only select repositories" → choose your Tarzan repo
-   - **Repository permissions** → **Actions** → **Read and write**
-     (only this scope)
+   - **Repository permissions** — set **both** of these to **Read and write**:
+     - **Contents** → **Read and write**
+     - **Actions** → **Read and write**
+
+     > A fine-grained PAT needs **Contents: Read and write** to post a
+     > `repository_dispatch` event — "Actions" alone returns
+     > HTTP 403 "Resource not accessible by personal access token".
 3. Click **Generate token**, copy the value (`github_pat_...`).
 
 ### 6b. Create the Apps Script project
@@ -325,6 +330,17 @@ For local development, keep using `input/holdings.csv` and
   entry under **Project Settings → Script Properties**, or just use the
   "Run workflow" button.
 
+### `GitHub dispatch failed: HTTP 403` ("Resource not accessible by personal access token")
+The Apps Script `tick()` ran on time but GitHub rejected the
+`repository_dispatch`, so no workflow started and no email was sent. The
+`GH_TOKEN` is missing a required permission. The most common cause is a
+token created with "Actions" only — a fine-grained PAT needs
+**Contents: Read and write** to fire `repository_dispatch`.
+
+Fix: regenerate the PAT (see "Rotating the `GH_TOKEN`" below) with
+**Contents: Read and write** AND **Actions: Read and write** on the
+`tarzan` repo, then update the `GH_TOKEN` Script Property.
+
 ### Apps Script doesn't dispatch
 - In Apps Script: **Executions** (left sidebar). Look for failed
   `tick()` runs. The error column tells you what went wrong.
@@ -350,8 +366,10 @@ To rotate it:
    - **Token name:** `tarzan-apps-script`
    - **Expiration:** 1 year (or "No expiration" to avoid repeating this)
    - **Repository access:** "Only select repositories" → the `tarzan` repo
-   - **Repository permissions → Actions → Read and write** (this is the
-     only permission needed; leave everything else at "No access")
+   - **Repository permissions** — set **both** to **Read and write**:
+     **Contents** and **Actions**. Leave everything else at "No access".
+     (Contents R/W is what makes `repository_dispatch` work; without it
+     GitHub returns HTTP 403.)
 3. Click **Generate token** and **copy the value** (`github_pat_...`)
    immediately — you won't see it again.
 4. In Apps Script: **Project Settings** (gear icon) → **Script
