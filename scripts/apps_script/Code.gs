@@ -6,17 +6,21 @@
  * *runner*. A single time-driven trigger calls tick() every few
  * minutes, and tick() does two independent jobs:
  *
- *   1. checkSchedule() — fires the daily market slots (morning / midday
- *      / close) at their Europe/Rome local time, AT MOST ONCE PER DAY
- *      PER SLOT. This replaces GitHub Actions' built-in cron, which was
- *      best-effort: it queued runs under load and released them in a
- *      burst, causing several newsletters to arrive back-to-back.
+ *   1. checkSchedule() — fires the market-hours slots at their
+ *      Europe/Rome local time, AT MOST ONCE PER DAY PER SLOT. On
+ *      weekdays it sends one digest every 90 minutes across Borsa
+ *      Italiana continuous trading (09:05 up to the 17:30 close) plus a
+ *      post-close wrap-up at 17:35; on weekends a single midday digest
+ *      (13:05) goes out. This replaces GitHub Actions' built-in cron,
+ *      which was best-effort: it queued runs under load and released
+ *      them in a burst, causing several newsletters to arrive
+ *      back-to-back.
  *
  *   2. processInbox() — the original on-demand path: when you reply
  *      "Update" to a newsletter, it dispatches an extra send.
  *
  * Both jobs trigger the same GitHub workflow via a repository_dispatch
- * event (event_type: send_now). The slot name travels in
+ * event (event_type: send_now). The slot label travels in
  * client_payload.label and ends up in the email subject.
  *
  * Why this fixes the duplicate/burst problem
@@ -29,8 +33,8 @@
  *   or two overlapping trigger runs can never send the same slot twice.
  * - A slot only fires inside a bounded window after its target time
  *   (MAX_LAG_MINUTES). If the script was down past the window, the slot
- *   is skipped rather than sent stale — we prefer "fewer than 3 today"
- *   over "3 at once at the wrong time".
+ *   is skipped rather than sent stale — we prefer a missed hourly
+ *   digest over a stale one at the wrong time.
  *
  * Setup
  * -----
@@ -39,8 +43,11 @@
  * 3. In Project Settings, set the following Script Properties:
  *      GH_OWNER       Your GitHub username or org (e.g. "simonsa")
  *      GH_REPO        Repository name (e.g. "Tarzan-personal")
- *      GH_TOKEN       Fine-grained PAT with "Actions: read & write"
- *                     scope on this repo (no other scopes needed).
+ *      GH_TOKEN       Fine-grained PAT on this repo with BOTH
+ *                     "Contents: Read and write" AND "Actions: Read and
+ *                     write". Contents R/W is required for
+ *                     repository_dispatch — "Actions" alone returns
+ *                     HTTP 403.
  *      LABEL_NAME     Optional Gmail label applied to processed
  *                     "Update" threads. Default "tarzan-update-handled".
  *      SUBJECT_MATCH  Optional. Default "Tarzan Portfolio Digest" — only
@@ -67,23 +74,52 @@
 // year-round.
 const SCHEDULE_TZ = 'Europe/Rome';
 
-// Daily market slots. Times are Europe/Rome local, aligned to Borsa
-// Italiana hours (open ~09:00, close 17:30):
-//   morning  09:05  — just after the open, sent every day
-//   midday   13:00  — mid-session, weekdays only
-//   close    17:35  — just after the close, weekdays only
-// Edit these to taste; the rest of the logic adapts automatically.
-const SLOTS = [
-  { name: 'morning', hour: 9,  minute: 5,  weekdaysOnly: false },
-  { name: 'midday',  hour: 13, minute: 0,  weekdaysOnly: true },
-  { name: 'close',   hour: 17, minute: 35, weekdaysOnly: true },
-];
+// Daily market slots. Times are Europe/Rome local. On weekdays we send
+// one digest every 90 minutes across Borsa Italiana continuous trading
+// (from just after the 09:00 open to the 17:30 close) plus a wrap-up
+// just after the close; on weekends markets are closed, so a single
+// midday digest goes out.
+//
+// Times are deliberately "off the hour" (the cadence starts at :05) for
+// a tidy inbox rhythm.
+//
+// Each slot carries:
+//   name   unique id — used for the per-(date, slot) idempotency marker,
+//          so every send fires at most once per day.
+//   label  shown in the email subject (need NOT be unique).
+//   hour/minute  Europe/Rome local time of the slot.
+//   days   'weekday' (Mon–Fri), 'weekend' (Sat–Sun), or 'all'.
+const SLOT_INTERVAL_MINUTES = 90;   // 1.5h cadence between weekday sends
+const SLOT_START_MINUTE = 9 * 60 + 5;   // first slot: 09:05
+const MARKET_CLOSE_MINUTE = 17 * 60 + 30;   // 17:30 Borsa Italiana close
+
+function _buildSlots_() {
+  const slots = [];
+  // Weekday cadence: 09:05, 10:35, 12:05, … up to (and including) the
+  // last step at or before the 17:30 close.
+  for (let m = SLOT_START_MINUTE; m <= MARKET_CLOSE_MINUTE; m += SLOT_INTERVAL_MINUTES) {
+    const h = Math.floor(m / 60);
+    const min = m % 60;
+    const hh = (h < 10 ? '0' : '') + h;
+    const mm = (min < 10 ? '0' : '') + min;
+    slots.push({ name: 'wd-' + hh + mm, label: hh + ':' + mm, hour: h, minute: min, days: 'weekday' });
+  }
+  // Post-close wrap-up just after the 17:30 close.
+  slots.push({ name: 'close', label: 'close', hour: 17, minute: 35, days: 'weekday' });
+  // Weekend: a single midday digest.
+  slots.push({ name: 'weekend', label: 'weekend', hour: 13, minute: 5, days: 'weekend' });
+  return slots;
+}
+const SLOTS = _buildSlots_();
 
 // A slot may fire only within this many minutes after its target time.
 // Past the window it is skipped (avoids stale, bursty sends if the
-// trigger was delayed or the script was paused). With a 5-minute poll,
-// 90 minutes leaves ample room to catch every slot punctually.
-const MAX_LAG_MINUTES = 90;
+// trigger was delayed or paused). It MUST stay smaller than the gap
+// between any two consecutive slots so two never fire in the same tick;
+// the tightest gap is the last cadence slot (16:35) to the post-close
+// wrap-up (17:35) = 60 min. 25 minutes still comfortably catches every
+// slot given the 5-minute polling cadence.
+const MAX_LAG_MINUTES = 25;
 
 // Script Property key prefix for per-(date, slot) idempotency markers.
 const SENT_MARKER_PREFIX = 'sent:';
@@ -188,10 +224,11 @@ function checkSchedule() {
     for (const slot of SLOTS) {
       const decision = _slotDecision_(slot, nowMin, isWeekend, props, today);
       if (decision.fire) {
-        _dispatch_(owner, repo, token, slot.name, 'scheduled:' + slot.name + ' ' + today);
+        _dispatch_(owner, repo, token, slot.label, 'scheduled:' + slot.name + ' ' + today);
         _markSent_(props, today, slot.name, now);
         dispatched += 1;
-        Logger.log('Dispatched slot "%s" for %s (now=%s).', slot.name, today, _localFormat_(now, 'HH:mm'));
+        Logger.log('Dispatched slot "%s" (label=%s) for %s (now=%s).',
+                   slot.name, slot.label, today, _localFormat_(now, 'HH:mm'));
       } else if (decision.reason !== 'not-due') {
         Logger.log('Slot "%s" skipped: %s.', slot.name, decision.reason);
       }
@@ -209,7 +246,7 @@ function checkSchedule() {
  * writes) the sent-markers to check idempotency.
  *
  * @return {{fire: boolean, reason: string}}
- *   reason is one of: "fire", "not-due", "too-late", "weekend",
+ *   reason is one of: "fire", "not-due", "too-late", "wrong-day",
  *   "already-sent".
  */
 function _slotDecision_(slot, nowMin, isWeekend, props, today) {
@@ -221,8 +258,15 @@ function _slotDecision_(slot, nowMin, isWeekend, props, today) {
   if (nowMin >= slotMin + MAX_LAG_MINUTES) {
     return { fire: false, reason: 'too-late (lag ' + (nowMin - slotMin) + 'm > ' + MAX_LAG_MINUTES + 'm)' };
   }
-  if (slot.weekdaysOnly && isWeekend) {
-    return { fire: false, reason: 'weekend' };
+  // Day-of-week eligibility: 'weekday' (Mon–Fri), 'weekend' (Sat–Sun),
+  // or 'all'. Markets are closed on weekends, so hourly weekday slots
+  // don't run then and the weekend slot doesn't run on weekdays.
+  const days = slot.days || 'all';
+  if (days === 'weekday' && isWeekend) {
+    return { fire: false, reason: 'wrong-day (weekday-only)' };
+  }
+  if (days === 'weekend' && !isWeekend) {
+    return { fire: false, reason: 'wrong-day (weekend-only)' };
   }
   if (_alreadySent_(props, today, slot.name)) {
     return { fire: false, reason: 'already-sent' };

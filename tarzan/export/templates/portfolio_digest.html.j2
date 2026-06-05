@@ -383,8 +383,7 @@
                 {% else %}
                 <tr>
                   <td style="padding:8px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
-                    <div>{{ r.name }}</div>
-                    {% if r.ticker %}<div style="margin-top:2px;font-size:9px;color:{{ palette.muted }};">{{ r.ticker }}</div>{% endif %}
+                    {{ r.name }}
                   </td>
                   {% for c in r.cells %}
                   <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ c.color }};font-weight:600;">{{ c.value }}</td>
