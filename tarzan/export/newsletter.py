@@ -1312,6 +1312,29 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # section by ``_build_risk_profile``; we no longer return separate
     # chip data here.
 
+    # Order-list returns (only present when an order list was supplied;
+    # all None for a holdings-only run so the template renders nothing).
+    m = ctx.metrics
+    returns_block = None
+    if m.xirr_pct is not None or m.twror_pct is not None:
+        fallback = []
+        prov = m.returns_provenance or {}
+        for key in ("synthetic", "carry_flat", "excluded"):
+            fallback.extend(prov.get(key, []))
+        returns_block = {
+            "xirr": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
+            "twror": _pct(m.twror_pct, signed=True) if m.twror_pct is not None else None,
+            "twror_annualized": (
+                _pct(m.twror_annualized_pct, signed=True)
+                if m.twror_annualized_pct is not None else None
+            ),
+            "coverage": (
+                _pct(m.returns_coverage_pct, decimals=0)
+                if m.returns_coverage_pct is not None else None
+            ),
+            "fallback_count": len(set(fallback)),
+        }
+
     return {
         "portfolio_row": portfolio_row,
         "benchmark_rows": benchmark_rows,  # show all configured benchmarks
@@ -1319,6 +1342,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         "history_label": history_label,
         "benchmark_alpha_beta": ctx.benchmark_alpha_beta,
         "benchmark_geo": ctx.benchmark_geo,
+        "returns": returns_block,
     }
 
 

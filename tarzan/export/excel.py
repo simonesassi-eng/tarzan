@@ -404,6 +404,16 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
         ("Total Gain (EUR)", total_gain, total_gain, "number_signed"),
         ("RTD (%)", rtd, total_gain, "number_signed"),
     ]
+    # Order-list returns: shown only when an order list was supplied
+    # (xirr_pct is None otherwise, so a holdings-only run is unchanged).
+    if metrics.xirr_pct is not None:
+        hero_data.append(
+            ("XIRR / MWR (%)", metrics.xirr_pct, metrics.xirr_pct, "pct_signed")
+        )
+    if metrics.twror_pct is not None:
+        hero_data.append(
+            ("TWROR (%)", metrics.twror_pct, metrics.twror_pct, "pct_signed")
+        )
     for ti, (label, value, gain_for_color, kind) in enumerate(hero_data):
         lcell = sheet.cell(row=row, column=1, value=label)
         lcell.font = px_font(size=10, color=C['text_sec'])
@@ -422,6 +432,8 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
             vcell.number_format = '#,##0.00'
         elif kind == "number_signed":
             vcell.number_format = '+#,##0.00;-#,##0.00;0.00'
+        elif kind == "pct_signed":
+            vcell.number_format = '+0.00"%";-0.00"%";0.00"%"'
         row += 1
 
     # ALLOCATION
@@ -1467,6 +1479,35 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
         warn_cell = sheet.cell(row=row, column=1, value=warn_text)
         warn_cell.font = px_font(size=9, italic=True, color=C['amber'])
         warn_cell.alignment = px_align(h='left', wrap=True)
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
+        sheet.row_dimensions[row].height = 28
+        row += 2
+
+    # Returns coverage note: when an order list drove XIRR/TWROR, disclose
+    # how much of the value rested on real market data and which
+    # instruments were priced by the synthetic/carry-flat fallback.
+    if metrics.returns_coverage_pct is not None:
+        prov = metrics.returns_provenance or {}
+        fallback = sorted(
+            set(prov.get("synthetic", []))
+            | set(prov.get("carry_flat", []))
+            | set(prov.get("excluded", []))
+        )
+        cov_text = (
+            f"XIRR {metrics.xirr_pct:+.2f}% (money-weighted)  ·  "
+            f"TWROR {metrics.twror_pct:+.2f}% cumulative "
+            f"({metrics.twror_annualized_pct:+.2f}% annualized).  "
+            f"Computed on {metrics.returns_coverage_pct:.1f}% real market data."
+        )
+        if fallback:
+            cov_text += (
+                f"  {len(fallback)} instrument"
+                f"{'s' if len(fallback) > 1 else ''} priced by fallback "
+                f"(interpolated/carry-flat): {', '.join(fallback)}."
+            )
+        cov_cell = sheet.cell(row=row, column=1, value=cov_text)
+        cov_cell.font = px_font(size=9, italic=True, color=C['text_sec'])
+        cov_cell.alignment = px_align(h='left', wrap=True)
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
         sheet.row_dimensions[row].height = 28
         row += 2

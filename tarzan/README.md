@@ -151,6 +151,51 @@ convention so the unit is unambiguous:
 ### Performance
 - CAGR, YTD, periodic returns (1d to 5y), IRR
 
+### Order-list returns — XIRR & TWROR (optional)
+
+When an order list is supplied (`--input_orders input/order_list.csv`, or
+`ORDERS_PATH` for the newsletter), the order list becomes the single
+source of the portfolio's historical value series and Tarzan additionally
+computes:
+
+- **XIRR** (money-weighted return) — the annualized rate that zeroes the
+  net present value of every external cash flow plus today's value.
+  Sensitive to *when* you deposit/withdraw.
+- **TWROR** (time-weighted return) — chained period returns, neutral to
+  deposit timing; the market behaviour of the held portfolio. Reported
+  cumulative and annualized.
+
+Both surface in the Excel Dashboard (KPI rows) and the newsletter
+Performance section, and are `None`/absent for a holdings-only run.
+
+**Historical price fallback ladder.** Building a daily value series needs
+a price for every held instrument on every date. When Yahoo Finance has
+no usable history, Tarzan walks an explicit ladder and **records which
+rung priced each instrument** so the figure is transparent:
+
+1. `yfinance` — real daily series (preferred).
+2. `synthetic` — linear interpolation between the order-list trade prices
+   (the default fallback). Captures the trend between trades; understates
+   intra-trade volatility.
+3. `carry_flat` — a single known price held flat (zero volatility
+   contribution for that name).
+4. `excluded` — no price at all; the instrument drops out of the
+   valuation on that date.
+
+The output reports a **coverage %** (share of value priced by real market
+data) and lists the fallback-priced instruments, in both Excel (a
+Performance-tab footnote) and the newsletter (a muted sub-line).
+
+**Known limitation.** A few fixed-income ISINs have no daily history on
+either Yahoo Finance or the Borsa Italiana fallback — notably the US
+Treasury `US91282CGJ45`, and intermittently the BTP/Eurobond lines
+(`IT0005542359`, `XS2105803527`, `IT0005358806`). These are priced by the
+`synthetic`/`carry_flat` rungs, so their contribution to TWROR is
+approximate (trend-only). XIRR is unaffected by this — it depends only on
+the cash flows and today's value, both of which are known exactly.
+Foreign-currency bonds (e.g. ZAR/USD) are converted to EUR via the order
+`fx_rate`, so they are valued correctly despite the missing history.
+
 ### Risk
 - **Sharpe ratio** — risk-adjusted return (excess return / volatility)
 - **Sortino ratio** — penalizes downside volatility only
