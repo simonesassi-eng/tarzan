@@ -197,7 +197,21 @@ def _fetch_ticker_data(ticker: str) -> dict:
         return cached
 
     logger.info("Fetching data for %s", ticker)
-    t = yf.Ticker(ticker)
+    # yfinance raises ValueError("Invalid ISIN number: ...") from the
+    # Ticker constructor when the symbol looks like an ISIN but fails
+    # its check-digit validation (common for BTP / US Treasury / EIB
+    # bonds). Left unguarded, that exception aborts the whole
+    # enrichment for the holding *before* the Borsa Italiana bond
+    # fallback in _enrich_single is ever reached. Catch it here and
+    # return an empty result so current_price stays None and the
+    # caller proceeds to the bond fallback.
+    try:
+        t = yf.Ticker(ticker)
+    except Exception as e:
+        logger.warning("yfinance rejected ticker %s: %s", ticker, e)
+        data = {"info": {}, "history": pd.DataFrame()}
+        cache_store(ticker, data)
+        return data
     try:
         info = t.info or {}
     except Exception:
