@@ -224,10 +224,24 @@ def _price_at(price_history: pd.Series, d: datetime.date) -> Optional[float]:
 
 
 def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Series]:
-    """Daily-indexed series of order ``price_native`` observations for an
-    ISIN, mean-aggregated per day. None if fewer than 1 observation."""
-    obs = [(o.date, o.price_native) for o in orders
-           if o.isin == isin and o.price_native is not None]
+    """Daily-indexed series of order prices for an ISIN, converted to
+    EUR and mean-aggregated per day. None if no observation.
+
+    Order ``price_native`` is in the instrument's trade currency and
+    ``fx_rate`` is Fineco's ``Cambio`` — units of native currency per
+    EUR — so the EUR price is ``price_native / fx_rate``. Converting
+    here means the synthetic/carry-flat rungs return EUR-per-unit
+    prices, consistent with the yfinance rung (which the enricher has
+    already converted to EUR). Without this a ZAR- or USD-denominated
+    bond would be valued in its native currency and overstated by the
+    FX rate.
+    """
+    obs = []
+    for o in orders:
+        if o.isin == isin and o.price_native is not None:
+            fx = o.fx_rate or 1.0
+            eur_price = o.price_native / fx if fx > 0 else o.price_native
+            obs.append((o.date, eur_price))
     if not obs:
         return None
     s = pd.Series(

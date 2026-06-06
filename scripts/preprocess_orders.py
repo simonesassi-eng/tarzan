@@ -77,6 +77,10 @@ from typing import Optional
 
 import pandas as pd
 
+# Ensure the tarzan package is importable when run from the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tarzan.data.bond_fetcher import looks_like_bond_from_orders  # noqa: E402
+
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -287,10 +291,8 @@ def _build_rows(fineco: pd.DataFrame) -> list[dict]:
             # the bank side and the accrual is preserved as a
             # regular distribution.
             quantity = abs(qty_raw)
-            looks_like_bond = (
-                50.0 <= price <= 150.0 and quantity >= 1000.0
-            )
-            denom = 100.0 if looks_like_bond else 1.0
+            bond = looks_like_bond_from_orders(price, quantity)
+            denom = 100.0 if bond else 1.0
             transfer_eur = quantity * price / denom / (fx if fx > 0 else 1.0)
             gross_eur = transfer_eur
             net_eur = 0.0

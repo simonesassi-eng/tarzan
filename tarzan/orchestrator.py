@@ -60,6 +60,13 @@ def run(
             logger.warning("Order list unreadable (%s); continuing holdings-only.", e)
             orders = None
 
+    # Option Y scope: the order list owns the *historical value series*
+    # and the history-dependent metrics (handled inside the engine via
+    # _portfolio_history_from_orders). The current snapshot — valuation,
+    # allocations, targets, rebalancing — still comes from holdings.csv,
+    # which carries the targets and cost basis the order list does not.
+    # So we do NOT replace `holdings` here.
+
     # 2. Enrich
     from tarzan.data.enricher import enrich_holdings, set_portfolio_backtest_period
     set_portfolio_backtest_period(config.portfolio_backtest_period)
