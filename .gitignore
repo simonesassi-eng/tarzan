@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 .tox/
 .coverage
 htmlcov/
@@ -36,6 +37,7 @@ output/sample/~$*
 input/.cache/
 input/holdings.csv
 input/targets.csv
+input/order_list.csv
 # Personal Fineco export staging area — the preprocessing step is
 # optional and only runs when the user invokes it explicitly.
 input/fineco_raw/
