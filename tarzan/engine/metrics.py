@@ -31,9 +31,11 @@ BENCHMARKS = cfg.benchmarks()
 class MetricsEngine:
     """Computes all portfolio metrics. Extensible via register()."""
 
-    def __init__(self, holdings: list[Holding], config: InvestorConfig):
+    def __init__(self, holdings: list[Holding], config: InvestorConfig,
+                 orders: Optional[list] = None):
         self.holdings = holdings
         self.config = config
+        self.orders = orders
         self._computers: list[Callable] = [
             self._valuation,
             self._portfolio_history,
@@ -48,6 +50,14 @@ class MetricsEngine:
             self._geo_benchmark,
             self._holding_histories,
         ]
+        # Option Y: when an order list is supplied it becomes the single
+        # source of truth for the historical value series. Swap the
+        # provider so _performance/_risk read the same order-derived
+        # series, and append the _returns computer for XIRR/TWROR.
+        if orders:
+            idx = self._computers.index(self._portfolio_history)
+            self._computers[idx] = self._portfolio_history_from_orders
+            self._computers.append(self._returns)
 
     def register(self, fn: Callable) -> None:
         """Append a custom metric computer to the pipeline."""
@@ -235,6 +245,63 @@ class MetricsEngine:
                 logger.warning("Failed to parse inception date '%s': %s", inception, e)
 
         ctx["portfolio_history"] = ph
+
+    # ------------------------------------------------------------------
+    # Portfolio history from orders (Option Y)
+    # ------------------------------------------------------------------
+    def _portfolio_history_from_orders(self, ctx: dict) -> None:
+        """Build the historical value series from the order list.
+
+        Replaces ``_portfolio_history`` when orders are supplied so that
+        every downstream history-dependent computer reads the same
+        order-derived series. Also stashes the raw valuation/flow series
+        and provenance in ``ctx`` for the ``_returns`` computer.
+        """
+        from tarzan.engine.returns_builder import build_order_derived_series
+
+        enriched_by_isin = {h.isin: h for h in self.holdings if h.isin}
+        series = build_order_derived_series(self.orders, enriched_by_isin)
+
+        # Build a daily-indexed pd.Series of portfolio value from the
+        # dated valuations so the existing _performance/_risk computers
+        # consume it exactly like the holdings-derived series.
+        if series.valuations:
+            idx = pd.to_datetime([d for d, _ in series.valuations])
+            vals = [v for _, v in series.valuations]
+            ph = pd.Series(vals, index=idx).sort_index()
+            ph = ph[~ph.index.duplicated(keep="last")]
+        else:
+            ph = pd.Series(dtype=float)
+
+        ctx["portfolio_history"] = ph
+        ctx["portfolio_history_full"] = ph
+        ctx["excluded_short_tenure"] = [
+            {"ticker": isin, "name": isin, "value_eur": 0.0,
+             "weight_pct": 0.0, "span_days": 0}
+            for isin in series.provenance.get("excluded", [])
+        ]
+        # Stash for _returns.
+        ctx["_order_series"] = series
+
+    # ------------------------------------------------------------------
+    # Returns: XIRR + TWROR (only registered when orders are present)
+    # ------------------------------------------------------------------
+    def _returns(self, ctx: dict) -> None:
+        series = ctx.get("_order_series")
+        if series is None:
+            return
+        rate = xirr(series.xirr_cashflows)
+        ctx["xirr_pct"] = rate * 100.0 if not _is_nan(rate) else None
+
+        res = twror(
+            series.valuations, series.external_flows, series.span_days,
+            coverage_pct=series.coverage_pct,
+        )
+        ctx["twror_pct"] = res.cumulative_pct
+        ctx["twror_annualized_pct"] = res.annualized_pct
+        ctx["returns_coverage_pct"] = res.coverage_pct
+        ctx["returns_provenance"] = series.provenance
+        ctx["returns_period_debug"] = res.periods
 
     # ------------------------------------------------------------------
     # Performance
@@ -572,6 +639,12 @@ class MetricsEngine:
             holding_histories=ctx.get("holding_histories", {}),
             acwi_geo=ctx.get("acwi_geo", {}),
             excluded_short_tenure=ctx.get("excluded_short_tenure", []),
+            xirr_pct=ctx.get("xirr_pct"),
+            twror_pct=ctx.get("twror_pct"),
+            twror_annualized_pct=ctx.get("twror_annualized_pct"),
+            returns_coverage_pct=ctx.get("returns_coverage_pct"),
+            returns_provenance=ctx.get("returns_provenance"),
+            returns_period_debug=ctx.get("returns_period_debug"),
         )
 
 
@@ -583,6 +656,11 @@ def _safe_pct_change(old: float, new: float) -> float:
     if old <= 0 or new <= 0:
         return 0.0
     return (new - old) / old * 100
+
+
+def _is_nan(value) -> bool:
+    """True if value is a float NaN (None counts as not-NaN here)."""
+    return isinstance(value, float) and value != value
 
 
 def _format_geo_breakdown(h: Holding) -> str:
