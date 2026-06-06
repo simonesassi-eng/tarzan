@@ -179,7 +179,18 @@ def main() -> int:
     logger.info("Holdings: %s | Targets: %s", holdings_path, targets_path)
 
     # 1. Run the full pipeline (load → enrich → compute)
-    metrics, config = run(holdings_source=holdings_path, config_source=targets_path)
+    # Optional order list: when ORDERS_PATH points to a readable file the
+    # pipeline additionally computes XIRR/TWROR (and the newsletter shows
+    # them). Unset by default, so behavior is unchanged.
+    orders_path = _env("ORDERS_PATH", "")
+    orders_source = orders_path if orders_path and Path(orders_path).exists() else None
+    if orders_source:
+        logger.info("Order list provided (%s) — returns enabled.", orders_source)
+    metrics, config = run(
+        holdings_source=holdings_path,
+        config_source=targets_path,
+        orders_source=orders_source,
+    )
     if metrics.total_value == 0:
         logger.error("Pipeline produced empty metrics. Aborting send.")
         return 1
