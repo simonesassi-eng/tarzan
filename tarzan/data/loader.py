@@ -14,6 +14,7 @@ from typing import Optional, Union
 import pandas as pd
 
 from tarzan.models.holding import Holding
+from tarzan.models.order import Order, OrderType
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.exceptions import DataIngestionError
 
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = frozenset({
     "isin", "ticker", "quantity", "cost_basis_eur", "market_value_eur", "currency",
+})
+
+# Minimal set the order list must carry for returns. The full schema has
+# more columns (trade_date, name, price_native, fx_rate, fees_eur,
+# source); those are optional and default when absent.
+ORDER_REQUIRED_COLUMNS = frozenset({
+    "date", "type", "isin", "quantity", "gross_eur", "net_eur",
 })
 
 
@@ -86,6 +94,137 @@ def load_config(source: Optional[Union[str, io.BytesIO]] = None) -> InvestorConf
         if row.get("key") and "value" in row
     }
     return InvestorConfig.from_dict(rows)
+
+
+def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Order]:
+    """Load and validate the order list into typed Order objects.
+
+    Mirrors ``load_holdings``: reuses ``_read_source`` (path/.csv/.xlsx/
+    BytesIO), lowercases columns, validates the canonical schema, and
+    skips malformed or unknown-type rows with a warning rather than
+    failing the whole load.
+
+    A missing file path returns ``[]`` (not an exception) so the
+    orchestrator can log and continue holdings-only.
+
+    Args:
+        source: File path (str) or BytesIO buffer.
+        filename: Original filename (needed for BytesIO extension detection).
+
+    Returns:
+        List of validated Order objects (possibly empty).
+    """
+    # Missing path → empty list, let the caller decide it's non-fatal.
+    if isinstance(source, str) and not os.path.exists(source):
+        logger.warning("Order list not found at %s; treating as no orders.", source)
+        return []
+
+    df = _read_source(source, filename)
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    missing = ORDER_REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        raise DataIngestionError(
+            f"Order list missing required columns: {', '.join(sorted(missing))}"
+        )
+
+    orders: list[Order] = []
+    skipped = 0
+    for idx, row in df.iterrows():
+        try:
+            order = _parse_order_row(idx, row)
+            if order is not None:
+                orders.append(order)
+            else:
+                skipped += 1
+        except Exception as e:
+            logger.warning("Order row %d: unexpected error '%s', skipping", idx, e)
+            skipped += 1
+
+    if skipped:
+        logger.info("Skipped %d order row(s) with invalid/unknown data", skipped)
+    logger.info("Loaded %d orders from %s", len(orders), filename or str(source))
+    return orders
+
+
+def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
+    """Parse one order-list row into an Order, or None to skip it."""
+    otype = OrderType.from_raw(row.get("type"))
+    if otype is None:
+        logger.warning("Order row %d: unknown type %r, skipping", idx, row.get("type"))
+        return None
+
+    order_date = _parse_date_safe(row.get("date"))
+    if order_date is None:
+        logger.warning("Order row %d: invalid date %r, skipping", idx, row.get("date"))
+        return None
+    trade_date = _parse_date_safe(row.get("trade_date")) or order_date
+
+    isin = str(row.get("isin", "")).strip()
+    if not isin or isin.lower() == "nan":
+        logger.warning("Order row %d: missing ISIN, skipping", idx)
+        return None
+
+    quantity = _parse_number_safe(row.get("quantity"), "quantity", idx)
+    gross_eur = _parse_number_safe(row.get("gross_eur"), "gross_eur", idx)
+    net_eur = _parse_number_safe(row.get("net_eur"), "net_eur", idx)
+    if quantity is None or gross_eur is None or net_eur is None:
+        return None
+
+    currency = str(row.get("currency", "EUR")).strip().upper() or "EUR"
+    if currency.lower() == "nan":
+        currency = "EUR"
+
+    return Order(
+        date=order_date,
+        trade_date=trade_date,
+        type=otype,
+        isin=isin,
+        name=_clean_str(row.get("name")),
+        ticker=_clean_str(row.get("ticker")),
+        quantity=quantity,
+        currency=currency,
+        price_native=_parse_number_optional(row.get("price_native")),
+        fx_rate=_parse_number_optional(row.get("fx_rate")),
+        gross_eur=gross_eur,
+        fees_eur=_parse_number_safe(row.get("fees_eur"), "fees_eur", idx) or 0.0,
+        net_eur=net_eur,
+        source=_clean_str(row.get("source")) or "fineco",
+    )
+
+
+def _clean_str(val) -> str:
+    """Return a stripped string, mapping NaN/None to empty string."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() == "nan" else s
+
+
+def _parse_date_safe(val):
+    """Parse a value into a date, or None on failure/empty."""
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+    try:
+        ts = pd.to_datetime(val, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_number_optional(val) -> Optional[float]:
+    """Parse a number, returning None for blanks/NaN (not 0)."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return None
+    try:
+        return _parse_number(val)
+    except (ValueError, TypeError):
+        return None
 
 
 def _read_source(source: Union[str, io.BytesIO], filename: str) -> pd.DataFrame:

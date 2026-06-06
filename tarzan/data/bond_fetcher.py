@@ -98,5 +98,87 @@ def bond_price_to_value(price: float, quantity: float) -> float:
 
     For European government bonds: value = quantity * price / 100
     (quantity is the nominal amount, price is percentage of par).
+
+    Thin alias of :func:`value_position` with ``bond=True`` — kept for
+    readability at call sites that already know they hold a bond.
     """
-    return quantity * price / 100
+    return value_position(quantity, price, bond=True)
+
+
+# ---------------------------------------------------------------------------
+# Shared position valuation + bond classification
+# ---------------------------------------------------------------------------
+# These three helpers are the single source of truth for the bond
+# per-100-nominal convention. Both the current-value path (enricher) and
+# the historical order-derived path use them, so a bond is valued the
+# same way everywhere (design Property 2: valuation consistency).
+
+# Keywords in instrument_type that indicate the per-100-nominal bond
+# convention applies. Matched case-insensitively as substrings.
+_BOND_INSTRUMENT_KEYWORDS = ("BOND", "TREASURY", "GOV", "CORP", "NOTE")
+
+# Order-list bond heuristic thresholds: a clean bond price is quoted per
+# 100 of face value (typically 50–150), and retail bond face amounts are
+# at least ~1,000, whereas ETF/equity unit prices in the 50–150 range
+# come with much smaller share counts.
+_ORDER_BOND_PRICE_MIN = 50.0
+_ORDER_BOND_PRICE_MAX = 150.0
+_ORDER_BOND_MIN_QTY = 1000.0
+
+
+def value_position(
+    quantity: float, price_eur_per_unit: float, bond: bool
+) -> float:
+    """EUR market value of a position, applying the bond convention once.
+
+    Bonds quote a clean price per 100 of face value, and ``quantity`` is
+    the nominal amount, so the value is ``quantity * price / 100``.
+    Non-bonds use ``quantity * price`` directly.
+
+    This is the ONLY place the ``/100`` is applied, so the current and
+    historical valuation paths agree by construction.
+    """
+    if bond:
+        return quantity * price_eur_per_unit / 100.0
+    return quantity * price_eur_per_unit
+
+
+def is_bond(
+    *,
+    asset_class=None,
+    instrument_type: Optional[str] = None,
+    quote_type: Optional[str] = None,
+    sec_type: Optional[str] = None,
+) -> bool:
+    """Single source of truth for the bond classification that triggers
+    the per-100-nominal convention.
+
+    Accepts whatever evidence the caller has — the enricher passes
+    yfinance ``quote_type``/``sec_type``; the orders path passes the
+    holding's ``asset_class``/``instrument_type``. Any one positive
+    signal is enough.
+    """
+    # AssetClass enum or its string value "Fixed Income".
+    if asset_class is not None:
+        ac_value = getattr(asset_class, "value", asset_class)
+        if str(ac_value).strip().lower() == "fixed income":
+            return True
+    for field in (instrument_type, quote_type, sec_type):
+        if field and any(k in str(field).upper() for k in _BOND_INSTRUMENT_KEYWORDS):
+            return True
+    return False
+
+
+def looks_like_bond_from_orders(avg_price: float, avg_qty: float) -> bool:
+    """Heuristic bond detection from order-list data alone.
+
+    Used only for ISINs that never reach yfinance (so we lack
+    ``quote_type``). A clean bond price sits in ``[50, 150]`` and the
+    nominal quantity is at least ``1000``; ETF/equity unit prices in
+    that band come with far smaller share counts. Deliberately distinct
+    from :func:`is_bond` — different evidence, same module.
+    """
+    return (
+        _ORDER_BOND_PRICE_MIN <= avg_price <= _ORDER_BOND_PRICE_MAX
+        and avg_qty >= _ORDER_BOND_MIN_QTY
+    )
