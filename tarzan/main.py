@@ -22,6 +22,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tarzan CLI")
     parser.add_argument("--input_holdings", default="input/holdings.csv")
     parser.add_argument("--input_config", default="input/targets.csv")
+    parser.add_argument(
+        "--input_orders", default=None,
+        help="Optional order-list CSV. When given, enables XIRR/TWROR and "
+             "makes the order list the source of the historical series.",
+    )
     parser.add_argument("--output", default="output/")
     return parser.parse_args(argv)
 
@@ -50,6 +55,7 @@ def main(argv=None) -> int:
         metrics, config = run(
             holdings_source=args.input_holdings,
             config_source=args.input_config,
+            orders_source=args.input_orders,
         )
         if metrics.total_value == 0:
             logger.error("No portfolio value computed. Check input data.")

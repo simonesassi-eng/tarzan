@@ -80,13 +80,26 @@ class PortfolioMetrics:
     # warning banner). Each entry: {"ticker", "name", "value_eur",
     # "weight_pct", "span_days"}.
     excluded_short_tenure: list = field(default_factory=list)
+    # Order-list returns (populated only when an order list is supplied;
+    # all None for a holdings-only run, preserving today's behavior).
+    # xirr_pct: annualized money-weighted return. twror_pct/
+    # twror_annualized_pct: cumulative/annualized time-weighted return.
+    # returns_coverage_pct: % of value priced by real market data over the
+    # window. returns_provenance: {source_tag: [isin, ...]}. The period
+    # debug list carries per-period TWROR diagnostics.
+    xirr_pct: Optional[float] = None
+    twror_pct: Optional[float] = None
+    twror_annualized_pct: Optional[float] = None
+    returns_coverage_pct: Optional[float] = None
+    returns_provenance: Optional[dict] = None
+    returns_period_debug: Optional[list] = None
 
     def to_summary_dict(self) -> dict:
         """Serialize key metrics to a JSON-compatible dictionary.
 
         Useful for API responses, logging, or downstream pipeline consumption.
         """
-        return {
+        summary = {
             "total_value_eur": round(self.total_value, 2),
             "invested_value_eur": round(self.invested_value, 2),
             "cash_value_eur": round(self.cash_value, 2),
@@ -106,3 +119,16 @@ class PortfolioMetrics:
                 len(self.rebalancing_suggestions) if self.rebalancing_suggestions else 0
             ),
         }
+        # Order-list returns: include only when computed (an order list
+        # was supplied), so a holdings-only summary is unchanged.
+        if self.xirr_pct is not None:
+            summary["xirr_pct"] = round(self.xirr_pct, 6)
+        if self.twror_pct is not None:
+            summary["twror_pct"] = round(self.twror_pct, 6)
+            summary["twror_annualized_pct"] = (
+                round(self.twror_annualized_pct, 6)
+                if self.twror_annualized_pct is not None else None
+            )
+        if self.returns_coverage_pct is not None:
+            summary["returns_coverage_pct"] = round(self.returns_coverage_pct, 6)
+        return summary

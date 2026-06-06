@@ -9,7 +9,7 @@ import io
 import logging
 from typing import Optional, Union
 
-from tarzan.data.loader import load_holdings, load_config
+from tarzan.data.loader import load_holdings, load_config, load_orders
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.engine.metrics import MetricsEngine
 
@@ -22,10 +22,17 @@ from tarzan.models.investor_config import InvestorConfig
 def run(
     holdings_source: Union[str, io.BytesIO],
     config_source: Optional[Union[str, io.BytesIO]] = None,
+    orders_source: Optional[Union[str, io.BytesIO]] = None,
     holdings_filename: str = "",
     config_filename: str = "",
+    orders_filename: str = "",
 ) -> tuple[PortfolioMetrics, InvestorConfig]:
     """Execute the full analysis pipeline.
+
+    When ``orders_source`` is provided and loads successfully, the order
+    list becomes the single source of the historical value series and
+    XIRR/TWROR are computed (Option Y). When it is absent or unreadable,
+    behavior is identical to a holdings-only run.
 
     Returns:
         Tuple of (PortfolioMetrics, InvestorConfig).
@@ -42,6 +49,17 @@ def run(
     config = load_config(config_source)
     logger.info("Config loaded (target tolerance=±%.1f%%)", config.rebalancing_target_tolerance_pctg)
 
+    # Optional order list — never fatal: log and continue holdings-only.
+    orders = None
+    if orders_source is not None:
+        try:
+            orders = load_orders(orders_source, orders_filename) or None
+            if orders:
+                logger.info("Loaded %d orders (returns enabled)", len(orders))
+        except Exception as e:
+            logger.warning("Order list unreadable (%s); continuing holdings-only.", e)
+            orders = None
+
     # 2. Enrich
     from tarzan.data.enricher import enrich_holdings, set_portfolio_backtest_period
     set_portfolio_backtest_period(config.portfolio_backtest_period)
@@ -52,7 +70,7 @@ def run(
 
     # 3. Compute
     logger.info("Computing metrics...")
-    engine = MetricsEngine(holdings, config)
+    engine = MetricsEngine(holdings, config, orders=orders)
     metrics = engine.compute_all()
     logger.info("Total portfolio value: €%.2f", metrics.total_value)
 
