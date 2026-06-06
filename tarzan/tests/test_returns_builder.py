@@ -165,3 +165,40 @@ class TestCumExConservationProperty:
             orders, enriched_by_isin={}, today=datetime.date(2025, 12, 1))
         # No open ISIN → terminal valuation is zero principal.
         assert res.valuations[-1][1] == pytest.approx(0.0)
+
+
+class TestMarketPricedFlowsNoJump:
+    """A trade valued at market price must not inject a fictitious TWROR
+    jump (Option 2): buying more of a flat-priced holding leaves the
+    chained period return at ~0."""
+
+    def test_same_day_buy_on_flat_prices_is_neutral(self):
+        from tarzan.engine.metrics import twror
+
+        # AAA: flat at 100 the whole window. Buy 10 on day 1, buy 10 more
+        # on day 15 (a mid-window trade), prices never move.
+        enriched = {"AAA": _enriched_with_history(
+            "AAA", [100.0] * 40, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 15)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 2, 1))
+        res = twror(series.valuations, series.external_flows, series.span_days)
+        # Flat prices → the buy must not create a positive/negative return.
+        assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)
+
+    def test_real_growth_is_captured(self):
+        from tarzan.engine.metrics import twror
+
+        # AAA rises 100 → 110 over the window, single initial buy.
+        prices = [100.0 + i * (10.0 / 30.0) for i in range(31)]
+        enriched = {"AAA": _enriched_with_history("AAA", prices, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 1, 31))
+        res = twror(series.valuations, series.external_flows, series.span_days)
+        assert res.cumulative_pct == pytest.approx(10.0, abs=0.5)

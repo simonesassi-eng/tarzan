@@ -351,6 +351,17 @@ def build_order_derived_series(
         "yfinance": [], "synthetic": [], "carry_flat": [], "excluded": [],
     }
 
+    def value_isin_on(isin: str, d: datetime.date) -> Optional[float]:
+        """EUR value of one unit of ``isin`` on ``d`` at market price
+        (None if unpriceable). Used to value quantity deltas for the
+        TWROR external flow at the same price basis as the series."""
+        price, source = resolver.price_on(isin, d)
+        if price is None:
+            return None
+        if source == "yfinance":
+            return price
+        return value_position(1.0, price, bond=resolver.is_bond(isin))
+
     def value_on(d: datetime.date, record_source: bool = False) -> float:
         total = 0.0
         for isin in timeline.isins():
@@ -373,14 +384,25 @@ def build_order_derived_series(
                 total += value_position(qty, price, bond=resolver.is_bond(isin))
         return total
 
-    # External flow per date (portfolio perspective): transfer_in adds
-    # its gross_eur; everything else negates net_eur (bank cash flow).
+    # TWROR external flow per date, valued at MARKET price (same basis as
+    # the valuation series), not at execution price. For each
+    # position-changing order we value its quantity delta at that day's
+    # market price; this makes V_before(d) = V_after(d) - flow(d) use one
+    # consistent price basis, so a trade does not inject a fictitious
+    # jump from the gap between execution and market price (Option 2).
+    # Coupons/dividends are not position changes and are NOT external
+    # flows for TWROR — they are income earned by the held portfolio, so
+    # they belong inside the market return, not subtracted from it.
     external_flows: dict[datetime.date, float] = {}
     for o in orders:
-        if o.type == OrderType.TRANSFER_IN:
-            external_flows[o.date] = external_flows.get(o.date, 0.0) + (o.gross_eur or 0.0)
-        else:
-            external_flows[o.date] = external_flows.get(o.date, 0.0) - o.net_eur
+        if not o.is_position_change():
+            continue
+        if o.isin not in open_isins:
+            continue
+        unit = value_isin_on(o.isin, o.date)
+        if unit is None:
+            continue
+        external_flows[o.date] = external_flows.get(o.date, 0.0) + o.quantity * unit
 
     cf_dates = sorted(external_flows.keys())
     valuations: list[tuple[datetime.date, float]] = [
