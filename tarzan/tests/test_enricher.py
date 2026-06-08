@@ -373,3 +373,22 @@ class TestBacktestPeriod:
             assert enricher._backtest_period() == "3y"
         finally:
             enricher.set_portfolio_backtest_period(original)
+
+
+class TestYfCallSpacing:
+    def test_spacing_enforced_between_calls(self, monkeypatch):
+        enricher.reset_run_caches()
+        slept = []
+        # Freeze monotonic so the gate always sees zero elapsed time and
+        # therefore must wait the full interval on the second call.
+        monkeypatch.setattr(enricher._time, "monotonic", lambda: 0.0)
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: slept.append(s))
+        enricher._space_yf_call()  # first call: last=0 set, may or may not wait
+        slept.clear()
+        enricher._space_yf_call()  # second call: 0 elapsed → must wait full interval
+        assert slept and slept[0] == enricher._YF_MIN_INTERVAL
+
+    def test_reset_clears_yf_timestamp(self):
+        enricher._yf_last_call[0] = 123.0
+        enricher.reset_run_caches()
+        assert enricher._yf_last_call[0] == 0.0

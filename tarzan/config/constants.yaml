@@ -71,7 +71,7 @@ metric_ratings:
 # 2. DATA FETCHING
 # =============================================================================
 
-max_workers: 8                    # Parallel threads for yfinance API calls
+max_workers: 4                    # Parallel threads for yfinance API calls (kept low to avoid HTTP 429 throttling)
 
 
 # =============================================================================
