@@ -69,6 +69,11 @@ class OrderDerivedSeries:
             data (rung 1) over the window.
         provenance: ``{source_tag: [isin, ...]}`` for disclosure.
         span_days: calendar days from the first flow to today.
+        daily_series: dense daily-indexed portfolio value over the whole
+            window, valued at market on every calendar day. This is the
+            series risk metrics (volatility, Sharpe, VaR, beta) must use —
+            the sparse ``valuations`` (trade dates only) would make
+            ``pct_change`` span arbitrary multi-day gaps.
     """
 
     valuations: list[tuple[datetime.date, float]]
@@ -77,6 +82,7 @@ class OrderDerivedSeries:
     coverage_pct: float
     provenance: dict[str, list[str]]
     span_days: int
+    daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
 
 # ---------------------------------------------------------------------------
@@ -354,10 +360,17 @@ def build_order_derived_series(
         return value_position(1.0, price, bond=resolver.is_bond(isin))
 
     def value_on(d: datetime.date, record_source: bool = False) -> float:
+        """Total EUR portfolio value on day ``d``.
+
+        Values *every* ISIN that had a non-zero held quantity on ``d``,
+        not only the ISINs still open today — otherwise a position opened
+        and fully closed inside the window would contribute nothing to the
+        historical series and its holding-period market move would be
+        invisible to TWROR. The cum/ex ``open_isins`` gate is only used
+        for the "what is open now" coverage snapshot, not for history.
+        """
         total = 0.0
         for isin in timeline.isins():
-            if isin not in open_isins:
-                continue
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
                 continue
@@ -384,11 +397,11 @@ def build_order_derived_series(
     # Coupons/dividends are not position changes and are NOT external
     # flows for TWROR — they are income earned by the held portfolio, so
     # they belong inside the market return, not subtracted from it.
+    # Round-trip positions (closed before today) are included: their
+    # buys/sells are real external flows over their holding window.
     external_flows: dict[datetime.date, float] = {}
     for o in orders:
         if not o.is_position_change():
-            continue
-        if o.isin not in open_isins:
             continue
         unit = value_isin_on(o.isin, o.date)
         if unit is None:
@@ -403,10 +416,17 @@ def build_order_derived_series(
     current_value = value_on(today, record_source=True)
     valuations.append((today, current_value))
 
-    # Coverage: share of today's value priced by real market data.
-    yf_isins = set(provenance["yfinance"])
+    # Dense daily value series for risk metrics (volatility, Sharpe, VaR,
+    # beta). pct_change on the sparse trade-date `valuations` would treat
+    # arbitrary multi-day gaps as single trading days and badly distort
+    # annualized risk; the daily series fixes that at the root.
+    daily_series = _build_daily_series(timeline, resolver, external_flows, cf_dates, today)
+
+    # Coverage: share of today's value priced by real market data. Use the
+    # SAME value_position basis as value_on so bonds (priced /100) are
+    # consistent and the ratio cannot exceed 100% by construction.
     real_value = 0.0
-    for isin in yf_isins:
+    for isin in set(provenance["yfinance"]):
         qty = timeline.qty_at(isin, today)
         price, source = resolver.price_on(isin, today)
         if price is not None and source == "yfinance":
@@ -444,4 +464,74 @@ def build_order_derived_series(
         coverage_pct=coverage_pct,
         provenance=provenance,
         span_days=span_days,
+        daily_series=daily_series,
     )
+
+
+def _build_daily_series(
+    timeline: "QuantityTimeline",
+    resolver: "PriceResolver",
+    external_flows: dict[datetime.date, float],
+    cf_dates: list[datetime.date],
+    today: datetime.date,
+) -> pd.Series:
+    """Dense daily, flow-adjusted NAV index from the first trade to today.
+
+    Each calendar day's raw market value is computed through the resolver
+    from the held quantity that day. The day-over-day return then strips
+    that day's external flow (deposits/withdrawals valued at market), so
+    buying more units does not register as a market gain:
+
+        r_t = (V_t - flow_t) / V_{t-1} - 1
+
+    The returns are chained into an index anchored at the first day's real
+    value. Risk metrics (volatility, Sharpe, Sortino, VaR, beta) must use
+    THIS series: its ``pct_change`` is always a single-day, flow-free
+    market return, unlike the sparse trade-date ``valuations`` (whose gaps
+    span months) or a raw value series (whose jumps include deposits).
+    """
+    if not cf_dates:
+        return pd.Series(dtype=float)
+
+    days = pd.date_range(start=cf_dates[0], end=today, freq="D")
+    isins = timeline.isins()
+
+    def raw_value(d: datetime.date) -> float:
+        total = 0.0
+        for isin in isins:
+            qty = timeline.qty_at(isin, d)
+            if abs(qty) < _QTY_EPS:
+                continue
+            price, source = resolver.price_on(isin, d)
+            if price is None:
+                continue
+            if source == "yfinance":
+                total += qty * price
+            else:
+                total += value_position(qty, price, bond=resolver.is_bond(isin))
+        return total
+
+    raw = [(ts.date(), raw_value(ts.date())) for ts in days]
+    # Anchor on the first strictly-positive value.
+    anchor_i = next((i for i, (_, v) in enumerate(raw) if v > 0), None)
+    if anchor_i is None:
+        return pd.Series(dtype=float)
+
+    index_dates: list[pd.Timestamp] = []
+    index_vals: list[float] = []
+    nav = raw[anchor_i][1]            # start the index at the real value
+    index_dates.append(pd.Timestamp(raw[anchor_i][0]))
+    index_vals.append(nav)
+
+    prev_v = raw[anchor_i][1]
+    for d, v in raw[anchor_i + 1:]:
+        flow = external_flows.get(d, 0.0)
+        if prev_v > 0:
+            r = (v - flow) / prev_v - 1.0
+            nav *= (1.0 + r)
+        index_dates.append(pd.Timestamp(d))
+        index_vals.append(nav)
+        if v > 0:
+            prev_v = v
+
+    return pd.Series(index_vals, index=pd.DatetimeIndex(index_dates))
