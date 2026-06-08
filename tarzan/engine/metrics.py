@@ -14,21 +14,49 @@ from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
 
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan import config as cfg
 
-logger = logging.getLogger(__name__)
+# Pure return/risk math lives in stats.py; benchmark fetch/metrics in
+# benchmarks.py. They are imported here and re-exported so the historical
+# ``tarzan.engine.metrics`` public API (xirr, twror, compute_*, …) is
+# preserved for callers, tests and scripts.
+from tarzan.engine.stats import (  # noqa: F401  (re-exported)
+    RISK_FREE_RATE,
+    TRADING_DAYS,
+    DAYS_PER_YEAR,
+    TwrorResult,
+    compute_cagr,
+    compute_cvar,
+    compute_max_drawdown,
+    compute_period_return,
+    compute_sharpe,
+    compute_sortino,
+    compute_var,
+    compute_ytd_return,
+    twror,
+    xirr,
+    xnpv,
+    _compute_beta_alpha,
+    _normalize_index,
+    _safe_pct_change,
+    _scale_or_nan,
+    _is_nan,
+    _cap_to_years,
+)
+from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
+    BENCHMARKS,
+    _add_mix_to_histories,
+    _build_benchmark_series,
+    _compute_single_benchmark_metrics,
+    _fetch_benchmark_history,
+    _populate_perf_row,
+)
 
-RISK_FREE_RATE = cfg.risk_free_rate() * 100  # e.g. 4.0 = 4%
-TRADING_DAYS = cfg.trading_days()
-# Calendar days per year used for ALL annualization (CAGR, XIRR, TWROR) so
-# the money-weighted and time-weighted figures are directly comparable.
-DAYS_PER_YEAR = 365.25
-BENCHMARKS = cfg.benchmarks()
+logger = logging.getLogger(__name__)
 
 
 class MetricsEngine:
@@ -683,17 +711,6 @@ class MetricsEngine:
 # Pure helper functions (no state, no I/O)
 # ======================================================================
 
-def _safe_pct_change(old: float, new: float) -> float:
-    if old <= 0 or new <= 0:
-        return 0.0
-    return (new - old) / old * 100
-
-
-def _is_nan(value) -> bool:
-    """True if value is a float NaN (None counts as not-NaN here)."""
-    return isinstance(value, float) and value != value
-
-
 def _format_geo_breakdown(h: Holding) -> str:
     if not h.geo_breakdown:
         return "Not Available"
@@ -704,257 +721,6 @@ def _format_geo_breakdown(h: Holding) -> str:
         f"{(g.value if hasattr(g, 'value') else str(g))}: {int(p)}"
         for g, p in sorted(h.geo_breakdown.items(), key=lambda x: -x[1])
     )
-
-
-def compute_cagr(series: pd.Series) -> float:
-    if series.empty or len(series) < 2:
-        return 0.0
-    start, end = float(series.iloc[0]), float(series.iloc[-1])
-    if start <= 0:
-        return 0.0
-    days = (series.index[-1] - series.index[0]).days
-    if days <= 0:
-        return 0.0
-    return ((end / start) ** (1 / (days / DAYS_PER_YEAR)) - 1) * 100
-
-
-def compute_period_return(
-    series: pd.Series, days: int, strict: bool = True,
-) -> Optional[float]:
-    """Return the % change over the last ``days`` calendar days.
-
-    Args:
-        series: Daily price series (datetime-indexed).
-        days: Lookback window in calendar days. ``1`` is a special case
-            that returns the last-trading-day change.
-        strict: When True (default), if the series does not actually
-            cover ``days`` of history we return ``None`` instead of
-            silently falling back to the full available window. This
-            avoids misleading comparisons (e.g. a 2Y portfolio reporting
-            "3Y" returns that are actually 2Y returns next to a 3Y
-            benchmark return).
-
-    Returns:
-        Percentage return over the period, or ``None`` if there is not
-        enough data.
-    """
-    if series.empty or len(series) < 2:
-        return None
-    if days <= 1:
-        start = float(series.iloc[-2])
-        return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-    if strict:
-        # Series must cover the full requested window. We allow a small
-        # slack (~7 days) to absorb weekends/holidays at the edges.
-        actual_span_days = (series.index[-1] - series.index[0]).days
-        if actual_span_days < days - 7:
-            return None
-    cutoff = series.index[-1] - pd.Timedelta(days=days)
-    subset = series[series.index >= cutoff]
-    if subset.empty or len(subset) < 2:
-        return None
-    start = float(subset.iloc[0])
-    return (((float(subset.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-
-
-def compute_ytd_return(series: pd.Series) -> Optional[float]:
-    if series.empty:
-        return None
-    ytd = series[series.index.year == series.index[-1].year]
-    if ytd.empty or len(ytd) < 2:
-        return None
-    start = float(ytd.iloc[0])
-    return (((float(ytd.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-
-
-# ======================================================================
-# Money-weighted (XIRR) and time-weighted (TWROR) returns
-# ======================================================================
-# Pure functions: no I/O, no global state. They sit beside the other
-# return helpers (compute_cagr, compute_period_return, …) so all return
-# math lives in one module. The order-driven valuation series is built
-# elsewhere and passed in.
-
-def xnpv(rate: float, cashflows: list[tuple[datetime.date, float]]) -> float:
-    """Net present value of dated ``cashflows`` at a constant annual
-    ``rate``, discounting on an actual/365.25 day count from the earliest
-    flow (same convention as CAGR/TWROR so the figures are comparable)."""
-    if not cashflows:
-        return 0.0
-    t0 = min(d for d, _ in cashflows)
-    return sum(
-        amount / (1.0 + rate) ** ((d - t0).days / DAYS_PER_YEAR)
-        for d, amount in cashflows
-    )
-
-
-def xirr(cashflows: list[tuple[datetime.date, float]]) -> float:
-    """Annualized money-weighted return: the constant rate making
-    ``xnpv`` zero, found by bisection on [-0.999, 10].
-
-    Returns NaN when the root cannot be bracketed — typically because
-    every cash flow shares the same sign (no realised return), which is
-    a legitimate "undefined", not an error.
-    """
-    if len(cashflows) < 2:
-        return float("nan")
-    lo, hi = -0.999, 10.0
-    try:
-        rate = brentq(lambda r: xnpv(r, cashflows), lo, hi, xtol=1e-7)
-    except ValueError:
-        return float("nan")
-    # A solution pinned at the bracket edge is not a well-defined root:
-    # near r → -1 (near-total loss) the NPV is ill-conditioned and brentq
-    # converges on the rate without the residual actually vanishing.
-    # Treat that as "undefined" rather than reporting a misleading rate.
-    if rate <= lo + 1e-6 or rate >= hi - 1e-6:
-        return float("nan")
-    return rate
-
-
-@dataclass
-class TwrorResult:
-    """Outcome of a time-weighted return computation.
-
-    Attributes:
-        cumulative_pct: chained return over the whole window, in %.
-        annualized_pct: the cumulative return annualized over span_days.
-        coverage_pct: share of portfolio value (0–100) priced by real
-            market data over the window; < 100 means some periods relied
-            on the synthetic/carry-flat fallback (disclosed to the user).
-        periods: per-period diagnostics, each a dict with date,
-            v_before, v_after, r (period return), and source tag.
-    """
-
-    cumulative_pct: float
-    annualized_pct: float
-    coverage_pct: float = 100.0
-    periods: list[dict] = field(default_factory=list)
-
-
-def twror(
-    valuations: list[tuple[datetime.date, float]],
-    external_flows: dict[datetime.date, float],
-    span_days: int,
-    coverage_pct: float = 100.0,
-) -> TwrorResult:
-    """Chained time-weighted return, neutral to deposit timing.
-
-    Args:
-        valuations: ``(date, V_after)`` pairs in chronological order,
-            where ``V_after`` is the portfolio value at the close of the
-            date *with* that date's external flow already applied.
-        external_flows: external inflow into the portfolio per date in
-            portfolio terms (deposits/buys positive, withdrawals/sells
-            negative). ``V_before(d) = V_after(d) - external_flows[d]``.
-        span_days: calendar days from first to last valuation, for
-            annualization.
-        coverage_pct: passthrough disclosure of data coverage.
-
-    Between consecutive valuation dates the market return is
-    ``r = V_before(d_i) / V_after(d_{i-1}) - 1``; subtracting the day's
-    external flow keeps deposits/withdrawals out of the return (that is
-    the whole point of TWROR — a pure deposit yields r = 0).
-    """
-    chained = 1.0
-    prev_v_after = 0.0
-    periods: list[dict] = []
-    for d, v_after in valuations:
-        if prev_v_after > 0:
-            v_before = v_after - external_flows.get(d, 0.0)
-            if v_before > 0:
-                r = v_before / prev_v_after - 1.0
-                chained *= 1.0 + r
-                periods.append({
-                    "date": d,
-                    "v_before": v_before,
-                    "v_after_prev": prev_v_after,
-                    "r": r,
-                })
-        prev_v_after = v_after
-
-    cumulative_pct = (chained - 1.0) * 100.0
-    annualized_pct = (
-        (chained ** (DAYS_PER_YEAR / span_days) - 1.0) * 100.0 if span_days > 0 else 0.0
-    )
-    return TwrorResult(
-        cumulative_pct=cumulative_pct,
-        annualized_pct=annualized_pct,
-        coverage_pct=coverage_pct,
-        periods=periods,
-    )
-
-
-def compute_sharpe(annual_return: float, annual_volatility: float) -> float:
-    if annual_volatility <= 0:
-        return float("nan")
-    return (annual_return - RISK_FREE_RATE) / annual_volatility
-
-
-def compute_sortino(daily_returns: pd.Series, annual_return: float) -> float:
-    downside = daily_returns[daily_returns < 0]
-    if downside.empty:
-        return float("nan")
-    downside_std = float(downside.std()) * np.sqrt(TRADING_DAYS) * 100
-    if downside_std <= 0:
-        return float("nan")
-    return (annual_return - RISK_FREE_RATE) / downside_std
-
-
-def compute_max_drawdown(series: pd.Series) -> float:
-    if series.empty or len(series) < 2:
-        return 0.0
-    cummax = series.cummax()
-    drawdown = (series - cummax) / cummax
-    return float(drawdown.min())
-
-
-def compute_var(daily_returns: pd.Series, confidence: float = 0.95) -> float:
-    if daily_returns.empty or len(daily_returns) < 5:
-        return float("nan")
-    return float(daily_returns.quantile(1 - confidence))
-
-
-def compute_cvar(daily_returns: pd.Series, confidence: float = 0.95) -> float:
-    if daily_returns.empty or len(daily_returns) < 5:
-        return float("nan")
-    var = compute_var(daily_returns, confidence)
-    tail = daily_returns[daily_returns <= var]
-    return float(tail.mean()) if not tail.empty else var
-
-
-def _scale_or_nan(val: float, factor: float) -> float:
-    if val != val:
-        return val
-    return val * factor
-
-
-def _normalize_index(series: pd.Series) -> pd.Series:
-    s = series.copy()
-    if hasattr(s.index, "tz") and s.index.tz is not None:
-        s.index = s.index.tz_convert("UTC").tz_localize(None).normalize()
-    else:
-        s.index = s.index.normalize()
-    return s
-
-
-def _compute_beta_alpha(
-    daily_returns: pd.Series, benchmark_history: pd.Series, annual_return: float,
-) -> tuple[float, float]:
-    bench_returns = benchmark_history.pct_change().dropna()
-    dr = _normalize_index(daily_returns)
-    br = _normalize_index(bench_returns)
-    aligned = pd.DataFrame({"port": dr, "bench": br}).dropna()
-    if len(aligned) <= 1:
-        return float("nan"), float("nan")
-    cov = aligned["port"].cov(aligned["bench"])
-    var_bench = aligned["bench"].var()
-    if var_bench <= 0:
-        return float("nan"), float("nan")
-    beta = cov / var_bench
-    bench_annual = compute_cagr(benchmark_history)
-    alpha = annual_return - (RISK_FREE_RATE + beta * (bench_annual - RISK_FREE_RATE))
-    return float(beta), float(alpha)
 
 
 # ======================================================================
@@ -989,173 +755,3 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
     if equity_total > 0 and not by_geo.empty:
         by_geo["weight_pct"] = by_geo["weight_pct"] / equity_total * 100
     return by_geo
-
-
-# ======================================================================
-# Benchmark helpers
-# ======================================================================
-
-def _fetch_benchmark_history(ticker: str) -> pd.Series:
-    """EUR-converted close-price history for a benchmark ticker.
-
-    Memoized per run (via the enricher's benchmark store) so the same
-    benchmark fetched by _performance/_risk/_benchmarks/_holding_performance
-    in one compute_all triggers a single network fetch + conversion.
-    """
-    from tarzan.data import enricher as _enr
-
-    with _enr._net_lock:
-        if ticker in _enr._benchmark_memo:
-            return _enr._benchmark_memo[ticker]
-
-    data = _enr._fetch_ticker_data(ticker)
-    history = data.get("history", pd.DataFrame())
-    if history.empty:
-        series = pd.Series(dtype=float)
-    else:
-        prices = history["Close"]
-        currency = data.get("info", {}).get("currency", "USD")
-        series = _enr.convert_to_eur(prices, currency) if currency != "EUR" else prices
-
-    with _enr._net_lock:
-        _enr._benchmark_memo[ticker] = series
-    return series
-
-
-def _build_benchmark_series(name: str, ticker: str, initial_value: float) -> pd.Series:
-    if ticker:
-        return _fetch_benchmark_history(ticker)
-    mix_c = cfg.mix_60_40()
-    eq = _fetch_benchmark_history(mix_c["equity_ticker"])
-    bd = _fetch_benchmark_history(mix_c["bond_ticker"])
-    if eq.empty or bd.empty:
-        return pd.Series(dtype=float)
-    combined = pd.DataFrame({"eq": eq, "bd": bd}).dropna()
-    if combined.empty:
-        return pd.Series(dtype=float)
-    eq_norm = combined["eq"] / combined["eq"].iloc[0]
-    bd_norm = combined["bd"] / combined["bd"].iloc[0]
-    bench = eq_norm * mix_c.get("equity_weight", 0.6) + bd_norm * mix_c.get("bond_weight", 0.4)
-    return bench * initial_value
-
-
-def _compute_single_benchmark_metrics(
-    bench: pd.Series,
-    ab_benchmark: Optional[pd.Series] = None,
-) -> dict:
-    """Compute the standard set of metrics for a benchmark series.
-
-    Args:
-        bench: The benchmark price series (in EUR).
-        ab_benchmark: Optional reference series used to compute α and β
-            for ``bench``. When provided, α/β are computed via the same
-            CAPM logic used for the portfolio (regression of daily
-            returns on overlap window; α annualized using benchmark
-            CAGR). Pass the same series as ``bench`` to get the trivial
-            β=1.00 / α=0 (vs itself).
-    """
-    cagr = compute_cagr(bench)
-    daily_ret = bench.pct_change().dropna()
-    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
-    metrics = {
-        "cagr": cagr,
-        "1d": compute_period_return(bench, 1), "1w": compute_period_return(bench, 7),
-        "1m": compute_period_return(bench, 30), "3m": compute_period_return(bench, 90),
-        "6m": compute_period_return(bench, 180), "ytd": compute_ytd_return(bench),
-        "1y": compute_period_return(bench, 365), "3y": compute_period_return(bench, 1095),
-        "5y": compute_period_return(bench, 1825),
-        "volatility": vol, "sharpe": compute_sharpe(cagr, vol),
-        "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
-        "max_drawdown": compute_max_drawdown(bench) * 100,
-        "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
-        "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
-        "alpha": float("nan"),
-        "beta": float("nan"),
-    }
-    if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
-        beta, alpha = _compute_beta_alpha(daily_ret, ab_benchmark, cagr)
-        metrics["alpha"] = alpha
-        metrics["beta"] = beta
-    return metrics
-
-
-def _add_mix_to_histories(key_histories: dict, initial_value: float) -> None:
-    mix_cfg = cfg.mix_60_40()
-    eq_ticker_name = None
-    for bname, bticker in BENCHMARKS.items():
-        if bticker == mix_cfg.get("equity_ticker"):
-            eq_ticker_name = bname
-            break
-    if eq_ticker_name and eq_ticker_name in key_histories:
-        try:
-            bond_hist = _fetch_benchmark_history(mix_cfg["bond_ticker"])
-            if not bond_hist.empty:
-                eq_w = mix_cfg.get("equity_weight", 0.6)
-                bd_w = mix_cfg.get("bond_weight", 0.4)
-                combined = pd.DataFrame({"eq": key_histories[eq_ticker_name], "bd": bond_hist}).dropna()
-                if not combined.empty:
-                    eq_n = combined["eq"] / combined["eq"].iloc[0]
-                    bd_n = combined["bd"] / combined["bd"].iloc[0]
-                    key_histories["60/40 ACWI+Bond"] = (eq_n * eq_w + bd_n * bd_w) * initial_value
-        except Exception as e:
-            logger.warning("Failed to build 60/40 mix: %s", e)
-
-
-
-def _cap_to_years(series: pd.Series, years: float) -> pd.Series:
-    """Cap a price series to the last N years."""
-    if series is None or series.empty:
-        return series
-    cutoff = series.index[-1] - pd.Timedelta(days=int(years * 365.25))
-    return series[series.index >= cutoff]
-
-
-def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> None:
-    """Populate a performance row dict with period returns + risk metrics + alpha/beta.
-
-    All risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Alpha, Beta) use the full series `s`
-    (already capped to max 5 years). Period Used reflects the actual window covered.
-    """
-    periods = {"1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180,
-               "1y": 365, "3y": 1095, "5y": 1825}
-
-    # Period returns
-    for key, days in periods.items():
-        row[key] = compute_period_return(s, days)
-    row["ytd"] = compute_ytd_return(s)
-
-    # Risk metrics on full series
-    row["cagr"] = compute_cagr(s)
-    daily_ret = s.pct_change().dropna()
-    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
-    cagr_val = row["cagr"] if isinstance(row["cagr"], (int, float)) else 0.0
-    row["volatility"] = vol
-    row["sharpe"] = compute_sharpe(cagr_val, vol)
-    row["sortino"] = compute_sortino(daily_ret, cagr_val) if len(daily_ret) > 0 else float("nan")
-    row["max_drawdown"] = compute_max_drawdown(s) * 100
-    # Tail risk (historical simulation, 95% confidence)
-    row["var_95"] = _scale_or_nan(compute_var(daily_ret, 0.95), 100)
-    row["cvar_95"] = _scale_or_nan(compute_cvar(daily_ret, 0.95), 100)
-
-    # Alpha/Beta vs configured benchmark
-    if not bench_history.empty and len(bench_history) > 1:
-        beta, alpha = _compute_beta_alpha(daily_ret, bench_history, cagr_val)
-        row["beta"] = beta
-        row["alpha"] = alpha
-    else:
-        row["beta"] = float("nan")
-        row["alpha"] = float("nan")
-
-    # Period Used: "5Y", "3.2Y", etc.
-    if len(s) >= 2:
-        days_covered = (s.index[-1] - s.index[0]).days
-        years_covered = days_covered / 365.25
-        if years_covered >= 4.9:
-            row["period_used"] = "5Y"
-        elif years_covered >= 1.0:
-            row["period_used"] = f"{years_covered:.1f}Y"
-        else:
-            months = int(years_covered * 12)
-            row["period_used"] = f"{months}M"
-    else:
-        row["period_used"] = "—"
