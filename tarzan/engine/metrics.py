@@ -7,9 +7,7 @@ The final context is used to build a PortfolioMetrics DTO.
 
 from __future__ import annotations
 
-import datetime
 import logging
-from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
@@ -41,7 +39,6 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     xirr,
     xnpv,
     _compute_beta_alpha,
-    _normalize_index,
     _safe_pct_change,
     _scale_or_nan,
     _is_nan,
