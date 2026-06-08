@@ -281,15 +281,9 @@ class PriceResolver:
     """Resolve an ISIN's price on any date via the explicit fallback
     ladder, recording the source tag used per ISIN for provenance."""
 
-    def __init__(
-        self,
-        orders: list[Order],
-        enriched_by_isin: dict[str, Holding],
-        today: Optional[datetime.date] = None,
-    ):
+    def __init__(self, orders: list[Order], enriched_by_isin: dict[str, Holding]):
         self._orders = orders
         self._enriched = enriched_by_isin
-        self._today = today
         self._synth: dict[str, Optional[pd.Series]] = {}
         self._is_bond: dict[str, bool] = {}
 
@@ -310,38 +304,14 @@ class PriceResolver:
             self._is_bond[isin] = flag
         return self._is_bond[isin]
 
-    def _borsa_price(self, isin: str) -> Optional[float]:
-        """The Borsa Italiana today-price for a bond, if the enricher set
-        one (EUR-per-unit, already /100-rescaled), else None.
-
-        yfinance does not quote BTPs / US Treasuries, so for those bonds
-        the enricher's ``_try_terrapin_fallback`` scrapes Borsa Italiana
-        and stamps the holding with ``current_price`` and a
-        ``data_source`` like ``"borsa_italiana/mot/btp"``. We only trust
-        ``current_price`` as a market quote when that source tag says so
-        (a yfinance-derived ``current_price`` would already be reachable
-        through ``price_history``).
-        """
-        h = self._enriched.get(isin)
-        if h is None:
-            return None
-        src = getattr(h, "data_source", None)
-        if not src or not str(src).startswith("borsa_italiana"):
-            return None
-        price = getattr(h, "current_price", None)
-        if price is None or not self.is_bond(isin):
-            return None
-        return float(price)
-
     def price_on(self, isin: str, d: datetime.date) -> tuple[Optional[float], str]:
         """Return (price_eur_per_unit, source) for an ISIN on a date.
 
         Note: prices from the enricher are already EUR-per-unit and, for
         bonds, already rescaled by /100 — so the caller must NOT apply
-        the bond /100 again on the 'yfinance' or 'borsa_italiana' rungs.
-        Synthetic/carry_flat prices are raw order prices that still need
-        the /100 via value_position. The returned source disambiguates
-        which.
+        the bond /100 again on the 'yfinance' rung. Synthetic/carry_flat
+        prices are raw order prices that still need the /100 via
+        value_position. The returned source disambiguates which.
         """
         h = self._enriched.get(isin)
         ph = getattr(h, "price_history", None) if h else None
@@ -349,16 +319,6 @@ class PriceResolver:
             price = _price_at(ph, d)
             if price is not None:
                 return price, "yfinance"
-        # Borsa Italiana single-point rung: only for the TODAY/terminal
-        # valuation of a bond with no yfinance history. The scrape gives
-        # only today's clean price (no series), so historical dates must
-        # still fall through to synthetic/carry_flat below. The price is
-        # already EUR-per-unit (post /100), so it is tagged like the
-        # yfinance rung and the caller must NOT apply value_position.
-        if self._today is not None and d >= self._today:
-            borsa = self._borsa_price(isin)
-            if borsa is not None:
-                return borsa, "borsa_italiana"
         s = self._synthetic(isin)
         if s is not None and not s.empty:
             return _interp_synthetic(s, d)
@@ -379,13 +339,12 @@ def build_order_derived_series(
     running the standard enrichment on ``build_holdings_from_orders``)."""
     today = today or datetime.datetime.now().date()
     timeline = QuantityTimeline(orders)
-    resolver = PriceResolver(orders, enriched_by_isin, today=today)
+    resolver = PriceResolver(orders, enriched_by_isin)
 
     # Track which source priced each open ISIN at its latest valuation,
     # for the coverage/provenance disclosure.
     provenance: dict[str, list[str]] = {
-        "yfinance": [], "borsa_italiana": [], "synthetic": [],
-        "carry_flat": [], "excluded": [],
+        "yfinance": [], "synthetic": [], "carry_flat": [], "excluded": [],
     }
 
     def value_isin_on(isin: str, d: datetime.date) -> Optional[float]:
@@ -395,9 +354,7 @@ def build_order_derived_series(
         price, source = resolver.price_on(isin, d)
         if price is None:
             return None
-        # 'yfinance' and 'borsa_italiana' prices are already EUR-per-unit
-        # (bonds pre-/100 by the enricher); raw synthetic prices are not.
-        if source in ("yfinance", "borsa_italiana"):
+        if source == "yfinance":
             return price
         return value_position(1.0, price, bond=resolver.is_bond(isin))
 
@@ -422,10 +379,9 @@ def build_order_derived_series(
             if price is None:
                 continue
             # The enricher already applied /100 to bond price_history, so
-            # the 'yfinance' rung is EUR-per-unit; the Borsa Italiana
-            # today-price is likewise pre-/100. Raw synthetic prices still
-            # need the /100 via value_position.
-            if source in ("yfinance", "borsa_italiana"):
+            # the 'yfinance' rung is EUR-per-unit; raw synthetic prices
+            # still need it via value_position.
+            if source == "yfinance":
                 total += qty * price
             else:
                 total += value_position(qty, price, bond=resolver.is_bond(isin))
@@ -474,17 +430,14 @@ def build_order_derived_series(
     # annualized risk; the daily series fixes that at the root.
     daily_series = _build_daily_series(timeline, resolver, external_flows, cf_dates, today)
 
-    # Coverage: share of today's value priced by real market data. Borsa
-    # Italiana is a real market quote (the best available for BTPs / US
-    # Treasuries that yfinance does not cover), so it counts alongside
-    # yfinance in the numerator. Use the SAME EUR-per-unit basis as
-    # value_on (no value_position) so the ratio cannot exceed 100%.
+    # Coverage: share of today's value priced by real market data. Use the
+    # SAME value_position basis as value_on so bonds (priced /100) are
+    # consistent and the ratio cannot exceed 100% by construction.
     real_value = 0.0
-    real_isins = set(provenance["yfinance"]) | set(provenance["borsa_italiana"])
-    for isin in real_isins:
+    for isin in set(provenance["yfinance"]):
         qty = timeline.qty_at(isin, today)
         price, source = resolver.price_on(isin, today)
-        if price is not None and source in ("yfinance", "borsa_italiana"):
+        if price is not None and source == "yfinance":
             real_value += qty * price
     coverage_pct = (real_value / current_value * 100.0) if current_value > 0 else 0.0
 
@@ -560,7 +513,7 @@ def _build_daily_series(
             price, source = resolver.price_on(isin, d)
             if price is None:
                 continue
-            if source in ("yfinance", "borsa_italiana"):
+            if source == "yfinance":
                 total += qty * price
             else:
                 total += value_position(qty, price, bond=resolver.is_bond(isin))
