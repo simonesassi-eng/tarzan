@@ -63,6 +63,25 @@ class TestIsBond:
     def test_no_signal_defaults_false(self):
         assert is_bond() is False
 
+    def test_openfigi_market_sector_govt(self):
+        # OpenFIGI's authoritative marketSector is the strongest signal.
+        assert is_bond(market_sector="Govt") is True
+        assert is_bond(market_sector="Corp") is True
+
+    def test_openfigi_market_sector_equity_not_bond(self):
+        assert is_bond(market_sector="Equity") is False
+
+    def test_openfigi_sec_type_bond(self):
+        assert is_bond(figi_sec_type="Global Sovereign") is True
+        assert is_bond(figi_sec_type="Corporate Bond") is True
+
+    def test_whole_word_avoids_note_substring_false_positive(self):
+        # "Notebook" contains "NOTE" as a substring but is not a bond; the
+        # whole-word matcher must not flag it (the old substring match did).
+        assert is_bond(instrument_type="Notebook Makers Inc") is False
+        # But a standalone "Note" token still counts.
+        assert is_bond(instrument_type="Medium Term Note") is True
+
 
 class TestLooksLikeBondFromOrders:
     def test_typical_btp(self):

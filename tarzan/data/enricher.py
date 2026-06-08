@@ -569,6 +569,24 @@ def _openfigi_name(isin: str) -> str:
     return ""
 
 
+def _openfigi_bond_signals(isin: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (marketSector, securityType2) from OpenFIGI for an ISIN.
+
+    These are OpenFIGI's authoritative instrument-level classification
+    fields, used to detect bonds reliably (so the per-100-nominal value
+    convention is applied). Reads the per-run memoized OpenFIGI result,
+    so this adds no extra network call. Returns (None, None) if unknown.
+    """
+    clean = isin.replace("-", "")
+    for result_group in _openfigi_raw(clean):
+        for item in result_group.get("data", []):
+            sector = item.get("marketSector")
+            sec_type = item.get("securityType2") or item.get("securityType")
+            if sector or sec_type:
+                return sector, sec_type
+    return None, None
+
+
 def _openfigi_lookup(isin: str) -> list[str]:
     """Query OpenFIGI API to resolve an ISIN to exchange tickers.
 
@@ -1017,9 +1035,16 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         # and historical valuation paths agree exactly.
         if holding.current_price is not None:
             from tarzan.data.bond_fetcher import is_bond, value_position
+            # OpenFIGI's authoritative classification (memoized, no extra
+            # network call) reliably catches bonds yfinance mislabels.
+            figi_sector, figi_sec_type = (None, None)
+            if is_valid_isin:
+                figi_sector, figi_sec_type = _openfigi_bond_signals(clean_isin)
             bond = is_bond(
                 quote_type=info.get("quoteType"),
                 sec_type=info.get("typeDisp"),
+                market_sector=figi_sector,
+                figi_sec_type=figi_sec_type,
             )
             holding.current_value = value_position(
                 holding.quantity, holding.current_price, bond=bond
