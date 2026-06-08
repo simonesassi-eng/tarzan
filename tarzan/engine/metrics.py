@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 RISK_FREE_RATE = cfg.risk_free_rate() * 100  # e.g. 4.0 = 4%
 TRADING_DAYS = cfg.trading_days()
+# Calendar days per year used for ALL annualization (CAGR, XIRR, TWROR) so
+# the money-weighted and time-weighted figures are directly comparable.
+DAYS_PER_YEAR = 365.25
 BENCHMARKS = cfg.benchmarks()
 
 
@@ -712,7 +715,7 @@ def compute_cagr(series: pd.Series) -> float:
     days = (series.index[-1] - series.index[0]).days
     if days <= 0:
         return 0.0
-    return ((end / start) ** (1 / (days / 365.25)) - 1) * 100
+    return ((end / start) ** (1 / (days / DAYS_PER_YEAR)) - 1) * 100
 
 
 def compute_period_return(
@@ -774,13 +777,13 @@ def compute_ytd_return(series: pd.Series) -> Optional[float]:
 
 def xnpv(rate: float, cashflows: list[tuple[datetime.date, float]]) -> float:
     """Net present value of dated ``cashflows`` at a constant annual
-    ``rate``, discounting on an actual/365 day count from the earliest
-    flow."""
+    ``rate``, discounting on an actual/365.25 day count from the earliest
+    flow (same convention as CAGR/TWROR so the figures are comparable)."""
     if not cashflows:
         return 0.0
     t0 = min(d for d, _ in cashflows)
     return sum(
-        amount / (1.0 + rate) ** ((d - t0).days / 365.0)
+        amount / (1.0 + rate) ** ((d - t0).days / DAYS_PER_YEAR)
         for d, amount in cashflows
     )
 
@@ -872,7 +875,7 @@ def twror(
 
     cumulative_pct = (chained - 1.0) * 100.0
     annualized_pct = (
-        (chained ** (365.0 / span_days) - 1.0) * 100.0 if span_days > 0 else 0.0
+        (chained ** (DAYS_PER_YEAR / span_days) - 1.0) * 100.0 if span_days > 0 else 0.0
     )
     return TwrorResult(
         cumulative_pct=cumulative_pct,

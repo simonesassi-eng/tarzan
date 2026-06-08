@@ -241,7 +241,10 @@ def compute_unified_rebalancing(
     # matches the net trade flow via the cash-flow equality.
     new_values = values.copy()
     for a in actions:
-        idx = next(j for j, h in enumerate(holdings) if h.ticker == a["ticker"])
+        # Use the stable holding index recorded when the action was built.
+        # Keying on ticker here was O(n²) and mis-attributed buys/sells
+        # when two holdings shared a ticker (e.g. two BTPs).
+        idx = a["idx"]
         if a["direction"] == "buy":
             new_values[idx] += float(a["amount_eur"])
         else:
@@ -447,7 +450,7 @@ def _extract_actions(result, n, holdings, config, values, geo_frac, all_geos, eq
         reason = _build_reason(
             i, h, config, values, geo_frac, all_geos, eq_value, reason_ctx,
         )
-        actions.append({"name": h.name or h.ticker, "ticker": h.ticker,
+        actions.append({"idx": i, "name": h.name or h.ticker, "ticker": h.ticker,
                         "direction": direction, "amount_eur": round(abs(net), 2), "reason": reason})
     return actions
 

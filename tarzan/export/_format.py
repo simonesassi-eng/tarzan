@@ -118,8 +118,6 @@ _NAME_NOISE_PATTERNS = [
     r"\(?\bDistributing\b\)?",
     r"\(?\bAcc\b\)?",
     r"\(?\bDist\b\)?",
-    # Fund-series roman numerals after the issuer ("Xtrackers II ...").
-    r"\b(?:II|III|IV)\b",
 ]
 
 # Issuer name → standardized short form, applied to the leading word(s)
@@ -160,7 +158,8 @@ def short_instrument_name(
     """
     if not name:
         return ""
-    s = str(name)
+    original = str(name).strip()
+    s = original
     if abbreviate_issuer:
         for issuer, abbr in _ISSUER_ABBREVIATIONS.items():
             # Anchor at start, require a word boundary so we only hit the
@@ -172,11 +171,23 @@ def short_instrument_name(
                 break
     for pat in _NAME_NOISE_PATTERNS:
         s = re.sub(pat, " ", s, flags=re.IGNORECASE)
-    # Drop trailing share-class codes: "1C", "5C", "1Dis", etc.
-    s = re.sub(r"\b\d+[A-Za-z]{1,3}\b", " ", s)
+    # Fund-series roman numeral right after the leading issuer token
+    # ("Xtrackers II ...", "iShares III ..."): drop the numeral but keep
+    # the issuer. Anchored at the start so a roman numeral elsewhere in
+    # the name (rare, but e.g. a real "IV" qualifier) is left untouched.
+    s = re.sub(r"^(\S+)\s+(?:II|III|IV)\b", r"\1", s, flags=re.IGNORECASE)
+    # Drop a trailing share-class code only at the END of the name
+    # ("... 1C", "... 5Dis"): a digit run followed by 1–3 letters. Anchored
+    # at the end so a mid-name token like "3M" or "500" is never eaten.
+    s = re.sub(r"\s+\d+[A-Za-z]{1,3}\s*$", " ", s)
     # Normalize separators and whitespace, trim dangling punctuation.
     s = re.sub(r"\s*[-–·]\s*", " ", s)
     s = re.sub(r"\s+", " ", s).strip(" -–·")
+    # Fallback: if stripping emptied the name (it was entirely
+    # boilerplate/share-class tokens), keep the original rather than
+    # returning a blank cell.
+    if not s:
+        s = original
     if len(s) > max_len:
         s = s[: max_len - 1].rstrip(" -–·") + "…"
     return s

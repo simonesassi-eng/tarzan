@@ -141,3 +141,45 @@ rebalancing_no_sell,TRUE
         assert config is not None
         # Should have sensible defaults
         assert config.rebalancing_lump_sum_amount_eur == 0.0
+
+
+class TestParseNumber:
+    """The shared numeric parser must accept both US and European
+    notation without the old silent '1,5' → 15 corruption."""
+
+    def _p(self, val):
+        from tarzan.data.loader import _parse_number
+        return _parse_number(val)
+
+    def test_us_format(self):
+        assert self._p("1,234.56") == pytest.approx(1234.56)
+
+    def test_european_format(self):
+        assert self._p("1.234,56") == pytest.approx(1234.56)
+
+    def test_european_decimal_no_grouping(self):
+        assert self._p("1234,56") == pytest.approx(1234.56)
+
+    def test_european_small_decimal_not_inflated(self):
+        # Regression: "1,5" must be 1.5, not 15.
+        assert self._p("1,5") == pytest.approx(1.5)
+
+    def test_thousands_comma_grouping(self):
+        assert self._p("1,234") == pytest.approx(1234.0)
+
+    def test_negative_european(self):
+        assert self._p("-1.234,5") == pytest.approx(-1234.5)
+
+    def test_plain_us_decimal_preserved(self):
+        assert self._p("9591.50472") == pytest.approx(9591.50472)
+
+    def test_multi_group_european(self):
+        assert self._p("1.234.567,89") == pytest.approx(1234567.89)
+
+    def test_passthrough_numeric(self):
+        assert self._p(42) == 42.0
+        assert self._p(3.14) == pytest.approx(3.14)
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            self._p("")

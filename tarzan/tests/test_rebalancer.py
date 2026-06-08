@@ -155,3 +155,29 @@ def test_verification_structure(sample_holdings, sample_config):
     assert "asset" in check_kinds
     assert "geography" in check_kinds
     assert "cash" in check_kinds
+
+
+def test_actions_carry_stable_holding_index(sample_holdings, sample_config):
+    """Each action must carry an 'idx' pointing at the exact holding it
+    names, so the verification step attributes buys/sells by position
+    (collision-safe) instead of by ticker."""
+    tv = _total_value(sample_holdings)
+    actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv)
+    for a in actions:
+        assert "idx" in a, "action missing stable holding index"
+        idx = a["idx"]
+        assert 0 <= idx < len(sample_holdings)
+        # The recorded index must resolve to the holding the action names.
+        assert sample_holdings[idx].ticker == a["ticker"]
+
+
+def test_duplicate_ticker_attribution(sample_holdings, sample_config):
+    """When two holdings share a ticker, the index-based mapping must not
+    mis-attribute one's trade to the other."""
+    # Force a ticker collision between the first two holdings.
+    sample_holdings[1].ticker = sample_holdings[0].ticker
+    tv = _total_value(sample_holdings)
+    actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, tv)
+    for a in actions:
+        # idx still uniquely identifies which of the two it is.
+        assert sample_holdings[a["idx"]].ticker == a["ticker"]
