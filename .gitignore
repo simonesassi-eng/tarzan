@@ -34,7 +34,6 @@ Thumbs.db
 output/*
 !output/sample/
 output/sample/~$*
-input/.cache/
 input/holdings.csv
 input/targets.csv
 input/order_list.csv
