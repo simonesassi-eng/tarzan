@@ -68,7 +68,7 @@ Tarzan/
 │   ├── main.py              # CLI entry point
 │   ├── orchestrator.py      # Pipeline: load → enrich → compute
 │   ├── config/              # YAML-driven configuration
-│   ├── data/                # Loaders, enricher, cache, geo resolver
+│   ├── data/                # Loaders, enricher, geo resolver
 │   ├── engine/              # Metrics and rebalancer
 │   ├── export/              # Excel report generator
 │   ├── models/              # Holding, InvestorConfig, PortfolioMetrics

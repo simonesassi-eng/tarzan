@@ -280,7 +280,6 @@ class PriceResolver:
         self._enriched = enriched_by_isin
         self._synth: dict[str, Optional[pd.Series]] = {}
         self._is_bond: dict[str, bool] = {}
-        self._cache: dict[tuple[str, datetime.date], tuple[Optional[float], str]] = {}
 
     def _synthetic(self, isin: str) -> Optional[pd.Series]:
         if isin not in self._synth:
@@ -308,23 +307,15 @@ class PriceResolver:
         prices are raw order prices that still need the /100 via
         value_position. The returned source disambiguates which.
         """
-        key = (isin, d)
-        if key in self._cache:
-            return self._cache[key]
         h = self._enriched.get(isin)
         ph = getattr(h, "price_history", None) if h else None
         if ph is not None and len(ph) > 0:
             price = _price_at(ph, d)
             if price is not None:
-                result = (price, "yfinance")
-                self._cache[key] = result
-                return result
+                return price, "yfinance"
         s = self._synthetic(isin)
         if s is not None and not s.empty:
-            price, source = _interp_synthetic(s, d)
-            self._cache[key] = (price, source)
-            return price, source
-        self._cache[key] = (None, "excluded")
+            return _interp_synthetic(s, d)
         return None, "excluded"
 
 
