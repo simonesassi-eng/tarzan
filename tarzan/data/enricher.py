@@ -72,6 +72,7 @@ def _backtest_period() -> str:
 _MAX_FETCH_ATTEMPTS = 3          # total tries per request before giving up
 _BACKOFF_BASE_SECONDS = 0.75     # exponential backoff base
 _OPENFIGI_MIN_INTERVAL = 0.3     # spacing between OpenFIGI calls (~25/min cap)
+_YF_MIN_INTERVAL = 0.2           # min spacing between yfinance calls (anti-429)
 
 _net_lock = threading.Lock()
 _openfigi_memo: dict[str, list] = {}
@@ -79,6 +80,7 @@ _ticker_info_memo: dict[str, dict] = {}
 _history_memo: dict[str, pd.Series] = {}
 _benchmark_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
+_yf_last_call: list[float] = [0.0]        # mutable single-cell timestamp
 
 
 def reset_run_caches() -> None:
@@ -92,6 +94,22 @@ def reset_run_caches() -> None:
         _geo_breakdown_memo.clear()
         _geo_source_memo.clear()
         _openfigi_last_call[0] = 0.0
+        _yf_last_call[0] = 0.0
+
+
+def _space_yf_call() -> None:
+    """Enforce a minimum interval between yfinance calls across threads.
+
+    yfinance scrapes Yahoo's unofficial endpoints, which rate-limit (HTTP
+    429) on bursts. The ThreadPoolExecutor would otherwise fire all
+    requests at once; this spreads them out by at least _YF_MIN_INTERVAL
+    so we stay under the limit and keep market-data coverage high.
+    """
+    with _net_lock:
+        wait = _YF_MIN_INTERVAL - (_time.monotonic() - _yf_last_call[0])
+        if wait > 0:
+            _time.sleep(wait)
+        _yf_last_call[0] = _time.monotonic()
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -141,10 +159,11 @@ def _get_fx_series(currency: str) -> pd.Series:
 def _fetch_fx_pair(currency: str) -> pd.Series:
     """Fetch FX pair from yfinance, trying direct and inverse."""
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
-        hist = _retry(
-            lambda p=pair: yf.Ticker(p).history(period=_backtest_period(), interval="1d"),
-            what=f"FX {pair}",
-        )
+        def _call(p=pair):
+            _space_yf_call()
+            return yf.Ticker(p).history(period=_backtest_period(), interval="1d")
+
+        hist = _retry(_call, what=f"FX {pair}")
         if hist is not None and not hist.empty:
             return 1.0 / hist["Close"] if invert else hist["Close"]
     logger.warning("No FX data for %s, assuming rate=1.0 (flagged)", currency)
@@ -491,7 +510,12 @@ def _fetch_ticker_info(symbol: str) -> dict:
     with _net_lock:
         if symbol in _ticker_info_memo:
             return _ticker_info_memo[symbol]
-    info = _retry(lambda: yf.Ticker(symbol).info or {}, what=f"info {symbol}") or {}
+
+    def _call():
+        _space_yf_call()
+        return yf.Ticker(symbol).info or {}
+
+    info = _retry(_call, what=f"info {symbol}") or {}
     with _net_lock:
         _ticker_info_memo[symbol] = info
     return info
@@ -503,10 +527,12 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     with _net_lock:
         if symbol in _history_memo:
             return _history_memo[symbol]
-    hist = _retry(
-        lambda: yf.Ticker(symbol).history(period=_backtest_period(), interval="1d"),
-        what=f"history {symbol}",
-    )
+
+    def _call():
+        _space_yf_call()
+        return yf.Ticker(symbol).history(period=_backtest_period(), interval="1d")
+
+    hist = _retry(_call, what=f"history {symbol}")
     if hist is None:
         hist = pd.DataFrame()
     with _net_lock:
