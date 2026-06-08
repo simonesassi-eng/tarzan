@@ -202,3 +202,78 @@ class TestMarketPricedFlowsNoJump:
             orders, enriched, today=datetime.date(2025, 1, 31))
         res = twror(series.valuations, series.external_flows, series.span_days)
         assert res.cumulative_pct == pytest.approx(10.0, abs=0.5)
+
+
+class TestRoundTripInclusion:
+    """A position opened and fully closed inside the window must still
+    contribute its holding-period market move to TWROR (Lotto 3 #2)."""
+
+    def test_closed_position_contributes_to_history(self):
+        # Buy AAA at 100 on Jan 1, sell all at 110 on Jan 31. Closed today,
+        # but its +10% move over the window must be visible in valuations.
+        prices = [100.0 + i * (10.0 / 30.0) for i in range(40)]
+        enriched = {"AAA": _enriched_with_history("AAA", prices, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.SELL, "AAA", qty=-10.0, net=1100.0, price=110.0, d=(2025, 1, 31)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 2, 10))
+        # The position is closed today…
+        assert _open_isins(_net_qty_by_isin(orders)) == set()
+        # …yet its buy and sell are recorded as external flows.
+        assert datetime.date(2025, 1, 1) in series.external_flows
+        assert datetime.date(2025, 1, 31) in series.external_flows
+        # And its holding-period market move is visible in the daily
+        # series (non-zero while held), instead of being dropped entirely
+        # as it was before the open-today gate was removed.
+        ds = series.daily_series
+        held = ds.loc[pd.Timestamp(2025, 1, 2):pd.Timestamp(2025, 1, 30)]
+        assert (held > 0).all()
+
+
+class TestDailySeries:
+    """The daily flow-adjusted NAV index used for risk metrics."""
+
+    def test_is_dense_daily(self):
+        prices = [100.0 + i * 0.1 for i in range(40)]
+        enriched = {"AAA": _enriched_with_history("AAA", prices, start=(2025, 1, 1))}
+        orders = [_o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0,
+                     d=(2025, 1, 1))]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 1, 31))
+        ds = series.daily_series
+        assert not ds.empty
+        # One point per calendar day from first trade to today.
+        gaps = ds.index.to_series().diff().dropna().dt.days
+        assert (gaps == 1).all()
+
+    def test_deposit_is_not_a_market_gain(self):
+        # Flat prices, but a second buy doubles the position mid-window.
+        # A raw value series would jump +100% on the deposit day; the
+        # flow-adjusted index must stay flat (no market move).
+        prices = [100.0] * 40
+        enriched = {"AAA": _enriched_with_history("AAA", prices, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 15)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 1, 31))
+        ds = series.daily_series
+        # NAV index is flat: first ≈ last despite the deposit.
+        assert ds.iloc[-1] == pytest.approx(ds.iloc[0], rel=1e-6)
+        # Daily returns are all ~0 → zero volatility, the correct answer.
+        assert float(ds.pct_change().dropna().abs().max()) == pytest.approx(0.0, abs=1e-9)
+
+    def test_market_move_shows_in_index(self):
+        # 100 → 110 over 30 days, single buy: index should rise ~10%.
+        prices = [100.0 + i * (10.0 / 30.0) for i in range(31)]
+        enriched = {"AAA": _enriched_with_history("AAA", prices, start=(2025, 1, 1))}
+        orders = [_o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0,
+                     d=(2025, 1, 1))]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 1, 31))
+        ds = series.daily_series
+        ret = ds.iloc[-1] / ds.iloc[0] - 1.0
+        assert ret == pytest.approx(0.10, abs=0.01)

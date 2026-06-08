@@ -257,21 +257,49 @@ class MetricsEngine:
         order-derived series. Also stashes the raw valuation/flow series
         and provenance in ``ctx`` for the ``_returns`` computer.
         """
-        from tarzan.engine.returns_builder import build_order_derived_series
+        from tarzan.engine.returns_builder import (
+            build_holdings_from_orders,
+            build_order_derived_series,
+        )
 
+        # Enriched holdings keyed by ISIN. Start from holdings.csv (which
+        # carries cost basis/targets), then fill in any ISIN that appears
+        # only in the order list by enriching the order-derived holdings.
+        # Without this, order-only ISINs would have no yfinance history in
+        # the live run and silently fall to the synthetic/carry_flat rung,
+        # making TWROR coverage differ from the standalone returns script.
         enriched_by_isin = {h.isin: h for h in self.holdings if h.isin}
+        missing = [
+            h for h in build_holdings_from_orders(self.orders)
+            if h.isin and h.isin not in enriched_by_isin
+        ]
+        if missing:
+            from tarzan.data.enricher import enrich_holdings
+            logger.info("Enriching %d order-only ISIN(s) for returns", len(missing))
+            for h in enrich_holdings(missing):
+                if h.isin:
+                    enriched_by_isin[h.isin] = h
+
         series = build_order_derived_series(self.orders, enriched_by_isin)
 
-        # Build a daily-indexed pd.Series of portfolio value from the
-        # dated valuations so the existing _performance/_risk computers
-        # consume it exactly like the holdings-derived series.
-        if series.valuations:
-            idx = pd.to_datetime([d for d, _ in series.valuations])
-            vals = [v for _, v in series.valuations]
-            ph = pd.Series(vals, index=idx).sort_index()
-            ph = ph[~ph.index.duplicated(keep="last")]
-        else:
-            ph = pd.Series(dtype=float)
+        # Risk and period-return metrics must read the dense, daily,
+        # flow-adjusted NAV index — not the sparse trade-date valuations.
+        # The sparse series' pct_change would treat multi-month gaps as
+        # one trading day (distorting volatility/Sharpe/VaR/beta), and a
+        # raw value series would book deposits as market gains. The daily
+        # series strips both problems, mirroring the holdings path (which
+        # values a fixed basket of today's quantities over history).
+        ph = series.daily_series
+        if ph is None or ph.empty:
+            # Fallback: the sparse valuations, so a portfolio with too few
+            # observations still yields a (degraded) series rather than none.
+            if series.valuations:
+                idx = pd.to_datetime([d for d, _ in series.valuations])
+                vals = [v for _, v in series.valuations]
+                ph = pd.Series(vals, index=idx).sort_index()
+                ph = ph[~ph.index.duplicated(keep="last")]
+            else:
+                ph = pd.Series(dtype=float)
 
         ctx["portfolio_history"] = ph
         ctx["portfolio_history_full"] = ph
