@@ -277,3 +277,41 @@ class TestDailySeries:
         ds = series.daily_series
         ret = ds.iloc[-1] / ds.iloc[0] - 1.0
         assert ret == pytest.approx(0.10, abs=0.01)
+
+
+class TestIncomeInTwror:
+    """GIPS total-return convention: coupons/dividends are income earned
+    by the held portfolio and must be captured in TWROR, not dropped."""
+
+    def test_coupon_lifts_twror_on_flat_prices(self):
+        from tarzan.engine.metrics import twror
+
+        # Flat price (100 throughout): with no income the market return
+        # is 0%. A coupon paid mid-window is income → must lift TWROR.
+        prices = [100.0] * 60
+        enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.COUPON, "BTP", qty=0.0, net=20.0, d=(2025, 2, 1)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 2, 28))
+        res = twror(series.valuations, series.external_flows, series.span_days)
+        # Coupon is recorded as a negative external flow (withdrawal from
+        # the securities portfolio) so it is added back into V_before.
+        assert series.external_flows.get(datetime.date(2025, 2, 1)) == pytest.approx(-20.0)
+        # Income makes the time-weighted return strictly positive.
+        assert res.cumulative_pct > 0.0
+
+    def test_no_income_stays_flat(self):
+        from tarzan.engine.metrics import twror
+
+        prices = [100.0] * 60
+        enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
+        orders = [
+            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+        ]
+        series = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 2, 28))
+        res = twror(series.valuations, series.external_flows, series.span_days)
+        assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)
