@@ -100,3 +100,38 @@ class TestRiskProfileBenchmarkLabels:
         cagr_row = next(r for r in profile["rows"] if r["label"] == "CAGR")
         assert cagr_row["sp500"] != "—"
         assert cagr_row["acwi"] != "—"
+
+
+class TestShortInstrumentName:
+    def _s(self, name, **kw):
+        return _format.short_instrument_name(name, **kw)
+
+    def test_preserves_real_alnum_token(self):
+        # "3M" must survive — it is the company name, not a share class.
+        assert self._s("3M Company") == "3M Company"
+
+    def test_strips_trailing_share_class(self):
+        out = self._s("iShares Core MSCI World UCITS ETF 1C")
+        assert "1C" not in out
+        assert "MSCI World" in out
+
+    def test_drops_fund_series_roman_keeps_issuer(self):
+        out = self._s("Xtrackers II Global Govt Bond UCITS ETF 1C")
+        assert out.startswith("Xtr.")
+        assert " II " not in f" {out} "
+
+    def test_fallback_when_all_boilerplate(self):
+        # Stripping everything would blank the cell; keep the original.
+        assert self._s("UCITS ETF Acc") == "UCITS ETF Acc"
+
+    def test_empty_input(self):
+        assert self._s("") == ""
+        assert self._s(None) == ""
+
+    def test_truncation_with_ellipsis(self):
+        out = self._s("Some Extremely Long Instrument Name That Exceeds", max_len=20)
+        assert len(out) <= 20
+        assert out.endswith("…")
+
+    def test_issuer_abbreviation(self):
+        assert self._s("Invesco Physical Gold ETC").startswith("Inv.")

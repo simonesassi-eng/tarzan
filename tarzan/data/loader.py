@@ -348,7 +348,53 @@ def _parse_number_safe(val, field_name: str, row_idx: int) -> Optional[float]:
 
 
 def _parse_number(val) -> float:
+    """Parse a numeric cell tolerant of both US and European notation.
+
+    Handles thousands separators and either decimal mark by treating the
+    *rightmost* '.' or ',' as the decimal separator and stripping the
+    other as a grouping separator:
+
+        "1,234.56"  → 1234.56   (US)
+        "1.234,56"  → 1234.56   (European)
+        "1234,56"   → 1234.56   (European, no grouping)
+        "1,5"       → 1.5       (European decimal — previously became 15)
+        "1234"      → 1234.0
+
+    A bare ',' or '.' used purely as a thousands separator (e.g. "1,234"
+    with no decimal part) is ambiguous; we resolve it the conventional
+    way — a single separator followed by exactly 3 digits is treated as
+    grouping, otherwise as a decimal mark.
+    """
     if isinstance(val, (int, float)):
         return float(val)
-    s = str(val).strip().replace(",", "")
-    return float(s)
+    s = str(val).strip()
+    if not s:
+        raise ValueError("empty")
+
+    # Preserve a leading sign, operate on the magnitude.
+    sign = ""
+    if s[0] in "+-":
+        sign, s = s[0], s[1:]
+
+    has_dot = "." in s
+    has_comma = "," in s
+    if has_dot and has_comma:
+        # The rightmost of the two is the decimal separator.
+        dec = "." if s.rfind(".") > s.rfind(",") else ","
+        grp = "," if dec == "." else "."
+        s = s.replace(grp, "").replace(dec, ".")
+    elif has_comma:
+        # Only commas present. One comma + 3 trailing digits → grouping;
+        # otherwise treat the comma as a decimal mark.
+        if s.count(",") == 1 and len(s.split(",")[1]) == 3:
+            s = s.replace(",", "")
+        else:
+            s = s.replace(",", ".")
+    elif has_dot:
+        # Only dots present. A single dot with 3 trailing digits is
+        # ambiguous (1.234 could be 1234 EU-grouped or 1.234 US-decimal);
+        # default to the US/standard reading (decimal) since our pipelines
+        # emit US-format numbers. Multiple dots → grouping.
+        if s.count(".") > 1:
+            s = s.replace(".", "")
+    return float(sign + s)
