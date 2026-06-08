@@ -35,14 +35,24 @@ from tarzan import config as cfg
 
 logger = logging.getLogger(__name__)
 
-# Configurable backtest period — set via set_portfolio_backtest_period() before enrichment
+# Configurable backtest period. Set once via set_portfolio_backtest_period()
+# before enrichment starts, then only read by worker threads. Guarded by a
+# dedicated lock so the write is published safely to the reader threads.
+_period_lock = threading.Lock()
 BACKTEST_PERIOD = "5y"
 
 
 def set_portfolio_backtest_period(period: str) -> None:
     """Set the yfinance history period for all subsequent fetches."""
     global BACKTEST_PERIOD
-    BACKTEST_PERIOD = period
+    with _period_lock:
+        BACKTEST_PERIOD = period
+
+
+def _backtest_period() -> str:
+    """Thread-safe read of the configured backtest period."""
+    with _period_lock:
+        return BACKTEST_PERIOD
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +89,8 @@ def reset_run_caches() -> None:
         _ticker_info_memo.clear()
         _history_memo.clear()
         _benchmark_memo.clear()
+        _geo_breakdown_memo.clear()
+        _geo_source_memo.clear()
         _openfigi_last_call[0] = 0.0
 
 
@@ -130,7 +142,7 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     """Fetch FX pair from yfinance, trying direct and inverse."""
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
         hist = _retry(
-            lambda p=pair: yf.Ticker(p).history(period=BACKTEST_PERIOD, interval="1d"),
+            lambda p=pair: yf.Ticker(p).history(period=_backtest_period(), interval="1d"),
             what=f"FX {pair}",
         )
         if hist is not None and not hist.empty:
@@ -492,7 +504,7 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
         if symbol in _history_memo:
             return _history_memo[symbol]
     hist = _retry(
-        lambda: yf.Ticker(symbol).history(period=BACKTEST_PERIOD, interval="1d"),
+        lambda: yf.Ticker(symbol).history(period=_backtest_period(), interval="1d"),
         what=f"history {symbol}",
     )
     if hist is None:
@@ -859,8 +871,26 @@ def _classify_from_category(cat: str, sector: str) -> Optional[AssetClass]:
 # ---------------------------------------------------------------------------
 GEOGRAPHY_MAP: dict[str, Geography] = cfg.geography_map()
 EXCHANGE_COUNTRY: dict[str, str] = cfg.exchange_country()
-GEO_BREAKDOWN_MAP: dict[str, dict[Geography, float]] = {}
-_GEO_SOURCE_MAP: dict[str, str] = {}
+
+# Per-run geo-breakdown memoization. Written from worker threads during
+# enrich_holdings, so all access is guarded by _net_lock; cleared by
+# reset_run_caches() at the start of each run so it never persists stale
+# breakdowns across runs (consistent with the no-cache guarantee).
+_geo_breakdown_memo: dict[str, dict[Geography, float]] = {}
+_geo_source_memo: dict[str, str] = {}
+
+
+def _get_geo_breakdown_cached(ticker: str) -> Optional[dict[Geography, float]]:
+    """Thread-safe read of the run-scoped geo-breakdown memo."""
+    with _net_lock:
+        return _geo_breakdown_memo.get(ticker)
+
+
+def _store_geo_breakdown(ticker: str, breakdown: dict[Geography, float], source: str) -> None:
+    """Thread-safe write to the run-scoped geo-breakdown memo."""
+    with _net_lock:
+        _geo_breakdown_memo[ticker] = breakdown
+        _geo_source_memo[ticker] = source
 
 
 def classify_geography(info: dict, ticker: str, holding: Holding) -> Geography:
@@ -871,7 +901,7 @@ def classify_geography(info: dict, ticker: str, holding: Holding) -> Geography:
     Falls back to exchange country from ticker suffix.
     """
     # 1. Geo breakdown (scraped)
-    breakdown = GEO_BREAKDOWN_MAP.get(ticker)
+    breakdown = _get_geo_breakdown_cached(ticker)
     if breakdown:
         return max(breakdown, key=lambda g: breakdown[g])
 
@@ -896,16 +926,19 @@ def get_geo_breakdown(
 ) -> Optional[tuple[dict[Geography, float], str]]:
     """Get geographic breakdown for an ETF ticker via dynamic scraping.
 
-    Returns (breakdown_dict, source_name) or None.
+    Returns (breakdown_dict, source_name) or None. Results are memoized
+    per run (thread-safe) so each ticker is scraped at most once.
     """
-    if ticker in GEO_BREAKDOWN_MAP:
-        return GEO_BREAKDOWN_MAP[ticker], _GEO_SOURCE_MAP.get(ticker, "memory")
+    cached = _get_geo_breakdown_cached(ticker)
+    if cached is not None:
+        with _net_lock:
+            source = _geo_source_memo.get(ticker, "memory")
+        return cached, source
 
     result = _scrape_geo_breakdown(ticker, isin)
     if result:
         breakdown, source = result
-        GEO_BREAKDOWN_MAP[ticker] = breakdown
-        _GEO_SOURCE_MAP[ticker] = source
+        _store_geo_breakdown(ticker, breakdown, source)
         return breakdown, source
     return None
 
@@ -914,13 +947,7 @@ def _scrape_geo_breakdown(
     ticker: str, isin: str = ""
 ) -> Optional[tuple[dict[Geography, float], str]]:
     """Get geographic breakdown via the geo resolution chain."""
-    long_name = ""
-    try:
-        t = yf.Ticker(ticker)
-        long_name = (t.info or {}).get("longName", "") or ""
-    except Exception:
-        pass
-
+    long_name = _fetch_ticker_info(ticker).get("longName", "") or ""
     from tarzan.data.geo_resolver import resolve_geo
     return resolve_geo(isin, ticker, long_name)
 

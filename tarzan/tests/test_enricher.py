@@ -310,3 +310,66 @@ class TestOpenFigiMemoization:
         enricher.reset_run_caches()
         enricher._openfigi_raw("IE0006WW1TQ4")
         assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Geo-breakdown memo — run-scoped & thread-safe
+# ---------------------------------------------------------------------------
+
+from tarzan.models.holding import Geography  # noqa: E402
+
+
+class TestGeoBreakdownMemo:
+    def test_scrape_once_then_memoized(self, monkeypatch):
+        enricher.reset_run_caches()
+        calls = {"n": 0}
+        breakdown = {Geography.USA: 100.0}
+
+        def fake_scrape(ticker, isin=""):
+            calls["n"] += 1
+            return breakdown, "justetf"
+
+        monkeypatch.setattr(enricher, "_scrape_geo_breakdown", fake_scrape)
+        first = enricher.get_geo_breakdown("XDWD.MI", "IE000")
+        second = enricher.get_geo_breakdown("XDWD.MI", "IE000")
+        assert first == second == (breakdown, "justetf")
+        assert calls["n"] == 1  # second call served from memo
+
+    def test_reset_forces_rescrape(self, monkeypatch):
+        enricher.reset_run_caches()
+        calls = {"n": 0}
+
+        def fake_scrape(ticker, isin=""):
+            calls["n"] += 1
+            return {Geography.USA: 100.0}, "justetf"
+
+        monkeypatch.setattr(enricher, "_scrape_geo_breakdown", fake_scrape)
+        enricher.get_geo_breakdown("XDWD.MI")
+        enricher.reset_run_caches()
+        enricher.get_geo_breakdown("XDWD.MI")
+        assert calls["n"] == 2  # memo cleared between runs → fresh scrape
+
+    def test_classify_geography_uses_memoized_breakdown(self, monkeypatch):
+        enricher.reset_run_caches()
+        # Seed the memo via the public API, then classify should pick the
+        # dominant region without re-scraping.
+        monkeypatch.setattr(
+            enricher, "_scrape_geo_breakdown",
+            lambda ticker, isin="": ({Geography.JAPAN: 80.0, Geography.USA: 20.0}, "justetf"),
+        )
+        enricher.get_geo_breakdown("XMJP.MI")
+        from tarzan.models.holding import Holding
+        h = Holding(isin="IE000", ticker="XMJP.MI", quantity=1.0, cost_basis_eur=0.0,
+                    market_value_eur=0.0, currency="EUR")
+        geo = enricher.classify_geography({"quoteType": "ETF"}, "XMJP.MI", h)
+        assert geo == Geography.JAPAN
+
+
+class TestBacktestPeriod:
+    def test_set_and_read_roundtrip(self):
+        original = enricher._backtest_period()
+        try:
+            enricher.set_portfolio_backtest_period("3y")
+            assert enricher._backtest_period() == "3y"
+        finally:
+            enricher.set_portfolio_backtest_period(original)
