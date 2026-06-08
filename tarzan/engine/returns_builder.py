@@ -340,7 +340,6 @@ def build_order_derived_series(
     today = today or datetime.datetime.now().date()
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin)
-    open_isins = _open_isins(_net_qty_by_isin(orders))
 
     # Track which source priced each open ISIN at its latest valuation,
     # for the coverage/provenance disclosure.
