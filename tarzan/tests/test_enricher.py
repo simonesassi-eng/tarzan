@@ -76,10 +76,10 @@ from tarzan.data.enricher import (  # noqa: E402
 
 
 def _cand(symbol, *, price=10.0, currency="EUR", name="", has_history=True):
-    """Build a candidate with a minimal data dict for ranking tests."""
+    """Build a candidate carrying only the info needed for ranking."""
     return _Candidate(
         symbol=symbol,
-        data={"info": {"currency": currency}, "history": pd.DataFrame()},
+        info={"currency": currency},
         price=price,
         currency=currency,
         name=name,
@@ -149,6 +149,8 @@ class TestResolveIsinDeterminism:
             return candidates_by_symbol.get(symbol)
 
         monkeypatch.setattr(enricher, "_fetch_candidate_meta", fake_fetch)
+        # History is fetched only for the winner; stub it out (no network).
+        monkeypatch.setattr(enricher, "_fetch_history", lambda symbol: pd.DataFrame())
 
     def test_collision_rejected_by_name(self, monkeypatch):
         isin = "IE0006WW1TQ4"
@@ -198,3 +200,113 @@ class TestResolveIsinDeterminism:
     def test_returns_none_when_nothing_priced(self, monkeypatch):
         self._patch(monkeypatch, {}, "", [])
         assert enricher._resolve_isin("XX0000000000") is None
+
+
+# ---------------------------------------------------------------------------
+# Network layer — retry/backoff, currency matching, per-run memoization
+# ---------------------------------------------------------------------------
+
+
+class TestTransientClassification:
+    def test_429_is_transient(self):
+        assert enricher._is_transient_error(Exception("HTTP Error 429: Too Many Requests"))
+
+    def test_timeout_is_transient(self):
+        assert enricher._is_transient_error(Exception("connection timed out"))
+
+    def test_not_found_is_not_transient(self):
+        assert not enricher._is_transient_error(Exception("404 Not Found"))
+
+
+class TestRetry:
+    def test_returns_on_first_success(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        out = enricher._retry(lambda: calls.append(1) or "ok", what="x")
+        assert out == "ok" and len(calls) == 1
+
+    def test_retries_then_succeeds_on_transient(self, monkeypatch):
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        state = {"n": 0}
+
+        def flaky():
+            state["n"] += 1
+            if state["n"] < 2:
+                raise Exception("HTTP 429 rate limit")
+            return "recovered"
+
+        assert enricher._retry(flaky, what="x") == "recovered"
+        assert state["n"] == 2
+
+    def test_no_retry_on_definitive_error(self, monkeypatch):
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        state = {"n": 0}
+
+        def notfound():
+            state["n"] += 1
+            raise Exception("404 Not Found")
+
+        assert enricher._retry(notfound, what="x") is None
+        assert state["n"] == 1  # not retried
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        state = {"n": 0}
+
+        def always_throttled():
+            state["n"] += 1
+            raise Exception("timeout")
+
+        assert enricher._retry(always_throttled, what="x") is None
+        assert state["n"] == enricher._MAX_FETCH_ATTEMPTS
+
+
+class TestCurrencyMatches:
+    def test_exact_match(self):
+        assert enricher._currency_matches("EUR", "EUR")
+
+    def test_minor_unit_matches_major(self):
+        # yfinance "GBp" must match a declared "GBP" holding currency.
+        assert enricher._currency_matches("GBp", "GBP")
+        assert enricher._currency_matches("ZAc", "ZAR")
+
+    def test_mismatch(self):
+        assert not enricher._currency_matches("USD", "EUR")
+
+    def test_empty_is_false(self):
+        assert not enricher._currency_matches("", "EUR")
+        assert not enricher._currency_matches("EUR", "")
+
+
+class TestOpenFigiMemoization:
+    def test_single_network_call_per_isin(self, monkeypatch):
+        enricher.reset_run_caches()
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=10):
+            calls["n"] += 1
+            raise Exception("404 Not Found")  # definitive → no retry
+
+        monkeypatch.setattr(enricher, "urlopen", fake_urlopen)
+        # Three logical lookups for the same ISIN…
+        enricher._openfigi_raw("IE0006WW1TQ4")
+        enricher._openfigi_raw("IE0006WW1TQ4")
+        enricher._openfigi_raw("IE0006WW1TQ4")
+        # …collapse to a single network call thanks to per-run memoization.
+        assert calls["n"] == 1
+
+    def test_reset_clears_memo(self, monkeypatch):
+        enricher.reset_run_caches()
+        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=10):
+            calls["n"] += 1
+            raise Exception("404 Not Found")
+
+        monkeypatch.setattr(enricher, "urlopen", fake_urlopen)
+        enricher._openfigi_raw("IE0006WW1TQ4")
+        enricher.reset_run_caches()
+        enricher._openfigi_raw("IE0006WW1TQ4")
+        assert calls["n"] == 2

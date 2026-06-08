@@ -965,16 +965,30 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
 # ======================================================================
 
 def _fetch_benchmark_history(ticker: str) -> pd.Series:
-    from tarzan.data.enricher import _fetch_ticker_data, convert_to_eur
-    data = _fetch_ticker_data(ticker)
+    """EUR-converted close-price history for a benchmark ticker.
+
+    Memoized per run (via the enricher's benchmark store) so the same
+    benchmark fetched by _performance/_risk/_benchmarks/_holding_performance
+    in one compute_all triggers a single network fetch + conversion.
+    """
+    from tarzan.data import enricher as _enr
+
+    with _enr._net_lock:
+        if ticker in _enr._benchmark_memo:
+            return _enr._benchmark_memo[ticker]
+
+    data = _enr._fetch_ticker_data(ticker)
     history = data.get("history", pd.DataFrame())
     if history.empty:
-        return pd.Series(dtype=float)
-    prices = history["Close"]
-    currency = data.get("info", {}).get("currency", "USD")
-    if currency != "EUR":
-        prices = convert_to_eur(prices, currency)
-    return prices
+        series = pd.Series(dtype=float)
+    else:
+        prices = history["Close"]
+        currency = data.get("info", {}).get("currency", "USD")
+        series = _enr.convert_to_eur(prices, currency) if currency != "EUR" else prices
+
+    with _enr._net_lock:
+        _enr._benchmark_memo[ticker] = series
+    return series
 
 
 def _build_benchmark_series(name: str, ticker: str, initial_value: float) -> pd.Series:
