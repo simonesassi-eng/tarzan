@@ -1,4 +1,4 @@
-"""Fetch market data from yfinance, cache results, enrich and classify holdings.
+"""Fetch market data from yfinance, enrich and classify holdings.
 
 This module handles the Data Enrichment layer:
 - Fetching price history and metadata from yfinance
@@ -6,7 +6,9 @@ This module handles the Data Enrichment layer:
 - FX conversion to EUR
 - Asset class and geography classification
 - Multi-geography breakdown via geo_scraper
-- Pickle-based caching with configurable TTL
+
+No persistent caching is used: every run fetches fresh market data from
+the network so prices and history are never served stale.
 
 Architecture note: enrichment is parallelized via ThreadPoolExecutor.
 Each holding is enriched independently, with per-holding error isolation
@@ -17,12 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import pickle
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime as dt, timedelta
-from typing import Any, Optional
+from datetime import datetime as dt
+from typing import Optional
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -32,12 +31,6 @@ from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan import config as cfg
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
-CACHE_DIR = os.path.join("input", ".cache")
-CACHE_TTL = timedelta(hours=cfg.cache_ttl_hours())
 
 # Configurable backtest period — set via set_portfolio_backtest_period() before enrichment
 BACKTEST_PERIOD = "5y"
@@ -49,64 +42,20 @@ def set_portfolio_backtest_period(period: str) -> None:
     BACKTEST_PERIOD = period
 
 
-def _cache_path(ticker: str) -> str:
-    """Return the pickle cache file path for a given ticker."""
-    safe = ticker.replace("^", "_caret_").replace("/", "_slash_")
-    return os.path.join(CACHE_DIR, f"{safe}.pkl")
-
-
-def cache_store(ticker: str, data: Any) -> None:
-    """Store data in the pickle cache with a timestamp."""
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    try:
-        with open(_cache_path(ticker), "wb") as f:
-            pickle.dump({"ts": time.time(), "data": data}, f)
-    except Exception as e:
-        logger.warning("Failed to write cache for %s: %s", ticker, e)
-
-
-def cache_load(ticker: str) -> Optional[Any]:
-    """Load data from cache if it exists and is within TTL."""
-    path = _cache_path(ticker)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "rb") as f:
-            cached = pickle.load(f)
-        age = time.time() - cached["ts"]
-        if age < CACHE_TTL.total_seconds():
-            return cached["data"]
-        logger.debug("Cache expired for %s (%.0fs old)", ticker, age)
-        return None
-    except Exception as e:
-        logger.warning("Corrupt cache for %s, deleting: %s", ticker, e)
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        return None
-
-
 # ---------------------------------------------------------------------------
 # FX conversion
 # ---------------------------------------------------------------------------
-_fx_cache: dict[str, pd.Series] = {}
-
 
 def _get_fx_series(currency: str) -> pd.Series:
-    """Get a 5Y daily FX rate series for currency→EUR conversion.
+    """Get a daily FX rate series for currency→EUR conversion.
 
     For EUR, returns an empty series (sentinel for no conversion needed).
-    Tries direct pair first, then inverse pair as fallback.
+    Tries direct pair first, then inverse pair as fallback. Fetched fresh
+    from yfinance on every call.
     """
     if currency == "EUR":
         return pd.Series(dtype=float)
-    if currency in _fx_cache:
-        return _fx_cache[currency]
-
-    series = _fetch_fx_pair(currency)
-    _fx_cache[currency] = series
-    return series
+    return _fetch_fx_pair(currency)
 
 
 def _fetch_fx_pair(currency: str) -> pd.Series:
@@ -184,18 +133,13 @@ ISIN_EXCHANGE_SUFFIXES = cfg.isin_exchange_suffixes()
 
 
 def _fetch_ticker_data(ticker: str) -> dict:
-    """Fetch yfinance data for a ticker, using cache if available.
+    """Fetch fresh yfinance data for a ticker.
 
     Falls back to base ticker (without exchange suffix) if initial fetch fails.
 
     Returns:
         Dict with keys: info, history.
     """
-    cached = cache_load(ticker)
-    if cached is not None:
-        logger.debug("Cache hit for %s", ticker)
-        return cached
-
     logger.info("Fetching data for %s", ticker)
     # yfinance raises ValueError("Invalid ISIN number: ...") from the
     # Ticker constructor when the symbol looks like an ISIN but fails
@@ -209,9 +153,7 @@ def _fetch_ticker_data(ticker: str) -> dict:
         t = yf.Ticker(ticker)
     except Exception as e:
         logger.warning("yfinance rejected ticker %s: %s", ticker, e)
-        data = {"info": {}, "history": pd.DataFrame()}
-        cache_store(ticker, data)
-        return data
+        return {"info": {}, "history": pd.DataFrame()}
     try:
         info = t.info or {}
     except Exception:
@@ -238,58 +180,225 @@ def _fetch_ticker_data(ticker: str) -> dict:
             pass
 
     data = {"info": info, "history": history}
-    cache_store(ticker, data)
     return data
 
 
 # ---------------------------------------------------------------------------
-# ISIN resolution
+# ISIN resolution — deterministic ranking
 # ---------------------------------------------------------------------------
+# An ISIN can map to many yfinance symbols: the same instrument listed on
+# several exchanges (.MI / .F / .L …) plus, occasionally, a *different*
+# instrument that happens to share the bare ticker (e.g. ISIN IE0006WW1TQ4
+# is Xtrackers "MSCI World ex USA", but the bare symbol "EXUS" on Yahoo is
+# an unrelated USD Nomura fund). Picking "the first symbol that responds"
+# is non-deterministic and can silently select the wrong instrument.
+#
+# Instead we collect every responding candidate and rank them by objective,
+# instrument-independent criteria so the choice is stable and identical
+# whichever path (holdings CSV or order list) asks for the ISIN:
+#
+#   1. name coherence with the OpenFIGI canonical name (rejects collisions)
+#   2. currency match to the expected/native currency
+#   3. exchange-suffix priority (config-ordered, region-agnostic)
+#   4. data completeness (has price history)
+#   5. alphabetical tiebreak (final determinism guarantee)
+#
+# No ISINs are hardcoded and no extra input file is needed — the criteria
+# are derived from OpenFIGI metadata + config, so this scales globally.
 
-def _probe_isin_suffixes(isin: str) -> Optional[tuple[dict, str]]:
-    """Try fetching data for an ISIN with multiple strategies.
+from dataclasses import dataclass
 
-    Strategy order:
-    1. OpenFIGI API → real exchange ticker → yfinance
-    2. Exchange suffix brute-force (.MI, .SG, etc.)
-    3. Raw ISIN as-is
 
-    Returns:
-        (data_dict, successful_ticker) or None if all fail.
+@dataclass
+class _Candidate:
+    """A resolved ISIN candidate with the metadata needed for ranking."""
+
+    symbol: str
+    data: dict           # {"info": ..., "history": ...}
+    price: float
+    currency: str
+    name: str
+    has_history: bool
+
+
+# Words that carry no instrument identity — stripped before name comparison.
+_NAME_STOPWORDS = frozenset({
+    "etf", "ucits", "etc", "fund", "index", "acc", "dist", "inc",
+    "the", "of", "and", "class", "shares", "share", "1c", "1d",
+    "eur", "usd", "gbp", "chf", "hedged", "accumulating", "distributing",
+})
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Normalise an instrument name into a set of identity tokens."""
+    if not name:
+        return set()
+    cleaned = "".join(c.lower() if c.isalnum() else " " for c in name)
+    return {tok for tok in cleaned.split() if tok and tok not in _NAME_STOPWORDS}
+
+
+def _name_match_score(candidate_name: str, canonical_name: str) -> float:
+    """Token-overlap score (0..1) between a candidate and the OpenFIGI
+    canonical name. Returns a neutral 0.5 when the canonical name is
+    unknown so name has no effect on ranking."""
+    canon = _name_tokens(canonical_name)
+    if not canon:
+        return 0.5
+    cand = _name_tokens(candidate_name)
+    if not cand:
+        return 0.0
+    return len(canon & cand) / len(canon)
+
+
+def _suffix_priority(symbol: str) -> int:
+    """Deterministic exchange-suffix priority (lower index = preferred).
+
+    Driven by the config-ordered ``isin_exchange_suffixes`` list so the
+    preference is region-agnostic and tunable without code changes.
+    Symbols with no/unknown suffix rank last.
+    """
+    for i, suffix in enumerate(ISIN_EXCHANGE_SUFFIXES):
+        if symbol.endswith(suffix):
+            return i
+    return len(ISIN_EXCHANGE_SUFFIXES)
+
+
+def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> tuple:
+    """Deterministic sort key for a candidate (higher tuple = better).
+
+    Pure function of the candidate metadata + resolution context, so
+    ranking the same candidate set always yields the same winner."""
+    name_score = _name_match_score(cand.name, canonical_name)
+    # Bucket the name score so tiny float differences don't reorder
+    # otherwise-equivalent listings of the same instrument.
+    name_bucket = round(name_score * 4)  # 0..4
+    currency_match = 1 if (expected_currency and cand.currency == expected_currency) else 0
+    # Negate suffix priority so a lower index sorts higher.
+    suffix_rank = -_suffix_priority(cand.symbol)
+    history = 1 if cand.has_history else 0
+    # Alphabetical tiebreak: prefer the lexicographically smaller symbol
+    # (negate via reversed comparison by using the string directly with
+    # ascending sort and taking max → so invert by mapping to a sortable
+    # form). We return the symbol and rely on min() for the final tiebreak.
+    return (name_bucket, currency_match, suffix_rank, history)
+
+
+def _resolve_isin(
+    isin: str, hint_ticker: str = "", expected_currency: str = ""
+) -> Optional[tuple[dict, str]]:
+    """Resolve an ISIN to the best yfinance symbol, deterministically.
+
+    Collects candidate symbols (CSV/order hint + OpenFIGI mappings +
+    brute-force exchange suffixes + raw ISIN), fetches each one's metadata,
+    and picks the winner by :func:`_rank_key`. The result is stable across
+    runs and identical for both the holdings and order-list paths.
+
+    Returns ``(data_dict, winning_symbol)`` or ``None`` if nothing priced.
     """
     clean_isin = isin.replace("-", "")
+    canonical_name = _openfigi_name(clean_isin)
 
-    # 1. OpenFIGI first
-    for candidate in _openfigi_lookup(clean_isin):
-        result = _try_fetch_candidate(candidate, isin)
-        if result:
-            return result
+    candidates = _collect_candidate_metas(clean_isin, hint_ticker)
+    if not candidates:
+        return None
 
-    # 2. Brute-force exchange suffixes
-    candidates = [clean_isin] + [f"{clean_isin}{s}" for s in ISIN_EXCHANGE_SUFFIXES]
-    for candidate in candidates:
-        result = _try_fetch_candidate(candidate, isin)
-        if result:
-            return result
+    # Best = max by rank key, with alphabetical symbol as the final
+    # deterministic tiebreak (smaller symbol wins when keys are equal).
+    best = max(
+        candidates,
+        key=lambda c: (_rank_key(c, canonical_name, expected_currency), _neg_str(c.symbol)),
+    )
+    logger.info(
+        "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
+        isin, best.symbol, best.price, best.currency, best.name[:40],
+    )
+    return best.data, best.symbol
 
-    return None
+
+def _neg_str(s: str) -> tuple:
+    """Helper to make alphabetical-ascending act as a max() tiebreak:
+    returns a key that is *larger* for lexicographically smaller strings."""
+    return tuple(-ord(c) for c in s)
 
 
-def _try_fetch_candidate(candidate: str, isin: str) -> Optional[tuple[dict, str]]:
-    """Try fetching a single candidate ticker, returning data if successful."""
+def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candidate]:
+    """Build the deterministic candidate-symbol list and fetch metadata.
+
+    Symbols are probed in a deterministic order and de-duplicated:
+
+      1. the CSV/order ticker hint (if any);
+      2. OpenFIGI-mapped exchange tickers;
+      3. every OpenFIGI *bare* ticker combined with each configured
+         exchange suffix — this is what lets the order-list path (which
+         only knows the ISIN) discover the same local listing, e.g.
+         ``EXUS`` + ``.MI`` → ``EXUS.MI``, that the holdings path finds
+         via its ticker hint;
+      4. the bare ISIN combined with each exchange suffix;
+      5. the raw ISIN as-is.
+
+    To bound network cost and rate-limit exposure the number of *fetched*
+    candidates is capped; because the order is deterministic the cap does
+    not affect reproducibility.
+    """
+    symbols: list[str] = []
+
+    def _add(sym: str) -> None:
+        if sym and sym not in symbols:
+            symbols.append(sym)
+
+    if hint_ticker and hint_ticker != clean_isin:
+        _add(hint_ticker)
+
+    figi_syms = _openfigi_lookup(clean_isin)
+    for sym in figi_syms:
+        _add(sym)
+
+    # Bare OpenFIGI tickers (no exchange suffix) get the full suffix sweep,
+    # so an ISIN-only caller reaches the local listing the same way.
+    for sym in figi_syms:
+        if "." not in sym:
+            for suffix in ISIN_EXCHANGE_SUFFIXES:
+                _add(f"{sym}{suffix}")
+
+    for suffix in ISIN_EXCHANGE_SUFFIXES:
+        _add(f"{clean_isin}{suffix}")
+    _add(clean_isin)
+
+    metas: list[_Candidate] = []
+    for sym in symbols:
+        if len(metas) >= _MAX_RESOLVE_FETCHES:
+            break
+        meta = _fetch_candidate_meta(sym)
+        if meta is not None:
+            metas.append(meta)
+    return metas
+
+
+# Upper bound on how many candidate symbols we fetch per ISIN. Probed in a
+# deterministic order so the cap never changes the resolved result.
+_MAX_RESOLVE_FETCHES = 10
+
+
+def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
+    """Fetch a single candidate's metadata; return None if unpriced."""
     try:
-        t = yf.Ticker(candidate)
+        t = yf.Ticker(symbol)
         info = t.info or {}
         price = info.get("regularMarketPrice") or info.get("previousClose")
-        if price and price > 0:
-            history = t.history(period=BACKTEST_PERIOD, interval="1d")
-            data = {"info": info, "history": history}
-            cache_store(candidate, data)
-            logger.info("Probe hit: %s → %s (price=%.2f)", isin, candidate, price)
-            return data, candidate
+        if not price or price <= 0:
+            return None
+        history = t.history(period=BACKTEST_PERIOD, interval="1d")
+        name = info.get("longName") or info.get("shortName") or info.get("name") or ""
+        return _Candidate(
+            symbol=symbol,
+            data={"info": info, "history": history},
+            price=float(price),
+            currency=info.get("currency", "") or "",
+            name=name,
+            has_history=not history.empty,
+        )
     except Exception:
-        pass
-    return None
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +420,21 @@ def _openfigi_raw(isin: str) -> list:
     except Exception as e:
         logger.debug("OpenFIGI lookup failed for %s: %s", isin, e)
         return []
+
+
+def _openfigi_name(isin: str) -> str:
+    """Return the OpenFIGI canonical instrument name for an ISIN ("" if none).
+
+    This is the authoritative name used to reject ticker collisions: a
+    candidate whose yfinance name does not overlap with it is a different
+    instrument that merely shares a symbol.
+    """
+    for result_group in _openfigi_raw(isin):
+        for item in result_group.get("data", []):
+            name = item.get("name")
+            if name:
+                return name
+    return ""
 
 
 def _openfigi_lookup(isin: str) -> list[str]:
@@ -655,7 +779,7 @@ def get_geo_breakdown(
     Returns (breakdown_dict, source_name) or None.
     """
     if ticker in GEO_BREAKDOWN_MAP:
-        return GEO_BREAKDOWN_MAP[ticker], _GEO_SOURCE_MAP.get(ticker, "cache")
+        return GEO_BREAKDOWN_MAP[ticker], _GEO_SOURCE_MAP.get(ticker, "memory")
 
     result = _scrape_geo_breakdown(ticker, isin)
     if result:
@@ -685,26 +809,40 @@ def _scrape_geo_breakdown(
 # Single holding enrichment
 # ---------------------------------------------------------------------------
 
-def _enrich_single(holding: Holding) -> Holding:
+def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     """Enrich a single holding with market data from yfinance.
 
     Fetches price history, metadata, converts to EUR, extracts TER/yield/sector.
     Per-holding errors are caught and logged — the holding is returned partially enriched.
+
+    Returns the enriched holding and the raw yfinance ``info`` dict used,
+    so the caller can classify without re-fetching.
     """
     ticker = holding.ticker
     if not ticker:
         logger.warning("No ticker for ISIN=%s, skipping enrichment", holding.isin)
-        return holding
+        return holding, {}
 
     data_source = "yfinance"
+    info: dict = {}
     try:
-        is_isin_ticker = len(ticker.replace("-", "")) == 12 and ticker[:2].isalpha()
-        data, info, history = None, {}, pd.DataFrame()
+        clean_isin = (holding.isin or "").replace("-", "")
+        is_valid_isin = len(clean_isin) == 12 and clean_isin[:2].isalpha()
+        data, history = None, pd.DataFrame()
 
-        if is_isin_ticker:
-            probe_result = _probe_isin_suffixes(ticker)
-            if probe_result:
-                data, resolved_ticker = probe_result
+        # ISIN-first resolution: whenever we have a real ISIN we resolve
+        # deterministically from it, using the CSV/order ``ticker`` only as
+        # a hint and the declared currency as a ranking signal. This makes
+        # the holdings path and the order-list path pick the *same* symbol
+        # for the same instrument, instead of "first responder wins".
+        if is_valid_isin:
+            resolved = _resolve_isin(
+                clean_isin,
+                hint_ticker=ticker,
+                expected_currency=(holding.currency or ""),
+            )
+            if resolved:
+                data, resolved_ticker = resolved
                 data_source = f"yfinance:{resolved_ticker}"
                 info = data.get("info", {})
                 history = data.get("history", pd.DataFrame())
@@ -772,7 +910,7 @@ def _enrich_single(holding: Holding) -> Holding:
     except Exception as e:
         logger.error("Failed to enrich %s: %s", ticker, e)
 
-    return holding
+    return holding, info
 
 
 def _set_price_data(
@@ -855,14 +993,7 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     3. OpenFIGI fallback for unclassified instruments
     4. Geography via geo_breakdown or single-country
     """
-    holding = _enrich_single(holding)
-
-    # Classify using fetched info
-    try:
-        data = cache_load(holding.ticker)
-        info = data.get("info", {}) if data else {}
-    except Exception:
-        info = {}
+    holding, info = _enrich_single(holding)
 
     if holding.asset_class is None:
         holding.asset_class = classify_asset_class(info, holding.ticker, holding)
