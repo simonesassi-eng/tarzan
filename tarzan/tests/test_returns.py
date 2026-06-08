@@ -15,6 +15,21 @@ def _d(y, m, day) -> datetime.date:
     return datetime.date(y, m, day)
 
 
+def _discounted_scale(rate: float, cashflows) -> float:
+    """Sum of the absolute discounted cash-flow terms at ``rate`` — the
+    natural scale of ``xnpv``. Used to judge the NPV residual in a
+    scale-invariant way (a root means xnpv is tiny *relative to this*,
+    not relative to the raw cash-flow magnitudes)."""
+    if not cashflows:
+        return 1.0
+    t0 = min(d for d, _ in cashflows)
+    total = sum(
+        abs(amount) / (1.0 + rate) ** ((d - t0).days / 365.0)
+        for d, amount in cashflows
+    )
+    return max(total, 1.0)
+
+
 class TestXirr:
     def test_single_deposit_then_growth(self):
         # Invest 1000, worth 1100 exactly one year later → ~10% XIRR.
@@ -123,14 +138,18 @@ class TestReturnProperties:
     @settings(max_examples=150)
     @given(cf=_feasible_cashflows())
     def test_xirr_is_npv_root_or_nan(self, cf):
-        # Property 4: returned rate zeroes the NPV, or is NaN. The
-        # residual is checked relative to the cash-flow scale — an
-        # absolute threshold is not scale-invariant, and near the
-        # bracket edge (deep losses, rate → -1) brentq's tolerance on
-        # the rate does not pin the NPV to a fixed absolute size.
+        # Property 4: the returned rate zeroes the NPV, or is NaN.
+        #
+        # The residual must be judged on the *function's own scale*, not
+        # on the raw cash-flow magnitudes. Near the bracket edge (deep
+        # losses, rate → -1) the discount factor (1+rate)^(-t) inflates
+        # the later terms by orders of magnitude, so |xnpv| of a few
+        # units can still be a perfectly good root of a sum whose terms
+        # are hundreds of thousands. The scale-invariant residual is
+        # |xnpv(r)| divided by the sum of the absolute discounted terms.
         r = xirr(cf)
         if not math.isnan(r):
-            scale = max(abs(a) for _, a in cf)
+            scale = _discounted_scale(r, cf)
             assert abs(xnpv(r, cf)) < 1e-4 * scale
 
     @settings(max_examples=150)
