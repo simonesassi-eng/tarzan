@@ -35,6 +35,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
+from tarzan.export._format import (
+    ASSET_CLASS_BG,
+    ASSET_CLASS_COLORS,
+    GEO_COLORS as _GEO_COLORS,
+    css,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,48 +69,22 @@ PALETTE = {
     "fi_bg": "#FEF3C7",
 }
 
-ASSET_COLORS = {
-    "Equities": "#1D4ED8",
-    "Fixed Income": "#A16207",
-    "Cash & Cash Equivalents": "#15803D",
-    "Gold": "#CA8A04",
-    "Commodities": "#C2410C",
-    "Crypto": "#7C3AED",
-    "Alternative": "#7C3AED",
-}
-
-ASSET_BG = {
-    "Equities": "#EEF2FF",
-    "Fixed Income": "#FEF3C7",
-    "Cash & Cash Equivalents": "#DCFCE7",
-    "Gold": "#FEF3C7",
-    "Commodities": "#FEF3C7",
-    "Crypto": "#EEF2FF",
-    "Alternative": "#EEF2FF",
-}
-
-GEO_COLORS = {
-    "USA": "#1D4ED8",
-    "Eurozone EMU": "#A16207",
-    "Dev ex-USA ex-EMU ex-JP": "#15803D",
-    "Emerging Markets": "#C2410C",
-    "Japan": "#7C3AED",
-}
+ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
+ASSET_BG = {k: css(v) for k, v in ASSET_CLASS_BG.items()}
+GEO_COLORS = {k: css(v) for k, v in _GEO_COLORS.items()}
 
 # Asset class display order in the newsletter Holdings section.
 # Cash is shown after Gold so the invested asset classes flow visually
 # from highest-risk equity down to commodities/crypto/alternative; cash
 # is reported as a separate accounting entity (no "% of portfolio" so
-# it does not appear to compete with invested classes).
-ASSET_CLASS_ORDER = [
-    "Equities",
-    "Fixed Income",
-    "Gold",
-    "Cash & Cash Equivalents",
-    "Commodities",
-    "Crypto",
-    "Alternative",
+# it does not appear to compete with invested classes). Any asset class
+# not listed here is appended (never silently dropped from the report).
+_NEWSLETTER_CLASS_ORDER = [
+    "Equities", "Fixed Income", "Gold", "Cash & Cash Equivalents",
+    "Commodities", "Crypto", "Alternative",
 ]
+_extra_classes = [c for c in ASSET_CLASS_COLORS if c not in _NEWSLETTER_CLASS_ORDER]
+ASSET_CLASS_ORDER = _NEWSLETTER_CLASS_ORDER + sorted(_extra_classes)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1382,8 +1362,10 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             return None
         return match.iloc[0].to_dict()
 
-    sp500 = _bench_row("S&P 500") or {}
-    acwi = _bench_row("MSCI ACWI") or {}
+    ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    geo_bench_name = ctx.benchmark_geo or "MSCI ACWI"
+    sp500 = _bench_row(ab_bench_name) or {}
+    acwi = _bench_row(geo_bench_name) or {}
 
     def _fmt_pct(v) -> str:
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -1460,7 +1442,7 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
 
     return {
         "available": True,
-        "headers": ["Metric", "You", "S&P 500", "MSCI ACWI"],
+        "headers": ["Metric", "You", ab_bench_name, geo_bench_name],
         "rows": rows,
         "legend": _build_risk_legend(),
         "benchmark_alpha_beta": ctx.benchmark_alpha_beta,

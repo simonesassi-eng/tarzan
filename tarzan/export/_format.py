@@ -13,6 +13,97 @@ from typing import Optional
 import pandas as pd
 
 
+# ---------------------------------------------------------------------------
+# Color taxonomy — single source of truth for asset-class / geography colors
+# ---------------------------------------------------------------------------
+# Both the Excel dashboard and the HTML newsletter must color the same asset
+# class / region identically. Previously each surface kept its own copy and
+# they had drifted (Crypto and Alternative rendered different colors in Excel
+# vs the email). Define the palette once here, as bare 6-hex codes (the form
+# openpyxl wants); use css()/css_map() for the "#RRGGBB" form the email needs.
+
+ASSET_CLASS_COLORS: dict[str, str] = {
+    "Equities": "1D4ED8",
+    "Fixed Income": "A16207",
+    "Cash & Cash Equivalents": "15803D",
+    "Gold": "CA8A04",
+    "Commodities": "C2410C",
+    "Crypto": "7C3AED",
+    "Alternative": "475569",
+}
+
+# Soft background tints for asset-class chips/rows in the newsletter.
+ASSET_CLASS_BG: dict[str, str] = {
+    "Equities": "EEF2FF",
+    "Fixed Income": "FEF3C7",
+    "Cash & Cash Equivalents": "DCFCE7",
+    "Gold": "FEF3C7",
+    "Commodities": "FEF3C7",
+    "Crypto": "EEF2FF",
+    "Alternative": "F1F5F9",
+}
+
+GEO_COLORS: dict[str, str] = {
+    "USA": "1D4ED8",
+    "Eurozone EMU": "A16207",
+    "Dev ex-USA ex-EMU ex-JP": "15803D",
+    "Emerging Markets": "C2410C",
+    "Japan": "7C3AED",
+}
+
+# Display/iteration order for asset classes across both surfaces. A class not
+# listed here still renders — see asset_class_order() — so no holding is ever
+# silently dropped from a report.
+_ASSET_CLASS_BASE_ORDER: list[str] = [
+    "Equities",
+    "Fixed Income",
+    "Cash & Cash Equivalents",
+    "Gold",
+    "Commodities",
+    "Crypto",
+    "Alternative",
+]
+
+
+def css(hex6: Optional[str], default: str = "#5B5BD6") -> str:
+    """Return a CSS ``#RRGGBB`` string from a bare 6-hex code."""
+    if not hex6:
+        return default
+    return hex6 if hex6.startswith("#") else f"#{hex6}"
+
+
+def asset_class_color(name: str, *, css_form: bool = False, default: str = "5B5BD6") -> str:
+    """Canonical color for an asset class. Bare hex by default; CSS form
+    (``#RRGGBB``) when ``css_form=True``."""
+    raw = ASSET_CLASS_COLORS.get(name, default)
+    return css(raw) if css_form else raw
+
+
+def asset_class_bg(name: str, *, css_form: bool = False, default: str = "EEF2FF") -> str:
+    """Canonical background tint for an asset class."""
+    raw = ASSET_CLASS_BG.get(name, default)
+    return css(raw) if css_form else raw
+
+
+def geo_color(name: str, *, css_form: bool = False, default: str = "5B5BD6") -> str:
+    """Canonical color for a geography/region."""
+    raw = GEO_COLORS.get(name, default)
+    return css(raw) if css_form else raw
+
+
+def asset_class_order(present: Optional[list[str]] = None) -> list[str]:
+    """Asset classes in canonical display order.
+
+    Any class in ``present`` that is not in the base order is appended at
+    the end (alphabetically) so a newly added asset class is never silently
+    dropped from a report when iterating in order.
+    """
+    if not present:
+        return list(_ASSET_CLASS_BASE_ORDER)
+    extra = sorted(set(present) - set(_ASSET_CLASS_BASE_ORDER))
+    return [c for c in _ASSET_CLASS_BASE_ORDER if c in present] + extra
+
+
 # Boilerplate phrases stripped from instrument display names before
 # truncation, so the *distinctive* part of the name survives instead of
 # being eaten by fund-structure noise. Order matters: multi-word phrases
