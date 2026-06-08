@@ -114,8 +114,17 @@ def bond_price_to_value(price: float, quantity: float) -> float:
 # same way everywhere (design Property 2: valuation consistency).
 
 # Keywords in instrument_type that indicate the per-100-nominal bond
-# convention applies. Matched case-insensitively as substrings.
-_BOND_INSTRUMENT_KEYWORDS = ("BOND", "TREASURY", "GOV", "CORP", "NOTE")
+# convention applies. Matched as whole words (case-insensitive) so a
+# substring like "NOTE" inside an unrelated name does not false-positive.
+_BOND_INSTRUMENT_KEYWORDS = ("BOND", "TREASURY", "GOVT", "GOVERNMENT",
+                             "CORP", "CORPORATE", "NOTE", "BTP", "BUND", "GILT")
+
+# OpenFIGI marketSector values that denote fixed income (authoritative).
+_FIGI_BOND_MARKET_SECTORS = ("GOVT", "CORP", "MTGE", "MUNI")
+
+# OpenFIGI securityType2 fragments that denote a bond/note.
+_FIGI_BOND_SEC_TYPES = ("BOND", "NOTE", "BILL", "DEBENTURE", "SOVEREIGN",
+                        "TREASURY", "FIXED")
 
 # Order-list bond heuristic thresholds: a clean bond price is quoted per
 # 100 of face value (typically 50–150), and retail bond face amounts are
@@ -143,28 +152,51 @@ def value_position(
     return quantity * price_eur_per_unit
 
 
+def _has_word(text: str, words) -> bool:
+    """True if any of ``words`` appears as a whole token in ``text``
+    (case-insensitive). Avoids substring false-positives."""
+    tokens = re.findall(r"[A-Z]+", str(text).upper())
+    token_set = set(tokens)
+    return any(w in token_set for w in words)
+
+
 def is_bond(
     *,
     asset_class=None,
     instrument_type: Optional[str] = None,
     quote_type: Optional[str] = None,
     sec_type: Optional[str] = None,
+    market_sector: Optional[str] = None,
+    figi_sec_type: Optional[str] = None,
 ) -> bool:
     """Single source of truth for the bond classification that triggers
     the per-100-nominal convention.
 
     Accepts whatever evidence the caller has — the enricher passes
-    yfinance ``quote_type``/``sec_type``; the orders path passes the
+    yfinance ``quote_type``/``sec_type`` plus OpenFIGI's authoritative
+    ``market_sector``/``figi_sec_type``; the orders path passes the
     holding's ``asset_class``/``instrument_type``. Any one positive
     signal is enough.
+
+    OpenFIGI's ``marketSector`` ("Govt"/"Corp"/…) and ``securityType2``
+    are the most reliable signals (they classify the instrument itself,
+    not a display string), so they are checked first.
     """
-    # AssetClass enum or its string value "Fixed Income".
+    # 1. OpenFIGI authoritative classification.
+    if market_sector and str(market_sector).strip().upper() in _FIGI_BOND_MARKET_SECTORS:
+        return True
+    if figi_sec_type and _has_word(figi_sec_type, _FIGI_BOND_SEC_TYPES):
+        return True
+
+    # 2. AssetClass enum or its string value "Fixed Income".
     if asset_class is not None:
         ac_value = getattr(asset_class, "value", asset_class)
         if str(ac_value).strip().lower() == "fixed income":
             return True
+
+    # 3. yfinance / instrument-type keyword evidence (whole-word match).
     for field in (instrument_type, quote_type, sec_type):
-        if field and any(k in str(field).upper() for k in _BOND_INSTRUMENT_KEYWORDS):
+        if field and _has_word(field, _BOND_INSTRUMENT_KEYWORDS):
             return True
     return False
 
