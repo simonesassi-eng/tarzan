@@ -1138,7 +1138,15 @@ def _set_price_data(
 
 
 def _try_terrapin_fallback(holding: Holding) -> None:
-    """Try Borsa Italiana scraping as fallback for bonds without yfinance data."""
+    """Try Borsa Italiana scraping as fallback for bonds without yfinance data.
+
+    Stores ``current_price`` as the EUR-per-unit price (the clean quote
+    divided by 100), matching the yfinance bond branch, so any code that
+    multiplies ``current_price`` (or ``price_history``) by the nominal
+    ``quantity`` reads correct EUR. The /100 is applied via
+    ``value_position`` for ``current_value`` and explicitly for
+    ``current_price`` — the convention stays centralized in bond_fetcher.
+    """
     try:
         from tarzan.data.bond_fetcher import fetch_bond_price, bond_price_to_value
 
@@ -1161,7 +1169,7 @@ def _try_terrapin_fallback(holding: Holding) -> None:
                 value = csv_value * (price / 100)
                 logger.info("Bond %s: using proportional pricing (qty mismatch), value=%.2f", isin, value)
 
-            holding.current_price = price
+            holding.current_price = price / 100.0
             holding.current_value = value
             holding.data_source = result["source"]
             logger.info("Bond fallback succeeded for %s: price=%.2f, value=%.2f EUR",
