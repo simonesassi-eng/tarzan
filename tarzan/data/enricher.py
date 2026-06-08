@@ -1138,9 +1138,17 @@ def _set_price_data(
 
 
 def _try_terrapin_fallback(holding: Holding) -> None:
-    """Try Borsa Italiana scraping as fallback for bonds without yfinance data."""
+    """Try Borsa Italiana scraping as fallback for bonds without yfinance data.
+
+    Borsa Italiana quotes the clean price per 100 of nominal in the bond's
+    *native* currency. We convert that to an EUR-per-unit ``current_price``
+    (FX-converted, then /100), matching the yfinance bond branch, so every
+    downstream consumer reads EUR directly. This is currency-general: a
+    USD Treasury, a ZAR EIB note, a GBP gilt are all handled the same way
+    via the shared FX machinery — no per-currency special-casing.
+    """
     try:
-        from tarzan.data.bond_fetcher import fetch_bond_price, bond_price_to_value
+        from tarzan.data.bond_fetcher import fetch_bond_price, value_position
 
         isin = holding.isin
         if not isin or len(isin.replace("-", "")) != 12:
@@ -1150,22 +1158,44 @@ def _try_terrapin_fallback(holding: Holding) -> None:
 
         result = fetch_bond_price(isin)
         if result:
-            price = result["price"]
-            value = bond_price_to_value(price, holding.quantity)
+            # Borsa quote: clean price per 100 nominal, in the native currency.
+            price_native = result["price"]
+            currency = holding.currency or "EUR"
 
-            # Sanity check: if calculated value is wildly different from CSV value,
-            # the quantity might not be standard nominal. Use proportional update instead.
+            # Convert the clean price to EUR per 100 nominal. The FX series
+            # is EUR-per-native-unit, so a native price is multiplied by it.
+            price_eur_per_100 = price_native
+            if currency != "EUR":
+                fx = _get_fx_series(currency)
+                if not fx.empty:
+                    price_eur_per_100 = price_native * float(fx.iloc[-1])
+                else:
+                    logger.warning(
+                        "Bond %s: no FX for %s, Borsa price left unconverted (flagged)",
+                        isin, currency,
+                    )
+
+            value = value_position(holding.quantity, price_eur_per_100, bond=True)
+
+            # Sanity net: if the EUR value is still wildly off the known CSV
+            # value (e.g. a non-standard nominal/quantity convention), fall
+            # back to the EUR anchor from the CSV rather than a number we
+            # cannot reconcile.
             csv_value = holding.market_value_eur
             if csv_value > 0 and abs(value - csv_value) / csv_value > 0.5:
-                # Proportional: assume CSV value was at par (100), scale by current price
-                value = csv_value * (price / 100)
-                logger.info("Bond %s: using proportional pricing (qty mismatch), value=%.2f", isin, value)
+                logger.info(
+                    "Bond %s: Borsa value %.2f far from CSV %.2f; using CSV anchor",
+                    isin, value, csv_value,
+                )
+                value = csv_value
 
-            holding.current_price = price
+            holding.current_price = price_eur_per_100 / 100.0  # EUR per unit
             holding.current_value = value
             holding.data_source = result["source"]
-            logger.info("Bond fallback succeeded for %s: price=%.2f, value=%.2f EUR",
-                        isin, price, value)
+            logger.info(
+                "Bond fallback for %s: clean=%.4f %s → %.4f EUR/100, value=%.2f EUR",
+                isin, price_native, currency, price_eur_per_100, value,
+            )
             return
 
         # No data from Borsa Italiana either

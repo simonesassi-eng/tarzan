@@ -15,7 +15,7 @@ from tarzan.engine.returns_builder import (
     _open_isins,
     _net_qty_by_isin,
 )
-from tarzan.models.holding import Holding
+from tarzan.models.holding import Holding, AssetClass
 from tarzan.models.order import Order, OrderType
 
 
@@ -144,6 +144,84 @@ class TestFallbackLadder:
         res = build_order_derived_series(
             orders, enriched_by_isin={}, today=datetime.date(2025, 6, 1))
         assert "DDD" in res.provenance["excluded"]
+
+
+def _enriched_borsa_bond(isin, current_price, qty=0.0, market_value=0.0):
+    """An enriched bond Holding priced ONLY by Borsa Italiana: no yfinance
+    price_history, but an EUR-per-unit current_price (FX-converted, post
+    /100) and a borsa_italiana data_source, exactly as the enricher's
+    _try_terrapin_fallback leaves it."""
+    h = Holding(isin=isin, ticker=isin, quantity=qty, cost_basis_eur=0.0,
+                market_value_eur=market_value, currency="EUR")
+    h.price_history = None
+    h.current_price = current_price
+    h.current_value = qty * current_price
+    h.data_source = "borsa_italiana/mot/btp"
+    h.asset_class = AssetClass.FIXED_INCOME
+    h.instrument_type = "Government Bond"
+    return h
+
+
+class TestBorsaItalianaRung:
+    """A bond with no yfinance history but a Borsa Italiana today-price
+    (already EUR-per-unit) must be valued at that price on the terminal
+    date (source 'borsa_italiana'), counting as real market coverage,
+    while historical dates still fall back to carry_flat/synthetic."""
+
+    def test_terminal_value_uses_borsa_price_eur_per_unit(self):
+        # EUR bond: qty 4000 nominal, Borsa clean 103.84 → enricher stores
+        # 1.0384 EUR-per-unit → terminal value 4000 * 1.0384 = 4153.60.
+        isin = "IT0005542359"
+        orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
+                     price=100.0, d=(2025, 1, 1))]
+        enriched = {isin: _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)}
+        res = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 6, 1))
+        assert isin in res.provenance["borsa_italiana"]
+        assert res.valuations[-1][1] == pytest.approx(4153.60)
+        assert res.coverage_pct == pytest.approx(100.0, abs=1e-6)
+
+    def test_foreign_currency_bond_not_inflated(self):
+        # Regression: a ZAR EIB note, qty 110000 nominal. The enricher has
+        # already FX-converted the Borsa ZAR clean price to EUR-per-unit
+        # (≈ 0.99 ZAR/100 ÷ 19.2 ZAR/EUR ≈ 0.0516 EUR-per-unit). Terminal
+        # value must be ≈ 110000 * 0.0516 ≈ 5676, NOT 110000 * 0.99 ≈
+        # 108900 (the bug that came from skipping the FX conversion).
+        isin = "XS2105803527"
+        orders = [_o(OrderType.TRANSFER_IN, isin, qty=110000.0,
+                     gross=5624.0, price=98.14, d=(2025, 1, 1))]
+        # EUR-per-unit after the enricher's FX + /100 conversion.
+        eur_per_unit = 0.05159
+        enriched = {isin: _enriched_borsa_bond(isin, current_price=eur_per_unit,
+                                               qty=110000.0)}
+        res = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 6, 1))
+        terminal = res.valuations[-1][1]
+        assert terminal == pytest.approx(110000 * eur_per_unit, rel=1e-6)
+        assert 4000 < terminal < 8000  # sane EUR value, not ~108k
+
+    def test_historical_dates_still_use_carry_flat(self):
+        isin = "IT0005542359"
+        orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
+                     price=100.0, d=(2025, 1, 1))]
+        enriched = {isin: _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)}
+        res = build_order_derived_series(
+            orders, enriched, today=datetime.date(2025, 6, 1))
+        jan_val = next(v for d, v in res.valuations if d == datetime.date(2025, 1, 1))
+        # Historical date: single order price 100 carried flat → 4000*100/100.
+        assert jan_val == pytest.approx(4000.0)
+        assert isin in res.provenance["borsa_italiana"]
+
+    def test_borsa_price_ignored_without_borsa_source(self):
+        isin = "IT0005542359"
+        orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
+                     price=100.0, d=(2025, 1, 1))]
+        h = _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)
+        h.data_source = "input_csv (no market data)"
+        res = build_order_derived_series(
+            orders, {isin: h}, today=datetime.date(2025, 6, 1))
+        assert isin not in res.provenance["borsa_italiana"]
+        assert isin in res.provenance["carry_flat"]
 
 
 class TestCumExConservationProperty:

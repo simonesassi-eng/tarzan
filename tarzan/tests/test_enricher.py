@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from tarzan.data.enricher import _normalize_minor_currency
 
@@ -392,3 +393,52 @@ class TestYfCallSpacing:
         enricher._yf_last_call[0] = 123.0
         enricher.reset_run_caches()
         assert enricher._yf_last_call[0] == 0.0
+
+
+class TestBondFxConversion:
+    """The Borsa Italiana bond fallback must convert the native clean
+    price to EUR for ANY currency (USD Treasury, ZAR note, GBP gilt),
+    not just EUR bonds — the regression that inflated a ZAR note 19x."""
+
+    def _holding(self, isin, qty, currency, market_value):
+        from tarzan.models.holding import Holding
+        return Holding(isin=isin, ticker=isin, quantity=qty, cost_basis_eur=0.0,
+                       market_value_eur=market_value, currency=currency)
+
+    def test_eur_bond_unchanged(self, monkeypatch):
+        import tarzan.data.bond_fetcher as bf
+        monkeypatch.setattr(bf, "fetch_bond_price",
+                            lambda isin: {"price": 103.84, "source": "borsa_italiana/mot/btp"})
+        h = self._holding("IT0005542359", qty=4000.0, currency="EUR", market_value=4150.0)
+        enricher._try_terrapin_fallback(h)
+        # 4000 * 103.84 / 100 = 4153.60, current_price EUR-per-unit = 1.0384
+        assert h.current_value == pytest.approx(4153.60)
+        assert h.current_price == pytest.approx(1.0384)
+        assert h.data_source.startswith("borsa_italiana")
+
+    def test_zar_bond_converted_to_eur(self, monkeypatch):
+        import tarzan.data.bond_fetcher as bf
+        monkeypatch.setattr(bf, "fetch_bond_price",
+                            lambda isin: {"price": 98.14, "source": "borsa_italiana/mot/btp"})
+        # FX: EUR per 1 ZAR ≈ 1/19.2 ≈ 0.05208
+        monkeypatch.setattr(enricher, "_get_fx_series",
+                            lambda ccy: pd.Series([1.0 / 19.2]))
+        h = self._holding("XS2105803527", qty=110000.0, currency="ZAR", market_value=5624.0)
+        enricher._try_terrapin_fallback(h)
+        # 110000 * (98.14/19.2) / 100 ≈ 5623 EUR — NOT 110000*98.14/100 = 107954
+        assert h.current_value == pytest.approx(110000 * (98.14 / 19.2) / 100.0, rel=1e-6)
+        assert 4000 < h.current_value < 8000
+        # current_price is EUR-per-unit
+        assert h.current_price == pytest.approx((98.14 / 19.2) / 100.0, rel=1e-6)
+
+    def test_usd_treasury_converted_to_eur(self, monkeypatch):
+        import tarzan.data.bond_fetcher as bf
+        monkeypatch.setattr(bf, "fetch_bond_price",
+                            lambda isin: {"price": 84.25, "source": "borsa_italiana/mot/btp"})
+        # FX: EUR per 1 USD ≈ 0.92
+        monkeypatch.setattr(enricher, "_get_fx_series",
+                            lambda ccy: pd.Series([0.92]))
+        h = self._holding("US91282CGJ45", qty=2800.0, currency="USD", market_value=2170.0)
+        enricher._try_terrapin_fallback(h)
+        # 2800 * (84.25*0.92) / 100 ≈ 2170 EUR
+        assert h.current_value == pytest.approx(2800 * (84.25 * 0.92) / 100.0, rel=1e-6)
