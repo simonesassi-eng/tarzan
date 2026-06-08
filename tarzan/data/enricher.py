@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
+import random
+import threading
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as dt
 from typing import Optional
@@ -43,6 +46,71 @@ def set_portfolio_backtest_period(period: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Network layer — retry/backoff + per-run memoization
+# ---------------------------------------------------------------------------
+# Caching was removed package-wide so data is always fresh *across runs*.
+# What remains here is strictly *intra-run* memoization: within a single
+# enrichment run the same OpenFIGI/yfinance/benchmark request is issued at
+# most once. This does not serve stale data (the stores are reset at the
+# start of every run) — it only stops the parallel pipeline from hammering
+# the same endpoint, which after the cache removal is the main source of
+# rate-limit (HTTP 429) noise and the resulting non-determinism.
+#
+# All stores are guarded by a lock because enrichment runs under a
+# ThreadPoolExecutor.
+
+_MAX_FETCH_ATTEMPTS = 3          # total tries per request before giving up
+_BACKOFF_BASE_SECONDS = 0.75     # exponential backoff base
+_OPENFIGI_MIN_INTERVAL = 0.3     # spacing between OpenFIGI calls (~25/min cap)
+
+_net_lock = threading.Lock()
+_openfigi_memo: dict[str, list] = {}
+_ticker_info_memo: dict[str, dict] = {}
+_history_memo: dict[str, pd.Series] = {}
+_benchmark_memo: dict[str, pd.Series] = {}
+_openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
+
+
+def reset_run_caches() -> None:
+    """Clear all intra-run memoization. Called once at the start of each
+    enrichment run so every run starts from fresh network state."""
+    with _net_lock:
+        _openfigi_memo.clear()
+        _ticker_info_memo.clear()
+        _history_memo.clear()
+        _benchmark_memo.clear()
+        _openfigi_last_call[0] = 0.0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """True when an exception looks like throttling/transient network
+    trouble (worth retrying) rather than a definitive 'not found'."""
+    msg = str(exc).lower()
+    transient = ("429", "too many requests", "rate limit", "timed out",
+                 "timeout", "connection", "temporarily", "503", "502")
+    return any(t in msg for t in transient)
+
+
+def _retry(fn, *, what: str):
+    """Run ``fn`` with bounded exponential backoff on transient errors.
+
+    Returns ``fn()`` on success, or None if every attempt failed. A
+    definitive (non-transient) error is not retried.
+    """
+    for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 — classified below
+            if not _is_transient_error(e) or attempt == _MAX_FETCH_ATTEMPTS:
+                logger.debug("%s failed (attempt %d): %s", what, attempt, e)
+                return None
+            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
+            logger.debug("%s throttled (attempt %d), backing off %.2fs", what, attempt, delay)
+            _time.sleep(delay)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # FX conversion
 # ---------------------------------------------------------------------------
 
@@ -61,14 +129,13 @@ def _get_fx_series(currency: str) -> pd.Series:
 def _fetch_fx_pair(currency: str) -> pd.Series:
     """Fetch FX pair from yfinance, trying direct and inverse."""
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
-        try:
-            hist = yf.Ticker(pair).history(period=BACKTEST_PERIOD, interval="1d")
-            if not hist.empty:
-                series = 1.0 / hist["Close"] if invert else hist["Close"]
-                return series
-        except Exception:
-            continue
-    logger.warning("No FX data for %s, assuming rate=1.0", currency)
+        hist = _retry(
+            lambda p=pair: yf.Ticker(p).history(period=BACKTEST_PERIOD, interval="1d"),
+            what=f"FX {pair}",
+        )
+        if hist is not None and not hist.empty:
+            return 1.0 / hist["Close"] if invert else hist["Close"]
+    logger.warning("No FX data for %s, assuming rate=1.0 (flagged)", currency)
     return pd.Series([1.0], index=[pd.Timestamp.now()])
 
 
@@ -144,43 +211,24 @@ def _fetch_ticker_data(ticker: str) -> dict:
     # yfinance raises ValueError("Invalid ISIN number: ...") from the
     # Ticker constructor when the symbol looks like an ISIN but fails
     # its check-digit validation (common for BTP / US Treasury / EIB
-    # bonds). Left unguarded, that exception aborts the whole
-    # enrichment for the holding *before* the Borsa Italiana bond
-    # fallback in _enrich_single is ever reached. Catch it here and
-    # return an empty result so current_price stays None and the
-    # caller proceeds to the bond fallback.
-    try:
-        t = yf.Ticker(ticker)
-    except Exception as e:
-        logger.warning("yfinance rejected ticker %s: %s", ticker, e)
-        return {"info": {}, "history": pd.DataFrame()}
-    try:
-        info = t.info or {}
-    except Exception:
-        info = {}
-    try:
-        history = t.history(period=BACKTEST_PERIOD, interval="1d")
-    except Exception as e:
-        logger.warning("History fetch failed for %s: %s", ticker, e)
-        history = pd.DataFrame()
+    # bonds). The retry/memoized helpers catch this and return empties,
+    # so current_price stays None and the caller proceeds to the bond
+    # fallback in _enrich_single.
+    info = _fetch_ticker_info(ticker)
+    history = _fetch_history(ticker)
 
     # Fallback: strip exchange suffix
     if history.empty and not info.get("regularMarketPrice") and "." in ticker:
         base_ticker = ticker.split(".")[0]
         logger.debug("Trying base ticker %s (stripped from %s)", base_ticker, ticker)
-        try:
-            t2 = yf.Ticker(base_ticker)
-            info2 = t2.info or {}
-            if info2.get("regularMarketPrice") or info2.get("previousClose"):
-                history2 = t2.history(period=BACKTEST_PERIOD, interval="1d")
-                if not history2.empty:
-                    info, history = info2, history2
-                    logger.info("Fallback to base ticker %s succeeded", base_ticker)
-        except Exception:
-            pass
+        info2 = _fetch_ticker_info(base_ticker)
+        if info2.get("regularMarketPrice") or info2.get("previousClose"):
+            history2 = _fetch_history(base_ticker)
+            if not history2.empty:
+                info, history = info2, history2
+                logger.info("Fallback to base ticker %s succeeded", base_ticker)
 
-    data = {"info": info, "history": history}
-    return data
+    return {"info": info, "history": history}
 
 
 # ---------------------------------------------------------------------------
@@ -198,27 +246,33 @@ def _fetch_ticker_data(ticker: str) -> dict:
 # whichever path (holdings CSV or order list) asks for the ISIN:
 #
 #   1. name coherence with the OpenFIGI canonical name (rejects collisions)
-#   2. currency match to the expected/native currency
+#   2. currency match to the expected/native currency (minor-unit aware)
 #   3. exchange-suffix priority (config-ordered, region-agnostic)
-#   4. data completeness (has price history)
-#   5. alphabetical tiebreak (final determinism guarantee)
+#   4. alphabetical tiebreak (final determinism guarantee)
+#   4. alphabetical tiebreak (final determinism guarantee)
 #
 # No ISINs are hardcoded and no extra input file is needed — the criteria
 # are derived from OpenFIGI metadata + config, so this scales globally.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class _Candidate:
-    """A resolved ISIN candidate with the metadata needed for ranking."""
+    """A resolved ISIN candidate with the metadata needed for ranking.
+
+    Ranking uses only the lightweight ``info`` fields, so price history is
+    *not* fetched here — it is downloaded once for the winning symbol in
+    :func:`_resolve_isin`. ``data`` is filled in only for the winner.
+    """
 
     symbol: str
-    data: dict           # {"info": ..., "history": ...}
+    info: dict
     price: float
     currency: str
     name: str
-    has_history: bool
+    has_history: bool = True
+    data: dict = field(default_factory=dict)
 
 
 # Words that carry no instrument identity — stripped before name comparison.
@@ -267,20 +321,33 @@ def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> 
     """Deterministic sort key for a candidate (higher tuple = better).
 
     Pure function of the candidate metadata + resolution context, so
-    ranking the same candidate set always yields the same winner."""
+    ranking the same candidate set always yields the same winner. Only
+    lightweight ``info`` fields are used — price history is fetched later,
+    for the winner only — so ranking does not depend on a full download.
+    """
     name_score = _name_match_score(cand.name, canonical_name)
     # Bucket the name score so tiny float differences don't reorder
     # otherwise-equivalent listings of the same instrument.
     name_bucket = round(name_score * 4)  # 0..4
-    currency_match = 1 if (expected_currency and cand.currency == expected_currency) else 0
+    currency_match = 1 if _currency_matches(cand.currency, expected_currency) else 0
     # Negate suffix priority so a lower index sorts higher.
     suffix_rank = -_suffix_priority(cand.symbol)
-    history = 1 if cand.has_history else 0
-    # Alphabetical tiebreak: prefer the lexicographically smaller symbol
-    # (negate via reversed comparison by using the string directly with
-    # ascending sort and taking max → so invert by mapping to a sortable
-    # form). We return the symbol and rely on min() for the final tiebreak.
-    return (name_bucket, currency_match, suffix_rank, history)
+    return (name_bucket, currency_match, suffix_rank)
+
+
+def _currency_matches(candidate_ccy: str, expected_ccy: str) -> bool:
+    """Currency equality that tolerates minor-unit quoting.
+
+    yfinance may quote in a minor unit (GBp, ZAc, ILa) while the declared
+    holding currency is the major code (GBP, ZAR, ILS). Normalise both to
+    the major unit before comparing so the expected-currency signal is not
+    defeated for exactly the instruments it should disambiguate.
+    """
+    if not expected_ccy or not candidate_ccy:
+        return False
+    cand = _MINOR_TO_MAJOR_CURRENCY.get(candidate_ccy, candidate_ccy)
+    exp = _MINOR_TO_MAJOR_CURRENCY.get(expected_ccy, expected_ccy)
+    return cand == exp
 
 
 def _resolve_isin(
@@ -289,9 +356,11 @@ def _resolve_isin(
     """Resolve an ISIN to the best yfinance symbol, deterministically.
 
     Collects candidate symbols (CSV/order hint + OpenFIGI mappings +
-    brute-force exchange suffixes + raw ISIN), fetches each one's metadata,
-    and picks the winner by :func:`_rank_key`. The result is stable across
-    runs and identical for both the holdings and order-list paths.
+    brute-force exchange suffixes + raw ISIN), ranks them by
+    :func:`_rank_key` using only lightweight ``info`` metadata, and then
+    downloads price history **once, for the winner only**. The result is
+    stable across runs and identical for both the holdings and order-list
+    paths.
 
     Returns ``(data_dict, winning_symbol)`` or ``None`` if nothing priced.
     """
@@ -308,6 +377,10 @@ def _resolve_isin(
         candidates,
         key=lambda c: (_rank_key(c, canonical_name, expected_currency), _neg_str(c.symbol)),
     )
+
+    # Fetch history only for the winner (ranking never needed it).
+    history = _fetch_history(best.symbol)
+    best.data = {"info": best.info, "history": history}
     logger.info(
         "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
         isin, best.symbol, best.price, best.currency, best.name[:40],
@@ -380,25 +453,53 @@ _MAX_RESOLVE_FETCHES = 10
 
 
 def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
-    """Fetch a single candidate's metadata; return None if unpriced."""
-    try:
-        t = yf.Ticker(symbol)
-        info = t.info or {}
-        price = info.get("regularMarketPrice") or info.get("previousClose")
-        if not price or price <= 0:
-            return None
-        history = t.history(period=BACKTEST_PERIOD, interval="1d")
-        name = info.get("longName") or info.get("shortName") or info.get("name") or ""
-        return _Candidate(
-            symbol=symbol,
-            data={"info": info, "history": history},
-            price=float(price),
-            currency=info.get("currency", "") or "",
-            name=name,
-            has_history=not history.empty,
-        )
-    except Exception:
+    """Fetch a single candidate's lightweight ``info`` for ranking.
+
+    Does NOT download price history — that happens once for the winning
+    symbol in :func:`_resolve_isin`. Returns None if the symbol has no
+    usable price (so it cannot be a real listing).
+    """
+    info = _fetch_ticker_info(symbol)
+    price = info.get("regularMarketPrice") or info.get("previousClose")
+    if not price or price <= 0:
         return None
+    name = info.get("longName") or info.get("shortName") or info.get("name") or ""
+    return _Candidate(
+        symbol=symbol,
+        info=info,
+        price=float(price),
+        currency=info.get("currency", "") or "",
+        name=name,
+    )
+
+
+def _fetch_ticker_info(symbol: str) -> dict:
+    """yfinance ``info`` for a symbol, retried on throttle and memoized
+    for the duration of the run."""
+    with _net_lock:
+        if symbol in _ticker_info_memo:
+            return _ticker_info_memo[symbol]
+    info = _retry(lambda: yf.Ticker(symbol).info or {}, what=f"info {symbol}") or {}
+    with _net_lock:
+        _ticker_info_memo[symbol] = info
+    return info
+
+
+def _fetch_history(symbol: str) -> pd.DataFrame:
+    """yfinance price history for a symbol, retried on throttle and
+    memoized for the duration of the run."""
+    with _net_lock:
+        if symbol in _history_memo:
+            return _history_memo[symbol]
+    hist = _retry(
+        lambda: yf.Ticker(symbol).history(period=BACKTEST_PERIOD, interval="1d"),
+        what=f"history {symbol}",
+    )
+    if hist is None:
+        hist = pd.DataFrame()
+    with _net_lock:
+        _history_memo[symbol] = hist
+    return hist
 
 
 # ---------------------------------------------------------------------------
@@ -409,17 +510,36 @@ _FIGI_MIC_MAP = cfg.figi_mic_map()
 
 
 def _openfigi_raw(isin: str) -> list:
-    """Raw OpenFIGI API call. Returns the JSON result list."""
-    url = "https://api.openfigi.com/v3/mapping"
-    payload = [{"idType": "ID_ISIN", "idValue": isin}]
-    try:
+    """Raw OpenFIGI API call, rate-limited, retried on throttle, and
+    memoized per run.
+
+    The unauthenticated OpenFIGI endpoint caps at ~25 requests/min, so a
+    minimum inter-call spacing is enforced and the result is memoized so
+    the three logical lookups per ISIN (name, ticker mapping, classify)
+    collapse to a single network call.
+    """
+    with _net_lock:
+        if isin in _openfigi_memo:
+            return _openfigi_memo[isin]
+
+    def _call() -> list:
+        # Enforce minimum spacing between OpenFIGI calls across threads.
+        with _net_lock:
+            wait = _OPENFIGI_MIN_INTERVAL - (_time.monotonic() - _openfigi_last_call[0])
+            if wait > 0:
+                _time.sleep(wait)
+            _openfigi_last_call[0] = _time.monotonic()
+        url = "https://api.openfigi.com/v3/mapping"
+        payload = [{"idType": "ID_ISIN", "idValue": isin}]
         req = Request(url, data=json.dumps(payload).encode("utf-8"))
         req.add_header("Content-Type", "application/json")
         with urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        logger.debug("OpenFIGI lookup failed for %s: %s", isin, e)
-        return []
+
+    results = _retry(_call, what=f"OpenFIGI {isin}") or []
+    with _net_lock:
+        _openfigi_memo[isin] = results
+    return results
 
 
 def _openfigi_name(isin: str) -> str:
@@ -1086,6 +1206,11 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     """
     if not holdings:
         return holdings
+
+    # Reset intra-run memoization so this run starts from fresh network
+    # state (no stale data across runs), then de-duplicates concurrent
+    # requests within the run.
+    reset_run_caches()
 
     logger.info("Enriching %d holdings (max %d workers)...", len(holdings), MAX_WORKERS)
 
