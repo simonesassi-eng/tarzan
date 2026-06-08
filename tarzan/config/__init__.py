@@ -113,9 +113,6 @@ def mix_60_40() -> dict:
 
 # --- Data fetching ---
 
-def cache_ttl_hours() -> int:
-    return get("cache_ttl_hours", 24)
-
 def max_workers() -> int:
     return get("max_workers", 8)
 

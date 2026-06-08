@@ -71,7 +71,6 @@ metric_ratings:
 # 2. DATA FETCHING
 # =============================================================================
 
-cache_ttl_hours: 0.083            # Cache expiry (~5 minutes)
 max_workers: 8                    # Parallel threads for yfinance API calls
 
 
