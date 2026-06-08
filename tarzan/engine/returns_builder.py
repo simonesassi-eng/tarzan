@@ -394,19 +394,28 @@ def build_order_derived_series(
     # market price; this makes V_before(d) = V_after(d) - flow(d) use one
     # consistent price basis, so a trade does not inject a fictitious
     # jump from the gap between execution and market price (Option 2).
-    # Coupons/dividends are not position changes and are NOT external
-    # flows for TWROR — they are income earned by the held portfolio, so
-    # they belong inside the market return, not subtracted from it.
     # Round-trip positions (closed before today) are included: their
     # buys/sells are real external flows over their holding window.
+    #
+    # Income (coupons/dividends) is treated the GIPS total-return way.
+    # Our series values only the securities, and the income cash is
+    # credited to the bank account (net_eur > 0), so from the securities
+    # portfolio's perspective the distribution is a *withdrawal*: a
+    # negative external flow of -net_eur. Because TWROR computes
+    # V_before(d) = V_after(d) - external_flow(d), that withdrawal is
+    # added back into the pre-flow value, so the income is captured as
+    # return rather than vanishing. (It is the mirror image of XIRR,
+    # where the same distribution is a positive bank cash inflow.)
     external_flows: dict[datetime.date, float] = {}
     for o in orders:
-        if not o.is_position_change():
-            continue
-        unit = value_isin_on(o.isin, o.date)
-        if unit is None:
-            continue
-        external_flows[o.date] = external_flows.get(o.date, 0.0) + o.quantity * unit
+        if o.is_position_change():
+            unit = value_isin_on(o.isin, o.date)
+            if unit is None:
+                continue
+            external_flows[o.date] = external_flows.get(o.date, 0.0) + o.quantity * unit
+        elif o.type in (OrderType.COUPON, OrderType.DIVIDEND) and o.net_eur:
+            # Distribution paid out of the securities portfolio → withdrawal.
+            external_flows[o.date] = external_flows.get(o.date, 0.0) - o.net_eur
 
     cf_dates = sorted(external_flows.keys())
     valuations: list[tuple[datetime.date, float]] = [
