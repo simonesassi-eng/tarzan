@@ -22,6 +22,7 @@ from openpyxl.utils import get_column_letter
 from tarzan.models.holding import Holding
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
+from tarzan.export._format import ASSET_CLASS_COLORS, GEO_COLORS
 from tarzan import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -47,16 +48,10 @@ C = {
     'border_dk': '94A3B8',
 }
 
-ASSET_COLORS = {
-    'Equities': '1D4ED8', 'Fixed Income': 'A16207',
-    'Cash & Cash Equivalents': '15803D', 'Gold': 'CA8A04', 'Commodities': 'C2410C',
-    'Crypto': '9333EA', 'Alternative': '475569',
-}
-
-GEO_COLORS = {
-    'USA': '1D4ED8', 'Eurozone EMU': 'A16207', 'Dev ex-USA ex-EMU ex-JP': '15803D',
-    'Emerging Markets': 'C2410C', 'Japan': '7C3AED',
-}
+# Asset-class / geography colors come from the shared taxonomy in
+# tarzan.export._format so the Excel dashboard and the HTML newsletter
+# color the same class/region identically (single source of truth).
+ASSET_COLORS = ASSET_CLASS_COLORS
 
 TAB_COLORS = {
     'Dashboard': '5B5BD6', 'Holdings': '1E293B', 'Optimizer': '16A34A',
