@@ -291,8 +291,24 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     cfg = ctx.config
     cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
-    total_gain = m.total_value - cost
-    gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
+    snapshot_gain = m.total_value - cost
+    snapshot_gain_pct = (snapshot_gain / cost * 100) if cost > 0 else 0.0
+
+    # "Since inception" gain. When the order path produced a lifetime P&L
+    # (realized + unrealized, from the XIRR cash flows) prefer it: it is
+    # the true all-in euro gain over every deposit, not just the snapshot
+    # cost-basis delta of the positions open today. PnL% is then expressed
+    # over the capital actually deployed. TWROR% (time-weighted) rides
+    # alongside so the reader sees both the money-on-capital and the
+    # market-timing-neutral views. Falls back to the snapshot gain for a
+    # holdings-only run, preserving today's behavior.
+    if m.pnl_eur is not None:
+        total_gain = m.pnl_eur
+        gain_pct = m.pnl_pct if m.pnl_pct is not None else 0.0
+    else:
+        total_gain = snapshot_gain
+        gain_pct = snapshot_gain_pct
+    twror_pct = m.twror_pct
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
     # 1W return is sourced from performance_full (same series as the
     # Performance section and the Excel Performance tab) so the inbox
@@ -359,6 +375,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "total_gain": _eur_smart(total_gain, signed=True),
         "gain_pct": _pct(gain_pct, signed=True),
         "is_positive": total_gain >= 0,
+        # Cumulative time-weighted return since inception (order path only).
+        "twror_pct": _pct(twror_pct, signed=True) if twror_pct is not None else None,
+        "twror_is_positive": (twror_pct or 0.0) >= 0,
         "invested_value": _eur_smart(m.invested_value),
         "invested_pct": _pct(invested_pct, decimals=1),
         "cash_value": _eur_smart(m.cash_value),
@@ -377,83 +396,143 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
 
 def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
-    """Build the 30-day sparkline data (start/end values + bar heights).
+    """Build the hero chart: a mountain (area) view of the real patrimony.
 
-    Includes a "vs benchmark" pill computed from the α/β benchmark over
-    the same 30-day window so the user can see at a glance whether the
-    portfolio outperformed the market for the period.
+    When the order path produced ``actual_value_series`` — the dense daily
+    euro worth of the whole portfolio with the deposit/withdrawal jumps
+    left in — the chart plots that over the full since-inception window, so
+    the reader sees how their real wealth evolved (contributions included),
+    not a flow-adjusted index. It carries up to three pills: lifetime PnL%
+    (gain on capital), cumulative TWROR% (market-timing-neutral) and the
+    α/β benchmark's return over the same window. Without an order list it
+    degrades to the legacy 30-day line on the consolidated holdings
+    history, so the holdings-only path is unchanged.
     """
     m = ctx.metrics
-    history = m.portfolio_history
-    if history is None or len(history) < 2:
-        # Synthesise a flat line at current value so the section still renders.
-        return {
-            "available": False,
-            "start_label": "",
-            "end_label": "",
-            "start_value": _eur_smart(m.total_value),
-            "end_value": _eur_smart(m.total_value),
-            "change_pct": "0.00%",
-            "is_positive": True,
-            "bars": [{"height": 22} for _ in range(n_days)],
-            "vs_bench": None,
-        }
 
-    last = history.tail(n_days)
-    start_v, end_v = float(last.iloc[0]), float(last.iloc[-1])
-    change_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
-    vmin, vmax = float(last.min()), float(last.max())
+    actual = m.actual_value_series
+    is_mountain = actual is not None and len(actual) >= 2
+    if is_mountain:
+        window = actual
+        label = "Since inception"
+    else:
+        history = m.portfolio_history
+        if history is None or len(history) < 2:
+            return {
+                "available": False,
+                "label": f"Last {n_days} days",
+                "start_label": "", "end_label": "",
+                "start_value": _eur_smart(m.total_value),
+                "end_value": _eur_smart(m.total_value),
+                "is_positive": True,
+                "bars": [{"height": 22} for _ in range(n_days)],
+                "pills": [],
+            }
+        window = history.tail(n_days)
+        label = f"Last {n_days} days"
+
+    # Downsample so a long window still fits a 600px email: the bars are
+    # drawn gap-less (adjacent) to form the mountain silhouette, so a few
+    # pixels each is plenty. Keep first and last point exactly.
+    max_bars = 120
+    if len(window) > max_bars:
+        step = max(1, len(window) // max_bars)
+        sampled = window.iloc[::step]
+        if window.index[-1] not in sampled.index:
+            sampled = pd.concat([sampled, window.iloc[[-1]]])
+        window = sampled
+
+    start_v, end_v = float(window.iloc[0]), float(window.iloc[-1])
+    vmin, vmax = float(window.min()), float(window.max())
     rng = max(vmax - vmin, 1.0)
 
-    # Map values to bar heights between 12 and 44 px.
-    bars = []
-    for v in last.values:
-        h = 12 + (float(v) - vmin) / rng * 32
-        bars.append({"height": int(round(h))})
+    # Map values to bar heights between 6 and 44 px. The 6px floor keeps
+    # even the trough visible as a filled area rather than a gap.
+    bars = [
+        {"height": int(round(6 + (float(v) - vmin) / rng * 38))}
+        for v in window.values
+    ]
 
-    # vs-benchmark pill: compare same-window % change of the portfolio
-    # against the α/β benchmark. Uses benchmark_histories when present
-    # (already aligned to portfolio start in initial-value units).
-    vs_bench: Optional[dict] = None
-    bench_name = ctx.benchmark_alpha_beta or "S&P 500"
-    bench_hist = (m.benchmark_histories or {}).get(bench_name)
-    if bench_hist is not None and len(bench_hist) >= 2:
-        bench_window = bench_hist.tail(n_days)
-        if len(bench_window) >= 2:
-            bs, be = float(bench_window.iloc[0]), float(bench_window.iloc[-1])
-            if bs > 0:
-                bench_pct = (be - bs) / bs * 100
-                delta = change_pct - bench_pct
-                if abs(delta) <= 0.25:
-                    color = PALETTE["amber"]
-                    bg = PALETTE["amber_bg"]
-                    icon = "●"
-                elif delta > 0:
-                    color = PALETTE["green"]
-                    bg = PALETTE["green_bg"]
-                    icon = "▲"
-                else:
-                    color = PALETTE["red"]
-                    bg = PALETTE["red_bg"]
-                    icon = "▼"
-                vs_bench = {
-                    "label": f"vs {bench_name}",
-                    "delta": f"{icon} {_signed_pp(delta, decimals=2)} pp",
-                    "color": color,
-                    "bg": bg,
-                }
+    pills = _build_sparkline_pills(ctx, window, start_v, end_v, is_mountain)
 
     return {
         "available": True,
-        "start_label": last.index[0].strftime("%b %d") if hasattr(last.index[0], "strftime") else "",
-        "end_label": last.index[-1].strftime("%b %d") if hasattr(last.index[-1], "strftime") else "",
+        "label": label,
+        "is_mountain": is_mountain,
+        "start_label": window.index[0].strftime("%b %d") if hasattr(window.index[0], "strftime") else "",
+        "end_label": window.index[-1].strftime("%b %d") if hasattr(window.index[-1], "strftime") else "",
         "start_value": _eur_smart(start_v),
         "end_value": _eur_smart(end_v),
-        "change_pct": _pct(change_pct, signed=True),
-        "is_positive": change_pct >= 0,
+        "is_positive": end_v >= start_v,
         "bars": bars,
-        "vs_bench": vs_bench,
+        "pills": pills,
     }
+
+
+def _build_sparkline_pills(
+    ctx: _NewsletterContext,
+    window: pd.Series,
+    start_v: float,
+    end_v: float,
+    is_mountain: bool,
+) -> list[dict]:
+    """Build the chart's summary pills.
+
+    Mountain (order path): lifetime PnL%, cumulative TWROR%, and the α/β
+    benchmark return over the same window. Legacy line: a single window
+    %-change pill plus the vs-benchmark delta, matching prior behavior.
+    """
+    m = ctx.metrics
+
+    def _pill(text: str, value: Optional[float], *, neutral: bool = False) -> dict:
+        if neutral:
+            return {"text": text, "color": PALETTE["muted"], "bg": PALETTE["page"]}
+        positive = (value or 0.0) >= 0
+        return {
+            "text": text,
+            "color": PALETTE["green"] if positive else PALETTE["red"],
+            "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
+        }
+
+    # Benchmark cumulative return over the window (initial-value units,
+    # already aligned to the portfolio start).
+    bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    bench_hist = (m.benchmark_histories or {}).get(bench_name)
+    bench_pct: Optional[float] = None
+    if bench_hist is not None and len(bench_hist) >= 2:
+        if is_mountain:
+            bs, be = float(bench_hist.iloc[0]), float(bench_hist.iloc[-1])
+        else:
+            bw = bench_hist.tail(len(window))
+            bs, be = float(bw.iloc[0]), float(bw.iloc[-1])
+        if bs > 0:
+            bench_pct = (be - bs) / bs * 100
+
+    if is_mountain:
+        pills: list[dict] = []
+        if m.pnl_pct is not None:
+            pills.append(_pill(f"PnL {_pct(m.pnl_pct, signed=True)}", m.pnl_pct))
+        if m.twror_pct is not None:
+            pills.append(_pill(f"TWROR {_pct(m.twror_pct, signed=True)}", m.twror_pct))
+        if bench_pct is not None:
+            pills.append(_pill(f"{bench_name} {_pct(bench_pct, signed=True)}", None, neutral=True))
+        return pills
+
+    # Legacy line: window %-change + vs-benchmark delta.
+    change_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
+    pills = [_pill(_pct(change_pct, signed=True), change_pct)]
+    if bench_pct is not None:
+        delta = change_pct - bench_pct
+        icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
+        color = (PALETTE["green"] if delta > 0.25
+                 else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
+        bg = (PALETTE["green_bg"] if delta > 0.25
+              else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
+        pills.append({
+            "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
+            "color": color, "bg": bg,
+        })
+    return pills
 
 
 def _build_allocation(ctx: _NewsletterContext) -> dict:

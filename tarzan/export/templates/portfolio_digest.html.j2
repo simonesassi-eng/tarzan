@@ -6,11 +6,13 @@
      palette          dict of CSS hex colors
      header           {date_short, issue_number, inception_date}
      hero             {total_value, total_gain, gain_pct, is_positive,
+                       twror_pct, twror_is_positive,
                        invested_value, invested_pct, cash_value,
                        cash_msg, cash_msg_color, week_return_eur,
                        week_return_pct, week_is_positive}
-     sparkline        {available, start_label, end_label, start_value,
-                       end_value, change_pct, is_positive, bars[]}
+     sparkline        {available, label, is_mountain, start_label,
+                       end_label, start_value, end_value, is_positive,
+                       bars[], pills[]}
      smart_insights   list of {icon, color, bg, category, headline, body}
      movers           {available, best, worst, benchmark_name}
      allocation       {rows[], stacked[], tolerance}
@@ -85,8 +87,12 @@
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Status</div>
               <div style="margin-top:6px;font-size:40px;font-weight:700;color:{{ palette.ink }};line-height:1.05;letter-spacing:-0.01em;">{{ hero.total_value }}</div>
               <div style="margin-top:6px;font-size:13px;color:{{ palette.ink }};">
-                <span style="color:{{ palette.green if hero.is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.is_positive else '▼' }} {{ hero.gain_pct }}</span>
+                <span style="color:{{ palette.green if hero.is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.is_positive else '▼' }} {{ hero.total_gain }} ({{ hero.gain_pct }})</span>
                 <span style="color:{{ palette.muted }};">&nbsp;since inception</span>
+                {% if hero.twror_pct %}
+                <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
+                <span style="color:{{ palette.green if hero.twror_is_positive else palette.red }};font-weight:700;">TWROR {{ hero.twror_pct }}</span>
+                {% endif %}
                 {% if hero.week_return_pct and hero.week_return_pct != '—' %}
                 <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
                 <span style="color:{{ palette.green if hero.week_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_is_positive else '▼' }} {{ hero.week_return_pct }}</span>
@@ -116,29 +122,30 @@
                 </tr>
               </table>
 
-              {# Sparkline #}
+              {# Mountain chart — real patrimony value over the window #}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
                 <tr>
                   <td style="padding:12px 14px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td style="vertical-align:middle;"><div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">Last 30 days</div></td>
+                        <td style="vertical-align:middle;"><div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">{{ sparkline.label }}</div></td>
                         <td align="right" style="vertical-align:middle;">
                           <span style="font-size:11px;color:{{ palette.muted }};">{{ sparkline.start_value }}</span>
                           <span style="font-size:11px;color:{{ palette.subtle }};">&nbsp;→&nbsp;</span>
                           <span style="font-size:11px;color:{{ palette.ink }};font-weight:700;">{{ sparkline.end_value }}</span>
-                          <span style="display:inline-block;margin-left:6px;padding:1px 6px;background:{{ palette.green_bg if sparkline.is_positive else palette.red_bg }};color:{{ palette.green if sparkline.is_positive else palette.red }};border-radius:4px;font-size:10px;font-weight:700;">{{ sparkline.change_pct }}</span>
-                          {% if sparkline.vs_bench %}
-                          <span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ sparkline.vs_bench.bg }};color:{{ sparkline.vs_bench.color }};border-radius:4px;font-size:10px;font-weight:700;">{{ sparkline.vs_bench.label }}: {{ sparkline.vs_bench.delta }}</span>
-                          {% endif %}
+                          {% for pill in sparkline.pills %}
+                          <span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ pill.bg }};color:{{ pill.color }};border-radius:4px;font-size:10px;font-weight:700;">{{ pill.text }}</span>
+                          {% endfor %}
                         </td>
                       </tr>
                     </table>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
-                      <tr style="height:42px;">
+                    {# Gap-less adjacent bars form an email-safe area/mountain
+                       silhouette. A linear-gradient fill degrades to the solid
+                       accent color in clients (Gmail) that strip gradients. #}
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:collapse;">
+                      <tr style="height:44px;">
                         {% for bar in sparkline.bars %}
-                        <td valign="bottom" style="width:{{ (100 / sparkline.bars|length) - 0.33 }}%;font-size:0;line-height:0;"><div style="background:{{ palette.accent }};height:{{ bar.height }}px;border-radius:1px 1px 0 0;font-size:0;line-height:0;">&nbsp;</div></td>
-                        {% if not loop.last %}<td style="width:0.33%;font-size:0;">&nbsp;</td>{% endif %}
+                        <td valign="bottom" style="width:{{ 100 / sparkline.bars|length }}%;font-size:0;line-height:0;padding:0;"><div style="background-color:{{ palette.accent }};background:linear-gradient(180deg,{{ palette.accent }} 0%,{{ palette.accent_bg }} 100%);height:{{ bar.height }}px;font-size:0;line-height:0;">&nbsp;</div></td>
                         {% endfor %}
                       </tr>
                     </table>

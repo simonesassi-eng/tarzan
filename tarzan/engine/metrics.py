@@ -359,6 +359,22 @@ class MetricsEngine:
         ctx["returns_provenance"] = series.provenance
         ctx["returns_period_debug"] = res.periods
 
+        # Lifetime P&L (realized + unrealized), straight from the XIRR cash
+        # flows. Those are the bank-account view — deposits negative, every
+        # distribution (sells, coupons, dividends) positive, terminated by
+        # today's portfolio value — so their algebraic sum is exactly
+        #     current_value + Σ distributions − Σ deposits
+        # i.e. the all-in euro gain since inception. PnL% expresses it over
+        # the total capital actually deployed (Σ deposits), the money-at-work
+        # denominator the user asked for.
+        flows = series.xirr_cashflows or []
+        pnl_eur = sum(amount for _, amount in flows)
+        deposits = -sum(amount for _, amount in flows if amount < 0)
+        ctx["pnl_eur"] = pnl_eur
+        ctx["invested_capital_eur"] = deposits
+        ctx["pnl_pct"] = (pnl_eur / deposits * 100.0) if deposits > 0 else None
+        ctx["actual_value_series"] = series.actual_value_series
+
     # ------------------------------------------------------------------
     # Performance
     # ------------------------------------------------------------------
@@ -701,6 +717,10 @@ class MetricsEngine:
             returns_coverage_pct=ctx.get("returns_coverage_pct"),
             returns_provenance=ctx.get("returns_provenance"),
             returns_period_debug=ctx.get("returns_period_debug"),
+            pnl_eur=ctx.get("pnl_eur"),
+            pnl_pct=ctx.get("pnl_pct"),
+            invested_capital_eur=ctx.get("invested_capital_eur"),
+            actual_value_series=ctx.get("actual_value_series"),
         )
 
 

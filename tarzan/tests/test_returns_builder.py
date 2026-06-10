@@ -76,6 +76,8 @@ class TestBuildHoldings:
         assert h.quantity == pytest.approx(100.0)
         # non-bond seed = qty * price
         assert h.market_value_eur == pytest.approx(3500.0)
+        # cost basis derived from the buy's net cash paid (incl. fees)
+        assert h.cost_basis_eur == pytest.approx(3500.0)
 
     def test_bond_seed_uses_per_100(self):
         orders = [
@@ -85,6 +87,59 @@ class TestBuildHoldings:
         holdings = build_holdings_from_orders(orders)
         # bond seed = qty * price / 100 = 4000 * 100 / 100 = 4000
         assert holdings[0].market_value_eur == pytest.approx(4000.0)
+
+
+class TestCostBasis:
+    """cost_basis_by_isin: average-cost basis of the units still held."""
+
+    def test_single_buy_is_net_cash_paid(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        orders = [_o(OrderType.BUY, "AAA", qty=100.0, net=-1000.0)]
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(1000.0)
+
+    def test_multiple_buys_accumulate(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1000.0, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1500.0, d=(2025, 2, 1)),
+        ]
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(2500.0)
+
+    def test_partial_sell_removes_at_average_cost(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        # Buy 200 @ avg 12.5 (1000 + 1500), then sell 100 → remove 1250.
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1000.0, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1500.0, d=(2025, 2, 1)),
+            _o(OrderType.SELL, "AAA", qty=-100.0, net=2000.0, d=(2025, 3, 1)),
+        ]
+        # avg = 2500/200 = 12.5; remove 100*12.5 = 1250 → 1250 left.
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(1250.0)
+
+    def test_sell_at_gain_does_not_inflate_remaining_basis(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        # Realized gain on the sell must not change the basis of the rest.
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1000.0, d=(2025, 1, 1)),
+            _o(OrderType.SELL, "AAA", qty=-50.0, net=900.0, d=(2025, 3, 1)),
+        ]
+        # avg = 10; remove 50*10 = 500 → 500 left (not reduced by proceeds).
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(500.0)
+
+    def test_coupon_does_not_reduce_cost(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=100.0, net=-1000.0, d=(2025, 1, 1)),
+            _o(OrderType.COUPON, "AAA", qty=0.0, net=50.0, d=(2025, 6, 1)),
+        ]
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(1000.0)
+
+    def test_transfer_in_uses_gross_when_no_cash(self):
+        from tarzan.engine.returns_builder import cost_basis_by_isin
+        orders = [
+            _o(OrderType.TRANSFER_IN, "AAA", qty=4000.0, gross=4000.0, net=0.0),
+        ]
+        assert cost_basis_by_isin(orders)["AAA"] == pytest.approx(4000.0)
 
 
 class TestQuantityTimeline:
