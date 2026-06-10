@@ -103,6 +103,10 @@ class PortfolioMetrics:
     pnl_pct: Optional[float] = None
     invested_capital_eur: Optional[float] = None
     actual_value_series: Optional[pd.Series] = None
+    # Portfolio inception date (ISO "YYYY-MM-DD"), derived automatically
+    # from the first order when an order list is present. None on the
+    # holdings-only path (the header then falls back to config).
+    inception_date: Optional[str] = None
 
     def to_summary_dict(self) -> dict:
         """Serialize key metrics to a JSON-compatible dictionary.

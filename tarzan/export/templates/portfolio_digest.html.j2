@@ -12,7 +12,7 @@
                        week_return_pct, week_is_positive}
      sparkline        {available, label, is_mountain, start_label,
                        end_label, start_value, end_value, is_positive,
-                       bars[], pills[]}
+                       bars[], pills[]} — a 30-day mountain/area chart
      smart_insights   list of {icon, color, bg, category, headline, body}
      movers           {available, best, worst, benchmark_name}
      allocation       {rows[], stacked[], tolerance}
@@ -87,16 +87,17 @@
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Status</div>
               <div style="margin-top:6px;font-size:40px;font-weight:700;color:{{ palette.ink }};line-height:1.05;letter-spacing:-0.01em;">{{ hero.total_value }}</div>
               <div style="margin-top:6px;font-size:13px;color:{{ palette.ink }};">
+                <span style="color:{{ palette.muted }};">PnL&nbsp;</span>
                 <span style="color:{{ palette.green if hero.is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.is_positive else '▼' }} {{ hero.total_gain }} ({{ hero.gain_pct }})</span>
-                <span style="color:{{ palette.muted }};">&nbsp;since inception</span>
                 {% if hero.twror_pct %}
                 <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
-                <span style="color:{{ palette.green if hero.twror_is_positive else palette.red }};font-weight:700;">TWROR {{ hero.twror_pct }}</span>
+                <span style="color:{{ palette.muted }};">TWROR&nbsp;</span>
+                <span style="color:{{ palette.green if hero.twror_is_positive else palette.red }};font-weight:700;">{{ hero.twror_pct }}</span>
                 {% endif %}
                 {% if hero.week_return_pct and hero.week_return_pct != '—' %}
                 <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
+                <span style="color:{{ palette.muted }};">This week&nbsp;</span>
                 <span style="color:{{ palette.green if hero.week_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_is_positive else '▼' }} {{ hero.week_return_pct }}</span>
-                <span style="color:{{ palette.muted }};">&nbsp;this week</span>
                 {% endif %}
               </div>
 

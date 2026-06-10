@@ -120,6 +120,8 @@ def test_order_only_derives_snapshot(tmp_path, monkeypatch):
     assert row["isin"] == "IE00BL25JP72"
     # Derived cost basis = 1000 + 600 = 1600.
     assert row["cost_basis_eur"] == pytest.approx(1600.0)
+    # Inception is taken automatically from the first order, not config.
+    assert metrics.inception_date == "2025-01-02"
 
 
 def test_missing_holdings_path_falls_back_to_orders(tmp_path, monkeypatch):

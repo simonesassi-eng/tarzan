@@ -375,6 +375,15 @@ class MetricsEngine:
         ctx["pnl_pct"] = (pnl_eur / deposits * 100.0) if deposits > 0 else None
         ctx["actual_value_series"] = series.actual_value_series
 
+        # Inception is automatic from the order list: the first dated
+        # position change. This is the authoritative start of the track
+        # record, independent of any config value.
+        order_dates = [
+            o.date for o in (self.orders or []) if o.is_position_change()
+        ]
+        if order_dates:
+            ctx["inception_date"] = min(order_dates).strftime("%Y-%m-%d")
+
     # ------------------------------------------------------------------
     # Performance
     # ------------------------------------------------------------------
@@ -721,6 +730,7 @@ class MetricsEngine:
             pnl_pct=ctx.get("pnl_pct"),
             invested_capital_eur=ctx.get("invested_capital_eur"),
             actual_value_series=ctx.get("actual_value_series"),
+            inception_date=ctx.get("inception_date"),
         )
 
 
