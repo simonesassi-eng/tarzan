@@ -201,6 +201,51 @@ def _clean_str(val) -> str:
     return "" if s.lower() == "nan" else s
 
 
+def load_targets_per_holding(
+    source: Union[str, io.BytesIO], filename: str = ""
+) -> dict[str, dict]:
+    """Load per-holding rebalancing targets keyed by ISIN.
+
+    The order list carries no target columns, so when the snapshot is
+    derived from orders (order-only mode) the rebalancer's per-holding
+    targets come from this side file instead. Expected columns:
+    ``name, isin, ticker, target_equities, target_fixed_income,
+    no_buy_no_sell`` (only ``isin`` is required; the rest are optional and
+    blanks map to "no target").
+
+    A missing path returns ``{}`` (non-fatal) so the pipeline runs without
+    it — holdings simply carry no per-instrument target.
+
+    Returns:
+        ``{isin: {"target_equities": float|None,
+                  "target_fixed_income": float|None,
+                  "no_buy_no_sell": bool}}``.
+    """
+    if isinstance(source, str) and not os.path.exists(source):
+        logger.info("No per-holding targets at %s; none applied.", source)
+        return {}
+
+    df = _read_source(source, filename)
+    df.columns = [c.strip().lower() for c in df.columns]
+    if "isin" not in df.columns:
+        logger.warning("Per-holding targets file has no 'isin' column; ignoring.")
+        return {}
+
+    result: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        isin = _clean_str(row.get("isin"))
+        if not isin:
+            continue
+        nbns = str(row.get("no_buy_no_sell", "")).strip().lower()
+        result[isin] = {
+            "target_equities": _parse_number_optional(row.get("target_equities")),
+            "target_fixed_income": _parse_number_optional(row.get("target_fixed_income")),
+            "no_buy_no_sell": nbns in ("true", "1", "yes"),
+        }
+    logger.info("Loaded per-holding targets for %d ISIN(s)", len(result))
+    return result
+
+
 def _parse_date_safe(val):
     """Parse a value into a date, or None on failure/empty."""
     if val is None or (isinstance(val, str) and not val.strip()):

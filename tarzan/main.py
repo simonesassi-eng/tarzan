@@ -25,7 +25,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--input_orders", default=None,
         help="Optional order-list CSV. When given, enables XIRR/TWROR and "
-             "makes the order list the source of the historical series.",
+             "makes the order list the source of the historical series. If "
+             "the holdings file is absent, the snapshot is derived from this "
+             "order list (order-only mode).",
+    )
+    parser.add_argument(
+        "--input_targets_per_holding", default="input/targets_per_holding.csv",
+        help="Optional per-holding rebalancing targets (by ISIN), used to "
+             "attach targets to the order-derived snapshot in order-only mode.",
     )
     parser.add_argument("--output", default="output/")
     return parser.parse_args(argv)
@@ -56,6 +63,7 @@ def main(argv=None) -> int:
             holdings_source=args.input_holdings,
             config_source=args.input_config,
             orders_source=args.input_orders,
+            targets_per_holding_source=args.input_targets_per_holding,
         )
         if metrics.total_value == 0:
             logger.error("No portfolio value computed. Check input data.")
