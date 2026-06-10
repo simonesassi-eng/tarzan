@@ -290,24 +290,24 @@ def _build_header(ctx: _NewsletterContext) -> dict:
 def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     cfg = ctx.config
-    cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
-    snapshot_gain = m.total_value - cost
-    snapshot_gain_pct = (snapshot_gain / cost * 100) if cost > 0 else 0.0
 
-    # "Since inception" gain. When the order path produced a lifetime P&L
-    # (realized + unrealized, from the XIRR cash flows) prefer it: it is
-    # the true all-in euro gain over every deposit, not just the snapshot
-    # cost-basis delta of the positions open today. PnL% is then expressed
-    # over the capital actually deployed. TWROR% (time-weighted) rides
-    # alongside so the reader sees both the money-on-capital and the
-    # market-timing-neutral views. Falls back to the snapshot gain for a
-    # holdings-only run, preserving today's behavior.
-    if m.pnl_eur is not None:
-        total_gain = m.pnl_eur
-        gain_pct = m.pnl_pct if m.pnl_pct is not None else 0.0
-    else:
-        total_gain = snapshot_gain
-        gain_pct = snapshot_gain_pct
+    # Two distinct P&L views at portfolio level:
+    #   * Unrealized PnL — the snapshot gain on the positions held *today*
+    #     vs their cost basis (= the Excel "RTD"). Numerator/denominator
+    #     are current-holdings only; realized gains and income are excluded.
+    #   * Total PnL — the lifetime, all-in gain (realized + unrealized +
+    #     coupons/dividends) from the order list, expressed over the *net*
+    #     capital contributed (current_value − Total PnL). It answers "how
+    #     much have I actually made on the money I put in".
+    cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
+    unrealized_eur = m.total_value - cost
+    unrealized_pct = (unrealized_eur / cost * 100) if cost > 0 else 0.0
+
+    has_total_pnl = m.pnl_eur is not None
+    total_pnl_eur = m.pnl_eur if has_total_pnl else unrealized_eur
+    total_pnl_pct = (
+        m.pnl_pct if (has_total_pnl and m.pnl_pct is not None) else unrealized_pct
+    )
     twror_pct = m.twror_pct
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
     # 1W return is sourced from performance_full (same series as the
@@ -355,10 +355,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         rebal_bg = PALETTE["green_bg"]
     else:
         # Actions to take. Communicate only that action is needed — no
-        # count, no drift/tolerance detail. The Optimizer section below
-        # carries the specifics.
+        # count, no sublabel. The Optimizer section below carries specifics.
         rebal_label = "Action"
-        rebal_sublabel = "review below"
+        rebal_sublabel = ""
         # Amber for a moderate plan, red when drift is well beyond tol.
         if max_abs_delta > 2 * tol:
             rebal_color, rebal_bg = PALETTE["red"], PALETTE["red_bg"]
@@ -369,11 +368,19 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # Hero big number keeps the full amount (€214,671.72): the
         # entire visual hierarchy of the Status section depends on it.
         "total_value": _eur(m.total_value),
-        # Everything else uses the compact form (€9.6k / €215k / €1.2M)
-        # so dense rows do not wrap.
-        "total_gain": _eur_smart(total_gain, signed=True),
-        "gain_pct": _pct(gain_pct, signed=True),
-        "is_positive": total_gain >= 0,
+        # Total PnL — lifetime, realized + unrealized (order path).
+        "total_pnl_eur": _eur_smart(total_pnl_eur, signed=True),
+        "total_pnl_pct": _pct(total_pnl_pct, signed=True),
+        "total_pnl_is_positive": total_pnl_eur >= 0,
+        # Unrealized PnL — snapshot gain on current holdings (= Excel RTD).
+        "unrealized_eur": _eur_smart(unrealized_eur, signed=True),
+        "unrealized_pct": _pct(unrealized_pct, signed=True),
+        "unrealized_is_positive": unrealized_eur >= 0,
+        # Whether the lifetime Total PnL is a real (order-derived) figure
+        # distinct from Unrealized; False on the holdings-only path.
+        "has_total_pnl": has_total_pnl,
+        # Kept for the preheader/back-compat: the headline % is Total PnL.
+        "gain_pct": _pct(total_pnl_pct, signed=True),
         # Cumulative time-weighted return since inception (order path only).
         "twror_pct": _pct(twror_pct, signed=True) if twror_pct is not None else None,
         "twror_is_positive": (twror_pct or 0.0) >= 0,
@@ -464,36 +471,69 @@ def _build_sparkline_pills(
     start_v: float,
     end_v: float,
 ) -> list[dict]:
-    """Build the chart's 30-day summary pills: the window %-change and the
-    vs-α/β-benchmark delta over the same window."""
+    """Build the chart's 30-day pills.
+
+    Order path: **Total PnL %** (the total change of the pot over the
+    window — what the mountain shows, contributions included) and **TWR %**
+    (the flow-adjusted market return over the same window, from the NAV
+    index), plus the vs-α/β-benchmark delta. Holdings-only path: a single
+    window %-change pill plus the benchmark delta.
+    """
     m = ctx.metrics
 
-    change_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
-    positive = change_pct >= 0
-    pills: list[dict] = [{
-        "text": _pct(change_pct, signed=True),
-        "color": PALETTE["green"] if positive else PALETTE["red"],
-        "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
-    }]
+    def _pill(text: str, value: Optional[float], *, neutral: bool = False) -> dict:
+        if neutral:
+            return {"text": text, "color": PALETTE["muted"], "bg": PALETTE["page"]}
+        positive = (value or 0.0) >= 0
+        return {
+            "text": text,
+            "color": PALETTE["green"] if positive else PALETTE["red"],
+            "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
+        }
 
+    total_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
+    is_order_path = m.twror_pct is not None
+
+    # TWR over the same window from the flow-adjusted NAV index.
+    twr_pct: Optional[float] = None
+    ph = m.portfolio_history
+    if is_order_path and ph is not None and len(ph) >= 2:
+        try:
+            ph_w = ph[ph.index >= window.index[0]]
+        except TypeError:
+            ph_w = ph.tail(len(window))
+        if len(ph_w) >= 2 and float(ph_w.iloc[0]) > 0:
+            twr_pct = (float(ph_w.iloc[-1]) / float(ph_w.iloc[0]) - 1) * 100
+
+    # α/β benchmark return over the same window.
+    bench_pct: Optional[float] = None
     bench_name = ctx.benchmark_alpha_beta or "S&P 500"
     bench_hist = (m.benchmark_histories or {}).get(bench_name)
     if bench_hist is not None and len(bench_hist) >= 2:
         bw = bench_hist.tail(len(window))
-        if len(bw) >= 2:
-            bs, be = float(bw.iloc[0]), float(bw.iloc[-1])
-            if bs > 0:
-                bench_pct = (be - bs) / bs * 100
-                delta = change_pct - bench_pct
-                icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
-                color = (PALETTE["green"] if delta > 0.25
-                         else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
-                bg = (PALETTE["green_bg"] if delta > 0.25
-                      else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
-                pills.append({
-                    "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
-                    "color": color, "bg": bg,
-                })
+        if len(bw) >= 2 and float(bw.iloc[0]) > 0:
+            bench_pct = (float(bw.iloc[-1]) / float(bw.iloc[0]) - 1) * 100
+
+    if is_order_path:
+        pills = [_pill(f"Total PnL {_pct(total_pct, signed=True)}", total_pct)]
+        if twr_pct is not None:
+            pills.append(_pill(f"TWR {_pct(twr_pct, signed=True)}", twr_pct))
+    else:
+        pills = [_pill(_pct(total_pct, signed=True), total_pct)]
+
+    if bench_pct is not None:
+        # Compare market-to-market when we have TWR, else the total change.
+        ref = twr_pct if twr_pct is not None else total_pct
+        delta = ref - bench_pct
+        icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
+        color = (PALETTE["green"] if delta > 0.25
+                 else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
+        bg = (PALETTE["green_bg"] if delta > 0.25
+              else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
+        pills.append({
+            "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
+            "color": color, "bg": bg,
+        })
     return pills
 
 

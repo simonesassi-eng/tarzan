@@ -95,8 +95,9 @@ class PortfolioMetrics:
     returns_period_debug: Optional[list] = None
     # Lifetime P&L since inception (order path only). pnl_eur is the all-in
     # euro gain (realized + unrealized) = current value + distributions −
-    # deposits; pnl_pct is that over the total capital deployed
-    # (invested_capital_eur). actual_value_series is the dense daily real
+    # deposits; pnl_pct is that over the *net* capital contributed
+    # (invested_capital_eur = current_value − pnl_eur = gross deposits −
+    # everything withdrawn). actual_value_series is the dense daily real
     # euro worth of the patrimony (deposit/withdrawal jumps kept in) that
     # the newsletter mountain chart plots.
     pnl_eur: Optional[float] = None

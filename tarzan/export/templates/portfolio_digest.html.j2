@@ -5,11 +5,13 @@
    Context shape (see tarzan/export/newsletter.py::build_context):
      palette          dict of CSS hex colors
      header           {date_short, issue_number, inception_date}
-     hero             {total_value, total_gain, gain_pct, is_positive,
-                       twror_pct, twror_is_positive,
-                       invested_value, invested_pct, cash_value,
-                       cash_msg, cash_msg_color, week_return_eur,
-                       week_return_pct, week_is_positive}
+     hero             {total_value, total_pnl_eur, total_pnl_pct,
+                       total_pnl_is_positive, unrealized_eur,
+                       unrealized_pct, unrealized_is_positive,
+                       has_total_pnl, gain_pct, twror_pct,
+                       twror_is_positive, invested_value, invested_pct,
+                       cash_value, cash_msg, cash_msg_color,
+                       week_return_eur, week_return_pct, week_is_positive}
      sparkline        {available, label, is_mountain, start_label,
                        end_label, start_value, end_value, is_positive,
                        bars[], pills[]} — a 30-day mountain/area chart
@@ -87,15 +89,21 @@
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Status</div>
               <div style="margin-top:6px;font-size:40px;font-weight:700;color:{{ palette.ink }};line-height:1.05;letter-spacing:-0.01em;">{{ hero.total_value }}</div>
               <div style="margin-top:6px;font-size:13px;color:{{ palette.ink }};">
-                <span style="color:{{ palette.muted }};">PnL&nbsp;</span>
-                <span style="color:{{ palette.green if hero.is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.is_positive else '▼' }} {{ hero.total_gain }} ({{ hero.gain_pct }})</span>
-                {% if hero.twror_pct %}
+                <span style="color:{{ palette.muted }};">Total PnL&nbsp;</span>
+                <span style="color:{{ palette.green if hero.total_pnl_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.total_pnl_is_positive else '▼' }} {{ hero.total_pnl_eur }} ({{ hero.total_pnl_pct }})</span>
+                {% if hero.has_total_pnl %}
                 <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
+                <span style="color:{{ palette.muted }};">Unrealized&nbsp;</span>
+                <span style="color:{{ palette.green if hero.unrealized_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.unrealized_is_positive else '▼' }} {{ hero.unrealized_eur }} ({{ hero.unrealized_pct }})</span>
+                {% endif %}
+              </div>
+              <div style="margin-top:4px;font-size:13px;color:{{ palette.ink }};">
+                {% if hero.twror_pct %}
                 <span style="color:{{ palette.muted }};">TWROR&nbsp;</span>
                 <span style="color:{{ palette.green if hero.twror_is_positive else palette.red }};font-weight:700;">{{ hero.twror_pct }}</span>
                 {% endif %}
                 {% if hero.week_return_pct and hero.week_return_pct != '—' %}
-                <span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>
+                {% if hero.twror_pct %}<span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>{% endif %}
                 <span style="color:{{ palette.muted }};">This week&nbsp;</span>
                 <span style="color:{{ palette.green if hero.week_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_is_positive else '▼' }} {{ hero.week_return_pct }}</span>
                 {% endif %}
