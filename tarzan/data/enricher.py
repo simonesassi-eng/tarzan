@@ -7,8 +7,12 @@ This module handles the Data Enrichment layer:
 - Asset class and geography classification
 - Multi-geography breakdown via geo_scraper
 
-No persistent caching is used: every run fetches fresh market data from
-the network so prices and history are never served stale.
+Caching policy: only the *immutable* past is cached on disk (see
+``tarzan.data.price_cache``). Daily closes up to yesterday, FX history and
+the deterministic ISIN→symbol resolution never change, so they are reused
+across runs; only the recent tail (last few days, including today) is
+re-fetched, so today's price is always fresh and never served stale. The
+``info`` blob (which carries today's quote) is never cached.
 
 Architecture note: enrichment is parallelized via ThreadPoolExecutor.
 Each holding is enriched independently, with per-holding error isolation
@@ -31,6 +35,7 @@ import pandas as pd
 import yfinance as yf
 
 from tarzan.models.holding import AssetClass, Geography, Holding
+from tarzan.data import price_cache
 from tarzan import config as cfg
 
 logger = logging.getLogger(__name__)
@@ -56,18 +61,25 @@ def _backtest_period() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Network layer — retry/backoff + per-run memoization
+# Network layer — retry/backoff + per-run memoization + immutable disk cache
 # ---------------------------------------------------------------------------
-# Caching was removed package-wide so data is always fresh *across runs*.
-# What remains here is strictly *intra-run* memoization: within a single
-# enrichment run the same OpenFIGI/yfinance/benchmark request is issued at
-# most once. This does not serve stale data (the stores are reset at the
-# start of every run) — it only stops the parallel pipeline from hammering
-# the same endpoint, which after the cache removal is the main source of
-# rate-limit (HTTP 429) noise and the resulting non-determinism.
+# Two layers cooperate here:
 #
-# All stores are guarded by a lock because enrichment runs under a
-# ThreadPoolExecutor.
+#   * intra-run memoization — within a single enrichment run the same
+#     OpenFIGI/yfinance/benchmark request is issued at most once. The
+#     stores are reset at the start of every run (reset_run_caches), so
+#     this never serves stale data; it only stops the parallel pipeline
+#     from hammering the same endpoint (the main source of HTTP 429 noise).
+#
+#   * cross-run immutable disk cache (tarzan.data.price_cache) — the
+#     multi-year price/FX history and the deterministic ISIN→symbol
+#     resolution are persisted to ~/.cache/tarzan and reused across runs.
+#     Only the recent tail (last few days, incl. today) is re-fetched, so
+#     today's close is always fresh. Today's live quote travels in the
+#     ``info`` blob, which is NOT cached.
+#
+# All in-memory stores are guarded by a lock because enrichment runs under
+# a ThreadPoolExecutor.
 
 _MAX_FETCH_ATTEMPTS = 3          # total tries per request before giving up
 _BACKOFF_BASE_SECONDS = 0.75     # exponential backoff base
@@ -157,15 +169,36 @@ def _get_fx_series(currency: str) -> pd.Series:
 
 
 def _fetch_fx_pair(currency: str) -> pd.Series:
-    """Fetch FX pair from yfinance, trying direct and inverse."""
+    """Fetch FX pair from yfinance, trying direct and inverse.
+
+    FX history is immutable past data, so it is disk-cached per currency
+    (``FX_<ccy>``) and only the recent tail is re-fetched on later runs.
+    A throttled fetch falls back to the cached series rather than the
+    rate=1.0 sentinel, so coverage does not silently degrade.
+    """
+    cache_key = f"FX_{currency}"
+    cached = price_cache.load_history(cache_key)
+    start = price_cache.refresh_start(cached)
+
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
-        def _call(p=pair):
+        def _call(p=pair, s=start):
             _space_yf_call()
-            return yf.Ticker(p).history(period=_backtest_period(), interval="1d")
+            ticker = yf.Ticker(p)
+            if s is not None:
+                return ticker.history(start=s, interval="1d")
+            return ticker.history(period=_backtest_period(), interval="1d")
 
         hist = _retry(_call, what=f"FX {pair}")
         if hist is not None and not hist.empty:
-            return 1.0 / hist["Close"] if invert else hist["Close"]
+            fresh = 1.0 / hist["Close"] if invert else hist["Close"]
+            merged = price_cache.merge_history(cached, fresh)
+            result = merged if merged is not None and not merged.empty else fresh
+            price_cache.store_history(cache_key, result)
+            return result
+
+    if cached is not None and not cached.empty:
+        logger.debug("FX %s fetch failed; using cached history", currency)
+        return cached
     logger.warning("No FX data for %s, assuming rate=1.0 (flagged)", currency)
     return pd.Series([1.0], index=[pd.Timestamp.now()])
 
@@ -396,6 +429,25 @@ def _resolve_isin(
     Returns ``(data_dict, winning_symbol)`` or ``None`` if nothing priced.
     """
     clean_isin = isin.replace("-", "")
+
+    # Fast path: a previously-resolved symbol is cached on disk. The
+    # resolution is deterministic and stable, so we can skip the whole
+    # OpenFIGI + candidate sweep and just price the cached symbol. If it
+    # no longer prices (delisted/renamed), fall through to a full
+    # re-resolve so the cache self-heals.
+    cached_symbol = price_cache.load_resolution(clean_isin)
+    if cached_symbol:
+        info = _fetch_ticker_info(cached_symbol)
+        history = _fetch_history(cached_symbol)
+        price = info.get("regularMarketPrice") or info.get("previousClose")
+        if (history is not None and not history.empty) or price:
+            logger.info("Resolved ISIN %s → %s (from cache)", isin, cached_symbol)
+            return {"info": info, "history": history}, cached_symbol
+        logger.info(
+            "Cached symbol %s for ISIN %s no longer prices; re-resolving",
+            cached_symbol, isin,
+        )
+
     canonical_name = _openfigi_name(clean_isin)
 
     candidates = _collect_candidate_metas(clean_isin, hint_ticker)
@@ -412,6 +464,7 @@ def _resolve_isin(
     # Fetch history only for the winner (ranking never needed it).
     history = _fetch_history(best.symbol)
     best.data = {"info": best.info, "history": history}
+    price_cache.store_resolution(clean_isin, best.symbol)
     logger.info(
         "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
         isin, best.symbol, best.price, best.currency, best.name[:40],
@@ -522,22 +575,42 @@ def _fetch_ticker_info(symbol: str) -> dict:
 
 
 def _fetch_history(symbol: str) -> pd.DataFrame:
-    """yfinance price history for a symbol, retried on throttle and
-    memoized for the duration of the run."""
+    """yfinance price history for a symbol, retried on throttle, memoized
+    for the run, and backed by the immutable disk cache.
+
+    The heavy multi-year download happens once: on subsequent runs the
+    cached history is loaded and only the recent tail (from
+    ``price_cache.refresh_start``) is re-fetched and merged, so historical
+    closes are reused while the last few sessions stay fresh. A throttled
+    tail fetch degrades gracefully to the cached history rather than
+    dropping the instrument.
+    """
     with _net_lock:
         if symbol in _history_memo:
             return _history_memo[symbol]
 
+    cached = price_cache.load_history(symbol)
+    start = price_cache.refresh_start(cached)
+
     def _call():
         _space_yf_call()
-        return yf.Ticker(symbol).history(period=_backtest_period(), interval="1d")
+        ticker = yf.Ticker(symbol)
+        if start is not None:
+            return ticker.history(start=start, interval="1d")
+        return ticker.history(period=_backtest_period(), interval="1d")
 
-    hist = _retry(_call, what=f"history {symbol}")
-    if hist is None:
-        hist = pd.DataFrame()
+    fresh = _retry(_call, what=f"history {symbol}")
+    if fresh is None:
+        fresh = pd.DataFrame()
+
+    merged = price_cache.merge_history(cached, fresh)
+    result = merged if merged is not None and not merged.empty else fresh
+    if result is not None and not result.empty:
+        price_cache.store_history(symbol, result)
+
     with _net_lock:
-        _history_memo[symbol] = hist
-    return hist
+        _history_memo[symbol] = result
+    return result
 
 
 # ---------------------------------------------------------------------------

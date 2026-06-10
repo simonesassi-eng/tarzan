@@ -49,3 +49,12 @@ analyzer.log
 # automation pulls them from the configured Google Drive folder via
 # scripts/drive_loader.py at workflow runtime.
 .private/
+
+# Per-holding rebalancing targets (personal data, joined by ISIN to the
+# order-derived holdings).
+input/targets_per_holding.csv
+
+# Local immutable market-data cache (default location is ~/.cache/tarzan,
+# outside the repo; this guards the TARZAN_CACHE_DIR override landing here).
+.cache/
+tarzan_cache/
