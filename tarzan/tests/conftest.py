@@ -9,6 +9,18 @@ from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.models.investor_config import InvestorConfig
 
 
+@pytest.fixture(autouse=True)
+def _disable_market_cache(monkeypatch):
+    """Disable the on-disk market-data cache for the whole suite by
+    default, so tests never read from or write to the real
+    ``~/.cache/tarzan`` (which would leak state across runs and pull the
+    network on resolution fast-paths). Tests that specifically exercise
+    the cache re-enable it against a temporary directory.
+    """
+    monkeypatch.setenv("TARZAN_DISABLE_CACHE", "1")
+    yield
+
+
 @pytest.fixture
 def sample_config() -> InvestorConfig:
     """Minimal investor config for testing."""
