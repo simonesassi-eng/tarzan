@@ -294,7 +294,6 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     total_gain = m.total_value - cost
     gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
-    cash_delta = m.cash_value - m.cash_target_eur
     # 1W return is sourced from performance_full (same series as the
     # Performance section and the Excel Performance tab) so the inbox
     # preview and Hero stay consistent with the metrics shown below.
@@ -302,15 +301,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     week_return = float(perf_full.get("1w") or 0.0)
     week_eur = m.total_value * week_return / 100 if week_return else 0.0
 
-    # Cash delta formatted message
-    if abs(cash_delta) < 1.0:
-        cash_msg, cash_msg_color = "on target", PALETTE["muted"]
-    elif cash_delta > 0:
-        cash_msg = f"{_eur_smart(cash_delta)} above target"
-        cash_msg_color = PALETTE["amber"]
-    else:
-        cash_msg = f"{_eur_smart(abs(cash_delta))} below target"
-        cash_msg_color = PALETTE["amber"]
+    # Cash KPI: show only the amount (no "above/below/on target" message).
+    cash_msg, cash_msg_color = "", PALETTE["muted"]
 
     # Rebalance status: traffic-light derived from the largest non-cash
     # drift in goal_deltas. Mirrors the banner shown in the Excel
@@ -332,70 +324,31 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         m.rebalancing_verifications
         and any(v.get("no_solution") for v in m.rebalancing_verifications)
     )
-    rebal_relaxed_meta = None
-    if m.rebalancing_verifications:
-        for v in m.rebalancing_verifications:
-            if v.get("relaxed"):
-                rebal_relaxed_meta = (
-                    float(v.get("tolerance") or 0.0),
-                    float(v.get("configured_max_tolerance") or tol),
-                )
-                break
 
+    n_act_str = f"{n_actions} action{'s' if n_actions != 1 else ''}"
     if rebal_infeasible:
         rebal_label = "Infeasible"
-        rebal_sublabel = (
-            f"max drift {max_abs_delta:.1f}pp · targets too tight for "
-            f"±{cfg.rebalancing_target_tolerance_pctg:.1f}pp ceiling"
-        )
+        rebal_sublabel = "no feasible plan"
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
     elif n_actions == 0:
-        # The LP solved cleanly and emitted no trades. Any drift left
-        # at this point is either inside the tolerance band (the
-        # solver was happy) or outside but pinned by locked holdings
-        # (``no_buy_no_sell``) or by the auto-relax kicking in to
-        # confirm there is nothing actionable. In none of those
-        # cases is there an action for the user to take, so the KPI
-        # reads "Aligned" and the sublabel explains why drift may be
-        # showing.
+        # Solved cleanly with no trades (inside tolerance, or pinned by
+        # locked positions / auto-relax). Nothing for the user to do.
         rebal_label = "Aligned"
-        if max_abs_delta > tol:
-            rebal_sublabel = (
-                f"max drift {max_abs_delta:.1f}pp · pinned by locked positions"
-            )
-        else:
-            rebal_sublabel = f"max drift {max_abs_delta:.1f}pp · ±{tol:.1f}pp tol."
+        rebal_sublabel = "no action needed"
         rebal_color = PALETTE["green"]
         rebal_bg = PALETTE["green_bg"]
-    elif rebal_relaxed_meta is not None:
-        used_tol, cfg_tol = rebal_relaxed_meta
-        rebal_label = "Action (relaxed)"
-        rebal_sublabel = (
-            f"solved at ±{used_tol:.1f}% (cfg ±{cfg_tol:.1f}%) · "
-            f"{n_actions} action{'s' if n_actions != 1 else ''}"
-        )
-        rebal_color = PALETTE["amber"]
-        rebal_bg = PALETTE["amber_bg"]
-    elif max_abs_delta <= tol:
-        rebal_label = "Aligned"
-        rebal_sublabel = f"max drift {max_abs_delta:.1f}pp · ±{tol:.1f}pp tol."
-        rebal_color = PALETTE["green"]
-        rebal_bg = PALETTE["green_bg"]
-    elif max_abs_delta <= 2 * tol:
-        rebal_label = "Drift"
-        rebal_sublabel = (
-            f"max drift {max_abs_delta:.1f}pp · {n_actions} action{'s' if n_actions != 1 else ''}"
-        )
-        rebal_color = PALETTE["amber"]
-        rebal_bg = PALETTE["amber_bg"]
     else:
+        # Actions to take. Show only the action count — the technical
+        # detail (drift pp, tolerance, "solved at ±X%") is intentionally
+        # omitted so the KPI communicates just the action.
         rebal_label = "Action"
-        rebal_sublabel = (
-            f"max drift {max_abs_delta:.1f}pp · {n_actions} action{'s' if n_actions != 1 else ''}"
-        )
-        rebal_color = PALETTE["red"]
-        rebal_bg = PALETTE["red_bg"]
+        rebal_sublabel = n_act_str
+        # Amber for a moderate plan, red when drift is well beyond tol.
+        if max_abs_delta > 2 * tol:
+            rebal_color, rebal_bg = PALETTE["red"], PALETTE["red_bg"]
+        else:
+            rebal_color, rebal_bg = PALETTE["amber"], PALETTE["amber_bg"]
 
     return {
         # Hero big number keeps the full amount (€214,671.72): the
