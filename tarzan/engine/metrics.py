@@ -365,14 +365,18 @@ class MetricsEngine:
         # today's portfolio value — so their algebraic sum is exactly
         #     current_value + Σ distributions − Σ deposits
         # i.e. the all-in euro gain since inception. PnL% expresses it over
-        # the total capital actually deployed (Σ deposits), the money-at-work
-        # denominator the user asked for.
+        # the *net* capital contributed (gross deposits − everything taken
+        # back out), which equals current_value − pnl_eur: "how much did I
+        # gain on the money I actually left in". Using net (not gross)
+        # deposits keeps cum/ex bond rotations and transfer-then-sell
+        # round-trips from inflating the denominator.
         flows = series.xirr_cashflows or []
         pnl_eur = sum(amount for _, amount in flows)
-        deposits = -sum(amount for _, amount in flows if amount < 0)
+        current_value = flows[-1][1] if flows else 0.0
+        net_deposits = current_value - pnl_eur
         ctx["pnl_eur"] = pnl_eur
-        ctx["invested_capital_eur"] = deposits
-        ctx["pnl_pct"] = (pnl_eur / deposits * 100.0) if deposits > 0 else None
+        ctx["invested_capital_eur"] = net_deposits
+        ctx["pnl_pct"] = (pnl_eur / net_deposits * 100.0) if net_deposits > 0 else None
         ctx["actual_value_series"] = series.actual_value_series
 
         # Inception is automatic from the order list: the first dated

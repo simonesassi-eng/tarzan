@@ -49,15 +49,18 @@ def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
 class TestHeroSinceInception:
     def test_uses_lifetime_pnl_when_order_path(self):
         hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
-        # PnL% (24%) preferred over the snapshot cost-basis gain (20%).
-        assert "24.00%" in hero["gain_pct"]
+        # Total PnL% (24%) on net deposits; Unrealized% = snapshot (20%).
+        assert hero["has_total_pnl"] is True
+        assert "24.00%" in hero["total_pnl_pct"]
+        assert "20.00%" in hero["unrealized_pct"]
         assert hero["twror_pct"] is not None
         assert "14.49%" in hero["twror_pct"]
 
     def test_falls_back_to_snapshot_gain_holdings_only(self):
         hero = build_context(_metrics(with_order_returns=False), _config())["hero"]
-        # Snapshot gain = (6000-5000)/5000 = 20%.
-        assert "20.00%" in hero["gain_pct"]
+        # No order history: Total PnL collapses to the snapshot gain (20%).
+        assert hero["has_total_pnl"] is False
+        assert "20.00%" in hero["total_pnl_pct"]
         assert hero["twror_pct"] is None
 
 
@@ -69,8 +72,9 @@ class TestMountainChart:
         # The chart window is the last 30 days (here all 5 points fit).
         assert spark["label"] == "Last 30 days"
         assert len(spark["bars"]) == 5
-        # Pills carry the window %-change (PnL/TWROR live in the hero now).
-        assert len(spark["pills"]) >= 1
+        # Order path → a Total PnL pill over the window.
+        pill_text = " ".join(p["text"] for p in spark["pills"])
+        assert "Total PnL" in pill_text
 
     def test_legacy_line_when_no_order_series(self):
         m = _metrics(with_order_returns=False)
@@ -86,3 +90,5 @@ class TestMountainChart:
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         assert "Last 30 days" in html
         assert "TWROR" in html  # in the hero line
+        assert "Total PnL" in html
+        assert "Unrealized" in html
