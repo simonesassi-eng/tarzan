@@ -242,11 +242,7 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
     # Action clause
     suggestions = list(m.rebalancing_suggestions or [])
     if suggestions:
-        n = len(suggestions)
-        parts.append(
-            f"and the optimizer suggests {n} rebalancing action"
-            f"{'s' if n != 1 else ''} below"
-        )
+        parts.append("and the optimizer suggests rebalancing below")
     else:
         parts.append("and your allocation is on target")
 
@@ -263,17 +259,21 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
 def _build_header(ctx: _NewsletterContext) -> dict:
     """Build the header strip metadata.
 
-    Issue number is computed dynamically: weeks since
-    ``portfolio_inception_date`` when available, otherwise the ISO week
-    of the current year. The explicit ``ctx.issue_number`` value
-    overrides this only when greater than 1, so callers wishing to
-    pin a specific number still can.
+    The portfolio inception date is taken automatically from the order
+    list (``metrics.inception_date``, the first order) when available,
+    falling back to the config value only for the holdings-only path.
+
+    Issue number is computed dynamically: weeks since inception when
+    available, otherwise the ISO week of the current year. The explicit
+    ``ctx.issue_number`` value overrides this only when greater than 1,
+    so callers wishing to pin a specific number still can.
     """
     now = datetime.now()
+    inception_date = ctx.metrics.inception_date or ctx.config.portfolio_inception_date or ""
     issue_number = ctx.issue_number
-    if issue_number <= 1 and ctx.config.portfolio_inception_date:
+    if issue_number <= 1 and inception_date:
         try:
-            inception = pd.to_datetime(ctx.config.portfolio_inception_date)
+            inception = pd.to_datetime(inception_date)
             weeks = max(1, int((now - inception.to_pydatetime()).days // 7) + 1)
             issue_number = weeks
         except Exception:
@@ -283,7 +283,7 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
         "issue_number": issue_number,
-        "inception_date": ctx.config.portfolio_inception_date or "",
+        "inception_date": inception_date,
     }
 
 
@@ -341,7 +341,6 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         and any(v.get("no_solution") for v in m.rebalancing_verifications)
     )
 
-    n_act_str = f"{n_actions} action{'s' if n_actions != 1 else ''}"
     if rebal_infeasible:
         rebal_label = "Infeasible"
         rebal_sublabel = "no feasible plan"
@@ -355,11 +354,11 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         rebal_color = PALETTE["green"]
         rebal_bg = PALETTE["green_bg"]
     else:
-        # Actions to take. Show only the action count — the technical
-        # detail (drift pp, tolerance, "solved at ±X%") is intentionally
-        # omitted so the KPI communicates just the action.
+        # Actions to take. Communicate only that action is needed — no
+        # count, no drift/tolerance detail. The Optimizer section below
+        # carries the specifics.
         rebal_label = "Action"
-        rebal_sublabel = n_act_str
+        rebal_sublabel = "review below"
         # Amber for a moderate plan, red when drift is well beyond tol.
         if max_abs_delta > 2 * tol:
             rebal_color, rebal_bg = PALETTE["red"], PALETTE["red_bg"]
@@ -396,31 +395,30 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
 
 def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
-    """Build the hero chart: a mountain (area) view of the real patrimony.
+    """Build the hero chart: a 30-day mountain (area) view of the patrimony.
 
     When the order path produced ``actual_value_series`` — the dense daily
     euro worth of the whole portfolio with the deposit/withdrawal jumps
-    left in — the chart plots that over the full since-inception window, so
-    the reader sees how their real wealth evolved (contributions included),
-    not a flow-adjusted index. It carries up to three pills: lifetime PnL%
-    (gain on capital), cumulative TWROR% (market-timing-neutral) and the
-    α/β benchmark's return over the same window. Without an order list it
+    left in — the chart plots its **last 30 days** as a mountain so the
+    reader sees the recent real-wealth trajectory. Without an order list it
     degrades to the legacy 30-day line on the consolidated holdings
-    history, so the holdings-only path is unchanged.
+    history. Either way it carries a 30-day change pill and the vs-α/β
+    benchmark delta over the same window; the lifetime PnL/TWROR figures
+    live in the hero line above, not here.
     """
     m = ctx.metrics
 
     actual = m.actual_value_series
     is_mountain = actual is not None and len(actual) >= 2
     if is_mountain:
-        window = actual
-        label = "Since inception"
+        window = actual.tail(n_days)
     else:
         history = m.portfolio_history
         if history is None or len(history) < 2:
             return {
                 "available": False,
                 "label": f"Last {n_days} days",
+                "is_mountain": False,
                 "start_label": "", "end_label": "",
                 "start_value": _eur_smart(m.total_value),
                 "end_value": _eur_smart(m.total_value),
@@ -429,18 +427,9 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
                 "pills": [],
             }
         window = history.tail(n_days)
-        label = f"Last {n_days} days"
 
-    # Downsample so a long window still fits a 600px email: the bars are
-    # drawn gap-less (adjacent) to form the mountain silhouette, so a few
-    # pixels each is plenty. Keep first and last point exactly.
-    max_bars = 120
-    if len(window) > max_bars:
-        step = max(1, len(window) // max_bars)
-        sampled = window.iloc[::step]
-        if window.index[-1] not in sampled.index:
-            sampled = pd.concat([sampled, window.iloc[[-1]]])
-        window = sampled
+    if len(window) < 2:
+        window = actual if is_mountain else m.portfolio_history
 
     start_v, end_v = float(window.iloc[0]), float(window.iloc[-1])
     vmin, vmax = float(window.min()), float(window.max())
@@ -453,11 +442,11 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         for v in window.values
     ]
 
-    pills = _build_sparkline_pills(ctx, window, start_v, end_v, is_mountain)
+    pills = _build_sparkline_pills(ctx, window, start_v, end_v)
 
     return {
         "available": True,
-        "label": label,
+        "label": f"Last {n_days} days",
         "is_mountain": is_mountain,
         "start_label": window.index[0].strftime("%b %d") if hasattr(window.index[0], "strftime") else "",
         "end_label": window.index[-1].strftime("%b %d") if hasattr(window.index[-1], "strftime") else "",
@@ -474,64 +463,37 @@ def _build_sparkline_pills(
     window: pd.Series,
     start_v: float,
     end_v: float,
-    is_mountain: bool,
 ) -> list[dict]:
-    """Build the chart's summary pills.
-
-    Mountain (order path): lifetime PnL%, cumulative TWROR%, and the α/β
-    benchmark return over the same window. Legacy line: a single window
-    %-change pill plus the vs-benchmark delta, matching prior behavior.
-    """
+    """Build the chart's 30-day summary pills: the window %-change and the
+    vs-α/β-benchmark delta over the same window."""
     m = ctx.metrics
 
-    def _pill(text: str, value: Optional[float], *, neutral: bool = False) -> dict:
-        if neutral:
-            return {"text": text, "color": PALETTE["muted"], "bg": PALETTE["page"]}
-        positive = (value or 0.0) >= 0
-        return {
-            "text": text,
-            "color": PALETTE["green"] if positive else PALETTE["red"],
-            "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
-        }
+    change_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
+    positive = change_pct >= 0
+    pills: list[dict] = [{
+        "text": _pct(change_pct, signed=True),
+        "color": PALETTE["green"] if positive else PALETTE["red"],
+        "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
+    }]
 
-    # Benchmark cumulative return over the window (initial-value units,
-    # already aligned to the portfolio start).
     bench_name = ctx.benchmark_alpha_beta or "S&P 500"
     bench_hist = (m.benchmark_histories or {}).get(bench_name)
-    bench_pct: Optional[float] = None
     if bench_hist is not None and len(bench_hist) >= 2:
-        if is_mountain:
-            bs, be = float(bench_hist.iloc[0]), float(bench_hist.iloc[-1])
-        else:
-            bw = bench_hist.tail(len(window))
+        bw = bench_hist.tail(len(window))
+        if len(bw) >= 2:
             bs, be = float(bw.iloc[0]), float(bw.iloc[-1])
-        if bs > 0:
-            bench_pct = (be - bs) / bs * 100
-
-    if is_mountain:
-        pills: list[dict] = []
-        if m.pnl_pct is not None:
-            pills.append(_pill(f"PnL {_pct(m.pnl_pct, signed=True)}", m.pnl_pct))
-        if m.twror_pct is not None:
-            pills.append(_pill(f"TWROR {_pct(m.twror_pct, signed=True)}", m.twror_pct))
-        if bench_pct is not None:
-            pills.append(_pill(f"{bench_name} {_pct(bench_pct, signed=True)}", None, neutral=True))
-        return pills
-
-    # Legacy line: window %-change + vs-benchmark delta.
-    change_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
-    pills = [_pill(_pct(change_pct, signed=True), change_pct)]
-    if bench_pct is not None:
-        delta = change_pct - bench_pct
-        icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
-        color = (PALETTE["green"] if delta > 0.25
-                 else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
-        bg = (PALETTE["green_bg"] if delta > 0.25
-              else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
-        pills.append({
-            "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
-            "color": color, "bg": bg,
-        })
+            if bs > 0:
+                bench_pct = (be - bs) / bs * 100
+                delta = change_pct - bench_pct
+                icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
+                color = (PALETTE["green"] if delta > 0.25
+                         else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
+                bg = (PALETTE["green_bg"] if delta > 0.25
+                      else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
+                pills.append({
+                    "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
+                    "color": color, "bg": bg,
+                })
     return pills
 
 
@@ -1723,7 +1685,7 @@ def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
     n_actions = len(m.rebalancing_suggestions or [])
     parts = [f"Portfolio at {hero['total_value']} ({hero['gain_pct']} since inception)"]
     if n_actions > 0:
-        parts.append(f"{n_actions} rebalancing action{'s' if n_actions != 1 else ''} suggested")
+        parts.append("rebalancing suggested")
     parts.append(f"{len(m.holdings_df)} holdings tracked")
     return " · ".join(parts)
 

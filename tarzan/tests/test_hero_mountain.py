@@ -66,13 +66,11 @@ class TestMountainChart:
         spark = build_context(_metrics(with_order_returns=True), _config())["sparkline"]
         assert spark["available"] is True
         assert spark["is_mountain"] is True
-        assert spark["label"] == "Since inception"
-        # One bar per actual-value point.
+        # The chart window is the last 30 days (here all 5 points fit).
+        assert spark["label"] == "Last 30 days"
         assert len(spark["bars"]) == 5
-        # Pills carry PnL% and TWROR%.
-        pill_text = " ".join(p["text"] for p in spark["pills"])
-        assert "PnL" in pill_text
-        assert "TWROR" in pill_text
+        # Pills carry the window %-change (PnL/TWROR live in the hero now).
+        assert len(spark["pills"]) >= 1
 
     def test_legacy_line_when_no_order_series(self):
         m = _metrics(with_order_returns=False)
@@ -86,5 +84,5 @@ class TestMountainChart:
 
     def test_renders_without_crash(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
-        assert "Since inception" in html
-        assert "TWROR" in html
+        assert "Last 30 days" in html
+        assert "TWROR" in html  # in the hero line
