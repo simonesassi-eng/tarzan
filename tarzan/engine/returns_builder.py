@@ -74,6 +74,11 @@ class OrderDerivedSeries:
             series risk metrics (volatility, Sharpe, VaR, beta) must use —
             the sparse ``valuations`` (trade dates only) would make
             ``pct_change`` span arbitrary multi-day gaps.
+        actual_value_series: dense daily-indexed *raw* portfolio value
+            (with the deposit/withdrawal jumps left in). Unlike
+            ``daily_series`` (a flow-adjusted NAV index) this is the real
+            euro worth of the whole patrimony over time, so it is what the
+            newsletter's mountain chart plots.
     """
 
     valuations: list[tuple[datetime.date, float]]
@@ -83,6 +88,7 @@ class OrderDerivedSeries:
     provenance: dict[str, list[str]]
     span_days: int
     daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    actual_value_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +154,14 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
 def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
     """Aggregate orders into synthetic Holdings for the open positions.
 
-    Net quantity per ISIN, cum/ex prefix netting, and a seeded
-    market value. The returned Holdings carry only what the enricher
-    needs; enrichment fills in price history, asset class, etc.
+    Net quantity per ISIN, cum/ex prefix netting, a seeded market value,
+    and the average-cost basis of the units still held. The returned
+    Holdings carry only what the enricher needs; enrichment fills in price
+    history, asset class, etc.
     """
     qty_by_isin = _net_qty_by_isin(orders)
     open_isins = _open_isins(qty_by_isin)
+    cost_by_isin = cost_basis_by_isin(orders)
 
     name_by_isin: dict[str, str] = {}
     ccy_by_isin: dict[str, str] = {}
@@ -170,12 +178,54 @@ def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
             isin=isin,
             ticker=isin,
             quantity=qty,
-            cost_basis_eur=0.0,
+            cost_basis_eur=cost_by_isin.get(isin, 0.0),
             market_value_eur=_seed_market_value(orders, isin, qty),
             currency=ccy_by_isin.get(isin, "EUR"),
             name=name_by_isin.get(isin, ""),
         ))
     return holdings
+
+
+def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
+    """Average-cost basis (EUR) of the *currently held* units per ISIN.
+
+    Walks the position-changing orders in date order keeping a running
+    ``(quantity, cost)`` pair per ISIN:
+
+      * a buy / transfer-in adds the EUR it committed — the net cash paid
+        including fees (``net_eur``), or the gross transferred value when
+        no cash moved (a ``transfer_in`` has ``net_eur == 0``);
+      * a sell / transfer-out removes cost at the running *average* price,
+        so realized gains/losses do not distort the basis of the units
+        that remain;
+      * coupons and dividends never touch cost basis (they are income, not
+        a return of capital).
+
+    The result is the acquisition cost of the units still open today — the
+    denominator the snapshot uses for per-holding unrealized P&L. Derived
+    purely from the order list, so the holdings-only and order-only paths
+    agree without needing a ``cost_basis_eur`` column in any CSV.
+    """
+    pos = sorted(
+        (o for o in orders if o.is_position_change()),
+        key=lambda o: o.date,
+    )
+    qty: dict[str, float] = {}
+    cost: dict[str, float] = {}
+    for o in pos:
+        q = qty.get(o.isin, 0.0)
+        c = cost.get(o.isin, 0.0)
+        if o.quantity > 0:  # buy / transfer_in
+            committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
+            qty[o.isin] = q + o.quantity
+            cost[o.isin] = c + committed
+        elif o.quantity < 0:  # sell / transfer_out
+            sold = abs(o.quantity)
+            if q > _QTY_EPS:
+                avg = c / q
+                cost[o.isin] = max(c - avg * min(sold, q), 0.0)
+            qty[o.isin] = max(q - sold, 0.0)
+    return cost
 
 
 # ---------------------------------------------------------------------------
@@ -474,8 +524,12 @@ def build_order_derived_series(
     # Dense daily value series for risk metrics (volatility, Sharpe, VaR,
     # beta). pct_change on the sparse trade-date `valuations` would treat
     # arbitrary multi-day gaps as single trading days and badly distort
-    # annualized risk; the daily series fixes that at the root.
-    daily_series = _build_daily_series(timeline, resolver, external_flows, cf_dates, today)
+    # annualized risk; the daily series fixes that at the root. The same
+    # pass also yields the raw actual-value series (jumps kept in) for the
+    # newsletter mountain chart.
+    daily_series, actual_value_series = _build_daily_series(
+        timeline, resolver, external_flows, cf_dates, today
+    )
 
     # Coverage: share of today's value priced by real market data. Use the
     # SAME value_position basis as value_on so bonds (priced /100) are
@@ -525,6 +579,7 @@ def build_order_derived_series(
         provenance=provenance,
         span_days=span_days,
         daily_series=daily_series,
+        actual_value_series=actual_value_series,
     )
 
 
@@ -534,24 +589,33 @@ def _build_daily_series(
     external_flows: dict[datetime.date, float],
     cf_dates: list[datetime.date],
     today: datetime.date,
-) -> pd.Series:
-    """Dense daily, flow-adjusted NAV index from the first trade to today.
+) -> tuple[pd.Series, pd.Series]:
+    """Dense daily NAV index + raw actual-value series, first trade → today.
 
-    Each calendar day's raw market value is computed through the resolver
-    from the held quantity that day. The day-over-day return then strips
-    that day's external flow (deposits/withdrawals valued at market), so
-    buying more units does not register as a market gain:
+    Returns ``(nav_index, actual_value_series)``:
 
-        r_t = (V_t - flow_t) / V_{t-1} - 1
+      * ``nav_index`` is flow-adjusted. Each day's raw market value is
+        computed through the resolver from the held quantity that day; the
+        day-over-day return strips that day's external flow (deposits/
+        withdrawals valued at market), so buying more units does not
+        register as a market gain::
 
-    The returns are chained into an index anchored at the first day's real
-    value. Risk metrics (volatility, Sharpe, Sortino, VaR, beta) must use
-    THIS series: its ``pct_change`` is always a single-day, flow-free
-    market return, unlike the sparse trade-date ``valuations`` (whose gaps
-    span months) or a raw value series (whose jumps include deposits).
+            r_t = (V_t - flow_t) / V_{t-1} - 1
+
+        The returns are chained into an index anchored at the first day's
+        real value. Risk metrics (volatility, Sharpe, Sortino, VaR, beta)
+        must use THIS series.
+
+      * ``actual_value_series`` is the same daily raw value with the
+        deposit/withdrawal jumps left in — the real euro worth of the
+        patrimony over time, for the mountain chart.
+
+    Both are anchored on the first strictly-positive value so leading
+    zero-value days (before the first priced position) are dropped.
     """
     if not cf_dates:
-        return pd.Series(dtype=float)
+        empty = pd.Series(dtype=float)
+        return empty, empty
 
     days = pd.date_range(start=cf_dates[0], end=today, freq="D")
     isins = timeline.isins()
@@ -575,13 +639,16 @@ def _build_daily_series(
     # Anchor on the first strictly-positive value.
     anchor_i = next((i for i, (_, v) in enumerate(raw) if v > 0), None)
     if anchor_i is None:
-        return pd.Series(dtype=float)
+        empty = pd.Series(dtype=float)
+        return empty, empty
 
     index_dates: list[pd.Timestamp] = []
     index_vals: list[float] = []
+    actual_vals: list[float] = []
     nav = raw[anchor_i][1]            # start the index at the real value
     index_dates.append(pd.Timestamp(raw[anchor_i][0]))
     index_vals.append(nav)
+    actual_vals.append(raw[anchor_i][1])
 
     prev_v = raw[anchor_i][1]
     for d, v in raw[anchor_i + 1:]:
@@ -591,7 +658,12 @@ def _build_daily_series(
             nav *= (1.0 + r)
         index_dates.append(pd.Timestamp(d))
         index_vals.append(nav)
+        actual_vals.append(v)
         if v > 0:
             prev_v = v
 
-    return pd.Series(index_vals, index=pd.DatetimeIndex(index_dates))
+    idx = pd.DatetimeIndex(index_dates)
+    return (
+        pd.Series(index_vals, index=idx),
+        pd.Series(actual_vals, index=idx),
+    )
