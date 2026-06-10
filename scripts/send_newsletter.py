@@ -13,11 +13,16 @@ Required environment variables (provided by GitHub Actions secrets):
 
 Input CSVs are loaded in this priority order:
     1. If GOOGLE_DRIVE_CREDENTIALS_JSON and DRIVE_FOLDER_ID are set, the
-       script downloads holdings.csv and targets.csv from the configured
-       Drive folder. Use this for public repos so personal data never
-       lands in git.
-    2. Otherwise, falls back to local files at HOLDINGS_PATH and
-       TARGETS_PATH (defaults to .private/*.csv).
+       script downloads whichever known input files exist in the Drive
+       folder: order_list.csv and/or holdings.csv (snapshot source),
+       targets.csv (config) and the optional targets_per_holding.csv.
+       Use this for public repos so personal data never lands in git.
+    2. Otherwise, falls back to local files at HOLDINGS_PATH / ORDERS_PATH
+       / TARGETS_PATH / TARGETS_PER_HOLDING_PATH (default .private/*.csv).
+
+Snapshot source: provide order_list.csv to run order-only (the snapshot is
+derived from the orders), or holdings.csv for the legacy layout. When both
+are present the run is hybrid (holdings snapshot + order-derived returns).
 
 Optional:
     SMTP_HOST                       Default smtp.gmail.com
@@ -128,38 +133,80 @@ def _send_email(html: str, subject: str, sender: str, recipient: str,
     logger.info("Sent newsletter to %s with subject: %s", recipient, subject)
 
 
-def _resolve_inputs() -> tuple[str, str]:
-    """Resolve the holdings and targets paths.
+def _resolve_inputs() -> dict[str, str | None]:
+    """Resolve the pipeline input paths.
 
-    Tries Google Drive first if credentials are present; otherwise falls
-    back to local paths. Returns absolute string paths suitable for the
-    Tarzan orchestrator.
+    Returns a dict with keys ``holdings``, ``config``, ``orders`` and
+    ``targets_per_holding`` (values are absolute paths or None). Order-only
+    mode is selected automatically downstream when ``holdings`` is None but
+    ``orders`` is present.
+
+    Drive mode (credentials present) downloads whichever known input files
+    exist in the folder, so the same folder supports either an order-list
+    layout (order_list.csv [+ targets_per_holding.csv]) or the legacy
+    holdings layout (holdings.csv). At least one snapshot source —
+    order_list.csv or holdings.csv — plus targets.csv (config) is required.
+    Local mode mirrors this via the *_PATH env vars.
     """
     drive_folder = _env("DRIVE_FOLDER_ID")
     drive_creds = _env("GOOGLE_DRIVE_CREDENTIALS_JSON")
     if drive_folder and drive_creds:
-        from drive_loader import download_inputs  # type: ignore[import-not-found]
+        from drive_loader import KNOWN_INPUT_FILES, download_files  # type: ignore[import-not-found]
         logger.info("Loading inputs from Google Drive folder %s", drive_folder)
-        files = download_inputs(folder_id=drive_folder, credentials_json=drive_creds)
-        return str(files["holdings.csv"]), str(files["targets.csv"])
+        files = download_files(
+            folder_id=drive_folder,
+            credentials_json=drive_creds,
+            filenames=KNOWN_INPUT_FILES,
+        )
+        if "targets.csv" not in files:
+            raise FileNotFoundError(
+                "Drive folder is missing targets.csv (the config file)."
+            )
+        if "order_list.csv" not in files and "holdings.csv" not in files:
+            raise FileNotFoundError(
+                "Drive folder has no snapshot source: provide order_list.csv "
+                "(order-only) or holdings.csv (legacy)."
+            )
+        return {
+            "holdings": str(files["holdings.csv"]) if "holdings.csv" in files else None,
+            "config": str(files["targets.csv"]),
+            "orders": str(files["order_list.csv"]) if "order_list.csv" in files else None,
+            "targets_per_holding": (
+                str(files["targets_per_holding.csv"])
+                if "targets_per_holding.csv" in files else None
+            ),
+        }
 
+    # Local mode.
     holdings_path = _env("HOLDINGS_PATH", ".private/holdings.csv")
     targets_path = _env("TARGETS_PATH", ".private/targets.csv")
-    logger.info("Loading inputs from local paths: %s / %s", holdings_path, targets_path)
+    orders_path = _env("ORDERS_PATH", ".private/order_list.csv")
+    tph_path = _env("TARGETS_PER_HOLDING_PATH", ".private/targets_per_holding.csv")
 
-    if not Path(holdings_path).exists():
+    has_holdings = Path(holdings_path).exists()
+    has_orders = Path(orders_path).exists()
+    if not has_holdings and not has_orders:
         raise FileNotFoundError(
-            f"Holdings file not found at {holdings_path!r}. "
-            "Either commit it under .private/ in a private repo, or set "
-            "DRIVE_FOLDER_ID and GOOGLE_DRIVE_CREDENTIALS_JSON to load "
-            "from Google Drive."
+            f"No snapshot source found. Provide an order list at {orders_path!r} "
+            f"(order-only) or holdings at {holdings_path!r} (legacy), or set "
+            "DRIVE_FOLDER_ID + GOOGLE_DRIVE_CREDENTIALS_JSON to load from Drive."
         )
     if not Path(targets_path).exists():
-        raise FileNotFoundError(
-            f"Targets file not found at {targets_path!r}. "
-            "See above for input loading options."
-        )
-    return holdings_path, targets_path
+        raise FileNotFoundError(f"Config/targets file not found at {targets_path!r}.")
+
+    logger.info(
+        "Local inputs — holdings=%s orders=%s targets=%s per_holding=%s",
+        holdings_path if has_holdings else "(none)",
+        orders_path if has_orders else "(none)",
+        targets_path,
+        tph_path if Path(tph_path).exists() else "(none)",
+    )
+    return {
+        "holdings": holdings_path if has_holdings else None,
+        "config": targets_path,
+        "orders": orders_path if has_orders else None,
+        "targets_per_holding": tph_path if Path(tph_path).exists() else None,
+    }
 
 
 def main() -> int:
@@ -173,23 +220,29 @@ def main() -> int:
     trigger_label = _env("TRIGGER_LABEL", "")
     dry_run = _env("DRY_RUN", "0") == "1"
 
-    holdings_path, targets_path = _resolve_inputs()
+    inputs = _resolve_inputs()
 
     logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
-    logger.info("Holdings: %s | Targets: %s", holdings_path, targets_path)
+    mode = "order-only" if (inputs["orders"] and not inputs["holdings"]) else (
+        "hybrid" if inputs["orders"] else "holdings"
+    )
+    logger.info(
+        "Inputs (%s) — holdings=%s | orders=%s | targets=%s | per_holding=%s",
+        mode, inputs["holdings"] or "(none)", inputs["orders"] or "(none)",
+        inputs["config"], inputs["targets_per_holding"] or "(none)",
+    )
 
-    # 1. Run the full pipeline (load → enrich → compute)
-    # Optional order list: when ORDERS_PATH points to a readable file the
-    # pipeline additionally computes XIRR/TWROR (and the newsletter shows
-    # them). Unset by default, so behavior is unchanged.
-    orders_path = _env("ORDERS_PATH", "")
-    orders_source = orders_path if orders_path and Path(orders_path).exists() else None
-    if orders_source:
-        logger.info("Order list provided (%s) — returns enabled.", orders_source)
+    # 1. Run the full pipeline (load → enrich → compute). When an order
+    #    list is present the pipeline computes XIRR/TWROR; when no holdings
+    #    snapshot is present it derives the snapshot from the order list
+    #    (order-only mode). Both are handled inside orchestrator.run.
+    if inputs["orders"]:
+        logger.info("Order list provided — returns enabled.")
     metrics, config = run(
-        holdings_source=holdings_path,
-        config_source=targets_path,
-        orders_source=orders_source,
+        holdings_source=inputs["holdings"],
+        config_source=inputs["config"],
+        orders_source=inputs["orders"],
+        targets_per_holding_source=inputs["targets_per_holding"],
     )
     if metrics.total_value == 0:
         logger.error("Pipeline produced empty metrics. Aborting send.")
