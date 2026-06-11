@@ -287,6 +287,43 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     }
 
 
+def _window_money_pnl(
+    pnl_series, actual_series, days: int
+) -> tuple[Optional[float], Optional[float]]:
+    """Real money P&L over the last ``days`` calendar days, net of any
+    contributions in that window.
+
+    Returns ``(gain_eur, gain_pct)`` where the € gain is the delta of the
+    cumulative P&L series across the window and the % expresses it over the
+    portfolio value at the window start. Either may be None when the order
+    path produced no series (holdings-only run) or the data is too short.
+    """
+    if pnl_series is None:
+        return None, None
+    pnl = pnl_series.dropna()
+    if len(pnl) < 2:
+        return None, None
+    last_date = pnl.index[-1]
+    try:
+        cutoff = last_date - pd.Timedelta(days=days)
+    except (TypeError, ValueError):
+        return None, None
+    prior = pnl[pnl.index <= cutoff]
+    start_pnl = float(prior.iloc[-1]) if len(prior) else float(pnl.iloc[0])
+    gain = float(pnl.iloc[-1]) - start_pnl
+    if gain != gain:  # NaN guard
+        return None, None
+
+    base: Optional[float] = None
+    if actual_series is not None:
+        av = actual_series.dropna()
+        if len(av):
+            prior_av = av[av.index <= cutoff]
+            base = float(prior_av.iloc[-1]) if len(prior_av) else float(av.iloc[0])
+    pct = (gain / base * 100) if base and base > 0 else None
+    return gain, pct
+
+
 def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     cfg = ctx.config
@@ -320,12 +357,21 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             inception_label = ""
 
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
-    # 1W return is sourced from performance_full (same series as the
-    # Performance section and the Excel Performance tab) so the inbox
-    # preview and Hero stay consistent with the metrics shown below.
+
+    # This-week figures, mirroring the since-inception group:
+    #   * Total PnL — the real money gained over the last 7 days, net of any
+    #     contributions in the week (delta of the cumulative P&L series);
+    #   * TWROR — the 1-week time-weighted return (performance_full['1w']),
+    #     the same series the Returns tables use.
     perf_full = m.performance_full or {}
-    week_return = float(perf_full.get("1w") or 0.0)
-    week_eur = m.total_value * week_return / 100 if week_return else 0.0
+    week_twror = perf_full.get("1w")
+    try:
+        week_twror = float(week_twror) if week_twror is not None else None
+        if week_twror != week_twror:  # NaN
+            week_twror = None
+    except (TypeError, ValueError):
+        week_twror = None
+    week_pnl_eur, week_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, 7)
 
     # Cash KPI: show only the amount (no "above/below/on target" message).
     cash_msg, cash_msg_color = "", PALETTE["muted"]
@@ -401,9 +447,13 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "cash_value": _eur_smart(m.cash_value),
         "cash_msg": cash_msg,
         "cash_msg_color": cash_msg_color,
-        "week_return_eur": _eur_smart(week_eur, signed=True),
-        "week_return_pct": _pct(week_return, signed=True),
-        "week_is_positive": week_eur >= 0,
+        # This week: real money P&L (€ + %, net of contributions) and the
+        # 1-week TWROR — both clearly labeled in the template.
+        "week_pnl_eur": _eur_smart(week_pnl_eur, signed=True) if week_pnl_eur is not None else None,
+        "week_pnl_pct": _pct(week_pnl_pct, signed=True) if week_pnl_pct is not None else None,
+        "week_pnl_is_positive": (week_pnl_eur or 0.0) >= 0,
+        "week_twror_pct": _pct(week_twror, signed=True) if week_twror is not None else None,
+        "week_twror_is_positive": (week_twror or 0.0) >= 0,
         # Rebalance status KPI replaces the "This Week" KPI which was
         # already covered by the TL;DR headline above.
         "rebal_label": rebal_label,
