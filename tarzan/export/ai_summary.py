@@ -42,7 +42,7 @@ _GEMINI_ENDPOINT = (
 )
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 12
-_MAX_OUTPUT_TOKENS = 320
+_MAX_OUTPUT_TOKENS = 512
 _MAX_CHARS = 700  # hard cap on the rendered summary length
 
 
@@ -327,6 +327,11 @@ def _call_gemini(system_prompt: str, user_prompt: str) -> Optional[str]:
             "temperature": 0.2,
             "maxOutputTokens": _MAX_OUTPUT_TOKENS,
             "topP": 0.9,
+            # Gemini 2.5 Flash is a "thinking" model: reasoning tokens count
+            # against maxOutputTokens and would otherwise truncate this short
+            # summary mid-sentence. Thinking adds nothing for paraphrasing
+            # given figures, so disable it (and keep latency/cost minimal).
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     req = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
