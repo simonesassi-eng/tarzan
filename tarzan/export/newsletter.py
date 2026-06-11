@@ -421,33 +421,28 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         window = actual.tail(n_days)
     else:
         history = m.portfolio_history
-        if history is None or len(history) < 2:
-            return {
-                "available": False,
-                "label": f"Last {n_days} days",
-                "is_mountain": False,
-                "start_label": "", "end_label": "",
-                "start_value": _eur_smart(m.total_value),
-                "end_value": _eur_smart(m.total_value),
-                "is_positive": True,
-                "bars": [{"height": 22} for _ in range(n_days)],
-                "pills": [],
-            }
-        window = history.tail(n_days)
+        window = history.tail(n_days) if (history is not None and len(history) >= 2) else None
 
-    if len(window) < 2:
-        window = actual if is_mountain else m.portfolio_history
+    # Drop NaN/inf so the area chart never crashes on a data gap: a cold
+    # cache or a vendor outage (Yahoo 5xx) can leave NaN valuations on some
+    # days, and int(round(NaN)) would otherwise blow up the whole send.
+    if window is not None:
+        window = window.replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if window is None or len(window) < 2:
+        return _flat_sparkline(m, n_days, is_mountain)
 
     start_v, end_v = float(window.iloc[0]), float(window.iloc[-1])
     vmin, vmax = float(window.min()), float(window.max())
     rng = max(vmax - vmin, 1.0)
 
     # Map values to bar heights between 6 and 44 px. The 6px floor keeps
-    # even the trough visible as a filled area rather than a gap.
-    bars = [
-        {"height": int(round(6 + (float(v) - vmin) / rng * 38))}
-        for v in window.values
-    ]
+    # even the trough visible as a filled area rather than a gap. The
+    # NaN guard is belt-and-suspenders after the dropna above.
+    bars = []
+    for v in window.values:
+        fv = float(v)
+        h = 6 + (fv - vmin) / rng * 38 if fv == fv else 6
+        bars.append({"height": int(round(h))})
 
     pills = _build_sparkline_pills(ctx, window, start_v, end_v)
 
@@ -462,6 +457,23 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         "is_positive": end_v >= start_v,
         "bars": bars,
         "pills": pills,
+    }
+
+
+def _flat_sparkline(m: PortfolioMetrics, n_days: int, is_mountain: bool) -> dict:
+    """Render-safe placeholder when there is no usable series (no history,
+    or every value in the window was NaN). Keeps the section from crashing
+    the whole newsletter send."""
+    return {
+        "available": False,
+        "label": f"Last {n_days} days",
+        "is_mountain": is_mountain,
+        "start_label": "", "end_label": "",
+        "start_value": _eur_smart(m.total_value),
+        "end_value": _eur_smart(m.total_value),
+        "is_positive": True,
+        "bars": [{"height": 22} for _ in range(n_days)],
+        "pills": [],
     }
 
 
@@ -492,6 +504,8 @@ def _build_sparkline_pills(
         }
 
     total_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
+    if total_pct != total_pct:  # NaN guard
+        total_pct = 0.0
     is_order_path = m.twror_pct is not None
 
     # TWR over the same window from the flow-adjusted NAV index.
@@ -502,8 +516,10 @@ def _build_sparkline_pills(
             ph_w = ph[ph.index >= window.index[0]]
         except TypeError:
             ph_w = ph.tail(len(window))
-        if len(ph_w) >= 2 and float(ph_w.iloc[0]) > 0:
-            twr_pct = (float(ph_w.iloc[-1]) / float(ph_w.iloc[0]) - 1) * 100
+        ph_w = ph_w.dropna() if ph_w is not None else ph_w
+        if ph_w is not None and len(ph_w) >= 2 and float(ph_w.iloc[0]) > 0:
+            candidate = (float(ph_w.iloc[-1]) / float(ph_w.iloc[0]) - 1) * 100
+            twr_pct = candidate if candidate == candidate else None  # drop NaN
 
     # α/β benchmark return over the same window.
     bench_pct: Optional[float] = None
@@ -511,8 +527,10 @@ def _build_sparkline_pills(
     bench_hist = (m.benchmark_histories or {}).get(bench_name)
     if bench_hist is not None and len(bench_hist) >= 2:
         bw = bench_hist.tail(len(window))
+        bw = bw.dropna()
         if len(bw) >= 2 and float(bw.iloc[0]) > 0:
-            bench_pct = (float(bw.iloc[-1]) / float(bw.iloc[0]) - 1) * 100
+            candidate = (float(bw.iloc[-1]) / float(bw.iloc[0]) - 1) * 100
+            bench_pct = candidate if candidate == candidate else None
 
     if is_order_path:
         pills = [_pill(f"Total PnL {_pct(total_pct, signed=True)}", total_pct)]

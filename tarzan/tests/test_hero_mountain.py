@@ -92,3 +92,27 @@ class TestMountainChart:
         assert "TWROR" in html  # in the hero line
         assert "Total PnL" in html
         assert "Unrealized" in html
+
+    def test_nan_values_do_not_crash(self):
+        """A cold cache / vendor outage can leave NaN valuations on some
+        days; the area chart must degrade, not raise (regression)."""
+        import numpy as np
+        m = _metrics(with_order_returns=True)
+        m.actual_value_series = pd.Series(
+            [4800.0, np.nan, 5100.0, np.nan, 6000.0],
+            index=pd.date_range("2025-12-29", periods=5, freq="W"),
+        )
+        spark = build_context(m, _config())["sparkline"]
+        # No NaN heights leak through.
+        assert all(isinstance(b["height"], int) for b in spark["bars"])
+
+    def test_all_nan_series_falls_back_flat(self):
+        import numpy as np
+        m = _metrics(with_order_returns=True)
+        m.actual_value_series = pd.Series(
+            [np.nan, np.nan, np.nan],
+            index=pd.date_range("2025-12-29", periods=3, freq="W"),
+        )
+        spark = build_context(m, _config())["sparkline"]
+        assert spark["available"] is False
+        assert all(isinstance(b["height"], int) for b in spark["bars"])
