@@ -442,3 +442,37 @@ class TestBondFxConversion:
         enricher._try_terrapin_fallback(h)
         # 2800 * (84.25*0.92) / 100 ≈ 2170 EUR
         assert h.current_value == pytest.approx(2800 * (84.25 * 0.92) / 100.0, rel=1e-6)
+
+
+class TestGeoBreakdownDiskCache:
+    """get_geo_breakdown must reuse the on-disk geo cache so a justETF
+    outage (scrape returns None) does not degrade geography."""
+
+    def test_falls_back_to_disk_cache_when_scrape_fails(self, tmp_path, monkeypatch):
+        from tarzan.data import enricher, price_cache
+        from tarzan.models.holding import Geography
+
+        # Enable the cache against a throwaway dir (conftest disables it).
+        monkeypatch.setenv("TARZAN_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.delenv("TARZAN_DISABLE_CACHE", raising=False)
+        enricher.reset_run_caches()
+
+        # Seed the disk cache for an ISIN, then force the live scrape to fail.
+        price_cache.store_geo(
+            "IE00BL25JP72", {"USA": 79.0, "Japan": 4.0}, "justetf"
+        )
+        monkeypatch.setattr(enricher, "_scrape_geo_breakdown", lambda *a, **k: None)
+
+        result = enricher.get_geo_breakdown("XDEM.MI", "IE00BL25JP72")
+        assert result is not None
+        breakdown, source = result
+        assert breakdown.get(Geography.USA) == pytest.approx(79.0)
+        assert source == "justetf"
+
+    def test_returns_none_when_no_cache_and_scrape_fails(self, tmp_path, monkeypatch):
+        from tarzan.data import enricher
+        monkeypatch.setenv("TARZAN_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.delenv("TARZAN_DISABLE_CACHE", raising=False)
+        enricher.reset_run_caches()
+        monkeypatch.setattr(enricher, "_scrape_geo_breakdown", lambda *a, **k: None)
+        assert enricher.get_geo_breakdown("ZZZ.MI", "ZZ0000000000") is None

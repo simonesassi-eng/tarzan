@@ -32,7 +32,7 @@ def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
         total_value=6000.0, invested_value=6000.0, cash_value=0.0,
         holdings_df=df,
         allocation_by_class=pd.DataFrame([{"category": "Equities", "weight_pct": 100.0}]),
-        performance_full={"1w": 0.5, "period_used": "1.0Y"},
+        performance_full={"1w": 0.5, "1m": 0.25, "period_used": "1.0Y"},
     )
     if with_order_returns:
         m.pnl_eur = 1200.0          # lifetime realized + unrealized
@@ -75,6 +75,14 @@ class TestMountainChart:
         # Order path → a Total PnL pill over the window.
         pill_text = " ".join(p["text"] for p in spark["pills"])
         assert "Total PnL" in pill_text
+
+    def test_twr_pill_matches_returns_table_1m(self):
+        """The chart TWR pill must equal performance_full['1m'] so it agrees
+        with the 'Returns vs benchmarks' total-portfolio 1M cell."""
+        spark = build_context(_metrics(with_order_returns=True), _config())["sparkline"]
+        pill_text = " ".join(p["text"] for p in spark["pills"])
+        assert "TWR" in pill_text
+        assert "+0.25%" in pill_text
 
     def test_legacy_line_when_no_order_series(self):
         m = _metrics(with_order_returns=False)

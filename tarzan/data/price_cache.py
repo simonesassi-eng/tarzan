@@ -15,7 +15,10 @@ Three things are cached, all stable:
   * per-symbol daily price history (the heavy multi-year download);
   * FX pair history (currency→EUR series);
   * the deterministic ISIN→symbol resolution (skips the OpenFIGI + probe
-    sweep entirely on subsequent runs).
+    sweep entirely on subsequent runs);
+  * the geographic breakdown per instrument (an ETF's geo allocation is
+    near-immutable, so caching it makes the equity-geography section
+    resilient to justETF/scrape outages).
 
 Caching is intentionally best-effort: any read/write error degrades to a
 live fetch, never breaks the pipeline.
@@ -197,3 +200,61 @@ def store_resolution(isin: str, symbol: str) -> None:
             pickle.dump(data, f)
     except Exception as e:  # noqa: BLE001
         logger.debug("Resolution cache write failed for %s: %s", isin, e)
+
+
+# ---------------------------------------------------------------------------
+# Geographic breakdown (ISIN/ticker → {geo_name: pct})
+# ---------------------------------------------------------------------------
+# An ETF's geographic allocation is near-immutable (it drifts only as slowly
+# as the underlying index reconstitutes), so it is cached like the ISIN
+# resolution — with a TTL so it self-heals over time. This makes the geo
+# section resilient to justETF/scrape outages, which otherwise silently
+# degrade the whole equity-geography breakdown to "Not Available".
+
+def _geo_path() -> Path:
+    return _subdir("geo") / "geo_breakdown.pkl"
+
+
+def _load_geo_map() -> dict:
+    if not is_enabled():
+        return {}
+    path = _geo_path()
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Geo cache read failed: %s", e)
+        return {}
+
+
+def load_geo(key: str) -> Optional[dict]:
+    """Return ``{"breakdown": {geo_name: pct}, "source": str}`` for a key
+    (ISIN or ticker) if present and not expired, else None."""
+    if not key:
+        return None
+    entry = _load_geo_map().get(key)
+    if not entry:
+        return None
+    breakdown = entry.get("breakdown")
+    if not breakdown:
+        return None
+    if time.time() - entry.get("ts", 0) > RESOLUTION_TTL_DAYS * 86400:
+        return None
+    return {"breakdown": breakdown, "source": entry.get("source", "cache")}
+
+
+def store_geo(key: str, breakdown: dict, source: str) -> None:
+    """Persist a geographic breakdown (``{geo_name: pct}``) for a key
+    (best-effort). Empty breakdowns are not stored."""
+    if not is_enabled() or not key or not breakdown:
+        return
+    try:
+        data = _load_geo_map()
+        data[key] = {"breakdown": dict(breakdown), "source": source, "ts": time.time()}
+        with open(_geo_path(), "wb") as f:
+            pickle.dump(data, f)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Geo cache write failed for %s: %s", key, e)
