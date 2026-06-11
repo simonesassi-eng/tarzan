@@ -104,6 +104,9 @@ class PortfolioMetrics:
     pnl_pct: Optional[float] = None
     invested_capital_eur: Optional[float] = None
     actual_value_series: Optional[pd.Series] = None
+    # Daily cumulative P&L (value − contributed capital); its delta over a
+    # window is the real money gained in that window, net of contributions.
+    pnl_series: Optional[pd.Series] = None
     # Portfolio inception date (ISO "YYYY-MM-DD"), derived automatically
     # from the first order when an order list is present. None on the
     # holdings-only path (the header then falls back to config).

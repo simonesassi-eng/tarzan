@@ -309,6 +309,16 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         m.pnl_pct if (has_total_pnl and m.pnl_pct is not None) else unrealized_pct
     )
     twror_pct = m.twror_pct
+
+    # "Since inception" caption with the precise month/year of the first
+    # order (derived automatically; falls back to empty when unknown).
+    inception_label = ""
+    if m.inception_date:
+        try:
+            inception_label = pd.to_datetime(m.inception_date).strftime("%b %Y")
+        except Exception:
+            inception_label = ""
+
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
     # 1W return is sourced from performance_full (same series as the
     # Performance section and the Excel Performance tab) so the inbox
@@ -379,6 +389,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # Whether the lifetime Total PnL is a real (order-derived) figure
         # distinct from Unrealized; False on the holdings-only path.
         "has_total_pnl": has_total_pnl,
+        # "Since inception · Mon YYYY" caption (empty when inception unknown).
+        "inception_label": inception_label,
         # Kept for the preheader/back-compat: the headline % is Total PnL.
         "gain_pct": _pct(total_pnl_pct, signed=True),
         # Cumulative time-weighted return since inception (order path only).
@@ -430,6 +442,15 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         window = window.replace([float("inf"), float("-inf")], float("nan")).dropna()
     if window is None or len(window) < 2:
         return _flat_sparkline(m, n_days, is_mountain)
+
+    # Anchor the final point to the authoritative snapshot value so the
+    # chart ends exactly at the hero's "total value". The order-derived
+    # series can value a couple of hard-to-price bonds via carry-flat,
+    # which would otherwise leave the chart end a few hundred euros below
+    # the snapshot (which uses the Borsa Italiana today-price).
+    if is_mountain and m.total_value and m.total_value == m.total_value and m.total_value > 0:
+        window = window.copy()
+        window.iloc[-1] = float(m.total_value)
 
     start_v, end_v = float(window.iloc[0]), float(window.iloc[-1])
     vmin, vmax = float(window.min()), float(window.max())
@@ -485,12 +506,13 @@ def _build_sparkline_pills(
 ) -> list[dict]:
     """Build the chart's 30-day pills.
 
-    Order path: **Total PnL %** (the total change of the pot over the
-    window — what the mountain shows, contributions included) and **TWR %**
-    (the portfolio's 1-month time-weighted return, taken from the same
-    ``performance_full`` source as the Returns tables so the two always
-    agree), plus the vs-α/β-benchmark delta. Holdings-only path: a single
-    window %-change pill plus the benchmark delta.
+    Order path: **PnL** — the real money gained over the window in euros,
+    net of any contributions made inside it (the delta of the cumulative
+    P&L series), NOT the raw value change which would also count deposits —
+    and **TWR %**, the portfolio's 1-month time-weighted return (from the
+    same ``performance_full`` source as the Returns tables so they agree),
+    plus the vs-α/β-benchmark delta. Holdings-only path: a single window
+    %-change pill plus the benchmark delta.
     """
     m = ctx.metrics
 
@@ -508,6 +530,20 @@ def _build_sparkline_pills(
     if total_pct != total_pct:  # NaN guard
         total_pct = 0.0
     is_order_path = m.twror_pct is not None
+
+    # Real money gained over the window (net of contributions) = delta of
+    # the cumulative P&L series across the window. This is the actual gain,
+    # unlike the raw value change which also counts deposits made in-window.
+    pnl_gain_eur: Optional[float] = None
+    pnl_s = m.pnl_series
+    if is_order_path and pnl_s is not None and len(pnl_s) >= 2:
+        try:
+            pnl_w = pnl_s[pnl_s.index >= window.index[0]].dropna()
+        except TypeError:
+            pnl_w = pnl_s.dropna()
+        if len(pnl_w) >= 2:
+            cand = float(pnl_w.iloc[-1]) - float(pnl_w.iloc[0])
+            pnl_gain_eur = cand if cand == cand else None
 
     # TWR over the window = the portfolio's 1-month time-weighted return,
     # taken from the SAME source the Returns tables use (performance_full),
@@ -538,14 +574,20 @@ def _build_sparkline_pills(
             bench_pct = None
 
     if is_order_path:
-        pills = [_pill(f"Total PnL {_pct(total_pct, signed=True)}", total_pct)]
+        pills: list[dict] = []
+        if pnl_gain_eur is not None:
+            pnl_pct_window = (pnl_gain_eur / start_v * 100) if start_v > 0 else None
+            pnl_txt = f"PnL {_eur_smart(pnl_gain_eur, signed=True)}"
+            if pnl_pct_window is not None:
+                pnl_txt += f" ({_pct(pnl_pct_window, signed=True)})"
+            pills.append(_pill(pnl_txt, pnl_gain_eur))
         if twr_pct is not None:
-            pills.append(_pill(f"TWR {_pct(twr_pct, signed=True)}", twr_pct))
+            pills.append(_pill(f"TWROR {_pct(twr_pct, signed=True)}", twr_pct))
     else:
         pills = [_pill(_pct(total_pct, signed=True), total_pct)]
 
     if bench_pct is not None:
-        # Compare market-to-market when we have TWR, else the total change.
+        # Compare market-to-market when we have TWROR, else the total change.
         ref = twr_pct if twr_pct is not None else total_pct
         delta = ref - bench_pct
         icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
@@ -553,8 +595,11 @@ def _build_sparkline_pills(
                  else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
         bg = (PALETTE["green_bg"] if delta > 0.25
               else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
+        # Make the basis explicit: the portfolio's TWROR vs the benchmark's
+        # same-period return (both time-weighted).
+        label = f"TWROR vs {bench_name}" if twr_pct is not None else f"vs {bench_name}"
         pills.append({
-            "text": f"vs {bench_name}: {icon} {_signed_pp(delta, decimals=2)} pp",
+            "text": f"{label}: {icon} {_signed_pp(delta, decimals=2)} pp",
             "color": color, "bg": bg,
         })
     return pills
