@@ -43,6 +43,13 @@ def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
             [4800.0, 5200.0, 5100.0, 5600.0, 6000.0],
             index=pd.date_range("2025-12-29", periods=5, freq="W"),
         )
+        # Cumulative P&L series: real money gained over the window = its
+        # delta = 350 − 0 = +€350 (net of contributions).
+        m.pnl_series = pd.Series(
+            [0.0, 120.0, 90.0, 250.0, 350.0],
+            index=pd.date_range("2025-12-29", periods=5, freq="W"),
+        )
+        m.inception_date = "2025-12-29"
     return m
 
 
@@ -55,6 +62,10 @@ class TestHeroSinceInception:
         assert "20.00%" in hero["unrealized_pct"]
         assert hero["twror_pct"] is not None
         assert "14.49%" in hero["twror_pct"]
+
+    def test_inception_label_is_month_year(self):
+        hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
+        assert hero["inception_label"] == "Dec 2025"
 
     def test_falls_back_to_snapshot_gain_holdings_only(self):
         hero = build_context(_metrics(with_order_returns=False), _config())["hero"]
@@ -72,16 +83,17 @@ class TestMountainChart:
         # The chart window is the last 30 days (here all 5 points fit).
         assert spark["label"] == "Last 30 days"
         assert len(spark["bars"]) == 5
-        # Order path → a Total PnL pill over the window.
+        # Order path → a real-money PnL gain pill (€, net of contributions).
         pill_text = " ".join(p["text"] for p in spark["pills"])
-        assert "Total PnL" in pill_text
+        assert "PnL" in pill_text
+        assert "350" in pill_text  # +€350 gained over the window
 
     def test_twr_pill_matches_returns_table_1m(self):
         """The chart TWR pill must equal performance_full['1m'] so it agrees
         with the 'Returns vs benchmarks' total-portfolio 1M cell."""
         spark = build_context(_metrics(with_order_returns=True), _config())["sparkline"]
         pill_text = " ".join(p["text"] for p in spark["pills"])
-        assert "TWR" in pill_text
+        assert "TWROR" in pill_text
         assert "+0.25%" in pill_text
 
     def test_legacy_line_when_no_order_series(self):

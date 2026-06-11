@@ -89,6 +89,7 @@ class OrderDerivedSeries:
     span_days: int
     daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     actual_value_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    pnl_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +572,13 @@ def build_order_derived_series(
 
     span_days = (today - cf_dates[0]).days if cf_dates else 0
 
+    # Daily cumulative P&L (realized + unrealized), net of contributed
+    # capital: actual value + cumulative bank cash flows (deposits negative,
+    # distributions positive). At today it equals the lifetime pnl_eur. The
+    # newsletter uses it to show the real money gained over a window, net of
+    # the contributions made *inside* that window.
+    pnl_series = _build_pnl_series(actual_value_series, xirr_cashflows)
+
     return OrderDerivedSeries(
         valuations=valuations,
         external_flows=external_flows,
@@ -580,7 +588,31 @@ def build_order_derived_series(
         span_days=span_days,
         daily_series=daily_series,
         actual_value_series=actual_value_series,
+        pnl_series=pnl_series,
     )
+
+
+def _build_pnl_series(actual: pd.Series, xirr_cashflows: list) -> pd.Series:
+    """Daily cumulative P&L = actual value + cumulative bank cash flows.
+
+    The XIRR flows are deposits (negative) and distributions (positive);
+    adding their running sum to the portfolio value cancels the invested
+    capital and leaves the realized + unrealized gain on each day. At the
+    final day it equals the lifetime ``pnl_eur``. The terminal valuation is
+    excluded (it is not a real cash flow), so the series is purely
+    value + contributions accounting.
+    """
+    if actual is None or actual.empty or not xirr_cashflows:
+        return pd.Series(dtype=float)
+    agg: dict = {}
+    for d, amt in xirr_cashflows[:-1]:  # drop the terminal valuation
+        ts = pd.Timestamp(d)
+        agg[ts] = agg.get(ts, 0.0) + amt
+    if not agg:
+        return pd.Series(dtype=float)
+    cum = pd.Series(agg).sort_index().cumsum()
+    cum = cum.reindex(actual.index, method="ffill").fillna(0.0)
+    return actual + cum
 
 
 def _build_daily_series(
