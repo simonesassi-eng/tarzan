@@ -11,7 +11,8 @@
                        has_total_pnl, inception_label, gain_pct, twror_pct,
                        twror_is_positive, invested_value, invested_pct,
                        cash_value, cash_msg, cash_msg_color,
-                       week_return_eur, week_return_pct, week_is_positive}
+                       week_pnl_eur, week_pnl_pct, week_pnl_is_positive,
+                       week_twror_pct, week_twror_is_positive}
      sparkline        {available, label, is_mountain, start_label,
                        end_label, start_value, end_value, is_positive,
                        bars[], pills[]} — a 30-day mountain/area chart
@@ -105,10 +106,18 @@
                 <span style="color:{{ palette.green if hero.twror_is_positive else palette.red }};font-weight:700;">{{ hero.twror_pct }}</span>
                 {% endif %}
               </div>
-              {% if hero.week_return_pct and hero.week_return_pct != '—' %}
+              {% if hero.week_twror_pct or hero.week_pnl_eur %}
               <div style="margin-top:6px;padding-top:6px;border-top:1px solid {{ palette.border }};font-size:13px;color:{{ palette.ink }};">
-                <span style="color:{{ palette.muted }};">This week&nbsp;</span>
-                <span style="color:{{ palette.green if hero.week_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_is_positive else '▼' }} {{ hero.week_return_pct }}</span>
+                <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.subtle }};text-transform:uppercase;margin-bottom:3px;">This week</div>
+                {% if hero.week_pnl_eur %}
+                <span style="color:{{ palette.muted }};">Total PnL&nbsp;</span>
+                <span style="color:{{ palette.green if hero.week_pnl_is_positive else palette.red }};font-weight:700;">{{ '▲' if hero.week_pnl_is_positive else '▼' }} {{ hero.week_pnl_eur }}{% if hero.week_pnl_pct %} ({{ hero.week_pnl_pct }}){% endif %}</span>
+                {% endif %}
+                {% if hero.week_twror_pct %}
+                {% if hero.week_pnl_eur %}<span style="color:{{ palette.subtle }};">&nbsp;·&nbsp;</span>{% endif %}
+                <span style="color:{{ palette.muted }};">TWROR&nbsp;</span>
+                <span style="color:{{ palette.green if hero.week_twror_is_positive else palette.red }};font-weight:700;">{{ hero.week_twror_pct }}</span>
+                {% endif %}
               </div>
               {% endif %}
 

@@ -67,6 +67,17 @@ class TestHeroSinceInception:
         hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
         assert hero["inception_label"] == "Dec 2025"
 
+    def test_this_week_has_pnl_and_twror(self):
+        hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
+        # Weekly money P&L from the cumulative series (last 7 days): the
+        # delta from the point ≤ cutoff (250) to the last (350) = +€100.
+        assert hero["week_pnl_eur"] is not None
+        assert "100" in hero["week_pnl_eur"]
+        assert hero["week_pnl_pct"] is not None
+        # Weekly TWROR from performance_full['1w'] = 0.5%.
+        assert hero["week_twror_pct"] is not None
+        assert "0.50%" in hero["week_twror_pct"]
+
     def test_falls_back_to_snapshot_gain_holdings_only(self):
         hero = build_context(_metrics(with_order_returns=False), _config())["hero"]
         # No order history: Total PnL collapses to the snapshot gain (20%).
