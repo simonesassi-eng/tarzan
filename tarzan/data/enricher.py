@@ -1043,8 +1043,11 @@ def get_geo_breakdown(
 ) -> Optional[tuple[dict[Geography, float], str]]:
     """Get geographic breakdown for an ETF ticker via dynamic scraping.
 
-    Returns (breakdown_dict, source_name) or None. Results are memoized
-    per run (thread-safe) so each ticker is scraped at most once.
+    Returns (breakdown_dict, source_name) or None. Memoized per run
+    (thread-safe) so each ticker is scraped at most once, and backed by
+    the immutable disk cache (keyed by the stable ISIN when available) so
+    a justETF/scrape outage does not degrade the geography section to
+    "Not Available" — once resolved, the breakdown persists across runs.
     """
     cached = _get_geo_breakdown_cached(ticker)
     if cached is not None:
@@ -1052,12 +1055,36 @@ def get_geo_breakdown(
             source = _geo_source_memo.get(ticker, "memory")
         return cached, source
 
+    geo_key = isin or ticker
+    disk = price_cache.load_geo(geo_key)
+    if disk:
+        breakdown = _geo_from_cache(disk["breakdown"])
+        if breakdown:
+            source = disk.get("source", "cache")
+            _store_geo_breakdown(ticker, breakdown, source)
+            return breakdown, source
+
     result = _scrape_geo_breakdown(ticker, isin)
     if result:
         breakdown, source = result
         _store_geo_breakdown(ticker, breakdown, source)
+        price_cache.store_geo(
+            geo_key, {g.value: v for g, v in breakdown.items()}, source
+        )
         return breakdown, source
     return None
+
+
+def _geo_from_cache(raw: dict) -> dict[Geography, float]:
+    """Reconstruct a ``{Geography: pct}`` dict from the cached
+    ``{geo_name: pct}`` form, dropping any unknown geography names."""
+    out: dict[Geography, float] = {}
+    for name, pct in (raw or {}).items():
+        try:
+            out[Geography(name)] = float(pct)
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 def _scrape_geo_breakdown(

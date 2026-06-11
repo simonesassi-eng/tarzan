@@ -125,6 +125,29 @@ def test_resolution_blank_inputs_ignored():
     assert price_cache.load_resolution("ISIN") is None
 
 
+# ── Geo breakdown cache (with TTL) ──────────────────────────────────────────
+
+def test_geo_roundtrip():
+    assert price_cache.load_geo("IE00BL25JP72") is None
+    price_cache.store_geo("IE00BL25JP72", {"USA": 79.0, "Japan": 4.0}, "justetf")
+    got = price_cache.load_geo("IE00BL25JP72")
+    assert got is not None
+    assert got["breakdown"] == {"USA": 79.0, "Japan": 4.0}
+    assert got["source"] == "justetf"
+
+
+def test_geo_empty_not_stored():
+    price_cache.store_geo("ISIN", {}, "justetf")
+    assert price_cache.load_geo("ISIN") is None
+
+
+def test_geo_expires_after_ttl(monkeypatch):
+    price_cache.store_geo("ISIN", {"USA": 100.0}, "justetf")
+    future = time.time() + (price_cache.RESOLUTION_TTL_DAYS + 1) * 86400
+    monkeypatch.setattr(price_cache.time, "time", lambda: future)
+    assert price_cache.load_geo("ISIN") is None
+
+
 # ── Disable switch ──────────────────────────────────────────────────────────
 
 def test_disable_env_forces_cold(monkeypatch):

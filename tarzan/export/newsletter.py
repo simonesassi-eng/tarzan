@@ -487,8 +487,9 @@ def _build_sparkline_pills(
 
     Order path: **Total PnL %** (the total change of the pot over the
     window — what the mountain shows, contributions included) and **TWR %**
-    (the flow-adjusted market return over the same window, from the NAV
-    index), plus the vs-α/β-benchmark delta. Holdings-only path: a single
+    (the portfolio's 1-month time-weighted return, taken from the same
+    ``performance_full`` source as the Returns tables so the two always
+    agree), plus the vs-α/β-benchmark delta. Holdings-only path: a single
     window %-change pill plus the benchmark delta.
     """
     m = ctx.metrics
@@ -508,29 +509,33 @@ def _build_sparkline_pills(
         total_pct = 0.0
     is_order_path = m.twror_pct is not None
 
-    # TWR over the same window from the flow-adjusted NAV index.
+    # TWR over the window = the portfolio's 1-month time-weighted return,
+    # taken from the SAME source the Returns tables use (performance_full),
+    # so the chart pill and the "Returns vs benchmarks" total-portfolio 1M
+    # cell always agree (no off-by-a-few-days window mismatch).
+    perf_full = m.performance_full or {}
+    twr_raw = perf_full.get("1m")
     twr_pct: Optional[float] = None
-    ph = m.portfolio_history
-    if is_order_path and ph is not None and len(ph) >= 2:
+    if is_order_path and twr_raw is not None:
         try:
-            ph_w = ph[ph.index >= window.index[0]]
-        except TypeError:
-            ph_w = ph.tail(len(window))
-        ph_w = ph_w.dropna() if ph_w is not None else ph_w
-        if ph_w is not None and len(ph_w) >= 2 and float(ph_w.iloc[0]) > 0:
-            candidate = (float(ph_w.iloc[-1]) / float(ph_w.iloc[0]) - 1) * 100
-            twr_pct = candidate if candidate == candidate else None  # drop NaN
+            cand = float(twr_raw)
+            twr_pct = cand if cand == cand else None
+        except (TypeError, ValueError):
+            twr_pct = None
 
-    # α/β benchmark return over the same window.
+    # α/β benchmark 1-month return, computed the same way as the table rows.
     bench_pct: Optional[float] = None
     bench_name = ctx.benchmark_alpha_beta or "S&P 500"
     bench_hist = (m.benchmark_histories or {}).get(bench_name)
     if bench_hist is not None and len(bench_hist) >= 2:
-        bw = bench_hist.tail(len(window))
-        bw = bw.dropna()
-        if len(bw) >= 2 and float(bw.iloc[0]) > 0:
-            candidate = (float(bw.iloc[-1]) / float(bw.iloc[0]) - 1) * 100
-            bench_pct = candidate if candidate == candidate else None
+        try:
+            from tarzan.engine.metrics import compute_period_return
+            cand = compute_period_return(bench_hist.dropna(), 30)
+            if cand is not None:
+                cand = float(cand)
+                bench_pct = cand if cand == cand else None
+        except Exception:  # noqa: BLE001 — pill is best-effort
+            bench_pct = None
 
     if is_order_path:
         pills = [_pill(f"Total PnL {_pct(total_pct, signed=True)}", total_pct)]
