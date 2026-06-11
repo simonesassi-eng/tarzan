@@ -260,12 +260,26 @@ def main() -> int:
     logger.info(
         "Benchmarks — α/β: %s | geo: %s", benchmark_alpha_beta, benchmark_geo
     )
+
+    # Optional AI portfolio summary (free Gemini tier). Best-effort: when no
+    # GEMINI_API_KEY is set, or the call fails, this returns None and the
+    # newsletter falls back to the rule-based Signals block.
+    from tarzan.export.ai_summary import generate_summary, is_enabled as _ai_on
+    ai_summary = None
+    if _ai_on():
+        logger.info("Generating AI portfolio summary...")
+        ai_summary = generate_summary(metrics, config)
+        logger.info("AI summary %s", "generated" if ai_summary else "unavailable (using Signals)")
+    else:
+        logger.info("AI summary disabled (no GEMINI_API_KEY) — using Signals.")
+
     html = render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=issue_number,
         benchmark_alpha_beta=benchmark_alpha_beta,
         benchmark_geo=benchmark_geo,
+        ai_summary=ai_summary,
     )
 
     subject = _build_subject(metrics, subject_prefix, trigger_label)
