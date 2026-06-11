@@ -16,6 +16,8 @@
      sparkline        {available, label, is_mountain, start_label,
                        end_label, start_value, end_value, is_positive,
                        bars[], pills[]} — a 30-day mountain/area chart
+     ai_summary       optional AI-generated portfolio summary (string);
+                      when present it replaces the Signals block
      smart_insights   list of {icon, color, bg, category, headline, body}
      movers           {available, best, worst, benchmark_name}
      allocation       {rows[], stacked[], tolerance}
@@ -182,12 +184,24 @@
             </td>
           </tr>
 
-          {# ─── SIGNALS ─────────────────────────────────────── #}
-          {# Conditional insights — each slot only renders when there
-             is something genuinely worth saying. The Action slot is an
-             "Observation" (contextual, not prescriptive); concrete
-             trades live in the Optimizer section below. #}
-          {% if smart_insights %}
+          {# ─── PORTFOLIO SUMMARY (AI) / SIGNALS fallback ──────── #}
+          {# When an AI summary is available it replaces the rule-based
+             Signals block; otherwise the conditional Signals render. #}
+          {% if ai_summary %}
+          <tr>
+            <td class="px-32" style="padding:24px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio summary</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <div style="font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary }}</div>
+                    <div style="margin-top:8px;font-size:10px;color:{{ palette.subtle }};">✨ AI-generated from your data · not financial advice</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% elif smart_insights %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Signals</div>

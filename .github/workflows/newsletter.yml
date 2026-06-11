@@ -66,6 +66,12 @@ jobs:
       DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
       GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
       SUBJECT_PREFIX: "Tarzan Portfolio Digest"
+      # Optional AI portfolio summary (free Google Gemini tier). When set,
+      # the newsletter replaces the rule-based "Signals" block with a short
+      # AI narrative built from the full metrics dataset. Leave unset to keep
+      # the rule-based Signals (the send never fails if the API is down).
+      # Get a free key at https://aistudio.google.com/apikey
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       # Issue counter — increments every send via $GITHUB_RUN_NUMBER
       ISSUE_NUMBER: ${{ github.run_number }}
 

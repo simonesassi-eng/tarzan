@@ -21,6 +21,16 @@ def _disable_market_cache(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _disable_ai_summary(monkeypatch):
+    """Force the AI portfolio summary off for the whole suite so tests
+    never hit the network or consume API tokens. Tests that exercise the
+    summary mock the call explicitly."""
+    monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    yield
+
+
 @pytest.fixture
 def sample_config() -> InvestorConfig:
     """Minimal investor config for testing."""

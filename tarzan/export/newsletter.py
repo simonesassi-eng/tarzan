@@ -1856,6 +1856,7 @@ def build_context(
     issue_number: int = 1,
     benchmark_alpha_beta: str = "S&P 500",
     benchmark_geo: str = "MSCI ACWI",
+    ai_summary: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build the full Jinja2 context dict for the newsletter template.
 
@@ -1883,6 +1884,7 @@ def build_context(
         "headline": _build_headline(nctx, hero),
         "hero": hero,
         "sparkline": _build_sparkline(nctx),
+        "ai_summary": ai_summary,
         "smart_insights": _build_smart_insights(nctx),
         "movers": _build_movers(nctx),
         "allocation": _build_allocation(nctx),
@@ -1908,6 +1910,7 @@ def render_newsletter(
     issue_number: int = 1,
     benchmark_alpha_beta: str = "S&P 500",
     benchmark_geo: str = "MSCI ACWI",
+    ai_summary: Optional[str] = None,
 ) -> str:
     """Render the newsletter HTML to a string.
 
@@ -1931,6 +1934,7 @@ def render_newsletter(
     template = env.get_template("portfolio_digest.html.j2")
     context = build_context(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
+        ai_summary=ai_summary,
     )
     return template.render(**context)
 
