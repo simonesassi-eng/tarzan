@@ -1159,7 +1159,13 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         # ``quantity × price / 100``. Bond detection and the /100
         # convention are centralized in bond_fetcher so the current
         # and historical valuation paths agree exactly.
-        if holding.current_price is not None:
+        # A valid price is not just "not None": a NaN or non-positive close
+        # slips past ``is not None`` and would make ``value_position`` return
+        # NaN, which then poisons the portfolio total (the whole sum becomes
+        # NaN and collapses). Require a real, positive number here.
+        cp = holding.current_price
+        has_price = cp is not None and cp == cp and cp > 0
+        if has_price:
             from tarzan.data.bond_fetcher import is_bond, value_position
             # OpenFIGI's authoritative classification (memoized, no extra
             # network call) reliably catches bonds yfinance mislabels.
@@ -1188,6 +1194,17 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
             # Fallback: try Terrapin Finance API for bonds
             _try_terrapin_fallback(holding)
 
+        # Safety net: never let a holding carry a None/NaN current_value into
+        # the portfolio total. A single NaN propagates through the sum and
+        # collapses the whole portfolio (the ~€13k-instead-of-€221k symptom
+        # seen when yfinance throttles the live quote). Seed from the
+        # last-known EUR value (CSV/order anchor) so the total stays sane.
+        cv = holding.current_value
+        if cv is None or cv != cv:  # None or NaN
+            holding.current_value = holding.market_value_eur or 0.0
+            if not holding.data_source or holding.data_source == "yfinance":
+                holding.data_source = "last-known (no live price)"
+
         if holding.cost_basis_eur > 0 and holding.current_value > 0:
             holding.gain_pct = (
                 (holding.current_value - holding.cost_basis_eur)
@@ -1214,27 +1231,47 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
 def _set_price_data(
     holding: Holding, history: pd.DataFrame, info: dict, currency: str
 ) -> None:
-    """Set price_history and current_price on a holding, with FX conversion."""
-    if not history.empty:
+    """Set price_history and current_price (EUR), robust to data gaps.
+
+    Prefers the price history's last *valid* close — which on later runs is
+    served from the immutable cache, so a throttled live quote does not
+    blank the holding (the user's "use the last cached close" requirement).
+    Falls back to the live info quote, and otherwise leaves current_price
+    None so the caller's seed/last-known fallback applies. NaN or
+    non-positive closes are never propagated as a price (that NaN would
+    otherwise slip past the ``is not None`` checks and poison the value).
+    """
+    current_price = None
+
+    if not history.empty and "Close" in history:
         prices = history["Close"].copy()
-        # Normalize minor-unit quotes (e.g. GBp → GBP) before FX conversion
+        # Normalize minor-unit quotes (e.g. GBp → GBP) before FX conversion.
         prices, currency = _normalize_minor_currency(prices, currency)
         if currency != "EUR":
             prices = convert_to_eur(prices, currency)
-        holding.price_history = prices
-        holding.current_price = float(prices.iloc[-1]) if len(prices) > 0 else None
-    else:
+        prices = prices.dropna()
+        prices = prices[prices > 0]
+        if len(prices) > 0:
+            holding.price_history = prices
+            current_price = float(prices.iloc[-1])
+
+    if current_price is None:
         price = info.get("regularMarketPrice") or info.get("previousClose")
-        if price:
-            # Normalize minor-unit quotes first
-            scalar = pd.Series([float(price)])
+        try:
+            price = float(price) if price is not None else None
+        except (TypeError, ValueError):
+            price = None
+        if price is not None and price == price and price > 0:  # not None/NaN/≤0
+            scalar = pd.Series([price])
             scalar, currency = _normalize_minor_currency(scalar, currency)
             price = float(scalar.iloc[0])
             if currency != "EUR":
                 fx = _get_fx_series(currency)
                 if not fx.empty:
                     price = price * float(fx.iloc[-1])
-            holding.current_price = float(price)
+            current_price = float(price)
+
+    holding.current_price = current_price
 
 
 def _try_terrapin_fallback(holding: Holding) -> None:

@@ -476,3 +476,71 @@ class TestGeoBreakdownDiskCache:
         enricher.reset_run_caches()
         monkeypatch.setattr(enricher, "_scrape_geo_breakdown", lambda *a, **k: None)
         assert enricher.get_geo_breakdown("ZZZ.MI", "ZZ0000000000") is None
+
+
+class TestSetPriceDataRobustness:
+    """_set_price_data must never propagate a NaN/non-positive close as a
+    price. A throttled live quote (yfinance returning NaN) previously slipped
+    past the ``is not None`` guard and collapsed the portfolio total."""
+
+    def _holding(self):
+        from tarzan.models.holding import Holding
+        return Holding(isin="IE00B4L5Y983", ticker="SWDA.MI", quantity=10.0,
+                       cost_basis_eur=1000.0, market_value_eur=1200.0, currency="EUR")
+
+    def test_uses_last_valid_close(self):
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [100.0, 101.0, 102.0]})
+        enricher._set_price_data(h, hist, {}, "EUR")
+        assert h.current_price == 102.0
+
+    def test_trailing_nan_close_ignored(self):
+        # Last row is NaN (throttled today) → use the last *valid* close.
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [100.0, 101.0, float("nan")]})
+        enricher._set_price_data(h, hist, {}, "EUR")
+        assert h.current_price == 101.0
+
+    def test_all_nan_history_falls_back_to_info(self):
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [float("nan"), float("nan")]})
+        enricher._set_price_data(h, hist, {"regularMarketPrice": 99.5}, "EUR")
+        assert h.current_price == 99.5
+
+    def test_no_price_anywhere_leaves_none(self):
+        # All-NaN history and no usable info quote → current_price stays None
+        # so the caller's seed/last-known fallback can take over.
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [float("nan")]})
+        enricher._set_price_data(h, hist, {"regularMarketPrice": float("nan")}, "EUR")
+        assert h.current_price is None
+
+    def test_nonpositive_close_ignored(self):
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [100.0, 0.0, -3.0]})
+        enricher._set_price_data(h, hist, {}, "EUR")
+        assert h.current_price == 100.0
+
+
+class TestEnrichSingleSafetyNet:
+    """_enrich_single must never leave a holding with a None/NaN
+    current_value; it seeds the last-known EUR anchor so the portfolio
+    total cannot collapse when the live price is missing."""
+
+    def test_seeds_market_value_when_no_price(self, monkeypatch):
+        from tarzan.models.holding import Holding
+        h = Holding(isin="IE00B4L5Y983", ticker="SWDA.MI", quantity=10.0,
+                    cost_basis_eur=1000.0, market_value_eur=1234.0, currency="EUR")
+
+        # Simulate a fully throttled fetch: no resolution, empty history/info,
+        # and no bond quote either (kept fully offline).
+        import tarzan.data.bond_fetcher as bf
+        monkeypatch.setattr(enricher, "_resolve_isin", lambda *a, **k: None)
+        monkeypatch.setattr(enricher, "_fetch_ticker_data",
+                            lambda t: {"info": {}, "history": pd.DataFrame()})
+        monkeypatch.setattr(bf, "fetch_bond_price", lambda isin: None)
+        # No price anywhere → fallback lands on the CSV anchor.
+        out, _ = enricher._enrich_single(h)
+        assert out.current_value is not None
+        assert out.current_value == out.current_value  # not NaN
+        assert out.current_value == pytest.approx(1234.0)
