@@ -120,9 +120,9 @@ class TestMountainChart:
     def test_renders_without_crash(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         assert "Last 30 days" in html
-        assert "TWROR" in html  # in the hero line
-        assert "Total PnL" in html
-        assert "Unrealized" in html
+        assert "Time-Weighted Rate of Return" in html  # scoreboard title
+        assert "Profit &amp; Losses" in html or "Profit & Losses" in html
+        assert "Unrealized" in html  # hero overlay
 
     def test_nan_values_do_not_crash(self):
         """A cold cache / vendor outage can leave NaN valuations on some
