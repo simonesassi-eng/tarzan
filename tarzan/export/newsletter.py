@@ -372,6 +372,16 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     except (TypeError, ValueError):
         week_twror = None
     week_pnl_eur, week_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, 7)
+    # Last-30-days money P&L (net of contributions) for the scoreboard's
+    # "Last 30 days" row, mirroring the chart window.
+    month_pnl_eur, month_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, 30)
+    month_twror = perf_full.get("1m")
+    try:
+        month_twror = float(month_twror) if month_twror is not None else None
+        if month_twror != month_twror:  # NaN
+            month_twror = None
+    except (TypeError, ValueError):
+        month_twror = None
 
     # Cash KPI: show only the amount (no "above/below/on target" message).
     cash_msg, cash_msg_color = "", PALETTE["muted"]
@@ -454,12 +464,23 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "week_pnl_is_positive": (week_pnl_eur or 0.0) >= 0,
         "week_twror_pct": _pct(week_twror, signed=True) if week_twror is not None else None,
         "week_twror_is_positive": (week_twror or 0.0) >= 0,
+        # Last 30 days (mirrors the chart window): money P&L + TWROR.
+        "month_pnl_eur": _eur_smart(month_pnl_eur, signed=True) if month_pnl_eur is not None else None,
+        "month_pnl_pct": _pct(month_pnl_pct, signed=True) if month_pnl_pct is not None else None,
+        "month_pnl_is_positive": (month_pnl_eur or 0.0) >= 0,
+        "month_twror_pct": _pct(month_twror, signed=True) if month_twror is not None else None,
+        "month_twror_is_positive": (month_twror or 0.0) >= 0,
+        # Annualized returns (card subtitles): money-weighted XIRR vs
+        # time-weighted TWROR-annualized.
+        "xirr_pct": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
+        "twror_annualized_pct": _pct(m.twror_annualized_pct, signed=True) if m.twror_annualized_pct is not None else None,
         # Rebalance status KPI replaces the "This Week" KPI which was
         # already covered by the TL;DR headline above.
         "rebal_label": rebal_label,
         "rebal_sublabel": rebal_sublabel,
         "rebal_color": rebal_color,
         "rebal_bg": rebal_bg,
+        "rebal_n_actions": n_actions,
     }
 
 
@@ -517,6 +538,20 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
 
     pills = _build_sparkline_pills(ctx, window, start_v, end_v)
 
+    # X-axis date labels: start, two interior points, end (evenly spaced),
+    # so the mountain reads as a dated trend rather than two endpoints.
+    idx = window.index
+    n = len(window)
+
+    def _axis_label(pos: int) -> str:
+        try:
+            return idx[pos].strftime("%b %d")
+        except (AttributeError, TypeError, IndexError):
+            return ""
+
+    axis_positions = sorted({0, n // 3, (2 * n) // 3, n - 1})
+    axis_labels = [_axis_label(p) for p in axis_positions]
+
     return {
         "available": True,
         "label": f"Last {n_days} days",
@@ -528,6 +563,7 @@ def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
         "is_positive": end_v >= start_v,
         "bars": bars,
         "pills": pills,
+        "axis_labels": axis_labels,
     }
 
 
@@ -545,6 +581,7 @@ def _flat_sparkline(m: PortfolioMetrics, n_days: int, is_mountain: bool) -> dict
         "is_positive": True,
         "bars": [{"height": 22} for _ in range(n_days)],
         "pills": [],
+        "axis_labels": [],
     }
 
 
