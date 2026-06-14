@@ -48,6 +48,7 @@ from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
     BENCHMARKS,
     _add_mix_to_histories,
     _build_benchmark_series,
+    _clip_to_window,
     _compute_single_benchmark_metrics,
     _fetch_benchmark_history,
     _populate_perf_row,
@@ -606,6 +607,14 @@ class MetricsEngine:
         comp_rows = []
         key_histories: dict[str, pd.Series] = {}
         chart_benchmarks = set(cfg.chart_benchmarks())
+        # Common risk window = the portfolio's own history span, so every
+        # benchmark's risk metrics are computed over the *same* period as
+        # the portfolio (apples-to-apples). Without this, a ~6-month
+        # portfolio was compared against benchmarks measured over ~5 years.
+        risk_window = ctx.get("portfolio_history_full", pd.Series(dtype=float))
+        if risk_window is None or risk_window.empty:
+            risk_window = ph
+        win_start, win_end = risk_window.index.min(), risk_window.index.max()
         # Fetch the α/β reference series once: every other benchmark row
         # gets α/β computed against this same series, so the columns are
         # comparable. The α/β benchmark vs itself yields β=1, α=0.
@@ -614,6 +623,7 @@ class MetricsEngine:
             ab_benchmark = _fetch_benchmark_history(cfg.benchmark_beta())
         except Exception as e:
             logger.warning("α/β benchmark fetch failed: %s", e)
+        ab_benchmark_win = _clip_to_window(ab_benchmark, win_start, win_end)
         for name, ticker in BENCHMARKS.items():
             try:
                 bench = _build_benchmark_series(name, ticker, initial_value)
@@ -621,7 +631,13 @@ class MetricsEngine:
                     continue
                 if name in chart_benchmarks:
                     key_histories[name] = bench
-                metrics = _compute_single_benchmark_metrics(bench, ab_benchmark)
+                # Clip to the portfolio window for the risk metrics; fall
+                # back to the full series if the overlap is too thin to
+                # estimate anything (so the row still appears).
+                bench_win = _clip_to_window(bench, win_start, win_end)
+                if len(bench_win) < 2:
+                    bench_win = bench
+                metrics = _compute_single_benchmark_metrics(bench_win, ab_benchmark_win)
                 metrics["benchmark"] = name
                 comp_rows.append(metrics)
             except Exception as e:
