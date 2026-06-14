@@ -94,7 +94,7 @@
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio summary</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
                     <div style="font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary }}</div>
@@ -110,7 +110,7 @@
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Signals</div>
               <div style="margin-top:4px;font-size:13px;color:{{ palette.muted }};">{{ smart_insights|length }} thing{{ 's' if smart_insights|length != 1 else '' }} worth your attention</div>
               {% for ins in smart_insights %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '12px' if loop.first else '6px' }};background:#FFFFFF;border:1px solid {{ palette.border }};border-left:4px solid {{ ins.color }};border-radius:8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '12px' if loop.first else '6px' }};background:#FFFFFF;border:1px solid {{ palette.border }};border-left:4px solid {{ ins.color }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:10px 14px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
