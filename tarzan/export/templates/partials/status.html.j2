@@ -22,8 +22,8 @@
                         {% if hero.has_total_pnl %}
                         <td align="right" style="vertical-align:top;">
                           <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Unrealized PnL</div>
-                          <div style="margin-top:2px;font-size:17px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">{{ hero.unrealized_eur }}</div>
-                          <div style="font-size:13px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">({{ hero.unrealized_pct }})</div>
+                          <div style="margin-top:2px;font-size:19px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">{{ hero.unrealized_eur }}</div>
+                          <div style="font-size:15px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">({{ hero.unrealized_pct }})</div>
                         </td>
                         {% endif %}
                       </tr>
