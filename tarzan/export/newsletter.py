@@ -1824,7 +1824,12 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
 
 
 def _build_return_contrib(ctx: _NewsletterContext) -> dict:
-    """Build winners / laggards by return contribution."""
+    """Build winners / laggards by return contribution.
+
+    Each item carries a ``bar_pct`` (0–100) scaled to the largest absolute
+    contribution among the shown movers, so the template can draw
+    magnitude bars that are comparable across winners and laggards.
+    """
     m = ctx.metrics
     df = m.holdings_df
     if df.empty:
@@ -1835,10 +1840,23 @@ def _build_return_contrib(ctx: _NewsletterContext) -> dict:
         contrib = float(r.get("weight_pct", 0) or 0) * float(r.get("gain_pct", 0) or 0) / 100
         rows.append({"name": r.get("name", ""), "ticker": r.get("ticker", ""), "contrib": contrib})
     rows.sort(key=lambda x: -x["contrib"])
-    winners = [{"name": r["name"], "value": _pct(r["contrib"], signed=True)} for r in rows[:3]]
-    laggards = [{"name": r["name"], "value": _pct(r["contrib"], signed=True)} for r in rows[-3:]]
-    laggards.reverse()  # worst first
-    return {"winners": winners, "laggards": laggards}
+
+    top = rows[:3]
+    bottom = list(reversed(rows[-3:]))  # worst first
+    max_abs = max((abs(r["contrib"]) for r in (top + bottom)), default=0.0) or 1.0
+
+    def _item(r: dict) -> dict:
+        return {
+            "name": r["name"],
+            "value": _pct(r["contrib"], signed=True),
+            "bar_pct": round(min(100.0, abs(r["contrib"]) / max_abs * 100.0), 1),
+            "is_positive": r["contrib"] >= 0,
+        }
+
+    return {
+        "winners": [_item(r) for r in top],
+        "laggards": [_item(r) for r in bottom],
+    }
 
 
 def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:

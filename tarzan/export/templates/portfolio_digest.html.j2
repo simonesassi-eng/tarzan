@@ -310,10 +310,6 @@
             </td>
           </tr>
 
-          {# ─── HOLDINGS (All positions) — moved to render after the
-             Performance / Returns vs benchmarks table. #}
-          {% include "partials/holdings.html.j2" %}
-
           {# ─── RISK PROFILE — UNIFIED TABLE ────────────────── #}
           {% if risk_profile.available %}
           <tr>
@@ -379,6 +375,54 @@
           </tr>
           {% endif %}
 
+          {# ─── HOLDINGS (All positions) — rendered after Risk profile. #}
+          {% include "partials/holdings.html.j2" %}
+
+          {# ─── RETURN CONTRIBUTION — ranked diverging bars ──────── #}
+          {% if return_contrib.winners or return_contrib.laggards %}
+          <tr>
+            <td class="px-32" style="padding:32px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Return contribution</div>
+              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Who moved the needle</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Each holding's share of the portfolio return — its weight × its own gain. Bars are scaled to the biggest mover.</div>
+
+              {% if return_contrib.winners %}
+              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;">
+                {% for w in return_contrib.winners %}
+                <tr>
+                  <td width="42%" style="padding:5px 8px 5px 0;color:{{ palette.ink }};vertical-align:middle;">{{ w.name|truncate(26, true, '…') }}</td>
+                  <td style="padding:5px 0;vertical-align:middle;">
+                    <div style="background:{{ palette.green_bg }};border-radius:4px;font-size:0;line-height:0;">
+                      <div style="height:9px;width:{{ w.bar_pct }}%;min-width:2px;background:{{ palette.green }};border-radius:4px;font-size:0;line-height:0;">&nbsp;</div>
+                    </div>
+                  </td>
+                  <td width="64" align="right" style="padding:5px 0 5px 10px;font-weight:700;color:{{ palette.green }};font-variant-numeric:tabular-nums;vertical-align:middle;">{{ w.value }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% endif %}
+
+              {% if return_contrib.laggards %}
+              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.red }};text-transform:uppercase;">▼ Laggards</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;">
+                {% for l in return_contrib.laggards %}
+                <tr>
+                  <td width="42%" style="padding:5px 8px 5px 0;color:{{ palette.ink }};vertical-align:middle;">{{ l.name|truncate(26, true, '…') }}</td>
+                  <td style="padding:5px 0;vertical-align:middle;">
+                    <div style="background:{{ palette.red_bg }};border-radius:4px;font-size:0;line-height:0;">
+                      <div style="height:9px;width:{{ l.bar_pct }}%;min-width:2px;background:{{ palette.red }};border-radius:4px;font-size:0;line-height:0;">&nbsp;</div>
+                    </div>
+                  </td>
+                  <td width="64" align="right" style="padding:5px 0 5px 10px;font-weight:700;color:{{ palette.red }};font-variant-numeric:tabular-nums;vertical-align:middle;">{{ l.value }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── OPTIMIZER ACTION ──────────────────────────── #}
           {% if optimizer.available %}
           <tr>
@@ -395,8 +439,8 @@
                 <tr>
                   <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;width:60px;">Action</td>
                   <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Holding</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:90px;">Amount</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:60px;border-top-right-radius:8px;">% Port.</td>
+                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:96px;">Asset</td>
+                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:96px;border-top-right-radius:8px;">Amount</td>
                 </tr>
                 {% for a in optimizer.actions %}
                 <tr>
@@ -405,13 +449,12 @@
                   </td>
                   <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;color:{{ palette.ink }};">
                     <div style="font-weight:600;line-height:1.3;">{{ a.name }}</div>
-                    <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">{{ a.ticker }} · <span style="color:{{ a.asset_color }};font-weight:600;">● {{ a.asset_class }}</span></div>
                     {% if a.reason %}
                     <div style="margin-top:4px;font-size:10px;color:{{ palette.subtle }};line-height:1.45;">{{ a.reason }}</div>
                     {% endif %}
                   </td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;color:{{ palette.muted }};{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ a.pct_of_portfolio }}</td>
+                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-size:11px;font-weight:600;color:{{ a.asset_color }};">{{ a.asset_class }}</td>
+                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ a.amount }}</td>
                 </tr>
                 {% endfor %}
               </table>
@@ -464,50 +507,6 @@
                 {% endfor %}
               </div>
               {% endif %}
-            </td>
-          </tr>
-          {% endif %}
-
-          {# ─── RETURN CONTRIBUTION ──────────────────────── #}
-          {% if return_contrib.winners or return_contrib.laggards %}
-          <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Return contribution</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Who moved the needle</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
-                <tr>
-                  <td class="kpi-cell" width="50%" valign="top" style="padding-right:8px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0FDF4;border:1px solid {{ palette.green_border }};border-radius:12px;">
-                      <tr><td style="padding:14px 16px 10px 16px;"><div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top winners</div></td></tr>
-                      <tr><td style="padding:0 16px 8px 16px;">
-                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:12px;">
-                          {% for w in return_contrib.winners %}
-                          <tr>
-                            <td style="padding:6px 0;color:{{ palette.ink }};{% if not loop.first %}border-top:1px solid {{ palette.green_bg }};{% endif %}">{{ w.name|truncate(28, true, '…') }}</td>
-                            <td align="right" style="padding:6px 0;font-weight:700;color:{{ palette.green }};font-variant-numeric:tabular-nums;{% if not loop.first %}border-top:1px solid {{ palette.green_bg }};{% endif %}">{{ w.value }}</td>
-                          </tr>
-                          {% endfor %}
-                        </table>
-                      </td></tr>
-                    </table>
-                  </td>
-                  <td class="kpi-cell" width="50%" valign="top" style="padding-left:8px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FEF2F2;border:1px solid {{ palette.red_border }};border-radius:12px;">
-                      <tr><td style="padding:14px 16px 10px 16px;"><div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.red }};text-transform:uppercase;">▼ Laggards</div></td></tr>
-                      <tr><td style="padding:0 16px 8px 16px;">
-                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:12px;">
-                          {% for l in return_contrib.laggards %}
-                          <tr>
-                            <td style="padding:6px 0;color:{{ palette.ink }};{% if not loop.first %}border-top:1px solid #FEE2E2;{% endif %}">{{ l.name|truncate(28, true, '…') }}</td>
-                            <td align="right" style="padding:6px 0;font-weight:700;color:{{ palette.red }};font-variant-numeric:tabular-nums;{% if not loop.first %}border-top:1px solid #FEE2E2;{% endif %}">{{ l.value }}</td>
-                          </tr>
-                          {% endfor %}
-                        </table>
-                      </td></tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
             </td>
           </tr>
           {% endif %}
