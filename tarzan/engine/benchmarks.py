@@ -35,6 +35,34 @@ logger = logging.getLogger(__name__)
 BENCHMARKS = cfg.benchmarks()
 
 
+def _clip_to_window(series: pd.Series, start, end) -> pd.Series:
+    """Return the slice of ``series`` within ``[start, end]`` (inclusive).
+
+    Indices are normalized to tz-naive dates so a benchmark series and the
+    portfolio window compare cleanly regardless of timezone. This is what
+    makes the risk comparison apples-to-apples: every benchmark's risk
+    metrics are computed over the *same* span as the portfolio's own
+    (short) track record, instead of the benchmark's full multi-year
+    history. Empty/None input passes through as an empty series.
+    """
+    if series is None or len(series) == 0:
+        return pd.Series(dtype=float)
+
+    def _naive(ts):
+        ts = pd.Timestamp(ts)
+        if ts.tz is not None:
+            ts = ts.tz_convert("UTC").tz_localize(None)
+        return ts.normalize()
+
+    idx = series.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    s = series.copy()
+    s.index = idx.normalize()
+    lo, hi = _naive(start), _naive(end)
+    return s[(s.index >= lo) & (s.index <= hi)]
+
+
 def _fetch_benchmark_history(ticker: str) -> pd.Series:
     """EUR-converted close-price history for a benchmark ticker.
 
@@ -167,6 +195,19 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
     # Tail risk (historical simulation, 95% confidence)
     row["var_95"] = _scale_or_nan(compute_var(daily_ret, 0.95), 100)
     row["cvar_95"] = _scale_or_nan(compute_cvar(daily_ret, 0.95), 100)
+    # Alpha/Beta vs the reference benchmark, on the *overlapping* window so
+    # the figures are apples-to-apples with `s`: a 6-month track record is
+    # measured against the benchmark over those same 6 months, not the
+    # benchmark's full multi-year history (which made α incoherent before).
+    row["alpha"] = float("nan")
+    row["beta"] = float("nan")
+    if (bench_history is not None and len(bench_history) > 1
+            and len(s) > 1 and not daily_ret.empty):
+        bench_win = _clip_to_window(bench_history, s.index.min(), s.index.max())
+        if len(bench_win) > 1:
+            beta, alpha = _compute_beta_alpha(daily_ret, bench_win, cagr_val)
+            row["beta"] = beta
+            row["alpha"] = alpha
 
     # Alpha/Beta vs configured benchmark
     if not bench_history.empty and len(bench_history) > 1:

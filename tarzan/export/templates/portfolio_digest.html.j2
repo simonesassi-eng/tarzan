@@ -316,7 +316,14 @@
             <td class="px-32" style="padding:24px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Risk profile</div>
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How risky is your ride</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Computed on the last 5 years of portfolio history (capped); holdings with &lt;1Y of data are excluded. Your portfolio is shown against the same benchmarks as the Performance table above.</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ risk_profile.description }}</div>
+              {% if risk_profile.caveat %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
+                <tr>
+                  <td style="padding:9px 12px;background:{{ palette.amber_bg }};border:1px solid {{ palette.amber_border }};border-left:4px solid {{ palette.amber }};border-radius:8px;font-size:11px;color:{{ palette.ink }};line-height:1.5;">⚠ {{ risk_profile.caveat }}</td>
+                </tr>
+              </table>
+              {% endif %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
                 {# Header row: empty corner + metric columns #}
                 <tr>

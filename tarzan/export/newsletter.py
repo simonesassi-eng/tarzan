@@ -1591,11 +1591,57 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             "cells": _cells_from(rd),
         })
 
+    # Track-record length drives a caveat that scales as the portfolio
+    # matures: annualized risk stats off a short window are noisy and only
+    # firm up with years of data.
+    window_years = None
+    ph = m.portfolio_history
+    if ph is not None and len(ph) > 1:
+        try:
+            span_days = (ph.index.max() - ph.index.min()).days
+            window_years = span_days / 365.25 if span_days > 0 else None
+        except Exception:
+            window_years = None
+
+    if window_years is None:
+        window_label = "the available history"
+    elif window_years < 1:
+        months = max(1, round(window_years * 12))
+        window_label = f"~{months} month{'s' if months != 1 else ''}"
+    else:
+        window_label = f"~{window_years:.1f} years"
+
+    description = (
+        "All figures use the same window for your portfolio and the "
+        f"benchmarks (apples-to-apples), based on your track record so far "
+        f"— {window_label} — capped at 5 years, with holdings under 1Y of "
+        "history excluded."
+    )
+
+    if window_years is None or window_years < 1:
+        caveat = (
+            f"Your track record is only {window_label}. Annualized risk "
+            "figures (Sharpe, Sortino, \u03b1) are very sensitive to such a "
+            "short window — read them as indicative, not definitive. They "
+            "become statistically meaningful from about 3 years of history."
+        )
+    elif window_years < 3:
+        caveat = (
+            f"Based on about {window_label} of history. These risk figures "
+            "keep firming up with more data — roughly 3 years for full "
+            "confidence."
+        )
+    else:
+        caveat = None
+
     return {
         "available": True,
         "columns": [{"label": label, "note": note}
                     for (label, _k, _p, note) in metric_cols],
         "rows": rows,
+        "description": description,
+        "caveat": caveat,
+        "window_label": window_label,
         # Footnote: α and β are both referenced to the α/β benchmark.
         "alpha_beta_note": (
             f"\u03b1 and \u03b2 are computed against {ab_bench_name}."

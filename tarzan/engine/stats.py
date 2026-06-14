@@ -228,10 +228,20 @@ def compute_sharpe(annual_return: float, annual_volatility: float) -> float:
 
 
 def compute_sortino(daily_returns: pd.Series, annual_return: float) -> float:
-    downside = daily_returns[daily_returns < 0]
-    if downside.empty:
+    """Sortino ratio using the textbook *target downside deviation*.
+
+    The downside deviation is the root-mean-square shortfall below the
+    (daily) risk-free target, taken over *all* observations — not the
+    sample std of the negative-only subset. This is the standard target
+    semideviation used by practitioners (Sortino & Price, 1994); the
+    negative-only std variant understates the denominator on short or
+    upward-skewed windows and inflates the ratio.
+    """
+    if daily_returns is None or daily_returns.empty:
         return float("nan")
-    downside_std = float(downside.std()) * np.sqrt(TRADING_DAYS) * 100
+    target_daily = RISK_FREE_RATE / 100.0 / TRADING_DAYS
+    shortfall = (daily_returns - target_daily).clip(upper=0.0)
+    downside_std = float((shortfall ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS) * 100
     if downside_std <= 0:
         return float("nan")
     return (annual_return - RISK_FREE_RATE) / downside_std
