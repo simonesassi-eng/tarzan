@@ -431,9 +431,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             rebal_color, rebal_bg = PALETTE["amber"], PALETTE["amber_bg"]
 
     return {
-        # Hero big number keeps the full amount (€214,671.72): the
-        # entire visual hierarchy of the Status section depends on it.
-        "total_value": _eur(m.total_value),
+        # Hero big number, rounded to whole euros (€221,593): decimals add
+        # visual noise to the largest figure in the Status section.
+        "total_value": _eur(m.total_value, decimals=0),
         # Total PnL — lifetime, realized + unrealized (order path).
         "total_pnl_eur": _eur_smart(total_pnl_eur, signed=True),
         "total_pnl_pct": _pct(total_pnl_pct, signed=True),
