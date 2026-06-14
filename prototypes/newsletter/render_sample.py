@@ -142,10 +142,24 @@ def _build_fake_metrics() -> PortfolioMetrics:
     ]
     holding_perf = pd.DataFrame(hp_rows + bench_rows)
 
-    # Benchmark comparison (used by smart insights to detect ACWI win)
+    # Benchmark comparison — full risk metrics per benchmark so the
+    # transposed Risk Profile section renders with real rows. Includes the
+    # same benchmarks as the Performance table. The α/β benchmark (S&P 500)
+    # reads β=1.00 / α=0 by definition. Both "benchmark" and "name" columns
+    # are provided for compatibility with every consumer.
     bench_cmp = pd.DataFrame([
-        {"name": "S&P 500", "cagr": 10.85, "volatility": 15.8, "sharpe": 0.85},
-        {"name": "MSCI ACWI", "cagr": 8.42, "volatility": 13.6, "sharpe": 0.81},
+        {"benchmark": "S&P 500", "name": "S&P 500", "cagr": 10.85, "volatility": 15.8,
+         "sharpe": 0.85, "sortino": 1.15, "max_drawdown": -23.95,
+         "var_95": -1.95, "cvar_95": -2.90, "alpha": 0.00, "beta": 1.00},
+        {"benchmark": "MSCI ACWI", "name": "MSCI ACWI", "cagr": 8.42, "volatility": 13.6,
+         "sharpe": 0.81, "sortino": 1.08, "max_drawdown": -21.10,
+         "var_95": -1.78, "cvar_95": -2.65, "alpha": -0.35, "beta": 0.92},
+        {"benchmark": "FTSE All-World", "name": "FTSE All-World", "cagr": 8.10, "volatility": 13.9,
+         "sharpe": 0.79, "sortino": 1.05, "max_drawdown": -21.60,
+         "var_95": -1.82, "cvar_95": -2.70, "alpha": -0.42, "beta": 0.94},
+        {"benchmark": "Nasdaq 100", "name": "Nasdaq 100", "cagr": 15.20, "volatility": 19.8,
+         "sharpe": 0.95, "sortino": 1.30, "max_drawdown": -32.50,
+         "var_95": -2.45, "cvar_95": -3.60, "alpha": 3.10, "beta": 1.18},
     ])
 
     return PortfolioMetrics(
