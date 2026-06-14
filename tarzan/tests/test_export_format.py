@@ -85,21 +85,32 @@ class TestRiskProfileBenchmarkLabels:
             benchmark_alpha_beta=ab_name, benchmark_geo=geo_name,
         )
 
-    def test_headers_use_configured_names(self):
+    def test_benchmarks_become_rows_with_configured_names(self):
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
         assert profile["available"]
-        assert profile["headers"] == ["Metric", "You", "MSCI World", "FTSE All-World"]
+        # Transposed layout: metrics are columns, series are rows.
+        labels = [r["label"] for r in profile["rows"]]
+        assert labels[0] == "Your portfolio"
+        assert profile["rows"][0]["is_portfolio"] is True
+        assert "MSCI World" in labels and "FTSE All-World" in labels
+        # 9 metric columns, with α/β carrying the footnote marker.
+        col_labels = [c["label"] for c in profile["columns"]]
+        assert col_labels[0] == "CAGR" and len(profile["columns"]) == 9
+        assert profile["columns"][-2]["note"] == "*"  # α
+        assert profile["columns"][-1]["note"] == "*"  # β
+        assert "MSCI World" in profile["alpha_beta_note"]
 
-    def test_benchmark_values_resolved_by_configured_name(self):
-        # The benchmark columns must be populated from the configured
-        # rows, not blank (which is what happened when the lookup used a
-        # hardcoded literal that didn't match the configured benchmark).
+    def test_benchmark_values_populated_in_rows(self):
+        # Each benchmark row must carry real values (not blank), proving
+        # the metrics are read straight from benchmark_comparison.
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
-        cagr_row = next(r for r in profile["rows"] if r["label"] == "CAGR")
-        assert cagr_row["sp500"] != "—"
-        assert cagr_row["acwi"] != "—"
+        bench_rows = [r for r in profile["rows"] if not r["is_portfolio"]]
+        assert bench_rows
+        for r in bench_rows:
+            assert len(r["cells"]) == 9
+            assert r["cells"][0] != "—"  # CAGR populated
 
 
 class TestShortInstrumentName:

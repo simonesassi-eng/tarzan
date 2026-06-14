@@ -1516,19 +1516,19 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
 
 def _build_risk_profile(ctx: _NewsletterContext) -> dict:
-    """Build the unified Risk Profile table.
+    """Build the unified Risk Profile table (transposed layout).
 
-    A single table with rows per metric and columns: You / S&P 500 / MSCI
-    ACWI. The first four metrics (CAGR, Volatility, Sharpe, Max Drawdown)
-    are confronted with both benchmarks. The remaining four (Sortino,
-    VaR 95%, CVaR 95%, β) are portfolio-only and show "—" in the
-    benchmark columns to keep the layout consistent.
+    Columns are the risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD,
+    VaR 95%, CVaR 95%, α, β) and rows are the series: ``Your portfolio``
+    first, then every benchmark in ``benchmark_comparison`` (the same set
+    shown in the Performance table). This mirrors the Performance /
+    Returns tables for visual consistency.
 
-    All portfolio numbers are sourced from ``performance_full`` (5y cap,
-    holdings <1Y excluded) so the rows are apples-to-apples with the
-    benchmark series and consistent with the Returns table above. β
-    naturally shows 1.00 under S&P 500 (the α/β benchmark) and "—" for
-    MSCI ACWI to make the relationship explicit.
+    Portfolio numbers come from ``performance_full`` (5y cap, holdings
+    <1Y excluded); benchmark numbers come straight from each
+    ``benchmark_comparison`` row, so the cells are apples-to-apples. α and
+    β are computed against the configured α/β benchmark (so that row reads
+    β=1.00 / α≈0), noted in a footnote below the table.
     """
     m = ctx.metrics
     perf_full = m.performance_full or {}
@@ -1539,22 +1539,9 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         or bench_cmp is None or bench_cmp.empty
         or "benchmark" not in bench_cmp.columns
     ):
-        return {"available": False, "rows": [], "headers": []}
-
-    def _bench_row(name_substr: str) -> Optional[dict]:
-        match = bench_cmp[
-            bench_cmp["benchmark"].astype(str).str.contains(
-                name_substr, case=False, na=False, regex=False,
-            )
-        ]
-        if match.empty:
-            return None
-        return match.iloc[0].to_dict()
+        return {"available": False, "rows": [], "columns": []}
 
     ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
-    geo_bench_name = ctx.benchmark_geo or "MSCI ACWI"
-    sp500 = _bench_row(ab_bench_name) or {}
-    acwi = _bench_row(geo_bench_name) or {}
 
     def _fmt_pct(v) -> str:
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -1566,73 +1553,53 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             return "—"
         return f"{float(v):.2f}"
 
-    def _verdict(port, bench, lower_is_better) -> tuple[str, str]:
-        """Return (symbol, color) for inline verdict on the You cell.
-
-        For "lower is better" metrics where the underlying values can be
-        negative (Max Drawdown is reported as a negative percentage —
-        −14.98 means a 14.98% peak-to-trough drop), comparing raw values
-        is wrong: −14.98 > −20.22 numerically, but −14.98 is the
-        shallower (better) drawdown. We compare absolute values so that
-        a smaller magnitude wins.
-        """
-        if (port is None or bench is None
-                or (isinstance(port, float) and pd.isna(port))
-                or (isinstance(bench, float) and pd.isna(bench))):
-            return ("", PALETTE["ink"])
-        port_f = float(port)
-        bench_f = float(bench)
-        if lower_is_better:
-            is_win = abs(port_f) < abs(bench_f)
-        else:
-            is_win = port_f > bench_f
-        return ("▲" if is_win else "▼",
-                PALETTE["green"] if is_win else PALETTE["amber"])
-
-    # Confrontable metrics: present in both perf_full and bench_cmp.
-    # Tuple: (label, perf_full key, bench_cmp key, is_pct, lower_is_better)
-    # The α/β labels include the configured benchmark name dynamically
-    # (default "S&P 500"). The benchmark name is also passed to the
-    # legend so the two stay in sync.
-    ab_name = ctx.benchmark_alpha_beta or "S&P 500"
-    confrontable = [
-        ("CAGR", "cagr", "cagr", True, False),
-        ("Volatility", "volatility", "volatility", True, True),
-        ("Sharpe", "sharpe", "sharpe", False, False),
-        ("Sortino", "sortino", "sortino", False, False),
-        ("Max Drawdown", "max_drawdown", "max_drawdown", True, True),
-        ("VaR 95%", "var_95", "var_95", True, True),
-        ("CVaR 95%", "cvar_95", "cvar_95", True, True),
-        # α and β are vs the configured α/β benchmark. By definition the
-        # α/β benchmark vs itself yields β=1.00 / α=0; α and β of any
-        # other series are computed against the same reference, so the
-        # columns are directly comparable.
-        # α: higher is better (positive alpha = excess return).
-        # β: lower is better in the Excel rating scale (Defensive at
-        # < 0.7 is the "Strong" outcome).
-        (f"\u03b1 (vs {ab_name})", "alpha", "alpha", True, False),
-        (f"\u03b2 (vs {ab_name})", "beta", "beta", False, True),
+    # Metric columns, in display order. Tuple: (label, key, is_pct, note).
+    # α and β carry a "*" footnote marker because they are referenced to
+    # a specific market index (and could ideally use two different ones).
+    metric_cols = [
+        ("CAGR", "cagr", True, ""),
+        ("Vol", "volatility", True, ""),
+        ("Sharpe", "sharpe", False, ""),
+        ("Sortino", "sortino", False, ""),
+        ("Max DD", "max_drawdown", True, ""),
+        ("VaR 95%", "var_95", True, ""),
+        ("CVaR 95%", "cvar_95", True, ""),
+        ("\u03b1", "alpha", True, "*"),
+        ("\u03b2", "beta", False, "*"),
     ]
 
-    rows = []
-    for label, port_key, bench_key, is_pct, lower_better in confrontable:
-        port_v = perf_full.get(port_key)
-        sp_v = sp500.get(bench_key)
-        acwi_v = acwi.get(bench_key)
-        sp_verdict_sym, sp_verdict_color = _verdict(port_v, sp_v, lower_better)
+    def _cells_from(source: dict) -> list[str]:
+        out = []
+        for _label, key, is_pct, _note in metric_cols:
+            v = source.get(key)
+            out.append(_fmt_pct(v) if is_pct else _fmt_num(v))
+        return out
+
+    rows = [{
+        "label": "Your portfolio",
+        "is_portfolio": True,
+        "cells": _cells_from(perf_full),
+    }]
+    for _, r in bench_cmp.iterrows():
+        rd = r.to_dict()
+        name = str(rd.get("benchmark", "") or "")
+        if not name:
+            continue
         rows.append({
-            "label": label,
-            "you": _fmt_pct(port_v) if is_pct else _fmt_num(port_v),
-            "sp500": _fmt_pct(sp_v) if is_pct else _fmt_num(sp_v),
-            "acwi": _fmt_pct(acwi_v) if is_pct else _fmt_num(acwi_v),
-            "verdict_sp": sp_verdict_sym,
-            "verdict_sp_color": sp_verdict_color,
+            "label": name,
+            "is_portfolio": False,
+            "cells": _cells_from(rd),
         })
 
     return {
         "available": True,
-        "headers": ["Metric", "You", ab_bench_name, geo_bench_name],
+        "columns": [{"label": label, "note": note}
+                    for (label, _k, _p, note) in metric_cols],
         "rows": rows,
+        # Footnote: α and β are both referenced to the α/β benchmark.
+        "alpha_beta_note": (
+            f"\u03b1 and \u03b2 are computed against {ab_bench_name}."
+        ),
         "legend": _build_risk_legend(),
         "benchmark_alpha_beta": ctx.benchmark_alpha_beta,
         "benchmark_geo": ctx.benchmark_geo,
