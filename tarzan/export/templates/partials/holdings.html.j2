@@ -1,0 +1,68 @@
+{# ─── HOLDINGS (grouped by class, compact rows) ────── #}
+{# Extracted to a partial so the section can be ordered after the
+   Performance ("Returns vs benchmarks") table via {% include %}. #}
+          {% if holdings.groups %}
+          <tr>
+            <td class="px-32" style="padding:32px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Holdings</div>
+              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">All positions</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ holdings.total_count }} holdings &nbsp;·&nbsp; {{ hero.total_value }} total</div>
+
+              {# Summary chips by asset class #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
+                <tr>
+                  {% for s in holdings.summary %}
+                  <td class="kpi-cell" style="vertical-align:top;padding:10px 12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
+                    <div style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:{{ s.color }};text-transform:uppercase;">● {{ s.name|truncate(12, true, '') }}</div>
+                    <div style="margin-top:2px;font-size:14px;font-weight:700;color:{{ palette.ink }};">{{ s.count }} <span style="color:{{ palette.muted }};font-size:11px;font-weight:600;">{{ s.label }}</span></div>
+                  </td>
+                  {% if not loop.last %}<td width="6"></td>{% endif %}
+                  {% endfor %}
+                </tr>
+              </table>
+
+              {# Grouped holdings table — one block per asset class with
+                 a thin colored header strip carrying the group summary,
+                 then compact 5-column rows: name+ticker · Value · Weight
+                 (% portfolio) · % Class · Gain. #}
+              {% for g in holdings.groups %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:{{ '18px' if loop.first else '14px' }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;font-size:12px;">
+                {# Group header: subtle separator strip with class name +
+                   summary on the right. Lighter than the previous full
+                   colored block which felt too loud. #}
+                <tr>
+                  <td colspan="5" style="padding:8px 12px 8px 14px;background:#FFFFFF;border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="vertical-align:middle;font-size:11px;font-weight:700;letter-spacing:0.04em;color:{{ g.color }};text-transform:uppercase;">{{ g.name }}</td>
+                        <td align="right" style="vertical-align:middle;font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ g.count }} {{ g.label }} &nbsp;·&nbsp; {{ g.total_value }}{% if g.total_pct %} &nbsp;·&nbsp; {{ g.total_pct }} of invested{% endif %}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                {# Column headers #}
+                <tr>
+                  <td style="padding:6px 12px 6px 14px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Holding</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:80px;">Value €</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:62px;">% Inv.</td>
+                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:54px;">% Class</td>
+                  <td align="right" style="padding:6px 12px 6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:60px;">Gain</td>
+                </tr>
+                {# Holding rows #}
+                {% for r in g.rows %}
+                <tr>
+                  <td style="padding:8px 12px 8px 14px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}border-left:4px solid {{ g.color }};">
+                    <div style="font-size:12px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{{ r.name|truncate(48, true, '…') }}</div>
+                    <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.3;">{{ r.ticker }}</div>
+                  </td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.value }}</td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.ink }};">{{ r.weight_pct }}</td>
+                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;">{{ r.pct_class }}</td>
+                  <td align="right" style="padding:8px 12px 8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_pct }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endif %}

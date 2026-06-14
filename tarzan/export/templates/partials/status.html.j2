@@ -128,6 +128,13 @@
               </table>
               {% endif %}
 
+              {# Data-quality note for the returns computation, surfaced near
+                 the top (just above the rebalance banner) as requested. The
+                 `performance` context is available inside this include. #}
+              {% if performance.returns and performance.returns.coverage %}
+              <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};">Computed on {{ performance.returns.coverage }} real market data{% if performance.returns.fallback_count %} · {{ performance.returns.fallback_count }} instrument{{ 's' if performance.returns.fallback_count != 1 else '' }} priced by fallback{% endif %}.</div>
+              {% endif %}
+
               {# 4 ── Slim, colored rebalance banner (only when action is needed) #}
               {% if hero.rebal_label and hero.rebal_label != 'Aligned' %}
               <div style="margin-top:10px;padding:7px 12px;background:{{ hero.rebal_bg }};border-radius:8px;font-size:11px;font-weight:700;color:{{ hero.rebal_color }};">● Rebalance · {{ hero.rebal_n_actions }} action{{ 's' if hero.rebal_n_actions != 1 else '' }} · see optimizer below</div>
