@@ -1044,10 +1044,11 @@ def get_geo_breakdown(
     """Get geographic breakdown for an ETF ticker via dynamic scraping.
 
     Returns (breakdown_dict, source_name) or None. Memoized per run
-    (thread-safe) so each ticker is scraped at most once, and backed by
-    the immutable disk cache (keyed by the stable ISIN when available) so
-    a justETF/scrape outage does not degrade the geography section to
-    "Not Available" — once resolved, the breakdown persists across runs.
+    (thread-safe). The live resolution (indexes.csv + justETF + yfinance)
+    runs first so it is always authoritative and fresh; the immutable disk
+    cache (keyed by the stable ISIN when available) is consulted only as a
+    fallback, so a justETF/scrape outage does not degrade the geography
+    section to "Not Available" — while never shadowing an indexes.csv edit.
     """
     cached = _get_geo_breakdown_cached(ticker)
     if cached is not None:
@@ -1056,14 +1057,12 @@ def get_geo_breakdown(
         return cached, source
 
     geo_key = isin or ticker
-    disk = price_cache.load_geo(geo_key)
-    if disk:
-        breakdown = _geo_from_cache(disk["breakdown"])
-        if breakdown:
-            source = disk.get("source", "cache")
-            _store_geo_breakdown(ticker, breakdown, source)
-            return breakdown, source
 
+    # indexes.csv (and the justETF index-name bridge) are authoritative and
+    # cheap enough to run fresh on every call, so an edit to indexes.csv
+    # takes effect immediately instead of being shadowed for the cache TTL.
+    # The on-disk cache is consulted ONLY as a fallback below, when the live
+    # resolution is unavailable.
     result = _scrape_geo_breakdown(ticker, isin)
     if result:
         breakdown, source = result
@@ -1072,6 +1071,19 @@ def get_geo_breakdown(
             geo_key, {g.value: v for g, v in breakdown.items()}, source
         )
         return breakdown, source
+
+    # Fallback: a previously-resolved breakdown from the immutable disk
+    # cache. This keeps the geography section resilient to a justETF /
+    # scrape outage (which would otherwise degrade it to "Not Available")
+    # without ever shadowing a fresh indexes.csv edit.
+    disk = price_cache.load_geo(geo_key)
+    if disk:
+        breakdown = _geo_from_cache(disk["breakdown"])
+        if breakdown:
+            source = disk.get("source", "cache")
+            _store_geo_breakdown(ticker, breakdown, source)
+            return breakdown, source
+
     return None
 
 
