@@ -450,7 +450,7 @@ class MetricsEngine:
         except Exception as e:
             logger.warning("Benchmark fetch for risk failed: %s", e)
         if not bench_history.empty and len(bench_history) > 1:
-            beta, alpha = _compute_beta_alpha(daily_returns, bench_history, annual_return)
+            beta, alpha = _compute_beta_alpha(ph, bench_history, annual_return)
             result["beta"] = beta
             result["alpha"] = alpha
         ctx["risk"] = result

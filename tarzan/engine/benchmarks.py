@@ -141,7 +141,7 @@ def _compute_single_benchmark_metrics(
         "beta": float("nan"),
     }
     if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
-        beta, alpha = _compute_beta_alpha(daily_ret, ab_benchmark, cagr)
+        beta, alpha = _compute_beta_alpha(bench, ab_benchmark, cagr)
         metrics["alpha"] = alpha
         metrics["beta"] = beta
     return metrics
@@ -205,18 +205,9 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
             and len(s) > 1 and not daily_ret.empty):
         bench_win = _clip_to_window(bench_history, s.index.min(), s.index.max())
         if len(bench_win) > 1:
-            beta, alpha = _compute_beta_alpha(daily_ret, bench_win, cagr_val)
+            beta, alpha = _compute_beta_alpha(s, bench_win, cagr_val)
             row["beta"] = beta
             row["alpha"] = alpha
-
-    # Alpha/Beta vs configured benchmark
-    if not bench_history.empty and len(bench_history) > 1:
-        beta, alpha = _compute_beta_alpha(daily_ret, bench_history, cagr_val)
-        row["beta"] = beta
-        row["alpha"] = alpha
-    else:
-        row["beta"] = float("nan")
-        row["alpha"] = float("nan")
 
     # Period Used: "5Y", "3.2Y", etc.
     if len(s) >= 2:
