@@ -4,8 +4,8 @@ MSCI ACWI,^892400-USD-STRD,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,Official I
 MSCI EAFE,EFA,TRUE,,,0,0,30.22,22.45,47.33,ETF Proxy - Developed markets excluding North America.,2/21/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
 MSCI World,^990100-USD-STRD,TRUE,,,71.22,0,8.18,6.02,14.58,Official Index - Large and mid-cap stocks across 23 developed markets.,2/21/26
-MSCI World Momentum,MTUM,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
-MSCI World Quality,QUAL,TRUE,,,76.22,0,8.22,5.1,10.46,ETF Proxy - Stocks with high return on equity and low debt.,2/21/26
+MSCI World Momentum,IWMO.L,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
+MSCI World Quality,IWQU.L,TRUE,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Stocks with high return on equity and low debt.,6/15/26
 Nasdaq 100,^NDX,TRUE,,,100,0,0,0,0,Official Index - Top 100 non-financial companies on Nasdaq.,2/21/26
 S&P 500,^GSPC,TRUE,,,100,0,0,0,0,Official Index - 500 leading large-cap US companies.,2/21/26
 Bloomberg Global Aggregate,AGGG.L,TRUE,,,44.53,5.18,12.28,13.81,24.2,ETF Proxy - Global investment grade debt from 24 local currency markets.,2/22/26
