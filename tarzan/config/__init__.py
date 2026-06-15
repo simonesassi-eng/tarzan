@@ -57,6 +57,20 @@ def get(key: str, default=None):
     return _load_static().get(key, default)
 
 
+def reset_input_caches() -> None:
+    """Drop the per-process caches of the input/config files.
+
+    constants.yaml and static.yaml ship with the code, but indexes.csv is
+    a user-supplied input (downloaded from each user's Google Drive), so it
+    must be re-read fresh on every run. Clearing all three keeps the rule
+    simple and consistent: a run never serves a previous run's inputs. The
+    immutable market-data disk cache (price_cache) is intentionally left
+    untouched — it holds universal data, safe to reuse across runs/users."""
+    _load_raw.cache_clear()
+    _load_static.cache_clear()
+    _load_indexes_csv.cache_clear()
+
+
 # --- Risk & Performance ---
 
 def risk_free_rate() -> float:
