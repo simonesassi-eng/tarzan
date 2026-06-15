@@ -1,9 +1,9 @@
 index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
 FTSE All-World,VWRL.L,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
 MSCI ACWI,^892400-USD-STRD,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,Official Index - Comprehensive global equity (Developed + Emerging).,6/15/26
-MSCI EAFE,EFA,TRUE,,,0,0,30.22,22.45,47.33,ETF Proxy - Developed markets excluding North America.,2/21/26
+MSCI EAFE,EFA,TRUE,,,0,0,32.2,22.7,45.1,ETF Proxy - Developed markets excluding North America.,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
-MSCI World,^990100-USD-STRD,TRUE,,,71.22,0,8.18,6.02,14.58,Official Index - Large and mid-cap stocks across 23 developed markets.,2/21/26
+MSCI World,^990100-USD-STRD,TRUE,,,72.5,0,8.5,5.7,13.3,Official Index - Large and mid-cap stocks across 23 developed markets.,6/15/26
 MSCI World Momentum,IWMO.L,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
 MSCI World Quality,IWQU.L,TRUE,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Stocks with high return on equity and low debt.,6/15/26
 Nasdaq 100,^NDX,TRUE,,,100,0,0,0,0,Official Index - Top 100 non-financial companies on Nasdaq.,2/21/26
@@ -16,44 +16,43 @@ Bloomberg US Treasury,GOVT,,,,100,0,0,0,0,ETF Proxy - US Treasury bonds with rem
 CAC 40,^FCHI,,,,0,0,100,0,0,Official Index for the French stock market (40 largest stocks).,2/22/26
 DAX 40,^GDAXI,,,,0,0,100,0,0,Official Index of the 40 major German blue-chip companies.,2/22/26
 Fidelity US Quality Income,FUSD.L,,,,100,0,0,0,0,ETF Proxy - High-quality US companies with dividend growth.,2/22/26
-FTSE All-World High Dividend,VHYL.L,,,,42.1,12.35,14.2,9.45,21.9,ETF Proxy - Stocks with above-average dividend yields globally.,2/22/26
-FTSE Developed World,VEVE.L,,,,70.85,0,8.45,6.2,14.5,ETF Proxy - Large and mid-cap companies across developed markets.,2/21/26
+FTSE All-World High Dividend,VHYL.L,,,,39.5,10.4,13.3,9.2,27.6,ETF Proxy - Stocks with above-average dividend yields globally.,6/15/26
+FTSE Developed World,VEVE.L,,,,68.3,0.5,8.1,6.5,16.6,ETF Proxy - Large and mid-cap companies across developed markets.,6/15/26
 FTSE MIB,FTSEMIB.MI,,,,0,0,100,0,0,Official Index for the Italian stock market.,2/22/26
 J.P. Morgan GBI-EM Global Dividend,EMDV.L,,,,0,100,0,0,0,ETF Proxy - Emerging markets sovereign bonds (high yield focus).,2/22/26
 JP Morgan GBI-EM,IEMB.L,,,,0,100,0,0,0,ETF Proxy - Government bonds issued by EM countries in local currency.,2/21/26
-MSCI ACWI ex USA,ACWX,,,,0,26.45,26.38,14.75,32.42,ETF Proxy - Global stocks excluding those listed in the US.,2/21/26
-MSCI ACWI IMI,ACIM,,,,63.15,10.22,7.42,5.48,13.73,ETF Proxy - All Country World Investable Market Index (incl. small caps).,2/21/26
-MSCI ACWI IMI Semiconductors,SMH,,,,74.15,18.3,4.25,1.85,1.45,ETF Proxy - Companies involved in semiconductor manufacturing.,2/22/26
+MSCI ACWI ex USA,ACWX,,,,0,28.5,21.19,14.84,35.47,ETF Proxy - Global stocks excluding those listed in the US.,6/15/26
+MSCI ACWI IMI,ACIM,,,,63.5,10.2,7.4,5.4,13.5,ETF Proxy - All Country World Investable Market Index (incl. small caps).,6/15/26
+MSCI ACWI IMI Semiconductors,SEMI.AS,,,,69,17,5.5,5,3.5,ETF Proxy - Global semiconductor companies (incl. Taiwan/Korea).,6/15/26
 MSCI Canada,EWC,,,,0,0,0,0,100,ETF Proxy - Large and mid-cap representation in Canada.,2/22/26
 MSCI China,MCHI,,,,0,100,0,0,0,ETF Proxy - Large and mid-cap Chinese stocks.,2/22/26
 MSCI EMU,EZU,,,,0,0,100,0,0,ETF Proxy - Stocks from countries within the Eurozone EMU.,2/21/26
 MSCI EMU High Dividend Yield,EUNY.DE,,,,0,0,100,0,0,ETF Proxy - High dividend yield stocks from the Eurozone.,2/22/26
 MSCI India,INDA,,,,0,100,0,0,0,ETF Proxy - Large and mid-cap representation in India.,2/22/26
 MSCI Japan,EWJ,,,,0,0,0,100,0,ETF Proxy - Performance of the Japanese stock market.,2/21/26
-MSCI Kokusai,TOK,,,,75.85,0,8.75,0,15.4,ETF Proxy - World equity index excluding Japan.,2/21/26
+MSCI Kokusai,TOK,,,,76.2,0,8.9,0,14.9,ETF Proxy - World equity index excluding Japan.,6/15/26
 MSCI Pacific ex Japan,EPP,,,,0,0,0,0,100,ETF Proxy - Developed Pacific markets excluding Japan.,2/21/26
 MSCI Switzerland,EWL,,,,0,0,0,0,100,ETF Proxy - Performance of the Swiss equity market.,2/22/26
-MSCI World Equal Weight,EQWL,,,,44.18,0,17.55,15.22,23.05,ETF Proxy - Equal-weighted global equity.,2/21/26
-MSCI World ex USA,VEU,,,,0,0,29.63,20.75,49.62,ETF Proxy - Developed markets outside the US.,6/15/26
-MSCI World ex USA Momentum,IMTM,,,,0,0,31.88,22.45,45.67,ETF Proxy - Stocks outside the US with strong price momentum.,2/21/26
-MSCI World ex USA Quality,IWQU.L,,,,0,0,30.15,18.37,51.48,ETF Proxy - Stocks outside the US with high quality scores.,2/21/26
-MSCI World ex USA Value,IWVL.L,,,,0,0,34.55,25.12,40.33,ETF Proxy - Stocks outside the US with attractive valuations.,2/21/26
-MSCI World Financials,IXG,,,,46.25,0,15.4,10.8,27.55,ETF Proxy - Global financial sector stocks.,2/22/26
-MSCI World Health Care,IXJ,,,,72.1,0,10.3,6.45,11.15,ETF Proxy - Global health care sector stocks.,2/22/26
+MSCI World Equal Weight,MWEQ.L,,,,42.07,0.8,16.45,12.88,27.8,ETF Proxy - Equal-weighted developed-market global equity.,6/15/26
+MSCI World ex USA,EXUS.MI,,,,0,0,29.63,20.75,49.62,ETF Proxy - Developed markets outside the US.,6/15/26
+MSCI World ex USA Momentum,IMTM,,,,0,0,23.4,23.1,53.5,ETF Proxy - Developed-market stocks outside the US with strong price momentum.,6/15/26
+MSCI World ex USA Quality,IQLT,,,,0,0,28.5,12.9,58.6,ETF Proxy - Developed-market stocks outside the US with high quality scores.,6/15/26
+MSCI World ex USA Value,IVLU,,,,0,0,30.6,29.6,39.8,ETF Proxy - Developed-market stocks outside the US with attractive valuations.,6/15/26
+MSCI World Financials,XDWF.L,,,,52,0,14,6.7,27.3,ETF Proxy - Developed-market financial sector stocks.,6/15/26
+MSCI World Health Care,XDWH.L,,,,70,0,7,3.8,19.2,ETF Proxy - Developed-market health care sector stocks.,6/15/26
 MSCI World High Dividend,VIGI,,,,48.25,0,18.4,11.2,22.15,ETF Proxy - Global stocks with dividend appreciation.,2/21/26
-MSCI World High Dividend Yield,VHYL.L,,,,48.25,0,18.4,11.2,22.15,ETF Proxy - Global high dividend yield stocks.,2/22/26
-MSCI World Info Tech,IXN,,,,88.4,0,4.15,3.25,4.2,ETF Proxy - Global technology sector stocks.,2/22/26
-MSCI World Minimum Volatility,ACWV,,,,57.4,0,12.15,14.7,15.75,ETF Proxy - Stocks with lower volatility characteristics globally.,2/21/26
+MSCI World Info Tech,XDWT.L,,,,78,0,8.7,4.2,9.1,ETF Proxy - Developed-market technology sector stocks.,6/15/26
+MSCI World Minimum Volatility,MVOL.L,,,,66.64,0,8.35,10.24,14.77,ETF Proxy - Developed-market stocks with lower volatility characteristics.,6/15/26
 MSCI World Sector Neutral Quality,IWQU.L,,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Quality factor stocks adjusted for sector neutrality.,6/15/26
-MSCI World Small Cap,WSML.L,,,,59.12,0,9.85,12.04,18.99,ETF Proxy - Small-cap stocks across developed market countries.,2/21/26
+MSCI World Small Cap,WSML.L,,,,62.46,0,6.0,11.98,19.56,ETF Proxy - Small-cap stocks across developed market countries.,6/15/26
 MSCI World SRI,SUSW.L,,,,72.15,0,7.95,5.8,14.1,ETF Proxy - Stocks with high ESG ratings.,2/22/26
 MSCI World Enhanced Value,IWVL.L,,,,51.29,0,16.05,18.57,14.09,ETF Proxy - Stocks with strong value characteristics.,6/15/26
-Nasdaq Global Buyback Achievers,PKW,,,,82.1,0,4.3,3.15,10.45,ETF Proxy - Companies that have significantly reduced shares.,2/22/26
+Nasdaq Global Buyback Achievers,BUYB.L,,,,58,0,10,10,22,ETF Proxy - Global companies that have significantly reduced shares.,6/15/26
 Russell 1000,^RUI,,,,100,0,0,0,0,Official Index - 1000 largest US companies.,2/21/26
 Russell 2000,^RUT,,,,100,0,0,0,0,Official Index - 2000 small-cap US companies.,2/21/26
 S&P 500 Equal Weight,^SPXEW,,,,100,0,0,0,0,ETF Proxy - S&P 500 constituents with equal weighting.,2/22/26
 S&P 500 Low Volatility,SPLV,,,,100,0,0,0,0,ETF Proxy - 100 least volatile stocks in the S&P 500.,2/22/26
 S&P US Dividend Aristocrats,NOBL,,,,100,0,0,0,0,ETF Proxy - S&P 500 companies with 25+ years of div growth.,2/22/26
-Solactive Global Lithium,LIT,,,,32.45,45.12,4.18,5.25,13,ETF Proxy - Companies involved in lithium and battery production.,2/22/26
-STOXX Europe 50,^STOXX50E,,,,0,0,41.3,0,58.7,Official Index - 50 largest blue-chip stocks from Europe.,2/21/26
-STOXX Europe Defense,DFNS.L,,,,0,0,62.35,0,37.65,ETF Proxy - European companies involved in defense.,2/22/26
+Solactive Global Lithium,LIT,,,,13.3,42,0.6,10.7,33.4,ETF Proxy - Companies involved in lithium and battery production.,6/15/26
+STOXX Europe 50,EUN.L,,,,0,0,56,0,44,Official Index - 50 largest blue-chip stocks from Europe.,6/15/26
+STOXX Europe Defense,EUAD,,,,0,0,66.2,0,33.8,ETF Proxy - European companies involved in defense.,6/15/26
