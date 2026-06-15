@@ -279,45 +279,65 @@ def _normalize_index(series: pd.Series) -> pd.Series:
 
 
 def _compute_beta_alpha(
-    daily_returns: pd.Series, benchmark_history: pd.Series, annual_return: float = 0.0,
+    series_or_returns: pd.Series,
+    benchmark_history: pd.Series,
+    annual_return: float = 0.0,
 ) -> tuple[float, float]:
-    """Compute beta and Jensen's alpha via OLS regression of excess returns.
+    """Compute beta and Jensen's alpha via OLS on weekly returns.
 
-    Beta is the slope of the regression of the portfolio's daily excess
-    returns on the benchmark's daily excess returns (same as cov/var for
-    the raw returns, but using excess keeps the intercept meaningful).
-    Alpha is the regression intercept annualized (× TRADING_DAYS), which
-    gives the annualized residual return not explained by market exposure.
+    Both inputs should be **price** series (the function detects returns vs
+    prices via a median heuristic). We resample to weekly (Friday close)
+    before computing returns and running the regression. Weekly returns
+    eliminate the exchange-calendar misalignment that plagues daily cross-
+    exchange comparisons (e.g. MSCI index publication dates don't match LSE
+    trading days, destroying daily correlation). This is also the standard
+    approach used by Morningstar, Bloomberg, and most institutional risk
+    systems for β/α.
 
-    This avoids the fragile old approach of plugging annualized CAGR (which
-    explodes on short windows) into the CAPM equation and producing alpha
-    figures of ±15% on a 6-month track record.
+    Alpha is the OLS intercept annualized (× 52 weeks).
     """
-    bench_returns = benchmark_history.pct_change().dropna()
-    dr = _normalize_index(daily_returns)
-    br = _normalize_index(bench_returns)
-    aligned = pd.DataFrame({"port": dr, "bench": br}).dropna()
-    if len(aligned) <= 1:
+    if benchmark_history is None or len(benchmark_history) < 10:
+        return float("nan"), float("nan")
+    if series_or_returns is None or len(series_or_returns) < 10:
         return float("nan"), float("nan")
 
-    # Daily risk-free rate
-    rf_daily = RISK_FREE_RATE / 100.0 / TRADING_DAYS
+    port_raw = _normalize_index(series_or_returns)
+    bench_raw = _normalize_index(benchmark_history)
 
-    # Excess returns
-    port_excess = aligned["port"] - rf_daily
-    bench_excess = aligned["bench"] - rf_daily
+    # If port is already returns (median abs < 0.5), reconstruct a price
+    # index so we can resample to weekly cleanly.
+    if port_raw.abs().median() < 0.5:
+        port_prices = (1 + port_raw).cumprod()
+        port_prices.iloc[0] = 1.0  # normalize start
+    else:
+        port_prices = port_raw
 
-    # OLS beta = cov(port_excess, bench_excess) / var(bench_excess)
+    # Resample both to weekly (Friday close) — robust to different exchange
+    # calendars, public holidays, and index publication lags.
+    port_w = port_prices.resample("W-FRI").last().dropna()
+    bench_w = bench_raw.resample("W-FRI").last().dropna()
+
+    # Align and compute weekly returns
+    aligned = pd.DataFrame({"port": port_w, "bench": bench_w}).dropna()
+    if len(aligned) < 5:
+        return float("nan"), float("nan")
+    rets = aligned.pct_change().dropna()
+    if len(rets) < 4:
+        return float("nan"), float("nan")
+
+    # Weekly risk-free
+    rf_weekly = RISK_FREE_RATE / 100.0 / 52.0
+
+    port_excess = rets["port"] - rf_weekly
+    bench_excess = rets["bench"] - rf_weekly
+
     var_bench = bench_excess.var()
     if var_bench <= 0:
         return float("nan"), float("nan")
-    cov = port_excess.cov(bench_excess)
-    beta = cov / var_bench
 
-    # OLS alpha (intercept) = mean(port_excess) - beta * mean(bench_excess)
-    # Annualized by multiplying the daily alpha by trading days.
-    alpha_daily = port_excess.mean() - beta * bench_excess.mean()
-    alpha_annual = alpha_daily * TRADING_DAYS * 100  # in % points
+    beta = port_excess.cov(bench_excess) / var_bench
+    alpha_weekly = port_excess.mean() - beta * bench_excess.mean()
+    alpha_annual = alpha_weekly * 52.0 * 100.0  # annualized, in %
 
     return float(beta), float(alpha_annual)
 
