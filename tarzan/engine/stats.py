@@ -279,22 +279,47 @@ def _normalize_index(series: pd.Series) -> pd.Series:
 
 
 def _compute_beta_alpha(
-    daily_returns: pd.Series, benchmark_history: pd.Series, annual_return: float,
+    daily_returns: pd.Series, benchmark_history: pd.Series, annual_return: float = 0.0,
 ) -> tuple[float, float]:
+    """Compute beta and Jensen's alpha via OLS regression of excess returns.
+
+    Beta is the slope of the regression of the portfolio's daily excess
+    returns on the benchmark's daily excess returns (same as cov/var for
+    the raw returns, but using excess keeps the intercept meaningful).
+    Alpha is the regression intercept annualized (× TRADING_DAYS), which
+    gives the annualized residual return not explained by market exposure.
+
+    This avoids the fragile old approach of plugging annualized CAGR (which
+    explodes on short windows) into the CAPM equation and producing alpha
+    figures of ±15% on a 6-month track record.
+    """
     bench_returns = benchmark_history.pct_change().dropna()
     dr = _normalize_index(daily_returns)
     br = _normalize_index(bench_returns)
     aligned = pd.DataFrame({"port": dr, "bench": br}).dropna()
     if len(aligned) <= 1:
         return float("nan"), float("nan")
-    cov = aligned["port"].cov(aligned["bench"])
-    var_bench = aligned["bench"].var()
+
+    # Daily risk-free rate
+    rf_daily = RISK_FREE_RATE / 100.0 / TRADING_DAYS
+
+    # Excess returns
+    port_excess = aligned["port"] - rf_daily
+    bench_excess = aligned["bench"] - rf_daily
+
+    # OLS beta = cov(port_excess, bench_excess) / var(bench_excess)
+    var_bench = bench_excess.var()
     if var_bench <= 0:
         return float("nan"), float("nan")
+    cov = port_excess.cov(bench_excess)
     beta = cov / var_bench
-    bench_annual = compute_cagr(benchmark_history)
-    alpha = annual_return - (RISK_FREE_RATE + beta * (bench_annual - RISK_FREE_RATE))
-    return float(beta), float(alpha)
+
+    # OLS alpha (intercept) = mean(port_excess) - beta * mean(bench_excess)
+    # Annualized by multiplying the daily alpha by trading days.
+    alpha_daily = port_excess.mean() - beta * bench_excess.mean()
+    alpha_annual = alpha_daily * TRADING_DAYS * 100  # in % points
+
+    return float(beta), float(alpha_annual)
 
 
 # ======================================================================
