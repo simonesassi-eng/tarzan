@@ -46,6 +46,20 @@ def _geo_map() -> dict[str, Geography]:
     return _GEO_MAP
 
 
+def reset_caches() -> None:
+    """Drop the per-process caches of indexes.csv and the geography map.
+
+    Called at the start of each pipeline run so a user's edited input
+    files (indexes.csv, constants) are re-read fresh — the same "inputs
+    are never shadowed" guarantee the enricher's run-memos provide. This
+    matters when several runs happen in one process (e.g. an interactive
+    dashboard refresh, or a multi-tenant service where each user supplies
+    their own Drive inputs)."""
+    global _GEO_MAP, _ASSET_GEO_DF
+    _GEO_MAP = None
+    _ASSET_GEO_DF = None
+
+
 def _load_asset_geo() -> Optional[pd.DataFrame]:
     """Load and cache the indexes.csv file."""
     global _ASSET_GEO_DF

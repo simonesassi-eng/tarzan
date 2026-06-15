@@ -76,6 +76,15 @@ def run(
     Returns:
         Tuple of (PortfolioMetrics, InvestorConfig).
     """
+    # Re-read user inputs fresh on every run: drop the per-process caches of
+    # indexes.csv / config and the geo resolver's copy, so an edit to a
+    # user's Drive inputs is never shadowed by a previous run in the same
+    # process. (Universal market data in price_cache is left cached.)
+    from tarzan import config as _cfg
+    from tarzan.data import geo_resolver as _geo
+    _cfg.reset_input_caches()
+    _geo.reset_caches()
+
     config = load_config(config_source)
     logger.info("Config loaded (target tolerance=±%.1f%%)", config.rebalancing_target_tolerance_pctg)
 
