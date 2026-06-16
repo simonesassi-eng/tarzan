@@ -291,12 +291,12 @@ class MetricsEngine:
             build_order_derived_series,
         )
 
-        # Enriched holdings keyed by ISIN. Start from holdings.csv (which
-        # carries cost basis/targets), then fill in any ISIN that appears
-        # only in the order list by enriching the order-derived holdings.
-        # Without this, order-only ISINs would have no yfinance history in
-        # the live run and silently fall to the synthetic/carry_flat rung,
-        # making TWROR coverage differ from the standalone returns script.
+        # Enriched holdings keyed by ISIN. ``self.holdings`` is the
+        # order-derived, enriched snapshot; we defensively re-derive from
+        # the orders and enrich any ISIN not already present, so every
+        # order ISIN has yfinance history for returns (otherwise it would
+        # silently fall to the synthetic/carry_flat rung, making TWROR
+        # coverage differ from the standalone returns script).
         enriched_by_isin = {h.isin: h for h in self.holdings if h.isin}
         missing = [
             h for h in build_holdings_from_orders(self.orders)
