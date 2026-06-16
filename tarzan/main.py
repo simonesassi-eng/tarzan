@@ -1,8 +1,8 @@
 """Tarzan — CLI entry point.
 
 Usage:
-    python -m tarzan.main --input_holdings input/holdings.csv
-    python -m tarzan.main --input_holdings input/holdings.csv --input_config input/targets.csv
+    python -m tarzan.main --input_orders input/order_list.csv
+    python -m tarzan.main --input_orders input/order_list.csv --input_config input/targets.csv
 """
 
 from __future__ import annotations
@@ -20,19 +20,16 @@ logger = logging.getLogger("tarzan")
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tarzan CLI")
-    parser.add_argument("--input_holdings", default="input/holdings.csv")
+    parser.add_argument(
+        "--input_orders", default="input/order_list.csv",
+        help="Order-list CSV. The single source of truth: the snapshot is "
+             "derived from it and it drives the historical series + XIRR/TWROR.",
+    )
     parser.add_argument("--input_config", default="input/targets.csv")
     parser.add_argument(
-        "--input_orders", default=None,
-        help="Optional order-list CSV. When given, enables XIRR/TWROR and "
-             "makes the order list the source of the historical series. If "
-             "the holdings file is absent, the snapshot is derived from this "
-             "order list (order-only mode).",
-    )
-    parser.add_argument(
         "--input_targets_per_holding", default="input/targets_per_holding.csv",
-        help="Optional per-holding rebalancing targets (by ISIN), used to "
-             "attach targets to the order-derived snapshot in order-only mode.",
+        help="Optional per-holding rebalancing targets (by ISIN), attached "
+             "to the order-derived snapshot.",
     )
     parser.add_argument("--output", default="output/")
     return parser.parse_args(argv)
@@ -60,7 +57,6 @@ def main(argv=None) -> int:
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
-            holdings_source=args.input_holdings,
             config_source=args.input_config,
             orders_source=args.input_orders,
             targets_per_holding_source=args.input_targets_per_holding,

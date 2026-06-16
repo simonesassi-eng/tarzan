@@ -33,7 +33,7 @@ back-to-back.
    ┌─────────────────────────┐                                   │
    │ Private Google Drive    │                                   │
    │ folder                  │ ◄─── 2. download CSVs ───┐        │
-   │   ├── holdings.csv      │      (service account)   │        │
+   │   ├── order_list.csv    │      (service account)   │        │
    │   └── targets.csv       │                          │        │
    └─────────────────────────┘                          │        │
                                                 ┌───────┴────────┴───┐
@@ -77,7 +77,7 @@ git push origin mainline   # or main, whichever you use
 ```
 
 > **Sanity check:** browse the repo on github.com — there should be
-> **no `.private/` folder, no `holdings.csv`, no `targets.csv`** anywhere.
+> **no `.private/` folder, no `order_list.csv`, no `targets.csv`** anywhere.
 > If you see them, stop and remove them before continuing.
 
 ---
@@ -124,9 +124,10 @@ your folder without you sharing your personal Drive credentials.
 
 ### 2f. Verify your folder contains the right files
 
-The folder MUST contain exactly these two filenames at the top level:
-- `holdings.csv`
+The folder MUST contain these filenames at the top level:
+- `order_list.csv`
 - `targets.csv`
+- `targets_per_holding.csv` (optional — per-instrument rebalancing targets)
 
 Anything else in the folder is ignored. The names are case-sensitive.
 
@@ -293,19 +294,19 @@ When you buy/sell, update your CSVs **directly in the Drive folder**
 next scheduled or on-demand run picks up the new data automatically.
 No git commit, no push, no rebuild.
 
-For local development, keep using `input/holdings.csv` and
+For local development, keep using `input/order_list.csv` and
 `input/targets.csv` (which are gitignored).
 
 ---
 
 ## Troubleshooting
 
-### "Drive folder is missing: holdings.csv, targets.csv"
+### "Drive folder is missing: order_list.csv, targets.csv"
 - Re-check the folder ID in the `DRIVE_FOLDER_ID` secret. It's the
   segment after `/folders/` in the URL.
 - Verify the service account email (from the JSON `"client_email"`
   field) is listed as **Viewer** on the folder.
-- Confirm both filenames are spelled exactly as `holdings.csv` and
+- Confirm the filenames are spelled exactly as `order_list.csv` and
   `targets.csv`. Case matters.
 
 ### "Authentication unsuccessful" / SMTP login fails
@@ -403,7 +404,7 @@ For pure local development with the same CSVs you use day-to-day:
 SMTP_USER=fake@example.com SMTP_PASS=fake \
 RECIPIENT_EMAIL=fake@example.com \
 DRY_RUN=1 \
-HOLDINGS_PATH=input/holdings.csv \
+ORDERS_PATH=input/order_list.csv \
 TARGETS_PATH=input/targets.csv \
 python scripts/send_newsletter.py
 ```

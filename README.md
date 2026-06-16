@@ -32,9 +32,9 @@ pip install -r requirements.txt
 
 # 2. Run the sample portfolio
 python -m tarzan.main \
-    --input_holdings input/sample/sample_holdings.csv \
-    --input_config   input/sample/sample_targets.csv \
-    --output         output/sample/
+    --input_orders input/sample/sample_order_list.csv \
+    --input_config input/sample/sample_targets.csv \
+    --output       output/sample/
 ```
 
 A ready-made report built from the sample data lives in
@@ -42,20 +42,27 @@ A ready-made report built from the sample data lives in
 
 ## Input format
 
-Holdings are a CSV or XLSX with the following columns (case-insensitive):
+The order list is the single source of truth: a CSV of your buy/sell/
+transfer/coupon orders. Tarzan derives the current snapshot (net
+quantity, average-cost basis, market value via live prices) and the
+historical value series from it. Minimum columns (case-insensitive):
 
-| Column             | Type  | Required | Description                     |
-|--------------------|-------|:--------:|---------------------------------|
-| `isin`             | str   | ✓        | 12-character ISIN code          |
-| `ticker`           | str   | ✓        | Yahoo Finance ticker            |
-| `quantity`         | float | ✓        | Number of units (> 0)           |
-| `cost_basis_eur`   | float | ✓        | Total cost in EUR               |
-| `market_value_eur` | float | ✓        | Current market value in EUR     |
-| `currency`         | str   | ✓        | Instrument currency             |
+| Column       | Type  | Required | Description                          |
+|--------------|-------|:--------:|--------------------------------------|
+| `date`       | date  | ✓        | Order date (YYYY-MM-DD)              |
+| `type`       | str   | ✓        | buy / sell / transfer_in / coupon …  |
+| `isin`       | str   | ✓        | 12-character ISIN code               |
+| `quantity`   | float | ✓        | Units traded (sign per direction)    |
+| `gross_eur`  | float | ✓        | Gross amount in EUR                  |
+| `net_eur`    | float | ✓        | Net cash flow in EUR (− for buys)    |
+
+Optional columns (`trade_date`, `name`, `ticker`, `currency`,
+`price_native`, `fx_rate`, `fees_eur`, `source`) are used when present.
 
 Targets are an optional CSV with typed-suffix keys (`_eur`, `_pctg`,
 `_date`) for cash buffer, invested-allocation targets, equity geography
-targets and rebalancing parameters.
+targets and rebalancing parameters. Per-instrument rebalancing targets
+live in an optional `targets_per_holding.csv` (joined by ISIN).
 
 See [`tarzan/README.md`](tarzan/README.md) for the full configuration
 reference and metric definitions.
@@ -74,7 +81,7 @@ Tarzan/
 │   ├── models/              # Holding, InvestorConfig, PortfolioMetrics
 │   └── tests/               # Pytest suite
 ├── input/
-│   └── sample/              # Sample holdings / targets CSVs (tracked)
+│   └── sample/              # Sample order list / targets CSVs (tracked)
 ├── output/
 │   └── sample/              # Pre-generated sample Excel report (tracked)
 └── requirements.txt

@@ -1,0 +1,10 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,source
+2025-01-15,2025-01-13,buy,IE00B3RBWM25,Vanguard FTSE All-World,VWCE.DE,80,EUR,128.00,1.0,10240.00,0.0,-10240.00,sample
+2025-01-15,2025-01-13,buy,IE00B4L5Y983,iShares Core MSCI World,EUNL.DE,50,EUR,98.00,1.0,4900.00,0.0,-4900.00,sample
+2025-01-15,2025-01-13,buy,IE00B5BMR087,iShares Core S&P 500,CSPX.L,15,EUR,570.00,1.0,8550.00,0.0,-8550.00,sample
+2025-02-10,2025-02-06,buy,LU0292107645,Xtrackers MSCI Emerging Markets,XMME.DE,90,EUR,56.00,1.0,5040.00,0.0,-5040.00,sample
+2025-02-10,2025-02-06,buy,IE00B52MJD48,iShares Nikkei 225 UCITS,CNKY.L,35,EUR,64.00,1.0,2240.00,0.0,-2240.00,sample
+2025-02-10,2025-02-06,buy,IE00B945VV12,Vanguard FTSE Developed Europe,VERX.DE,120,EUR,33.00,1.0,3960.00,0.0,-3960.00,sample
+2025-03-05,2025-03-03,buy,IE00B3F81R35,iShares Core Global Aggregate Bond,IEAG.L,100,EUR,56.00,1.0,5600.00,0.0,-5600.00,sample
+2025-03-05,2025-03-03,buy,IE00B1FZS798,iShares USD Treasury Bond 7-10yr,IBTM.L,40,EUR,105.00,1.0,4200.00,0.0,-4200.00,sample
+2025-04-01,2025-03-28,buy,IE00B579F325,Invesco Physical Gold,SGLD.L,18,EUR,245.00,1.0,4410.00,0.0,-4410.00,sample

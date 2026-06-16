@@ -105,9 +105,8 @@ def test_order_only_derives_snapshot(tmp_path, monkeypatch):
     targets_csv = tmp_path / "targets_per_holding.csv"
     targets_csv.write_text(TARGETS_CSV)
 
-    # No holdings snapshot at all → order-only mode kicks in.
+    # The order list is the single source of truth.
     metrics, config = orchestrator.run(
-        holdings_source=None,
         config_source=None,
         orders_source=str(orders_csv),
         targets_per_holding_source=str(targets_csv),
@@ -124,7 +123,7 @@ def test_order_only_derives_snapshot(tmp_path, monkeypatch):
     assert metrics.inception_date == "2025-01-02"
 
 
-def test_missing_holdings_path_falls_back_to_orders(tmp_path, monkeypatch):
+def test_run_without_per_holding_targets(tmp_path, monkeypatch):
     monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", _no_network_enrich)
     _stub_benchmarks(monkeypatch)
     orders_csv = tmp_path / "order_list.csv"
@@ -132,10 +131,19 @@ def test_missing_holdings_path_falls_back_to_orders(tmp_path, monkeypatch):
         "date,type,isin,quantity,gross_eur,net_eur\n"
         "2025-01-02,buy,IE00BL25JP72,100,1000,-1000\n"
     )
-    # Holdings path points to a nonexistent file → graceful fallback.
+    # Order list alone (no per-holding targets) must still run end to end.
     metrics, _ = orchestrator.run(
-        holdings_source=str(tmp_path / "does_not_exist.csv"),
         orders_source=str(orders_csv),
         targets_per_holding_source=None,
     )
     assert metrics.total_value > 0
+
+
+def test_run_without_orders_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", _no_network_enrich)
+    _stub_benchmarks(monkeypatch)
+    # No order list → nothing to derive; returns empty metrics, not a crash.
+    metrics, _ = orchestrator.run(
+        orders_source=str(tmp_path / "does_not_exist.csv"),
+    )
+    assert metrics.total_value == 0

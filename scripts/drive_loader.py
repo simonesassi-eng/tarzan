@@ -1,7 +1,7 @@
 """Download Tarzan input CSVs from a private Google Drive folder.
 
 Used by the GitHub Actions newsletter workflow when the repo is public:
-your holdings and targets CSVs live in a Drive folder shared (read-only)
+your order list and targets CSVs live in a Drive folder shared (read-only)
 with a service account, instead of being committed to the repo.
 
 Required environment variables:
@@ -11,10 +11,10 @@ Required environment variables:
                                      single-line string (newlines escaped).
 
 The folder must contain at least:
-    - holdings.csv
+    - order_list.csv
     - targets.csv
 
-Anything else in the folder is ignored.
+Optionally: targets_per_holding.csv. Anything else in the folder is ignored.
 """
 
 from __future__ import annotations
@@ -28,11 +28,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_FILES = ("holdings.csv", "targets.csv")
 # Files the order-only pipeline can use. Downloaded when present; none is
-# individually mandatory (the caller decides which combination is enough).
+# individually mandatory here (the caller decides which combination is
+# enough — typically order_list.csv + targets.csv, with the optional
+# per-holding targets file).
 KNOWN_INPUT_FILES = (
-    "order_list.csv", "targets.csv", "targets_per_holding.csv", "holdings.csv",
+    "order_list.csv", "targets.csv", "targets_per_holding.csv",
 )
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -64,9 +65,9 @@ def download_files(
 ) -> dict[str, Path]:
     """Download the requested files that exist in the folder.
 
-    Unlike :func:`download_inputs`, this skips files that are absent rather
-    than raising, returning only the ones found. Lets the caller support
-    several input layouts (order-only vs holdings) from one Drive folder.
+    Skips files that are absent rather than raising, returning only the
+    ones found. Lets the caller require whichever combination it needs
+    (the order-only pipeline wants order_list.csv + targets.csv).
 
     Returns:
         Dict mapping each found filename to its local Path (missing files
@@ -111,27 +112,3 @@ def download_files(
     if skipped:
         logger.info("Drive: not present in folder (skipped): %s", ", ".join(sorted(skipped)))
     return paths
-
-
-def download_inputs(
-    folder_id: str,
-    credentials_json: str,
-    dest_dir: Optional[Path] = None,
-) -> dict[str, Path]:
-    """Download the required holdings + targets CSVs (raises if missing).
-
-    Kept for backward compatibility with the holdings-based flow. New code
-    should prefer :func:`download_files`, which tolerates absent files and
-    supports the order-only layout.
-
-    Raises:
-        FileNotFoundError: If a required CSV is missing from the folder.
-    """
-    paths = download_files(folder_id, credentials_json, KNOWN_INPUT_FILES, dest_dir)
-    missing = [name for name in REQUIRED_FILES if name not in paths]
-    if missing:
-        raise FileNotFoundError(
-            f"Drive folder {folder_id!r} is missing: {', '.join(missing)}. "
-            f"Expected at least: {', '.join(REQUIRED_FILES)}."
-        )
-    return {name: paths[name] for name in REQUIRED_FILES}
