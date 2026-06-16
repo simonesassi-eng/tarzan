@@ -230,7 +230,3 @@ def sheet_names() -> list[str]:
 def portfolio_backtest_period() -> str:
     """Default backtest period (5 years, hardcoded)."""
     return "5y"
-
-def portfolio_inception_date() -> str:
-    """Default inception date. Can be overridden by targets.csv."""
-    return str(get("portfolio_inception_date", ""))

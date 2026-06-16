@@ -12,8 +12,6 @@ rebalancing_transaction_fee_sell_eur,0,"Fixed EUR fee paid for each executed SEL
 rebalancing_capital_gains_tax_standard_pctg,0,"Capital gains tax rate applied to ETFs and equities when selling at a profit."
 rebalancing_capital_gains_tax_government_pctg,0,"Capital gains tax rate applied to government bonds (typically lower than the standard rate)."
 
-portfolio_inception_date,1/1/24,"Reference date for portfolio age and inception-anchored stats."
-
 target_cash_buffer_eur,3000,"Absolute EUR cash buffer kept in the portfolio."
 
 target_invested_allocation_equities_pctg,66,"Target weight of equities in the invested portfolio. All target_invested_allocation_*_pctg keys must sum to 100."

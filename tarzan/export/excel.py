@@ -361,7 +361,14 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     """Dashboard: Hero (Value/Gain/RTD) + Allocation + Top 5 + Rebalancing alert."""
 
     # --- Dates ---
-    inception_str = config.portfolio_inception_date or ""
+    inception_str = ""
+    if metrics.inception_date:
+        try:
+            inception_str = datetime.strptime(
+                metrics.inception_date, "%Y-%m-%d"
+            ).strftime("%d %b %Y")
+        except ValueError:
+            inception_str = metrics.inception_date
     as_of = datetime.now().strftime("%d %b %Y")
 
     # --- KPI values ---
