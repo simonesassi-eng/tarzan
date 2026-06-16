@@ -1,13 +1,15 @@
 # Sample input
 
-Sample portfolio and target files used to showcase Tarzan without any
+Sample order list and target files used to showcase Tarzan without any
 real personal data.
 
 ## Files
 
-- **`sample_holdings.csv`** — 11 positions across equities, fixed income,
-  gold, crypto and cash. Uses real, liquid tickers (iShares, Vanguard,
-  Xtrackers, ETC Group) for realistic live market data.
+- **`sample_order_list.csv`** — a handful of buy orders across equities,
+  fixed income and gold. Uses real, liquid tickers (iShares, Vanguard,
+  Xtrackers, Invesco) so live market data resolves. Tarzan derives the
+  current snapshot (net quantity, average-cost basis, market value) and
+  the historical value series from these orders.
 - **`sample_targets.csv`** — investor targets using the typed-key schema:
   - Invested allocation (% of invested portfolio, excludes cash):
     66% equities · 25% fixed income · 5% gold · 3% crypto · 1% alternative.
@@ -31,17 +33,15 @@ From the project root:
 
 ```bash
 python -m tarzan.main \
-    --input_holdings input/sample/sample_holdings.csv \
-    --input_config   input/sample/sample_targets.csv \
-    --output         output/sample/
+    --input_orders input/sample/sample_order_list.csv \
+    --input_config input/sample/sample_targets.csv \
+    --output       output/sample/
 ```
 
 See the generated report in [`output/sample/`](../../output/sample/).
 
 ## Notes
 
-- `CASH-EUR` is a pseudo-ticker for the cash position; Yahoo Finance
-  does not resolve it, which is expected. The pipeline falls back to the
-  `market_value_eur` column for that row.
-- All `quantity`, `cost_basis_eur` and `market_value_eur` values are
-  fictitious and chosen to produce a portfolio of roughly €80,000.
+- The order list is the single source of truth. Per-instrument
+  rebalancing targets (the `target_equities` / `target_fixed_income`
+  columns) live in an optional `targets_per_holding.csv`, joined by ISIN.

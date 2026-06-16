@@ -1,13 +1,13 @@
 """Convert a Fineco "Lista Titoli" movements export into a Tarzan
 order-list CSV.
 
-This step is **optional**. The main pipeline (``python -m tarzan.main``)
-does not consume ``order_list.csv`` yet — it is the data source for
-upcoming time-weighted return (TWROR) and money-weighted return
-(XIRR) computations. The file is also designed to be the long-term
-single source of truth for the portfolio: holdings (current
-positions, cost basis) can be reconstructed from the orders by
-aggregating quantities per ISIN.
+This step is **optional**. It produces ``input/order_list.csv`` — the
+single source of truth the main pipeline (``python -m tarzan.main``)
+reads: the current snapshot (positions, cost basis) is reconstructed
+from the orders by aggregating quantities per ISIN, and the order list
+also drives the time-weighted (TWROR) and money-weighted (XIRR)
+returns. You can equally hand-curate ``order_list.csv`` instead of
+running this preprocessor.
 
 Usage:
     python scripts/preprocess_orders.py
@@ -25,9 +25,7 @@ The Fineco "Lista Titoli" export carries three operation kinds:
     emitted as a separate ``coupon`` row so the position transfer
     stays a clean cash-flow-zero event.
 
-The output schema is intentionally richer than what TWROR/XIRR
-strictly need today, so the file can later replace ``holdings.csv``
-without a second migration:
+The output schema:
 
     date         (YYYY-MM-DD)  settlement / value date — the date the
                                cash hits the account, used by XIRR.
@@ -348,7 +346,7 @@ def _backup(path: Path, fineco_dir: Path) -> Optional[Path]:
     """Make a timestamped backup of ``path`` if it exists.
 
     Backups land alongside the Fineco staging files so personal
-    snapshots stay grouped — same convention as ``preprocess_fineco``.
+    snapshots stay grouped.
     """
     if not path.exists():
         return None

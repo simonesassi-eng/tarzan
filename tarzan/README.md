@@ -48,13 +48,13 @@ pip install -r requirements.txt
 
 ```bash
 # Minimal run (uses defaults for input_config and output)
-python -m tarzan.main --input_holdings input/sample/sample_holdings.csv
+python -m tarzan.main --input_orders input/sample/sample_order_list.csv
 
 # Full CLI
 python -m tarzan.main \
-    --input_holdings input/sample/sample_holdings.csv \
-    --input_config   input/sample/sample_targets.csv \
-    --output         output/sample/
+    --input_orders input/sample/sample_order_list.csv \
+    --input_config input/sample/sample_targets.csv \
+    --output       output/sample/
 ```
 
 See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
@@ -62,43 +62,46 @@ See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
 
 ## Input
 
-### Holdings (required)
+### Order list (required)
 
-A `.csv` or `.xlsx` file with the following columns (case-insensitive):
+A `.csv` or `.xlsx` of your orders — the single source of truth. Tarzan
+derives the current snapshot (net quantity, average-cost basis, market
+value via live prices) and the historical value series from it. Minimum
+columns (case-insensitive):
 
-| Column             | Type  | Required | Description                     |
-|--------------------|-------|:--------:|---------------------------------|
-| `isin`             | str   | ✓        | 12-character ISIN code          |
-| `ticker`           | str   | ✓        | Yahoo Finance ticker            |
-| `quantity`         | float | ✓        | Number of units (> 0)           |
-| `cost_basis_eur`   | float | ✓        | Total cost in EUR               |
-| `market_value_eur` | float | ✓        | Current market value in EUR     |
-| `currency`         | str   | ✓        | Instrument currency             |
+| Column      | Type  | Required | Description                          |
+|-------------|-------|:--------:|--------------------------------------|
+| `date`      | date  | ✓        | Order date (YYYY-MM-DD)              |
+| `type`      | str   | ✓        | buy / sell / transfer_in / coupon …  |
+| `isin`      | str   | ✓        | 12-character ISIN code               |
+| `quantity`  | float | ✓        | Units traded (sign per direction)    |
+| `gross_eur` | float | ✓        | Gross amount in EUR                  |
+| `net_eur`   | float | ✓        | Net cash flow in EUR (− for buys)    |
+
+Optional columns (`trade_date`, `name`, `ticker`, `currency`,
+`price_native`, `fx_rate`, `fees_eur`, `source`) are used when present.
 
 Geographic allocation is resolved automatically: first by ticker / ISIN
 lookup in `input/indexes.csv`, then via yfinance fund composition data.
 
-#### Optional: build holdings from a Fineco export
+#### Optional: build the order list from a Fineco export
 
-Curating `holdings.csv` by hand is fine but tedious if you already get a
-"Portafoglio di sintesi" export from Fineco. The
-`scripts/preprocess_fineco.py` script normalises that export into the
-Tarzan schema and merges the per-holding targets you maintain in a
-separate CSV (joined by ISIN).
-
-Drop the two files into `input/fineco_raw/` and run:
+If you get a "Lista Titoli" movements export from Fineco, the
+`scripts/preprocess_orders.py` script normalises it into the Tarzan
+order-list schema:
 
 ```bash
-python scripts/preprocess_fineco.py
+python scripts/preprocess_orders.py
 ```
 
-Defaults read `input/fineco_raw/portafoglio-export.xls` and
-`input/fineco_raw/targets_per_holding.csv`, and write
-`input/holdings.csv` after timestamping a backup of any existing file.
-Override paths with `--input`, `--targets`, `--output` if needed.
+This step is **optional** — `python -m tarzan.main` only ever reads
+`input/order_list.csv`, regardless of how it got there.
 
-This step is **always optional** — `python -m tarzan.main` only ever
-reads `input/holdings.csv`, regardless of how it got there.
+### Per-instrument targets (optional)
+
+A `targets_per_holding.csv` (joined by ISIN) carries the rebalancer's
+per-instrument `target_equities` / `target_fixed_income` weights and the
+`no_buy_no_sell` flag — the order list itself has no target columns.
 
 ### Targets (optional)
 
