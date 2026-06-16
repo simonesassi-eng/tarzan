@@ -1,9 +1,8 @@
 """Geographic allocation resolver.
 
 Priority chain for assigning geo exposure to a holding:
-1. Columns in holdings.csv (usa, emerging_markets, etc.) — forced override
-2. Lookup in input/indexes.csv by ISIN, ticker, or index name
-3. yfinance fund_top_holdings → country of each top holding → aggregated geo
+1. Lookup in input/indexes.csv by ISIN, ticker, or index name
+2. yfinance fund_top_holdings → country of each top holding → aggregated geo
 
 The justETF index name lookup is used to bridge holdings to index names
 in the indexes.csv file.
@@ -294,9 +293,8 @@ def resolve_geo(
     """Resolve geographic exposure for a holding.
 
     Priority:
-    1. (holdings.csv columns — handled by caller, not here)
-    2. indexes.csv lookup (by ISIN, ticker, or index name)
-    3. yfinance top holdings fallback
+    1. indexes.csv lookup (by ISIN, ticker, or index name)
+    2. yfinance top holdings fallback
 
     Args:
         isin: Holding ISIN.

@@ -36,8 +36,8 @@ The output schema:
     isin
     name                       Fineco-style description.
     ticker                     left blank — Fineco does not carry it
-                               on this export; downstream code can
-                               look it up from holdings.csv by ISIN.
+                               on this export; downstream code resolves
+                               it from the ISIN via yfinance.
     quantity                   signed: + for buy / transfer_in,
                                - for sell / transfer_out, 0 for
                                coupons and dividends.
