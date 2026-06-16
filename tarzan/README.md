@@ -120,7 +120,6 @@ convention so the unit is unambiguous:
 | `rebalancing_lump_sum_amount_eur`    | `0`     | Extra cash to deploy in a rebalance                     |
 | `rebalancing_target_tolerance_pctg`  | `2.0`   | Tolerance band around every allocation target. The LP uses it as the hard ceiling and the dashboard uses it as the traffic-light threshold. |
 | `rebalancing_no_sell`                | `false` | If true, solver can only buy                            |
-| `portfolio_inception_date`           | `""`    | Inception date used by performance charts               |
 
 **Cash buffer (absolute EUR, tracked separately from invested %)**
 

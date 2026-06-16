@@ -260,8 +260,7 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     """Build the header strip metadata.
 
     The portfolio inception date is taken automatically from the order
-    list (``metrics.inception_date``, the first order) when available,
-    falling back to the config value only for the holdings-only path.
+    list (``metrics.inception_date``, the first order).
 
     Issue number is computed dynamically: weeks since inception when
     available, otherwise the ISO week of the current year. The explicit
@@ -269,7 +268,7 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     so callers wishing to pin a specific number still can.
     """
     now = datetime.now()
-    inception_date = ctx.metrics.inception_date or ctx.config.portfolio_inception_date or ""
+    inception_date = ctx.metrics.inception_date or ""
     issue_number = ctx.issue_number
     if issue_number <= 1 and inception_date:
         try:

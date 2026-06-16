@@ -105,15 +105,12 @@ class InvestorConfig:
     )
 
     # Metadata
-    portfolio_inception_date: str = ""
     portfolio_backtest_period: str = ""
 
     def __post_init__(self):
         """Fill metadata from constants.yaml if not set explicitly."""
         if not self.portfolio_backtest_period:
             self.portfolio_backtest_period = cfg.portfolio_backtest_period()
-        if not self.portfolio_inception_date:
-            self.portfolio_inception_date = cfg.portfolio_inception_date()
 
     # ------------------------------------------------------------------
     # Public loaders
@@ -156,10 +153,6 @@ class InvestorConfig:
             config.rebalancing_no_sell = _parse_bool(rows["rebalancing_no_sell"])
         if "rebalancing_auto_relax" in rows:
             config.rebalancing_auto_relax = _parse_bool(rows["rebalancing_auto_relax"])
-
-        # Date / string fields
-        if rows.get("portfolio_inception_date"):
-            config.portfolio_inception_date = rows["portfolio_inception_date"]
 
         # Dict fields
         _parse_invested_allocation(config, rows)
@@ -256,7 +249,6 @@ _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_capital_gains_tax_government_pctg",
     "rebalancing_drift_penalty_weight",
     "target_cash_buffer_eur",
-    "portfolio_inception_date",
 })
 
 

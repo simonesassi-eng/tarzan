@@ -261,19 +261,10 @@ class MetricsEngine:
         ph_full = _cap_to_years(ph_full, 5)
         ctx["portfolio_history_full"] = ph_full
 
-        # Filter by inception date if configured
-        ph = ph_full.copy()
-        inception = self.config.portfolio_inception_date if self.config else ""
-        if inception:
-            try:
-                inception_dt = pd.to_datetime(inception)
-                if inception_dt.tzinfo is None and ph.index.tz is not None:
-                    inception_dt = inception_dt.tz_localize(ph.index.tz)
-                ph = ph[ph.index >= inception_dt]
-            except Exception as e:
-                logger.warning("Failed to parse inception date '%s': %s", inception, e)
-
-        ctx["portfolio_history"] = ph
+        # Inception is the first dated point of the order-derived history;
+        # there is no separate config override, so the full series is the
+        # since-inception series.
+        ctx["portfolio_history"] = ph_full.copy()
 
     # ------------------------------------------------------------------
     # Portfolio history from orders (Option Y)
