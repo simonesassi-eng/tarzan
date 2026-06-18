@@ -103,6 +103,16 @@ class PortfolioMetrics:
     pnl_eur: Optional[float] = None
     pnl_pct: Optional[float] = None
     invested_capital_eur: Optional[float] = None
+    # Net-of-tax ESTIMATE (Italian CGT on realized gains; order path only).
+    # estimated_cgt_eur is the estimated tax on realized capital gains;
+    # pnl_eur_net_tax / pnl_pct_net_tax and xirr_net_tax_pct are the
+    # money-weighted figures after subtracting it. The gross fields above
+    # are never altered — these sit alongside them, clearly labeled as an
+    # estimate (average cost, 26%/12.5% gov, losses offset where allowed).
+    estimated_cgt_eur: Optional[float] = None
+    pnl_eur_net_tax: Optional[float] = None
+    pnl_pct_net_tax: Optional[float] = None
+    xirr_net_tax_pct: Optional[float] = None
     actual_value_series: Optional[pd.Series] = None
     # Daily cumulative P&L (value − contributed capital); its delta over a
     # window is the real money gained in that window, net of contributions.

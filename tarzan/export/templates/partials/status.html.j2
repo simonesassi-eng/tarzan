@@ -60,15 +60,22 @@
                         <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Since inception</td>
                         <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.total_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.total_pnl_eur }} <span style="font-size:12px;">({{ hero.total_pnl_pct }})</span></td>
                       </tr>
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
+                      {% if hero.has_net_tax %}
+                      <tr><td colspan="2" style="font-size:0;line-height:4px;">&nbsp;</td></tr>
                       <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_pnl_eur or '—' }}{% if hero.week_pnl_pct %} <span style="font-size:12px;">({{ hero.week_pnl_pct }})</span>{% endif %}</td>
+                        <td style="font-size:9px;color:{{ palette.subtle }};font-style:italic;vertical-align:middle;">Net of est. tax <span style="white-space:nowrap;">({{ hero.cgt_eur }})</span></td>
+                        <td align="right" style="font-size:10px;font-weight:700;color:{{ palette.muted }};font-style:italic;vertical-align:middle;white-space:nowrap;">{{ hero.pnl_net_tax_eur }} <span style="font-size:9px;">({{ hero.pnl_net_tax_pct }})</span></td>
                       </tr>
+                      {% endif %}
                       <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
                       <tr>
                         <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 30 days</td>
                         <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.month_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.month_pnl_eur or '—' }}{% if hero.month_pnl_pct %} <span style="font-size:12px;">({{ hero.month_pnl_pct }})</span>{% endif %}</td>
+                      </tr>
+                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
+                      <tr>
+                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
+                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_pnl_eur or '—' }}{% if hero.week_pnl_pct %} <span style="font-size:12px;">({{ hero.week_pnl_pct }})</span>{% endif %}</td>
                       </tr>
                     </table>
                   </td>
@@ -80,15 +87,24 @@
                         <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Since inception</td>
                         <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.twror_pct or '—' }}</td>
                       </tr>
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
+                      {# Invisible spacer mirroring the PnL card's net-of-tax
+                         line, so Last 30 / Last 7 line up across both cards. #}
+                      {% if hero.has_net_tax %}
+                      <tr><td colspan="2" style="font-size:0;line-height:4px;">&nbsp;</td></tr>
                       <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_twror_pct or '—' }}</td>
+                        <td style="font-size:9px;color:{{ palette.card_alt }};vertical-align:middle;">&nbsp;</td>
+                        <td align="right" style="font-size:10px;color:{{ palette.card_alt }};vertical-align:middle;">&nbsp;</td>
                       </tr>
+                      {% endif %}
                       <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
                       <tr>
                         <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 30 days</td>
                         <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.month_twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.month_twror_pct or '—' }}</td>
+                      </tr>
+                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
+                      <tr>
+                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
+                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_twror_pct or '—' }}</td>
                       </tr>
                     </table>
                   </td>
@@ -110,6 +126,12 @@
                         </td>
                         <td align="right" style="vertical-align:middle;font-size:16px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;">{{ hero.xirr_pct or '—' }}</td>
                       </tr>
+                      {% if hero.has_net_tax and hero.xirr_net_tax_pct %}
+                      <tr>
+                        <td style="padding-top:4px;vertical-align:middle;font-size:9px;color:{{ palette.subtle }};font-style:italic;">net of est. tax</td>
+                        <td align="right" style="padding-top:4px;vertical-align:middle;font-size:10px;font-weight:700;color:{{ palette.muted }};white-space:nowrap;">{{ hero.xirr_net_tax_pct }}</td>
+                      </tr>
+                      {% endif %}
                     </table>
                   </td>
                   <td width="2%"></td>
@@ -118,7 +140,7 @@
                       <tr>
                         <td style="vertical-align:middle;">
                           <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};">TWROR · annualized</div>
-                          <div style="font-size:10px;color:{{ palette.subtle }};">time-weighted</div>
+                          <div style="font-size:10px;color:{{ palette.subtle }};">time-weighted · gross of tax</div>
                         </td>
                         <td align="right" style="vertical-align:middle;font-size:16px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;">{{ hero.twror_annualized_pct or '—' }}</td>
                       </tr>
@@ -133,6 +155,9 @@
                  `performance` context is available inside this include. #}
               {% if performance.returns and performance.returns.coverage %}
               <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};">Computed on {{ performance.returns.coverage }} real market data{% if performance.returns.fallback_count %} · {{ performance.returns.fallback_count }} instrument{{ 's' if performance.returns.fallback_count != 1 else '' }} priced by fallback{% endif %}.</div>
+              {% endif %}
+              {% if hero.has_net_tax %}
+              <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};font-style:italic;line-height:1.4;">Net-of-tax is an estimate: average-cost basis, 26% / 12.5% on government bonds, realized losses offset later gains where Italian rules allow (ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of transferred-in positions. TWROR shown gross of tax.</div>
               {% endif %}
 
               {# 4 ── Slim, colored rebalance banner (only when action is needed) #}

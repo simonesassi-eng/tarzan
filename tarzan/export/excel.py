@@ -408,14 +408,41 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
     ]
     # Order-list returns: shown only when an order list was supplied
     # (xirr_pct is None otherwise, so a holdings-only run is unchanged).
+    # Label the basis explicitly and keep the comparison like-for-like:
+    # XIRR is annualized, so TWROR is shown both cumulative (since
+    # inception) and annualized, so the reader compares annualized-with-
+    # annualized rather than mistaking the cumulative TWROR for an
+    # under-performance vs the annualized XIRR.
     if metrics.xirr_pct is not None:
         hero_data.append(
-            ("XIRR / MWR (%)", metrics.xirr_pct, metrics.xirr_pct, "pct_signed")
+            ("XIRR / MWR (% ann.)", metrics.xirr_pct, metrics.xirr_pct, "pct_signed")
         )
     if metrics.twror_pct is not None:
         hero_data.append(
-            ("TWROR (%)", metrics.twror_pct, metrics.twror_pct, "pct_signed")
+            ("TWROR (% cum. since inception)", metrics.twror_pct, metrics.twror_pct, "pct_signed")
         )
+    if metrics.twror_annualized_pct is not None:
+        hero_data.append(
+            ("TWROR (% ann.)", metrics.twror_annualized_pct, metrics.twror_annualized_pct, "pct_signed")
+        )
+    # Net-of-tax ESTIMATE: shown only when a positive CGT was estimated.
+    # Sits below the gross figures and is labeled "(est.)" so it is never
+    # mistaken for the authoritative gross return.
+    if metrics.estimated_cgt_eur is not None and metrics.estimated_cgt_eur > 0:
+        hero_data.append(
+            ("Est. CGT on realized gains (EUR)", -metrics.estimated_cgt_eur,
+             -metrics.estimated_cgt_eur, "number_signed")
+        )
+        if metrics.pnl_eur_net_tax is not None:
+            hero_data.append(
+                ("PnL net of est. tax (EUR)", metrics.pnl_eur_net_tax,
+                 metrics.pnl_eur_net_tax, "number_signed")
+            )
+        if metrics.xirr_net_tax_pct is not None:
+            hero_data.append(
+                ("XIRR net of est. tax (% ann.)", metrics.xirr_net_tax_pct,
+                 metrics.xirr_net_tax_pct, "pct_signed")
+            )
     for ti, (label, value, gain_for_color, kind) in enumerate(hero_data):
         lcell = sheet.cell(row=row, column=1, value=label)
         lcell.font = px_font(size=10, color=C['text_sec'])
@@ -1512,6 +1539,32 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
         cov_cell.alignment = px_align(h='left', wrap=True)
         sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
         sheet.row_dimensions[row].height = 28
+        row += 2
+
+    # Net-of-tax estimate disclosure: states the figure and the method, so
+    # the estimate is transparent and never confused with the gross return.
+    if (metrics.estimated_cgt_eur is not None and metrics.estimated_cgt_eur > 0):
+        parts = [
+            f"Net-of-tax estimate: \u2212\u20ac{metrics.estimated_cgt_eur:,.0f} "
+            f"estimated CGT on realized gains"
+        ]
+        if metrics.pnl_eur_net_tax is not None:
+            parts.append(f"PnL {metrics.pnl_eur_net_tax:+,.0f} EUR")
+        if metrics.xirr_net_tax_pct is not None:
+            parts.append(f"XIRR {metrics.xirr_net_tax_pct:+.2f}% ann")
+        tax_text = (
+            "  \u00b7  ".join(parts)
+            + ".  Estimate only: average-cost basis, 26% / 12.5% on government "
+            "bonds, realized losses offset later gains where Italian rules allow "
+            "(ETF/fund gains are redditi di capitale, not offsettable). Excludes "
+            "coupon/dividend withholding and the original cost basis of "
+            "transferred-in positions. TWROR is shown gross of tax."
+        )
+        tax_cell = sheet.cell(row=row, column=1, value=tax_text)
+        tax_cell.font = px_font(size=9, italic=True, color=C['text_sec'])
+        tax_cell.alignment = px_align(h='left', wrap=True)
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=21)
+        sheet.row_dimensions[row].height = 40
         row += 2
 
     # Columns
