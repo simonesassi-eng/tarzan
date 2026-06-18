@@ -19,10 +19,11 @@ from tarzan.models.holding import Holding, AssetClass
 from tarzan.models.order import Order, OrderType
 
 
-def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1)):
+def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
+       td=None):
     return Order(
         date=datetime.date(*d),
-        trade_date=datetime.date(*d),
+        trade_date=datetime.date(*td) if td is not None else datetime.date(*d),
         type=otype,
         isin=isin,
         name="X",
@@ -299,6 +300,28 @@ class TestCumExConservationProperty:
         # No open ISIN → terminal valuation is zero principal.
         assert res.valuations[-1][1] == pytest.approx(0.0)
 
+    def test_cum_ex_with_different_leg_prices_nets_to_zero(self):
+        # Regression: the cum leg arrives at 100 and the ex leg is sold at
+        # 105 (the real BTP reclassification case). The group nets to zero
+        # quantity, so the terminal valuation must be exactly 0 — pricing
+        # each leg at its own carry-flat price would otherwise leave a
+        # spurious residual (here -1,000) that desynced the returns-path
+        # valuation from the snapshot and pushed coverage above 100%.
+        orders = [
+            _o(OrderType.TRANSFER_IN, "IT0005565392", qty=20000.0,
+               gross=20000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.SELL, "IT0005565400", qty=-20000.0,
+               net=21000.0, price=105.0, d=(2025, 6, 1)),
+        ]
+        res = build_order_derived_series(
+            orders, enriched_by_isin={}, today=datetime.date(2025, 12, 1))
+        assert res.valuations[-1][1] == pytest.approx(0.0)
+        # The closed legs must not be disclosed as fallback-priced, and
+        # coverage must never exceed 100%.
+        assert "IT0005565392" not in res.provenance["carry_flat"]
+        assert "IT0005565400" not in res.provenance["carry_flat"]
+        assert res.coverage_pct <= 100.0
+
 
 class TestMarketPricedFlowsNoJump:
     """A trade valued at market price must not inject a fictitious TWROR
@@ -363,6 +386,57 @@ class TestRoundTripInclusion:
         ds = series.daily_series
         held = ds.loc[pd.Timestamp(2025, 1, 2):pd.Timestamp(2025, 1, 30)]
         assert (held > 0).all()
+
+
+class TestUnsettledFutureOrders:
+    """Returns are keyed on ``trade_date`` (market-exposure date), not the
+    settlement ``date``. A trade executed before the run date but settling
+    after it (T+2) must be fully reflected in every metric — otherwise the
+    cash flow lands while the position it creates is invisible and PnL
+    drops by the net unsettled capital (regression: the +€4.5k buy that
+    vanished from the terminal value)."""
+
+    def test_trade_before_run_settles_after_is_valued(self):
+        today_real = datetime.date.today()
+        # Executed yesterday, settles tomorrow (T+2 straddling the run).
+        trade = today_real - datetime.timedelta(days=1)
+        settle = today_real + datetime.timedelta(days=1)
+        start = today_real - datetime.timedelta(days=5)
+        enriched = {
+            "AAA": _enriched_with_history(
+                "AAA", [100.0] * 11,
+                start=(start.year, start.month, start.day),
+            )
+        }
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0,
+               d=(settle.year, settle.month, settle.day),
+               td=(trade.year, trade.month, trade.day)),
+        ]
+        series = build_order_derived_series(orders, enriched, today=None)
+
+        # The 10 units (trade_date = yesterday) are held as of the run
+        # date, so the terminal valuation is 10 * 100, not 0.
+        terminal = series.valuations[-1][1]
+        assert terminal == pytest.approx(1000.0)
+
+        # The cash flow is dated on the trade date, not the settlement.
+        assert any(d == trade for d, _ in series.xirr_cashflows)
+
+        # PnL = current value + Σ cash flows = 1000 + (-1000) = 0, instead
+        # of -1000 when the cash was counted but the asset was not.
+        pnl = sum(amount for _, amount in series.xirr_cashflows)
+        assert pnl == pytest.approx(0.0, abs=1e-6)
+
+    def test_timeline_keys_on_trade_date(self):
+        # Buy executed Jan 1, settling Jan 3: held from Jan 1, not Jan 3.
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=10.0, net=-1000.0, price=100.0,
+               d=(2025, 1, 3), td=(2025, 1, 1)),
+        ]
+        tl = QuantityTimeline(orders)
+        assert tl.qty_at("AAA", datetime.date(2025, 1, 1)) == pytest.approx(10.0)
+        assert tl.qty_at("AAA", datetime.date(2025, 1, 2)) == pytest.approx(10.0)
 
 
 class TestDailySeries:

@@ -142,7 +142,7 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     unpriceable holding does not collapse to zero (Req 8.3)."""
     priced = sorted(
         (o for o in orders if o.isin == isin and o.price_native is not None),
-        key=lambda o: o.date,
+        key=lambda o: o.trade_date,
     )
     if not priced or qty == 0:
         return 0.0
@@ -209,7 +209,7 @@ def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
     """
     pos = sorted(
         (o for o in orders if o.is_position_change()),
-        key=lambda o: o.date,
+        key=lambda o: o.trade_date,
     )
     qty: dict[str, float] = {}
     cost: dict[str, float] = {}
@@ -239,7 +239,7 @@ class QuantityTimeline:
 
     def __init__(self, orders: list[Order]):
         events: list[tuple[datetime.date, str, float]] = [
-            (o.date, o.isin, o.quantity)
+            (o.trade_date, o.isin, o.quantity)
             for o in orders if o.is_position_change()
         ]
         events.sort(key=lambda e: e[0])
@@ -298,7 +298,7 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
         if o.isin == isin and o.price_native is not None:
             fx = o.fx_rate or 1.0
             eur_price = o.price_native / fx if fx > 0 else o.price_native
-            obs.append((o.date, eur_price))
+            obs.append((o.trade_date, eur_price))
     if not obs:
         return None
     s = pd.Series(
@@ -422,6 +422,28 @@ class PriceResolver:
 # Main: build the dated value series + cash flows + provenance
 # ---------------------------------------------------------------------------
 
+def _closed_cum_ex_prefixes(
+    timeline: "QuantityTimeline", d: datetime.date
+) -> set[str]:
+    """Prefixes whose cum/ex group nets to ~0 held quantity as of ``d``.
+
+    Mirrors ``_open_isins`` but as-of a date: Italian retail BTPs are
+    reclassified cum→ex coupon, which appears in the order list as a sell
+    of one ISIN and a transfer-in of a sibling sharing the 9-char prefix.
+    When the group's net quantity is ~0 on ``d`` the position is closed,
+    so it must contribute nothing to that day's valuation — even though
+    each leg individually still shows a non-zero quantity. Pricing the
+    legs separately (often by different carry-flat prices) would otherwise
+    leave a spurious residual and desync the historical valuation from the
+    order-derived snapshot.
+    """
+    prefix_totals: dict[str, float] = {}
+    for isin in timeline.isins():
+        prefix = isin[:_CUM_EX_PREFIX_LEN]
+        prefix_totals[prefix] = prefix_totals.get(prefix, 0.0) + timeline.qty_at(isin, d)
+    return {p for p, t in prefix_totals.items() if abs(t) < _QTY_EPS}
+
+
 def build_order_derived_series(
     orders: list[Order],
     enriched_by_isin: dict[str, Holding],
@@ -429,8 +451,26 @@ def build_order_derived_series(
 ) -> OrderDerivedSeries:
     """Build the order-derived valuation series, cash flows and
     provenance. ``enriched_by_isin`` maps ISIN → enriched Holding (from
-    running the standard enrichment on ``build_holdings_from_orders``)."""
-    today = today or datetime.datetime.now().date()
+    running the standard enrichment on ``build_holdings_from_orders``).
+
+    All date-keyed logic (quantity timeline, cash flows, cost basis,
+    synthetic prices, inception) keys on each order's ``trade_date`` —
+    the date market exposure is taken on — not its settlement ``date``.
+    This keeps the cash side and the asset side on the same clock, so a
+    trade that settles after the run date (T+2) cannot make the cash
+    flow land while the position it creates is still invisible.
+    """
+    # Defensive anchor for the live "value now" path (no explicit
+    # ``today``): should a trade ever be dated after the run date, value
+    # as of that date so the terminal valuation still covers every order
+    # the cash flows count. With trade-date keying this is a safety net,
+    # not the primary fix. An explicit ``today`` (historical/backtest
+    # as-of valuation) is always respected verbatim.
+    if today is None:
+        today = datetime.datetime.now().date()
+        last_trade_date = max((o.trade_date for o in orders), default=today)
+        if last_trade_date > today:
+            today = last_trade_date
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
 
@@ -464,12 +504,21 @@ def build_order_derived_series(
         historical series and its holding-period market move would be
         invisible to TWROR. The cum/ex ``open_isins`` gate is only used
         for the "what is open now" coverage snapshot, not for history.
+
+        Cum/ex pairs that net to ~0 quantity as of ``d`` are the one
+        exception: they are a single bond reclassified across coupon
+        events, so the group is treated as closed (contributes 0),
+        consistent with the order-derived snapshot. Valuing each leg at
+        its own carry-flat price would otherwise leave a spurious residual.
         """
         total = 0.0
+        closed = _closed_cum_ex_prefixes(timeline, d)
         for isin in timeline.isins():
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
                 continue
+            if isin[:_CUM_EX_PREFIX_LEN] in closed:
+                continue  # cum/ex group nets flat → closed, contributes 0
             price, source = resolver.price_on(isin, d)
             if record_source:
                 provenance[source].append(isin)
@@ -506,13 +555,13 @@ def build_order_derived_series(
     external_flows: dict[datetime.date, float] = {}
     for o in orders:
         if o.is_position_change():
-            unit = value_isin_on(o.isin, o.date)
+            unit = value_isin_on(o.isin, o.trade_date)
             if unit is None:
                 continue
-            external_flows[o.date] = external_flows.get(o.date, 0.0) + o.quantity * unit
+            external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) + o.quantity * unit
         elif o.type in (OrderType.COUPON, OrderType.DIVIDEND) and o.net_eur:
             # Distribution paid out of the securities portfolio → withdrawal.
-            external_flows[o.date] = external_flows.get(o.date, 0.0) - o.net_eur
+            external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) - o.net_eur
 
     cf_dates = sorted(external_flows.keys())
     valuations: list[tuple[datetime.date, float]] = [
@@ -547,6 +596,11 @@ def build_order_derived_series(
         if price is not None and source in ("yfinance", "borsa_italiana"):
             real_value += qty * price
     coverage_pct = (real_value / current_value * 100.0) if current_value > 0 else 0.0
+    # Defensive clamp: coverage is a share of value priced by real market
+    # data and is meaningless above 100%. Cum/ex netting keeps the
+    # numerator and denominator consistent, but clamp anyway so a future
+    # pricing edge case can never surface an impossible >100% figure.
+    coverage_pct = max(0.0, min(coverage_pct, 100.0))
 
     # Disclosure: warn once per instrument that fell back.
     for source in ("synthetic", "carry_flat", "excluded"):
@@ -559,15 +613,16 @@ def build_order_derived_series(
     provenance = {k: sorted(set(v)) for k, v in provenance.items()}
 
     # XIRR cash flows (bank-account perspective): transfer_in is a
-    # deposit at its market value; others use net_eur. Terminated by
-    # today's value.
+    # deposit at its market value; others use net_eur. Dated on the
+    # trade date (when market exposure is taken on), consistent with
+    # every other metric. Terminated by today's value.
     xirr_cashflows: list[tuple[datetime.date, float]] = []
     for o in orders:
         if o.type == OrderType.TRANSFER_IN:
             if (o.gross_eur or 0.0) > 0:
-                xirr_cashflows.append((o.date, -(o.gross_eur)))
+                xirr_cashflows.append((o.trade_date, -(o.gross_eur)))
         elif o.net_eur != 0.0:
-            xirr_cashflows.append((o.date, o.net_eur))
+            xirr_cashflows.append((o.trade_date, o.net_eur))
     xirr_cashflows.append((today, current_value))
 
     span_days = (today - cf_dates[0]).days if cf_dates else 0
@@ -654,10 +709,13 @@ def _build_daily_series(
 
     def raw_value(d: datetime.date) -> float:
         total = 0.0
+        closed = _closed_cum_ex_prefixes(timeline, d)
         for isin in isins:
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
                 continue
+            if isin[:_CUM_EX_PREFIX_LEN] in closed:
+                continue  # cum/ex group nets flat → closed, contributes 0
             price, source = resolver.price_on(isin, d)
             if price is None:
                 continue
