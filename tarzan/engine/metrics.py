@@ -330,6 +330,7 @@ class MetricsEngine:
         ]
         # Stash for _returns.
         ctx["_order_series"] = series
+        ctx["_enriched_by_isin"] = enriched_by_isin
 
     # ------------------------------------------------------------------
     # Returns: XIRR + TWROR (only registered when orders are present)
@@ -372,11 +373,41 @@ class MetricsEngine:
         ctx["actual_value_series"] = series.actual_value_series
         ctx["pnl_series"] = series.pnl_series
 
+        # Net-of-tax estimate (Italian CGT on realized gains). This is an
+        # ESTIMATE shown alongside — never replacing — the gross figures:
+        # the tax is a real cash outflow, so it lowers the money-weighted
+        # views (lifetime PnL and XIRR). TWROR is left gross by convention.
+        from tarzan.engine.tax import estimate_realized_cgt
+        enriched_by_isin = ctx.get("_enriched_by_isin", {})
+        cgt = estimate_realized_cgt(
+            self.orders, enriched_by_isin,
+            std_rate_pctg=self.config.rebalancing_capital_gains_tax_standard_pctg,
+            gov_rate_pctg=self.config.rebalancing_capital_gains_tax_government_pctg,
+        )
+        ctx["estimated_cgt_eur"] = cgt.total_tax_eur
+        if cgt.total_tax_eur > 0:
+            pnl_net = pnl_eur - cgt.total_tax_eur
+            ctx["pnl_eur_net_tax"] = pnl_net
+            ctx["pnl_pct_net_tax"] = (
+                pnl_net / net_deposits * 100.0 if net_deposits > 0 else None
+            )
+            # Net XIRR: the tax outflows are dated at each sell's trade date
+            # (regime amministrato withholding) and discounted like any
+            # other cash flow.
+            net_flows = list(flows) + list(cgt.tax_flows)
+            r_net = xirr(net_flows)
+            ctx["xirr_net_tax_pct"] = r_net * 100.0 if not _is_nan(r_net) else None
+        else:
+            ctx["pnl_eur_net_tax"] = pnl_eur
+            ctx["pnl_pct_net_tax"] = ctx["pnl_pct"]
+            ctx["xirr_net_tax_pct"] = ctx["xirr_pct"]
+
         # Inception is automatic from the order list: the first dated
         # position change. This is the authoritative start of the track
-        # record, independent of any config value.
+        # record, independent of any config value. Keyed on trade_date
+        # (market-exposure date), consistent with the returns engine.
         order_dates = [
-            o.date for o in (self.orders or []) if o.is_position_change()
+            o.trade_date for o in (self.orders or []) if o.is_position_change()
         ]
         if order_dates:
             ctx["inception_date"] = min(order_dates).strftime("%Y-%m-%d")
@@ -741,6 +772,10 @@ class MetricsEngine:
             pnl_eur=ctx.get("pnl_eur"),
             pnl_pct=ctx.get("pnl_pct"),
             invested_capital_eur=ctx.get("invested_capital_eur"),
+            estimated_cgt_eur=ctx.get("estimated_cgt_eur"),
+            pnl_eur_net_tax=ctx.get("pnl_eur_net_tax"),
+            pnl_pct_net_tax=ctx.get("pnl_pct_net_tax"),
+            xirr_net_tax_pct=ctx.get("xirr_net_tax_pct"),
             actual_value_series=ctx.get("actual_value_series"),
             pnl_series=ctx.get("pnl_series"),
             inception_date=ctx.get("inception_date"),

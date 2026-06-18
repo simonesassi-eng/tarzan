@@ -473,6 +473,16 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # time-weighted TWROR-annualized.
         "xirr_pct": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
         "twror_annualized_pct": _pct(m.twror_annualized_pct, signed=True) if m.twror_annualized_pct is not None else None,
+        # Net-of-tax ESTIMATE (order path only). Shown as a small line under
+        # the since-inception PnL and as a sub-line in the XIRR annualized
+        # card; the gross figures above are never altered. `has_net_tax` is
+        # False (all keys None) when no CGT was estimated.
+        "has_net_tax": (m.estimated_cgt_eur is not None and m.estimated_cgt_eur > 0),
+        "cgt_eur": _eur_smart(-m.estimated_cgt_eur, signed=True) if m.estimated_cgt_eur else None,
+        "pnl_net_tax_eur": _eur_smart(m.pnl_eur_net_tax, signed=True) if m.pnl_eur_net_tax is not None else None,
+        "pnl_net_tax_pct": _pct(m.pnl_pct_net_tax, signed=True) if m.pnl_pct_net_tax is not None else None,
+        "pnl_net_tax_is_positive": (m.pnl_eur_net_tax or 0.0) >= 0,
+        "xirr_net_tax_pct": _pct(m.xirr_net_tax_pct, signed=True) if m.xirr_net_tax_pct is not None else None,
         # Rebalance status KPI replaces the "This Week" KPI which was
         # already covered by the TL;DR headline above.
         "rebal_label": rebal_label,
