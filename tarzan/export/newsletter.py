@@ -195,6 +195,72 @@ def _semaphore_color(sema: str) -> str:
             "red": PALETTE["red"], "muted": PALETTE["muted"]}.get(sema, PALETTE["ink"])
 
 
+def _spark(vals: list[float], target: Optional[float], color: str,
+           w: int = 250, h: int = 40) -> str:
+    """Tiny area+line sparkline with an optional dashed target line.
+
+    Auto-scaled to the data range around the target so small slices stay
+    legible (a fixed 0–100 axis would flatten a 6% sleeve). Inline SVG with
+    ``preserveAspectRatio="none"`` so it stretches to the table cell width;
+    legacy Outlook (Word engine) ignores SVG and simply shows nothing,
+    which is acceptable — the target/gap numbers carry the same story.
+    Returns an empty string when there are fewer than two points.
+    """
+    n = len(vals)
+    if n < 2:
+        return ""
+    anchor = target if target is not None else vals[-1]
+    lo = min(min(vals), anchor)
+    hi = max(max(vals), anchor)
+    span = (hi - lo) or 1.0
+    lo -= span * 0.18
+    hi += span * 0.18
+    span = hi - lo
+
+    def _x(i: int) -> float:
+        return i / (n - 1) * w
+
+    def _y(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    pts = [(_x(i), _y(v)) for i, v in enumerate(vals)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"0,{h:.1f} " + line + f" {w},{h:.1f}"
+    parts = [
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" '
+        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" '
+        f'style="display:block;">',
+        f'<polygon points="{area}" fill="{color}" fill-opacity="0.12"/>',
+    ]
+    if target is not None:
+        ty = _y(float(target))
+        parts.append(
+            f'<line x1="0" y1="{ty:.1f}" x2="{w}" y2="{ty:.1f}" '
+            f'stroke="{PALETTE["muted"]}" stroke-width="1" stroke-dasharray="3,3"/>'
+        )
+    parts.append(
+        f'<polyline points="{line}" fill="none" stroke="{color}" '
+        f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+    )
+    lx, ly = pts[-1]
+    parts.append(
+        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="{color}" '
+        f'stroke="#fff" stroke-width="1.5"/>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
+    """Extract the per-bucket weights for one category from an allocation
+    timeline series. Returns None when the category never carried weight
+    (so the caller can skip drawing an empty sparkline)."""
+    if not series:
+        return None
+    vals = [float(pt.get(key, 0.0)) for pt in series]
+    return vals if any(v > 0 for v in vals) else None
+
+
 # ── Context builders ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -710,6 +776,9 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     targets = cfg.invested_allocation_targets_pctg or {}
     alloc_df = m.allocation_by_class
 
+    timeline = m.allocation_timeline or {}
+    asset_series = timeline.get("asset")
+
     rows = []
     for klass in ASSET_CLASS_ORDER:
         if alloc_df.empty:
@@ -721,9 +790,11 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         target = targets.get(klass)
         delta = actual - target if target is not None else None
         sema = _semaphore(delta, tol)
+        color = ASSET_COLORS.get(klass, PALETTE["accent"])
+        spark_vals = _timeline_vals(asset_series, klass)
         rows.append({
             "name": klass,
-            "color": ASSET_COLORS.get(klass, PALETTE["accent"]),
+            "color": color,
             "actual_pct": _pct_smart(actual),
             "actual_pct_raw": actual,
             "target_pct": _pct_smart(target) if target is not None else None,
@@ -734,6 +805,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "delta": _signed_pp(delta) if delta is not None else None,
             "delta_color": _semaphore_color(sema),
             "bar_width": min(max(actual, 1), 100),
+            "spark": _spark(spark_vals, target, color) if spark_vals else None,
         })
 
     # Cash buffer (EUR-based, appended after invested classes).
@@ -784,6 +856,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         "rows": rows,
         "stacked": stacked,
         "tolerance": _pct(tol, decimals=1).rstrip("%") + "%",
+        "has_timeline": any(r.get("spark") for r in rows),
     }
 
 
@@ -797,6 +870,9 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
     geo_df = m.allocation_by_geo
     acwi = m.acwi_geo or {}
 
+    timeline = m.allocation_timeline or {}
+    geo_series = timeline.get("geo")
+
     # Order regions consistently (descending by actual)
     rows = []
     if not geo_df.empty:
@@ -808,9 +884,11 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
             acwi_v = acwi.get(region)
             delta_target = actual - target if target is not None else None
             sema = _semaphore(delta_target, tol)
+            color = GEO_COLORS.get(region, PALETTE["accent"])
+            spark_vals = _timeline_vals(geo_series, region)
             rows.append({
                 "name": region,
-                "color": GEO_COLORS.get(region, PALETTE["accent"]),
+                "color": color,
                 "actual_pct": _pct_smart(actual),
                 "target_pct": _pct_smart(target) if target is not None else "—",
                 "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
@@ -819,6 +897,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
                 "bar_width": min(max(actual, 1), 100),
                 "target_left": min(max(target or 0, 0), 100),
                 "acwi_left": min(max(acwi_v or 0, 0), 100),
+                "spark": _spark(spark_vals, target, color) if spark_vals else None,
             })
 
     # Stacked equity bar
@@ -828,6 +907,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
         "rows": rows,
         "stacked": stacked,
         "benchmark_name": ctx.benchmark_geo,
+        "has_timeline": any(r.get("spark") for r in rows),
     }
 
 

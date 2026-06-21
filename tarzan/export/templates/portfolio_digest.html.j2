@@ -194,6 +194,26 @@
                   </td>
                 </tr>
               </table>
+              {# ── How it evolved — weekly sparkline per class, last 3
+                 months. Donut + table above stay the source of truth for
+                 the live numbers; this strip adds the temporal trend with
+                 a dashed target line. Omitted on the holdings-only path
+                 (no order history → no timeline). ── #}
+              {% if allocation.has_timeline %}
+              <div style="margin-top:16px;font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};text-transform:uppercase;">How it evolved — weekly, last 3 months</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
+                {% for r in allocation.rows %}{% if not r.is_eur and r.spark %}
+                <tr>
+                  <td width="150" valign="middle" style="padding:7px 12px 7px 0;border-top:1px solid #F1F2F8;">
+                    <div style="font-size:12px;font-weight:600;color:{{ r.color }};"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:{{ r.color }};vertical-align:middle;margin-right:6px;"></span>{{ r.name }}</div>
+                    <div style="margin-top:3px;font-size:10px;color:{{ palette.muted }};">tgt {{ r.target_pct or '—' }} &nbsp;·&nbsp; gap <span style="color:{{ r.delta_color }};font-weight:700;">●&nbsp;{{ r.delta or '—' }}</span></div>
+                  </td>
+                  <td valign="middle" style="padding:7px 0;border-top:1px solid #F1F2F8;">{{ r.spark|safe }}</td>
+                </tr>
+                {% endif %}{% endfor %}
+                <tr><td colspan="2" style="padding-top:6px;font-size:9px;color:{{ palette.subtle }};text-align:right;">solid = your weight &nbsp;·&nbsp; – – – = target</td></tr>
+              </table>
+              {% endif %}
               {% endif %}
 
               {% if geography.rows %}
@@ -230,6 +250,21 @@
                   </td>
                 </tr>
               </table>
+              {% if geography.has_timeline %}
+              <div style="margin-top:16px;font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};text-transform:uppercase;">How it evolved — weekly, last 3 months</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
+                {% for r in geography.rows %}{% if r.spark %}
+                <tr>
+                  <td width="150" valign="middle" style="padding:7px 12px 7px 0;border-top:1px solid #F1F2F8;">
+                    <div style="font-size:12px;font-weight:600;color:{{ r.color }};"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:{{ r.color }};vertical-align:middle;margin-right:6px;"></span>{{ r.name|truncate(22, true, '…') }}</div>
+                    <div style="margin-top:3px;font-size:10px;color:{{ palette.muted }};">tgt {{ r.target_pct }} &nbsp;·&nbsp; gap <span style="color:{{ r.delta_color }};font-weight:700;">●&nbsp;{{ r.delta }}</span></div>
+                  </td>
+                  <td valign="middle" style="padding:7px 0;border-top:1px solid #F1F2F8;">{{ r.spark|safe }}</td>
+                </tr>
+                {% endif %}{% endfor %}
+                <tr><td colspan="2" style="padding-top:6px;font-size:9px;color:{{ palette.subtle }};text-align:right;">solid = your weight &nbsp;·&nbsp; – – – = target</td></tr>
+              </table>
+              {% endif %}
               {% endif %}
             </td>
           </tr>

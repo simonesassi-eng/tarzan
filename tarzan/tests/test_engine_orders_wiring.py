@@ -52,9 +52,13 @@ class TestProperty1Identity:
         names = [c.__name__ for c in engine._computers]
         assert "_portfolio_history" not in names
         assert "_portfolio_history_from_orders" in names
-        assert names[-1] == "_returns"
-        # Same number of computers as default + 1 (swap is in-place).
-        assert len(names) == 13
+        assert "_returns" in names
+        # _allocation_timeline is appended last (after _returns) on the
+        # order path to feed the newsletter Diversification sparklines.
+        assert names[-1] == "_allocation_timeline"
+        # Same number of computers as default + 2 appended (the history
+        # provider swap is in-place): _returns and _allocation_timeline.
+        assert len(names) == 14
 
 
 class TestProperty6SingleSeries:

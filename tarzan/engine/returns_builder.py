@@ -42,7 +42,7 @@ from tarzan.data.bond_fetcher import (
     looks_like_bond_from_orders,
     value_position,
 )
-from tarzan.models.holding import Holding
+from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
 
 logger = logging.getLogger(__name__)
@@ -757,3 +757,129 @@ def _build_daily_series(
         pd.Series(index_vals, index=idx),
         pd.Series(actual_vals, index=idx),
     )
+
+
+# ---------------------------------------------------------------------------
+# Allocation timeline (per asset-class / per equity-geography weekly weights)
+# ---------------------------------------------------------------------------
+
+# Price-source preference when collapsing a cum/ex group to a single
+# representative quote: real market quotes first, then the synthetic
+# ladder. Mirrors the ranking used when valuing the portfolio history.
+_TIMELINE_SOURCE_RANK = {
+    "yfinance": 0, "borsa_italiana": 0, "synthetic": 1, "carry_flat": 2,
+}
+
+
+def build_allocation_timeline(
+    orders: list[Order],
+    enriched_by_isin: dict[str, Holding],
+    *,
+    months: int = 3,
+    today: Optional[datetime.date] = None,
+) -> Optional[dict]:
+    """Reconstruct the historical allocation mix over a recent window.
+
+    Returns weekly snapshots of the invested asset-class mix and the
+    equity-geography mix over the last ``months`` months (clamped to the
+    portfolio inception), so the newsletter can draw a per-category
+    sparkline of how each weight drifted toward/away from its target.
+
+    The reconstruction reuses the same primitives as the value series —
+    ``QuantityTimeline`` for as-of held quantity, ``PriceResolver`` for the
+    EUR price ladder, and 9-char cum/ex prefix netting so a BTP rotated
+    across coupon events nets to zero rather than lingering as a phantom
+    leg. Asset class and equity geo come from the already-enriched
+    holdings (constant per instrument), so this adds no network calls.
+
+    Output (or ``None`` when there is no order history):
+        ``{"dates": [date, ...],
+            "asset": [{class: pct_of_invested}, ...],
+            "geo":   [{region: pct_of_equity}, ...]}``
+    The lists are parallel to ``dates``; the caller typically anchors the
+    final bucket to the authoritative live allocation.
+    """
+    if not orders:
+        return None
+    if today is None:
+        today = datetime.datetime.now().date()
+
+    pos_dates = [o.trade_date for o in orders if o.is_position_change()]
+    if not pos_dates:
+        return None
+    inception = min(pos_dates)
+
+    # Weekly (W-FRI) buckets across the window, clamped to inception for a
+    # portfolio younger than the window, and always terminated by today.
+    window_start = (pd.Timestamp(today) - pd.DateOffset(months=months)).date()
+    start = max(window_start, inception)
+    pts = list(pd.date_range(start=start, end=today, freq="W-FRI"))
+    dates = [p.date() for p in pts]
+    if not dates or dates[0] > start:
+        dates.insert(0, start)
+    if dates[-1] != today:
+        dates.append(today)
+
+    timeline = QuantityTimeline(orders)
+    resolver = PriceResolver(orders, enriched_by_isin, today=today)
+    cash_class = AssetClass.CASH_EQUIVALENTS.value
+
+    # Group cum/ex ISIN variants (shared 9-char prefix) so they value as a
+    # single net position, exactly like ``build_holdings_from_orders``.
+    groups: dict[str, list[str]] = {}
+    for isin in timeline.isins():
+        groups.setdefault(isin[:_CUM_EX_PREFIX_LEN], []).append(isin)
+
+    def _value_group(group: list[str], d: datetime.date) -> tuple[float, Optional[str]]:
+        """EUR value of a cum/ex group on ``d`` plus the representative
+        ISIN (best-priced leg) used to classify it."""
+        net = sum(timeline.qty_at(i, d) for i in group)
+        if abs(net) < _QTY_EPS:
+            return 0.0, None
+        best = None
+        best_rank = 99
+        for i in group:
+            price, source = resolver.price_on(i, d)
+            if price is None:
+                continue
+            rank = _TIMELINE_SOURCE_RANK.get(source, 3)
+            if rank < best_rank:
+                best_rank, best = rank, (i, price, source)
+        if best is None:
+            return 0.0, None
+        isin, price, source = best
+        if source in ("yfinance", "borsa_italiana"):
+            return net * price, isin
+        return value_position(net, price, bond=resolver.is_bond(isin)), isin
+
+    asset_series: list[dict[str, float]] = []
+    geo_series: list[dict[str, float]] = []
+    for d in dates:
+        class_val: dict[str, float] = {}
+        geo_val: dict[str, float] = {}
+        eq_val = 0.0
+        for group in groups.values():
+            v, rep = _value_group(group, d)
+            if v <= 0 or rep is None:
+                continue
+            h = enriched_by_isin.get(rep)
+            ac = h.asset_class.value if (h and h.asset_class) else AssetClass.ALTERNATIVE.value
+            class_val[ac] = class_val.get(ac, 0.0) + v
+            if ac == "Equities":
+                eq_val += v
+                if h and h.geo_breakdown:
+                    tot = sum(h.geo_breakdown.values()) or 1.0
+                    for g, p in h.geo_breakdown.items():
+                        gn = g.value if hasattr(g, "value") else str(g)
+                        geo_val[gn] = geo_val.get(gn, 0.0) + v * (p / tot)
+        invested = sum(val for k, val in class_val.items() if k != cash_class)
+        asset_series.append({
+            k: (val / invested * 100.0)
+            for k, val in class_val.items()
+            if k != cash_class and invested > 0
+        })
+        geo_series.append({
+            k: (val / eq_val * 100.0) for k, val in geo_val.items() if eq_val > 0
+        })
+
+    return {"dates": dates, "asset": asset_series, "geo": geo_series}
