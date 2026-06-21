@@ -87,6 +87,7 @@ class MetricsEngine:
             idx = self._computers.index(self._portfolio_history)
             self._computers[idx] = self._portfolio_history_from_orders
             self._computers.append(self._returns)
+            self._computers.append(self._allocation_timeline)
 
     def register(self, fn: Callable) -> None:
         """Append a custom metric computer to the pipeline."""
@@ -411,6 +412,44 @@ class MetricsEngine:
         ]
         if order_dates:
             ctx["inception_date"] = min(order_dates).strftime("%Y-%m-%d")
+
+    # ------------------------------------------------------------------
+    # Allocation timeline (weekly mix over the last ~3 months)
+    # ------------------------------------------------------------------
+    def _allocation_timeline(self, ctx: dict) -> None:
+        """Reconstruct the weekly asset-class and equity-geo mix over the
+        last 3 months for the newsletter sparklines.
+
+        Reuses the enriched holdings stashed by
+        ``_portfolio_history_from_orders`` (so it adds no network calls)
+        and anchors the final weekly bucket to the authoritative live
+        allocation (``allocation_by_class`` / ``allocation_by_geo``) so the
+        sparkline's endpoint matches the donut and metrics table exactly.
+        """
+        enriched = ctx.get("_enriched_by_isin")
+        if not self.orders or not enriched:
+            return
+        from tarzan.engine.returns_builder import build_allocation_timeline
+
+        tl = build_allocation_timeline(self.orders, enriched, months=3)
+        if not tl or len(tl.get("dates", [])) < 2:
+            return
+
+        cash_class = AssetClass.CASH_EQUIVALENTS.value
+        by_class = ctx.get("allocation_by_class")
+        if by_class is not None and not by_class.empty and tl["asset"]:
+            tl["asset"][-1] = {
+                r["category"]: float(r["weight_pct"])
+                for _, r in by_class.iterrows()
+                if r["category"] != cash_class
+            }
+        by_geo = ctx.get("allocation_by_geo")
+        if by_geo is not None and not by_geo.empty and tl["geo"]:
+            tl["geo"][-1] = {
+                r["category"]: float(r["weight_pct"])
+                for _, r in by_geo.iterrows()
+            }
+        ctx["allocation_timeline"] = tl
 
     # ------------------------------------------------------------------
     # Performance
@@ -779,6 +818,7 @@ class MetricsEngine:
             actual_value_series=ctx.get("actual_value_series"),
             pnl_series=ctx.get("pnl_series"),
             inception_date=ctx.get("inception_date"),
+            allocation_timeline=ctx.get("allocation_timeline"),
         )
 
 

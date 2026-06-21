@@ -121,6 +121,13 @@ class PortfolioMetrics:
     # from the first order when an order list is present. None on the
     # holdings-only path (the header then falls back to config).
     inception_date: Optional[str] = None
+    # Weekly allocation history over the last ~3 months (order path only).
+    # Drives the per-category sparklines in the newsletter Diversification
+    # section. Shape: {"dates": [date, ...],
+    #                  "asset": [{class: pct_of_invested}, ...],
+    #                  "geo":   [{region: pct_of_equity}, ...]}.
+    # None on the holdings-only path (sparklines are then omitted).
+    allocation_timeline: Optional[dict] = None
 
     def to_summary_dict(self) -> dict:
         """Serialize key metrics to a JSON-compatible dictionary.
