@@ -24,17 +24,12 @@ def test_empty_portfolio(sample_config):
 
 
 def test_zero_total_value(sample_holdings, sample_config):
-    """Portfolio with zero total value should return empty actions.
-
-    The default drift penalty pushes the solver to close residual
-    drift even within the tolerance band. This test isolates the
-    zero-total-value path by disabling that penalty so the legacy
-    "minimum trading" objective is in effect.
-    """
-    sample_config.rebalancing_drift_penalty_weight = 0.0
-    actions, verifications = compute_unified_rebalancing(
-        sample_holdings, sample_config, 0.0
-    )
+    """A portfolio whose holdings all value to zero yields no actions and no
+    crash. The optimizer guards on total invested value <= 0."""
+    for h in sample_holdings:
+        h.current_value = 0.0
+        h.market_value_eur = 0.0
+    actions, _ = compute_unified_rebalancing(sample_holdings, sample_config, 0.0)
     assert actions == []
 
 
@@ -181,3 +176,109 @@ def test_duplicate_ticker_attribution(sample_holdings, sample_config):
     for a in actions:
         # idx still uniquely identifies which of the two it is.
         assert sample_holdings[a["idx"]].ticker == a["ticker"]
+
+
+# ---------------------------------------------------------------------------
+# Local-search specifics: every-ambit reduction + determinism
+# ---------------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+
+from tarzan.engine.rebalancer import _ObjectiveModel  # noqa: E402
+from tarzan.models.investor_config import InvestorConfig  # noqa: E402
+
+
+def _geo_scenario():
+    """Equities over-weight at the asset level AND USA under-weight at the geo
+    level, with a pure-USA equity fund available to buy. Buying equity helps
+    geography but worsens the asset-class over-weight — the conflict that made
+    the old optimizer leave geography untouched."""
+    holdings = [
+        Holding(isin="USA000000001", ticker="USA_EQ", quantity=500.0,
+                cost_basis_eur=45000.0, market_value_eur=50000.0, currency="EUR",
+                name="USA Equity", current_price=100.0, current_value=50000.0,
+                gain_pct=10.0, asset_class=AssetClass.EQUITIES,
+                geography=Geography.USA, geo_breakdown={Geography.USA: 100.0}),
+        Holding(isin="EUR000000001", ticker="EU_EQ", quantity=300.0,
+                cost_basis_eur=28000.0, market_value_eur=30000.0, currency="EUR",
+                name="Eurozone Equity", current_price=100.0, current_value=30000.0,
+                gain_pct=7.0, asset_class=AssetClass.EQUITIES,
+                geography=Geography.EUROZONE_EMU,
+                geo_breakdown={Geography.EUROZONE_EMU: 100.0}),
+        Holding(isin="BOND00000001", ticker="AGGH", quantity=150.0,
+                cost_basis_eur=15000.0, market_value_eur=15000.0, currency="EUR",
+                name="Global Agg Bond", current_price=100.0, current_value=15000.0,
+                gain_pct=-1.0, asset_class=AssetClass.FIXED_INCOME),
+        Holding(isin="GOLD00000001", ticker="GOLD", quantity=50.0,
+                cost_basis_eur=4800.0, market_value_eur=5000.0, currency="EUR",
+                name="Gold ETC", current_price=100.0, current_value=5000.0,
+                gain_pct=5.0, asset_class=AssetClass.GOLD),
+    ]
+    cfg = InvestorConfig()
+    cfg.invested_allocation_targets_pctg = {"Equities": 72.0, "Fixed Income": 21.0, "Gold": 7.0}
+    cfg.equity_geo_targets_pctg = {"USA": 70.0, "Eurozone EMU": 30.0}
+    cfg.rebalancing_target_tolerance_pctg = 2.0
+    cfg.rebalancing_no_sell = True
+    cfg.target_cash_buffer_eur = 0.0
+    return holdings, cfg, 10000.0
+
+
+def _gaps_before_after(holdings, cfg, lump):
+    values = np.array([h.current_value for h in holdings], float)
+    model = _ObjectiveModel(holdings, cfg, values)
+    g0 = np.abs(model.gaps(values))
+    actions, _ = compute_unified_rebalancing(holdings, cfg, float(values.sum()), lump_sum=lump)
+    nv = values.copy()
+    for a in actions:
+        nv[a["idx"]] += a["amount_eur"] if a["direction"] == "buy" else -a["amount_eur"]
+    return model, g0, np.abs(model.gaps(nv)), actions
+
+
+def test_geography_ambit_is_reduced_not_left_intact():
+    """The core fix: geography must be actively reduced even when it conflicts
+    with the asset-class over-weight (the old behaviour left it untouched)."""
+    holdings, cfg, lump = _geo_scenario()
+    model, g0, g1, actions = _gaps_before_after(holdings, cfg, lump)
+    geo_idx = [i for i, a in enumerate(model.ambit_of) if a == "geo"]
+    geo_before = max(g0[i] for i in geo_idx)
+    geo_after = max(g1[i] for i in geo_idx)
+    assert geo_after < geo_before - 0.1, (
+        f"geography ambit not reduced: worst gap {geo_before:.2f} -> {geo_after:.2f}"
+    )
+
+
+def test_no_objective_pushed_further_out_of_tolerance():
+    """The guard must keep every objective at or below max(its initial gap,
+    tolerance) — nothing is made worse to fix something else."""
+    holdings, cfg, lump = _geo_scenario()
+    _model, g0, g1, _actions = _gaps_before_after(holdings, cfg, lump)
+    tol = cfg.rebalancing_target_tolerance_pctg
+    for before, after in zip(g0, g1):
+        assert after <= max(before, tol) + 0.25
+
+
+def test_lump_fully_deployed_no_sell():
+    """No-sell lump deployment: zero sells and total buy equals the lump sum."""
+    holdings, cfg, lump = _geo_scenario()
+    _m, _g0, _g1, actions = _gaps_before_after(holdings, cfg, lump)
+    assert all(a["direction"] == "buy" for a in actions)
+    assert abs(sum(a["amount_eur"] for a in actions) - lump) < 5.0
+
+
+def test_local_search_is_deterministic():
+    """Fixed seed → identical plan across runs (stable user-facing output)."""
+    holdings, cfg, lump = _geo_scenario()
+    tv = sum(h.current_value for h in holdings)
+    a1, _ = compute_unified_rebalancing(holdings, cfg, tv, lump_sum=lump)
+    a2, _ = compute_unified_rebalancing(holdings, cfg, tv, lump_sum=lump)
+    sig = lambda acts: sorted((a["ticker"], a["direction"], a["amount_eur"]) for a in acts)
+    assert sig(a1) == sig(a2)
+
+
+def test_drift_penalty_sensitivity_retired():
+    """The LP-only drift-penalty sweep is retired and returns an empty list so
+    the Excel/newsletter tuning section hides itself."""
+    from tarzan.engine.rebalancer import compute_drift_penalty_sensitivity
+    holdings, cfg, lump = _geo_scenario()
+    tv = sum(h.current_value for h in holdings)
+    assert compute_drift_penalty_sensitivity(holdings, cfg, tv, lump_sum=lump) == []
