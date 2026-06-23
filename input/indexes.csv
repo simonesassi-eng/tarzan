@@ -1,7 +1,6 @@
 index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
 FTSE All-World,VWRL.L,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
 MSCI ACWI,^892400-USD-STRD,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,Official Index - Comprehensive global equity (Developed + Emerging).,6/15/26
-MSCI EAFE,EFA,TRUE,,,0,0,32.2,22.7,45.1,ETF Proxy - Developed markets excluding North America.,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
 MSCI World,^990100-USD-STRD,TRUE,,,72.5,0,8.5,5.7,13.3,Official Index - Large and mid-cap stocks across 23 developed markets.,6/15/26
 MSCI World Momentum,IWMO.L,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
@@ -11,6 +10,10 @@ S&P 500,^GSPC,TRUE,,,100,0,0,0,0,Official Index - 500 leading large-cap US compa
 Bloomberg Global Aggregate,AGGG.L,TRUE,,,44.53,5.18,12.28,13.81,24.2,ETF Proxy - Global investment grade debt from 24 local currency markets.,2/22/26
 EURO STOXX 50,^STOXX50E,TRUE,,,0,0,100,0,0,Official Index of the top 50 blue-chip stocks from the Eurozone.,2/21/26
 STOXX Europe 600,^STOXX,TRUE,,,0,0,51.7,0,48.3,Official Index - 600 large mid and small-cap stocks in Europe.,6/15/26
+MSCI World Enhanced Value,IWVL.L,TRUE,,,51.29,0,16.05,18.57,14.09,ETF Proxy - Stocks with strong value characteristics.,6/15/26
+Vanguard LifeStrategy 80,V80A.DE,TRUE,,,,,,,,,
+Vanguard LifeStrategy 60,V60A.DE,TRUE,,,,,,,,,
+MSCI EAFE,EFA,,,,0,0,32.2,22.7,45.1,ETF Proxy - Developed markets excluding North America.,6/15/26
 Bloomberg Euro Aggregate,IEAG.L,,,,,0,100,0,0,ETF Proxy - Tracks EUR-denominated investment grade bonds.,2/22/26
 Bloomberg US Treasury,GOVT,,,,100,0,0,0,0,ETF Proxy - US Treasury bonds with remaining maturities 1-30 years.,2/22/26
 CAC 40,^FCHI,,,,0,0,100,0,0,Official Index for the French stock market (40 largest stocks).,2/22/26
@@ -44,9 +47,8 @@ MSCI World High Dividend,VIGI,,,,48.25,0,18.4,11.2,22.15,ETF Proxy - Global stoc
 MSCI World Info Tech,XDWT.L,,,,78,0,8.7,4.2,9.1,ETF Proxy - Developed-market technology sector stocks.,6/15/26
 MSCI World Minimum Volatility,MVOL.L,,,,66.64,0,8.35,10.24,14.77,ETF Proxy - Developed-market stocks with lower volatility characteristics.,6/15/26
 MSCI World Sector Neutral Quality,IWQU.L,,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Quality factor stocks adjusted for sector neutrality.,6/15/26
-MSCI World Small Cap,WSML.L,,,,62.46,0,6.0,11.98,19.56,ETF Proxy - Small-cap stocks across developed market countries.,6/15/26
+MSCI World Small Cap,WSML.L,,,,62.46,0,6,11.98,19.56,ETF Proxy - Small-cap stocks across developed market countries.,6/15/26
 MSCI World SRI,SUSW.L,,,,72.15,0,7.95,5.8,14.1,ETF Proxy - Stocks with high ESG ratings.,2/22/26
-MSCI World Enhanced Value,IWVL.L,,,,51.29,0,16.05,18.57,14.09,ETF Proxy - Stocks with strong value characteristics.,6/15/26
 Nasdaq Global Buyback Achievers,BUYB.L,,,,58,0,10,10,22,ETF Proxy - Global companies that have significantly reduced shares.,6/15/26
 Russell 1000,^RUI,,,,100,0,0,0,0,Official Index - 1000 largest US companies.,2/21/26
 Russell 2000,^RUT,,,,100,0,0,0,0,Official Index - 2000 small-cap US companies.,2/21/26
