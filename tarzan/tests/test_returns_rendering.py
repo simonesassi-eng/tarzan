@@ -36,6 +36,17 @@ def _minimal_metrics(with_returns: bool) -> PortfolioMetrics:
             "yfinance": ["US0000000001"], "synthetic": [],
             "carry_flat": ["IT0005542359"], "excluded": [],
         }
+        # The order path always ships the daily series; the Performance
+        # matrix + charts render off these (and the lifetime P&L).
+        idx = pd.date_range("2025-12-29", periods=6, freq="W")
+        m.pnl_eur = 1000.0
+        m.pnl_pct = 20.0
+        m.actual_value_series = pd.Series(
+            [4800.0, 5000.0, 5200.0, 5100.0, 5600.0, 6000.0], index=idx)
+        m.pnl_series = pd.Series([0.0, 60.0, 120.0, 90.0, 250.0, 350.0], index=idx)
+        m.unrealized_series = pd.Series([0.0, 50.0, 100.0, 80.0, 200.0, 300.0], index=idx)
+        m.portfolio_history = pd.Series(
+            [100.0, 100.8, 101.5, 101.2, 102.8, 103.5], index=idx)
     return m
 
 
@@ -52,11 +63,14 @@ class TestNewsletterReturns:
         assert "14.49%" in rb["twror"]
         assert rb["fallback_count"] == 1
 
-    def test_html_shows_chips_only_when_set(self):
+    def test_html_shows_perf_section_only_when_set(self):
         html_off = render_newsletter(_minimal_metrics(False), _config())
         html_on = render_newsletter(_minimal_metrics(True), _config())
-        assert "money-weighted" not in html_off
-        assert "money-weighted" in html_on
+        # The Performance section (returns matrix + annualized footer + charts)
+        # renders only when the order-derived returns and daily series exist.
+        assert "How your money moved" not in html_off
+        assert "How your money moved" in html_on
+        assert "Annualized — TWROR" in html_on
         assert "TWROR" in html_on
 
 

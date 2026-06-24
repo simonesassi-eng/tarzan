@@ -1,166 +1,33 @@
-{# Status variant 6 — "Hybrid" (v2 + v5), refined:
-   1) chart-led hero card: value + Cash (small) on the left, Unrealized PnL
-      on the right, full-bleed mountain with a 4-point dated X-axis;
-   2) return scoreboard: YOUR MONEY (PnL) vs MARKET · TIME-WEIGHTED (TWROR),
-      each with an annualized subtitle (XIRR / TWROR-ann.) and three rows by
-      period — since inception / last 7 days / last 30 days;
-   3) a v4-style rebalance banner, only when action is needed. #}
+{# Status — slim lifetime-state band (refactored).
+   The hero now carries only the "where I am" identity: portfolio value +
+   cash, plus the rebalance banner and the data-quality note. ALL P&L /
+   return numbers — Total P&L, Unrealized P&L and TWROR across 1D / 7D / 30D /
+   since inception, the annualized XIRR / TWROR rates and the net-of-tax
+   estimate — now live in the Performance section below (returns matrix +
+   30-day charts), so no figure appears twice. The old 30-day hero mountain is
+   superseded by that section's patrimony chart (which adds axes + deposit
+   markers). #}
           <tr>
             <td class="px-32" style="padding:28px 32px 8px 32px;background:#FFFFFF;">
 
-              {# 1 ── Chart-led hero card #}
+              {# Lifetime-state band: portfolio value + cash. #}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:14px;border-collapse:separate;border-spacing:0;">
                 <tr>
-                  <td style="padding:16px 16px 12px 16px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td style="vertical-align:top;">
-                          <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio{% if hero.inception_label %} · since {{ hero.inception_label }}{% endif %}</div>
-                          <div style="margin-top:4px;font-size:36px;font-weight:700;color:{{ palette.ink }};line-height:1.03;letter-spacing:-0.015em;">{{ hero.total_value }}</div>
-                          <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};">Cash <span style="color:{{ palette.ink }};font-weight:700;">{{ hero.cash_value }}</span></div>
-                        </td>
-                        {% if hero.has_total_pnl %}
-                        <td align="right" style="vertical-align:top;">
-                          <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Unrealized PnL</div>
-                          <div style="margin-top:2px;font-size:19px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">{{ hero.unrealized_eur }}</div>
-                          <div style="font-size:15px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">({{ hero.unrealized_pct }})</div>
-                        </td>
-                        {% endif %}
-                      </tr>
-                    </table>
-                    {# Full-bleed mountain #}
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;border-collapse:collapse;">
-                      <tr style="height:58px;">
-                        {% for bar in sparkline.bars %}
-                        <td valign="bottom" style="width:{{ 100 / sparkline.bars|length }}%;font-size:0;line-height:0;padding:0;"><div style="background-color:{{ palette.accent }};background:linear-gradient(180deg,{{ palette.accent }} 0%,{{ palette.accent_bg }} 100%);height:{{ (bar.height * 1.3)|round|int }}px;font-size:0;line-height:0;">&nbsp;</div></td>
-                        {% endfor %}
-                      </tr>
-                    </table>
-                    {# Dated X-axis (start · two interior · end) #}
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;">
-                      <tr>
-                        {% for lbl in sparkline.axis_labels %}
-                        <td style="font-size:10px;color:{{ palette.subtle }};" align="{{ 'left' if loop.first else ('right' if loop.last else 'center') }}">{{ lbl }}</td>
-                        {% endfor %}
-                      </tr>
-                    </table>
+                  <td style="padding:16px 18px;">
+                    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio{% if hero.inception_label %} · since {{ hero.inception_label }}{% endif %}</div>
+                    <div style="margin-top:4px;font-size:36px;font-weight:700;color:{{ palette.ink }};line-height:1.03;letter-spacing:-0.015em;">{{ hero.total_value }}</div>
+                    <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};">Cash <span style="color:{{ palette.ink }};font-weight:700;">{{ hero.cash_value }}</span></div>
                   </td>
                 </tr>
               </table>
 
-              {# 2 ── Return scoreboard: Profit & Losses | TWROR.
-                 Each period is a horizontal row (label left, value right) to
-                 use the card's width and keep it vertically compact. #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td width="49%" style="vertical-align:top;padding:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <div style="font-size:11px;font-weight:700;color:{{ palette.muted }};">Profit &amp; Losses <span style="color:{{ palette.subtle }};">(PnL)</span></div>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Since inception</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.total_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.total_pnl_eur }} <span style="font-size:12px;">({{ hero.total_pnl_pct }})</span></td>
-                      </tr>
-                      {% if hero.has_net_tax %}
-                      <tr><td colspan="2" style="font-size:0;line-height:4px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:9px;color:{{ palette.subtle }};font-style:italic;vertical-align:middle;">Net of est. tax <span style="white-space:nowrap;">({{ hero.cgt_eur }})</span></td>
-                        <td align="right" style="font-size:10px;font-weight:700;color:{{ palette.muted }};font-style:italic;vertical-align:middle;white-space:nowrap;">{{ hero.pnl_net_tax_eur }} <span style="font-size:9px;">({{ hero.pnl_net_tax_pct }})</span></td>
-                      </tr>
-                      {% endif %}
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 30 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.month_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.month_pnl_eur or '—' }}{% if hero.month_pnl_pct %} <span style="font-size:12px;">({{ hero.month_pnl_pct }})</span>{% endif %}</td>
-                      </tr>
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_pnl_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_pnl_eur or '—' }}{% if hero.week_pnl_pct %} <span style="font-size:12px;">({{ hero.week_pnl_pct }})</span>{% endif %}</td>
-                      </tr>
-                    </table>
-                  </td>
-                  <td width="2%"></td>
-                  <td width="49%" style="vertical-align:top;padding:14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <div style="font-size:11px;font-weight:700;color:{{ palette.muted }};">Time-Weighted Rate of Return <span style="color:{{ palette.subtle }};">(TWROR)</span></div>
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Since inception</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.twror_pct or '—' }}</td>
-                      </tr>
-                      {# Invisible spacer mirroring the PnL card's net-of-tax
-                         line, so Last 30 / Last 7 line up across both cards. #}
-                      {% if hero.has_net_tax %}
-                      <tr><td colspan="2" style="font-size:0;line-height:4px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:9px;color:{{ palette.card_alt }};vertical-align:middle;">&nbsp;</td>
-                        <td align="right" style="font-size:10px;color:{{ palette.card_alt }};vertical-align:middle;">&nbsp;</td>
-                      </tr>
-                      {% endif %}
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 30 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.month_twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.month_twror_pct or '—' }}</td>
-                      </tr>
-                      <tr><td colspan="2" style="font-size:0;line-height:7px;">&nbsp;</td></tr>
-                      <tr>
-                        <td style="font-size:11px;color:{{ palette.subtle }};vertical-align:middle;">Last 7 days</td>
-                        <td align="right" style="font-size:14px;font-weight:700;color:{{ palette.green if hero.week_twror_is_positive else palette.red }};vertical-align:middle;white-space:nowrap;">{{ hero.week_twror_pct or '—' }}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              {# 3 ── Annualized returns in two separate cards (money-weighted
-                 XIRR vs time-weighted TWROR), with the percentage aligned
-                 to the right of the label. Shown only when available. #}
-              {% if hero.xirr_pct or hero.twror_annualized_pct %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td width="49%" style="vertical-align:top;padding:10px 14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td style="vertical-align:middle;">
-                          <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};">XIRR · annualized</div>
-                          <div style="font-size:10px;color:{{ palette.subtle }};">money-weighted</div>
-                        </td>
-                        <td align="right" style="vertical-align:middle;font-size:16px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;">{{ hero.xirr_pct or '—' }}</td>
-                      </tr>
-                      {% if hero.has_net_tax and hero.xirr_net_tax_pct %}
-                      <tr>
-                        <td style="padding-top:4px;vertical-align:middle;font-size:9px;color:{{ palette.subtle }};font-style:italic;">net of est. tax</td>
-                        <td align="right" style="padding-top:4px;vertical-align:middle;font-size:10px;font-weight:700;color:{{ palette.muted }};white-space:nowrap;">{{ hero.xirr_net_tax_pct }}</td>
-                      </tr>
-                      {% endif %}
-                    </table>
-                  </td>
-                  <td width="2%"></td>
-                  <td width="49%" style="vertical-align:top;padding:10px 14px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td style="vertical-align:middle;">
-                          <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};">TWROR · annualized</div>
-                          <div style="font-size:10px;color:{{ palette.subtle }};">time-weighted · gross of tax</div>
-                        </td>
-                        <td align="right" style="vertical-align:middle;font-size:16px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;">{{ hero.twror_annualized_pct or '—' }}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              {% endif %}
-
-              {# Data-quality note for the returns computation, surfaced near
-                 the top (just above the rebalance banner) as requested. The
-                 `performance` context is available inside this include. #}
+              {# Data-quality note for the returns computation (provenance for
+                 every figure in the Performance section below). #}
               {% if performance.returns and performance.returns.coverage %}
               <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};">Computed on {{ performance.returns.coverage }} real market data{% if performance.returns.fallback_count %} · {{ performance.returns.fallback_count }} instrument{{ 's' if performance.returns.fallback_count != 1 else '' }} priced by fallback{% endif %}.</div>
               {% endif %}
-              {% if hero.has_net_tax %}
-              <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};font-style:italic;line-height:1.4;">Net-of-tax is an estimate: average-cost basis, 26% / 12.5% on government bonds, realized losses offset later gains where Italian rules allow (ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of transferred-in positions. TWROR shown gross of tax.</div>
-              {% endif %}
 
-              {# 4 ── Slim, colored rebalance banner (only when action is needed) #}
+              {# Slim, colored rebalance banner (only when action is needed). #}
               {% if hero.rebal_label and hero.rebal_label != 'Aligned' %}
               <div style="margin-top:10px;padding:7px 12px;background:{{ hero.rebal_bg }};border-radius:8px;font-size:11px;font-weight:700;color:{{ hero.rebal_color }};">● Rebalance · {{ hero.rebal_n_actions }} action{{ 's' if hero.rebal_n_actions != 1 else '' }} · see optimizer below</div>
               {% endif %}

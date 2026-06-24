@@ -49,6 +49,16 @@ def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
             [0.0, 120.0, 90.0, 250.0, 350.0],
             index=pd.date_range("2025-12-29", periods=5, freq="W"),
         )
+        # Smooth flow-adjusted NAV index + unrealized series so the
+        # Performance section (matrix + charts) renders in the HTML test.
+        m.portfolio_history = pd.Series(
+            [100.0, 101.5, 101.2, 102.8, 103.5],
+            index=pd.date_range("2025-12-29", periods=5, freq="W"),
+        )
+        m.unrealized_series = pd.Series(
+            [0.0, 100.0, 80.0, 200.0, 300.0],
+            index=pd.date_range("2025-12-29", periods=5, freq="W"),
+        )
         m.inception_date = "2025-12-29"
     return m
 
@@ -119,10 +129,13 @@ class TestMountainChart:
 
     def test_renders_without_crash(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
-        assert "Last 30 days" in html
-        assert "Time-Weighted Rate of Return" in html  # scoreboard title
-        assert "Profit &amp; Losses" in html or "Profit & Losses" in html
-        assert "Unrealized" in html  # hero overlay
+        # Lean hero: the portfolio value band (scoreboard + mountain removed).
+        assert "Portfolio" in html
+        # The Performance section now carries the P&L / TWROR story.
+        assert "How your money moved" in html
+        assert "Total P&amp;L" in html
+        assert "Unrealized P&amp;L" in html
+        assert "TWROR" in html
 
     def test_nan_values_do_not_crash(self):
         """A cold cache / vendor outage can leave NaN valuations on some
