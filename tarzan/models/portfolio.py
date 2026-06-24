@@ -117,6 +117,16 @@ class PortfolioMetrics:
     # Daily cumulative P&L (value − contributed capital); its delta over a
     # window is the real money gained in that window, net of contributions.
     pnl_series: Optional[pd.Series] = None
+    # Daily unrealized P&L = market value of open positions − their cost
+    # basis. Same definition as the hero's snapshot (total_value − cost),
+    # but as a full daily series for charting. None on the holdings-only path.
+    unrealized_series: Optional[pd.Series] = None
+    # Net external capital flow per date: {date: eur} where deposits/buys are
+    # positive and withdrawals/sells negative (distributions are negative —
+    # cash leaving the securities portfolio). Drives the deposit/withdrawal
+    # markers on the newsletter performance charts. None on the holdings-only
+    # path. Same object the TWROR engine consumes (no recomputation).
+    external_flows: Optional[dict] = None
     # Portfolio inception date (ISO "YYYY-MM-DD"), derived automatically
     # from the first order when an order list is present. None on the
     # holdings-only path (the header then falls back to config).

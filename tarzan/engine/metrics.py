@@ -373,6 +373,25 @@ class MetricsEngine:
         ctx["pnl_pct"] = (pnl_eur / net_deposits * 100.0) if net_deposits > 0 else None
         ctx["actual_value_series"] = series.actual_value_series
         ctx["pnl_series"] = series.pnl_series
+        # External capital flows (deposits/buys +, withdrawals/sells/distros −)
+        # per date — the same dict TWROR consumes. Drives the deposit/withdrawal
+        # markers on the newsletter performance charts (no recomputation).
+        ctx["external_flows"] = series.external_flows
+        # Unrealized P&L series: the order-derived reconstruction differs from
+        # the snapshot in level (bonds priced carry-flat; cum/ex-netted legs
+        # carry residual cost the open-positions snapshot drops). We keep its
+        # daily SHAPE but anchor the END to the authoritative snapshot the
+        # hero shows — unrealized = total_value − Σ cost_basis(open holdings) —
+        # via a constant shift. Consistent with the hero, no double source.
+        ur = series.unrealized_series
+        if ur is not None and not ur.empty:
+            hdf = ctx.get("holdings_df")
+            cost_now = (float(hdf["cost_basis_eur"].sum())
+                        if hdf is not None and not hdf.empty else 0.0)
+            hero_unreal = float(ctx.get("total_value", 0.0)) - cost_now
+            ctx["unrealized_series"] = ur + (hero_unreal - float(ur.iloc[-1]))
+        else:
+            ctx["unrealized_series"] = ur
 
         # Net-of-tax estimate (Italian CGT on realized gains). This is an
         # ESTIMATE shown alongside — never replacing — the gross figures:
@@ -817,6 +836,8 @@ class MetricsEngine:
             xirr_net_tax_pct=ctx.get("xirr_net_tax_pct"),
             actual_value_series=ctx.get("actual_value_series"),
             pnl_series=ctx.get("pnl_series"),
+            unrealized_series=ctx.get("unrealized_series"),
+            external_flows=ctx.get("external_flows"),
             inception_date=ctx.get("inception_date"),
             allocation_timeline=ctx.get("allocation_timeline"),
         )

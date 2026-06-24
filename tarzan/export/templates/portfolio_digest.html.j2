@@ -134,6 +134,22 @@
           {% endif %}
 
 
+          {# ─── PERFORMANCE (1D/7D/30D/since matrix + 30-day charts) ─────────
+             Owns the multi-horizon P&L / TWROR numbers and the recent
+             trajectory. The hero above is now a slim lifetime-state band so
+             no figure appears twice. SVG charts render in Gmail/Apple Mail;
+             legacy Outlook shows the matrix + chips (PNG fallback is a TODO).
+             Pre-rendered in newsletter.py::_build_performance30 (SVG can't be
+             expressed in Jinja), injected as safe HTML. #}
+          {% if performance30.available %}
+          <tr>
+            <td class="px-32" style="padding:28px 32px 0 32px;">
+              {{ performance30.html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+
+
           {# ─── DIVERSIFICATION (Asset Class + Geography, donut layout) ───── #}
           {% if allocation.rows or geography.rows %}
           <tr>

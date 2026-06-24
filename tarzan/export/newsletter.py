@@ -41,6 +41,7 @@ from tarzan.export._format import (
     GEO_COLORS as _GEO_COLORS,
     css,
 )
+from tarzan.export import _charts
 
 logger = logging.getLogger(__name__)
 
@@ -765,6 +766,264 @@ def _build_sparkline_pills(
             "color": color, "bg": bg,
         })
     return pills
+
+
+# ── Performance section (1D/7D/30D/since matrix + 30-day charts) ─────────────
+
+def _norm_series(s: pd.Series) -> pd.Series:
+    """tz-naive, calendar-day-normalised, de-duplicated copy of a series."""
+    s = s.copy()
+    ix = s.index
+    if getattr(ix, "tz", None) is not None:
+        ix = ix.tz_convert("UTC").tz_localize(None)
+    s.index = pd.DatetimeIndex(ix).normalize()
+    return s[~s.index.duplicated(keep="last")]
+
+
+def _flow_list(external_flows, start, end, threshold: float = 500.0):
+    """``{date: eur}`` → sorted ``[(Timestamp, eur)]`` inside ``[start, end]``,
+    dropping flows below ``threshold`` (nets out small rebalancing trades so
+    only real deposits/withdrawals mark the chart)."""
+    if not external_flows:
+        return []
+    out = []
+    for d, v in external_flows.items():
+        ts = pd.Timestamp(d)
+        if ts < start or ts > end or abs(float(v)) < threshold:
+            continue
+        out.append((ts, float(v)))
+    return sorted(out, key=lambda t: t[0])
+
+
+def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
+    """Window TWROR (%) from the flow-adjusted NAV index over the last
+    ``days`` calendar days (mirrors :func:`_window_money_pnl`'s as-of logic)."""
+    if nav is None:
+        return None
+    s = nav.replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if len(s) < 2:
+        return None
+    cutoff = s.index[-1] - pd.Timedelta(days=days)
+    prior = s[s.index <= cutoff]
+    base = float(prior.iloc[-1]) if len(prior) else float(s.iloc[0])
+    return (float(s.iloc[-1]) / base - 1.0) * 100.0 if base > 0 else None
+
+
+def _perf_window(m: PortfolioMetrics, n_days: int = 30) -> Optional[dict]:
+    """Last ``n_days`` of value (€), TWROR (%), MSCI ACWI (%) and P&L (€→%),
+    on a common daily index, plus deposit/withdrawal markers. Reuses the
+    order-derived series (no recomputation). None when unavailable."""
+    val_raw = m.actual_value_series
+    if val_raw is None or len(val_raw) < 2:
+        return None
+    val = _norm_series(val_raw).replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if len(val) < 2:
+        return None
+    cutoff = val.index[-1] - pd.Timedelta(days=n_days)
+    val = val[val.index >= cutoff]
+    if len(val) < 2:
+        return None
+    idx = val.index
+
+    nav = (_norm_series(m.portfolio_history).reindex(idx, method="ffill").bfill()
+           if m.portfolio_history is not None else None)
+    twror = (list(((nav / nav.iloc[0] - 1.0) * 100.0).values.astype(float))
+             if nav is not None and float(nav.iloc[0]) else None)
+
+    acwi = None
+    acwi_raw = (m.benchmark_histories or {}).get("MSCI ACWI")
+    if acwi_raw is not None and len(acwi_raw) >= 2:
+        a = _norm_series(acwi_raw).reindex(idx, method="ffill").bfill()
+        if float(a.iloc[0]):
+            acwi = list(((a / a.iloc[0] - 1.0) * 100.0).values.astype(float))
+
+    pnl_pct = None
+    if m.pnl_series is not None:
+        pnl = _norm_series(m.pnl_series).reindex(idx, method="ffill").bfill()
+        base = (pnl - pnl.iloc[0])
+        v0 = float(val.iloc[0]) or 1.0
+        pnl_pct = [float(p) / v0 * 100.0 for p in base.values]
+
+    dates = list(idx)
+    return {
+        "dates": dates,
+        "value": list(val.values.astype(float)),
+        "twror": twror,
+        "acwi": acwi,
+        "pnl_pct": pnl_pct,
+        "flows": _flow_list(m.external_flows, dates[0], dates[-1]),
+    }
+
+
+def _perf_level_series(m: PortfolioMetrics, dates):
+    """The three indicators as % over the window, each matching the hero's
+    definition, from existing series (no recomputation):
+      * TWROR since inception — NAV index anchored at inception.
+      * Total P&L %           — P&L ÷ net invested capital (value − P&L).
+      * Unrealized P&L %       — unrealized ÷ cost basis (value − unrealized).
+    Returns ``(twror_si, total_pct, unreal_pct)`` (any may be None)."""
+    if m.portfolio_history is None or m.actual_value_series is None:
+        return None
+    idx = pd.DatetimeIndex(dates)
+    av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
+    # TWROR since inception: anchor the NAV index at the FULL series' first
+    # point (inception), THEN sample the window — so the line shows the
+    # cumulative since-inception trajectory over the last 30 days (ending at
+    # twror_pct), not a window-rebased 0%. (Reindexing before dividing would
+    # rebase to the window start — the bug this avoids.)
+    nav_full = _norm_series(m.portfolio_history)
+    twror_si = None
+    if len(nav_full) and float(nav_full.iloc[0]):
+        twror_full = (nav_full / float(nav_full.iloc[0]) - 1.0) * 100.0
+        twror_si = list(twror_full.reindex(idx, method="ffill").bfill().values.astype(float))
+    total_pct = unreal_pct = None
+    if m.pnl_series is not None:
+        pnl = _norm_series(m.pnl_series).reindex(idx, method="ffill").bfill()
+        total_pct = list((pnl / (av - pnl).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
+    if m.unrealized_series is not None:
+        ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
+        unreal_pct = list((ur / (av - ur).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
+    return twror_si, total_pct, unreal_pct
+
+
+def _build_performance30(ctx: _NewsletterContext) -> dict:
+    """Performance section: a 1D / 7D / 30D / since-inception returns matrix
+    (Total P&L €+%, Unrealized P&L €+%, TWROR %) with an annualized footer,
+    plus three 30-day trajectory charts (patrimony €, return vs benchmark,
+    your-return-three-ways). All numbers come straight from the order-derived
+    series — nothing the hero already shows is recomputed here. Returns
+    ``{"available": False}`` on the holdings-only path."""
+    m = ctx.metrics
+    if (m.actual_value_series is None or m.pnl_series is None
+            or m.portfolio_history is None or m.pnl_eur is None):
+        return {"available": False, "html": ""}
+    win = _perf_window(m, 30)
+    if win is None:
+        return {"available": False, "html": ""}
+
+    P = PALETTE
+
+    def _sgn(v: Optional[float]) -> str:
+        return P["green"] if (v is not None and v >= 0) else P["red"]
+
+    # ── Matrix values (windows reuse _window_money_pnl / _window_twror;
+    #    "since inception" uses the authoritative lifetime fields). ──────
+    tot = {d: _window_money_pnl(m.pnl_series, m.actual_value_series, d) for d in (1, 7, 30)}
+    tot_since = (m.pnl_eur, m.pnl_pct)
+    unr = {d: _window_money_pnl(m.unrealized_series, m.actual_value_series, d) for d in (1, 7, 30)}
+    cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
+    unreal_now = m.total_value - cost
+    unr_since = (unreal_now, (unreal_now / cost * 100.0) if cost > 0 else None)
+    nav_norm = _norm_series(m.portfolio_history)
+    tw = {d: _window_twror(nav_norm, d) for d in (1, 7, 30)}
+    tw_since = m.twror_pct
+
+    bt = f"1px solid {P['border']}"
+
+    def _money_cell(pair) -> str:
+        eur, pct = pair
+        c = _sgn(eur)
+        eur_s = _eur_smart(eur, signed=True) if eur is not None else "—"
+        pct_s = _pct(pct, decimals=1, signed=True) if pct is not None else ""
+        return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};">'
+                f'<div style="font-size:13px;font-weight:700;color:{c};font-variant-numeric:tabular-nums;">{eur_s}</div>'
+                + (f'<div style="font-size:11px;color:{c};font-variant-numeric:tabular-nums;">{pct_s}</div>' if pct_s else "")
+                + '</td>')
+
+    def _pct_cell(v) -> str:
+        return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};font-size:13px;'
+                f'font-weight:700;color:{_sgn(v)};font-variant-numeric:tabular-nums;">'
+                f'{_pct(v, signed=True) if v is not None else "—"}</td>')
+
+    def _label(txt) -> str:
+        return f'<td style="padding:7px 0;border-top:{bt};font-size:12px;color:{P["ink"]};">{txt}</td>'
+
+    heads = ("1 Day", "7 Days", "30 Days", "Since inception")
+    head_html = '<tr><td></td>' + "".join(
+        f'<td align="right" style="padding:0 0 5px 10px;font-size:9px;font-weight:700;color:{P["muted"]};'
+        f'letter-spacing:0.04em;text-transform:uppercase;">{h}</td>' for h in heads) + '</tr>'
+    row_t = '<tr>' + _label("Total P&amp;L") + _money_cell(tot[1]) + _money_cell(tot[7]) + _money_cell(tot[30]) + _money_cell(tot_since) + '</tr>'
+    row_u = '<tr>' + _label("Unrealized P&amp;L") + _money_cell(unr[1]) + _money_cell(unr[7]) + _money_cell(unr[30]) + _money_cell(unr_since) + '</tr>'
+    row_w = '<tr>' + _label("TWROR") + _pct_cell(tw[1]) + _pct_cell(tw[7]) + _pct_cell(tw[30]) + _pct_cell(tw_since) + '</tr>'
+    matrix = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+              f'style="border-collapse:collapse;">{head_html}{row_t}{row_u}{row_w}</table>')
+
+    footer = (f'<div style="margin-top:12px;padding-top:10px;border-top:2px solid {P["border"]};'
+              f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized — '
+              f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> · '
+              f'XIRR <strong style="color:{_sgn(m.xirr_pct)};">{_pct(m.xirr_pct, signed=True)}</strong>'
+              + (f' <span style="color:{P["subtle"]};">(net of tax {_pct(m.xirr_net_tax_pct, signed=True)})</span>'
+                 if m.xirr_net_tax_pct is not None else "")
+              + (f' · P&amp;L net of tax {_eur_smart(m.pnl_eur_net_tax, signed=True)}'
+                 if m.pnl_eur_net_tax is not None else "")
+              + '</div>')
+
+    tax_note = ""
+    if m.estimated_cgt_eur and m.estimated_cgt_eur > 0:
+        tax_note = (f'<div style="margin-top:8px;font-size:10px;color:{P["subtle"]};font-style:italic;line-height:1.4;">'
+                    f'Net-of-tax is an estimate: average-cost basis, 26% / 12.5% on government bonds, realized losses '
+                    f'offset later gains where Italian rules allow (ETF/fund gains are not offsettable). Excludes '
+                    f'coupon/dividend withholding and the cost basis of transferred-in positions. TWROR is gross of tax.</div>')
+
+    matrix_card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                   f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+                   f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
+                   f'<tr><td style="padding:14px 16px;">{matrix}{footer}{tax_note}</td></tr></table>')
+
+    # ── Charts ────────────────────────────────────────────────────────
+    dates = win["dates"]
+
+    def _sub(t: str) -> str:
+        return (f'<div style="margin-top:18px;font-size:11px;font-weight:700;color:{P["muted"]};'
+                f'text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">{t}</div>')
+
+    parts = [_sub("Patrimony (€) — ▲ deposits / ▼ withdrawals"),
+             _charts.chart_eur(win["value"], dates, flows=win["flows"]),
+             _charts.flow_chips(win["flows"], lambda v: _eur_smart(v, signed=True))]
+
+    # Return vs benchmark (%) — TWROR, P&L %, MSCI ACWI on one rebased axis.
+    ret_series, ret_leg = [], []
+    if win["twror"] is not None:
+        ret_series.append({"values": win["twror"], "color": _charts.GREEN})
+        ret_leg.append((f'TWROR {_pct(win["twror"][-1], signed=True)}', _charts.GREEN, False))
+    if win["pnl_pct"] is not None:
+        ret_series.append({"values": win["pnl_pct"], "color": _charts.PNL})
+        ret_leg.append((f'P&L % {_pct(win["pnl_pct"][-1], signed=True)}', _charts.PNL, False))
+    if win["acwi"] is not None:
+        ret_series.append({"values": win["acwi"], "color": _charts.BENCH, "dash": True})
+        ret_leg.append((f'MSCI ACWI {_pct(win["acwi"][-1], signed=True)}', _charts.BENCH, True))
+    if ret_series:
+        parts.append(_sub("Return vs MSCI ACWI (%, rebased to 0)"))
+        parts.append(_charts.chart_pct(ret_series, dates, flows=None, include_zero=True))
+        parts.append(_charts.legend(ret_leg))
+
+    # Your return, three ways (%).
+    lvl = _perf_level_series(m, dates)
+    if lvl is not None:
+        twror_si, total_pct, unreal_pct = lvl
+        pct3, leg3 = [], []
+        if twror_si is not None:
+            pct3.append({"values": twror_si, "color": _charts.GREEN})
+            leg3.append(("TWROR since inception", _charts.GREEN, False))
+        if total_pct is not None:
+            pct3.append({"values": total_pct, "color": _charts.ACCENT})
+            leg3.append(("Total P&L %", _charts.ACCENT, False))
+        if unreal_pct is not None:
+            pct3.append({"values": unreal_pct, "color": _charts.PNL, "dash": True})
+            leg3.append(("Unrealized P&L %", _charts.PNL, True))
+        if pct3:
+            parts.append(f'<div style="border-top:1px solid {P["border"]};margin:20px 0 0 0;"></div>')
+            parts.append(_sub("Your return, three ways (%) — 30-day trajectory"))
+            parts.append(_charts.chart_pct(pct3, dates, flows=None, include_zero=False))
+            parts.append(_charts.legend(leg3))
+
+    header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
+              f'text-transform:uppercase;">Performance</div>'
+              f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{P["ink"]};">How your money moved</div>'
+              f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Total &amp; unrealized P&amp;L and your '
+              f'time-weighted return across 1 day, 7 days, 30 days and since inception — then the 30-day trajectory.</div>')
+
+    return {"available": True, "html": header + matrix_card + "".join(parts)}
 
 
 def _build_allocation(ctx: _NewsletterContext) -> dict:
@@ -2041,6 +2300,7 @@ def build_context(
         "headline": _build_headline(nctx, hero),
         "hero": hero,
         "sparkline": _build_sparkline(nctx),
+        "performance30": _build_performance30(nctx),
         "ai_summary": ai_summary,
         "smart_insights": _build_smart_insights(nctx),
         "movers": _build_movers(nctx),

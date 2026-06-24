@@ -90,6 +90,10 @@ class OrderDerivedSeries:
     daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     actual_value_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     pnl_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    # Daily unrealized P&L = market value of open positions − their cost basis.
+    # Consistent with the hero's snapshot (total_value − cost_basis), but as a
+    # full daily series for charting.
+    unrealized_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +638,16 @@ def build_order_derived_series(
     # the contributions made *inside* that window.
     pnl_series = _build_pnl_series(actual_value_series, xirr_cashflows)
 
+    # Daily unrealized P&L = market value of open positions − their cost
+    # basis on each day. Same average-cost logic as ``cost_basis_by_isin``
+    # (so today's value reconciles with the hero's snapshot), expressed as a
+    # full daily series for charting.
+    cost_basis_series = _build_cost_basis_series(orders, actual_value_series.index)
+    if actual_value_series is not None and not actual_value_series.empty:
+        unrealized_series = actual_value_series - cost_basis_series
+    else:
+        unrealized_series = pd.Series(dtype=float)
+
     return OrderDerivedSeries(
         valuations=valuations,
         external_flows=external_flows,
@@ -644,7 +658,47 @@ def build_order_derived_series(
         daily_series=daily_series,
         actual_value_series=actual_value_series,
         pnl_series=pnl_series,
+        unrealized_series=unrealized_series,
     )
+
+
+def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
+    """Daily total cost basis of the OPEN positions, reindexed onto ``index``.
+
+    Average-cost walk identical to ``cost_basis_by_isin`` (buys/transfers add
+    the committed EUR; sells remove cost at the running average), but it
+    records the running total after each trade date so the result is a step
+    function forward-filled across calendar days. Subtracting it from the
+    daily market value yields the unrealized P&L series.
+    """
+    if index is None or len(index) == 0:
+        return pd.Series(dtype=float)
+    pos = sorted(
+        (o for o in orders if o.is_position_change()),
+        key=lambda o: o.trade_date,
+    )
+    qty: dict[str, float] = {}
+    cost: dict[str, float] = {}
+    by_date: dict[pd.Timestamp, float] = {}
+    for o in pos:
+        q = qty.get(o.isin, 0.0)
+        c = cost.get(o.isin, 0.0)
+        if o.quantity > 0:  # buy / transfer_in
+            committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
+            qty[o.isin] = q + o.quantity
+            cost[o.isin] = c + committed
+        elif o.quantity < 0:  # sell / transfer_out
+            sold = abs(o.quantity)
+            if q > _QTY_EPS:
+                avg = c / q
+                cost[o.isin] = max(c - avg * min(sold, q), 0.0)
+            qty[o.isin] = max(q - sold, 0.0)
+        by_date[pd.Timestamp(o.trade_date)] = sum(cost.values())
+    if not by_date:
+        return pd.Series(0.0, index=index)
+    s = pd.Series(by_date).sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    return s.reindex(index, method="ffill").fillna(0.0)
 
 
 def _build_pnl_series(actual: pd.Series, xirr_cashflows: list) -> pd.Series:
