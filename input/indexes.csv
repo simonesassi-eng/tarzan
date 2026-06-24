@@ -13,12 +13,12 @@ STOXX Europe 600,^STOXX,TRUE,,,0,0,51.7,0,48.3,Official Index - 600 large mid an
 MSCI World Enhanced Value,IWVL.L,TRUE,,,51.29,0,16.05,18.57,14.09,ETF Proxy - Stocks with strong value characteristics.,6/15/26
 Vanguard LifeStrategy 80,V80A.DE,TRUE,,,59.2,9.3,10.4,5.7,15.4,ETF Proxy - Globally diversified multi-asset fund holding 80% equities and 20% bonds.,6/24/26
 Vanguard LifeStrategy 60,V60A.DE,TRUE,,,58.6,7,15.9,4.8,13.7,ETF Proxy - Globally diversified multi-asset fund holding 60% equities and 40% bonds.,6/24/26
-WisdomTree Global Efficient Core,NTSG,TRUE,,,69.84,0,11.51,5.99,12.66,ETF Proxy - Global developed equities plus a leveraged government bond futures overlay (90/60).,6/24/26
-WisdomTree Enhanced Commodity Carry,CRRY,TRUE,,,,,,,,ETF Proxy - Commodity carry factor via long/short positions in commodity futures.,6/24/26
-iMGP DBi Managed Futures,DBMFE,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures.,6/24/26
-UBS CMCI Commodity Carry,UEQC,TRUE,,,,,,,,ETF Proxy - 2.5x leveraged broad commodities basket excluding precious metals (carry strategy).,6/24/26
-MSCI World 2x Leveraged,LVWC,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - 2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
-MSCI USA 2x Leveraged,CL2,TRUE,,,100,0,0,0,0,ETF Proxy - 2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
+WisdomTree Global Efficient Core,NTSG.DE,TRUE,,,69.84,0,11.51,5.99,12.66,ETF Proxy - Global developed equities plus a leveraged government bond futures overlay (90/60).,6/24/26
+WisdomTree Enhanced Commodity Carry,CRRY.MI,TRUE,,,,,,,,ETF Proxy - Commodity carry factor via long/short positions in commodity futures.,6/24/26
+iMGP DBi Managed Futures,DBMFE.PA,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures.,6/24/26
+UBS CMCI Commodity Carry,UEQC.DE,TRUE,,,,,,,,ETF Proxy - 2.5x leveraged broad commodities basket excluding precious metals (carry strategy).,6/24/26
+MSCI World 2x Leveraged,LVWC.DE,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - 2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
+MSCI USA 2x Leveraged,CL2.MI,TRUE,,,100,0,0,0,0,ETF Proxy - 2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
 MSCI EAFE,EFA,,,,0,0,32.2,22.7,45.1,ETF Proxy - Developed markets excluding North America.,6/15/26
 Bloomberg Euro Aggregate,IEAG.L,,,,,0,100,0,0,ETF Proxy - Tracks EUR-denominated investment grade bonds.,2/22/26
 Bloomberg US Treasury,GOVT,,,,100,0,0,0,0,ETF Proxy - US Treasury bonds with remaining maturities 1-30 years.,2/22/26
