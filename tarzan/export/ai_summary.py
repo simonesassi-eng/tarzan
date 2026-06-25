@@ -104,13 +104,12 @@ def build_digest(metrics, config) -> dict:
         "today": datetime.now().strftime("%A, %B %d, %Y"),
     }
 
-    # Today's major-index levels and daily moves (from the already-fetched
-    # benchmark histories — no extra network), so the model can cite real
-    # figures rather than vague wording. Lazy import to avoid an import-time
-    # cycle with the newsletter module.
+    # Today's major-index levels and daily moves (yfinance-style set,
+    # fetched through the cached price layer — warm runs add no network),
+    # so the model can cite real figures rather than vague wording.
     try:
-        from tarzan.export.newsletter import market_snapshot as _market_snapshot
-        mk = _market_snapshot(m)
+        from tarzan.data.market_quotes import fetch_market_quotes
+        mk = fetch_market_quotes()
         if mk:
             digest["markets_today"] = [
                 {"name": d["name"], "level": _num(d["value"], 2),
@@ -322,16 +321,20 @@ def _system_prompt(language: str, today_str: str) -> str:
         "- Reference the ACTUAL day(s) by name and date (e.g. 'on Thursday the "
         "25th') and cite CONCRETE figures — real index levels and percentage "
         "moves (use the 'markets_today' levels in the JSON plus what you find "
-        "in search). Avoid vague wording like 'slight dip' or 'mixed'.\n"
+        "in search).\n"
+        "- Every market move you mention MUST carry a specific number (level "
+        "and/or % change). NEVER use vague qualifiers such as 'slight', "
+        "'mixed', 'somewhat', 'a bit', 'modest', 'broadly' or 'edged' without "
+        "an attached figure.\n"
         "- Connect the macro drivers (US / Europe / emerging-market equities, "
         "gold, government-bond yields and rates, EUR/USD) to why the portfolio "
         "moved the way the JSON shows.\n"
         "- Refer to real, recent events (rate decisions, inflation prints, "
         "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
-        "unsure, stay general on that point.\n"
-        "- Maximum 4 sentences, about 90 words. No markdown, no bullet points, "
-        "no headings. No predictions, no recommendations, no personalized "
-        "investment advice.\n"
+        "unsure, omit that point rather than guessing.\n"
+        "- Exactly 3 to 4 sentences, about 90 words (never more than 110). No "
+        "markdown, no bullet points, no headings. No predictions, no "
+        "recommendations, no personalized investment advice.\n"
         f"- Write in {language}."
     )
 
