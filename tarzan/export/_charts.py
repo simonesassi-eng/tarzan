@@ -89,7 +89,7 @@ def _y(v: float, vmin: float, vmax: float) -> float:
 
 def _svg_head() -> str:
     return (f'<svg width="100%" viewBox="0 0 {W} {H}" preserveAspectRatio="xMidYMid meet" '
-            f'xmlns="http://www.w3.org/2000/svg" style="display:block;max-width:{W}px;height:auto;'
+            f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;max-width:100%;height:auto;'
             f'font-family:-apple-system,Helvetica,Arial,sans-serif;">')
 
 
@@ -194,9 +194,13 @@ def legend(items) -> str:
     """Inline legend. ``items``: list of ``(label, color, is_dashed)``."""
     out = []
     for label, color, dash in items:
-        mark = (f'<span style="display:inline-block;width:14px;border-top:2px {"dashed" if dash else "solid"} {color};'
-                f'vertical-align:middle;margin-right:5px;"></span>')
-        out.append(f'<span style="margin-right:14px;font-size:11px;color:{INK};white-space:nowrap;">{mark}{label}</span>')
+        if dash:
+            mark = (f'<span style="display:inline-block;width:24px;height:0;'
+                    f'border-top:3px dashed {color};vertical-align:middle;margin-right:6px;"></span>')
+        else:
+            mark = (f'<span style="display:inline-block;width:24px;height:5px;'
+                    f'background:{color};border-radius:3px;vertical-align:middle;margin-right:6px;"></span>')
+        out.append(f'<span style="margin-right:14px;font-size:11px;font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
     return '<div style="margin-top:8px;">' + "".join(out) + "</div>"
 
 

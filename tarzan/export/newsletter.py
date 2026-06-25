@@ -856,12 +856,14 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30) -> Optional[dict]:
 
 
 def _perf_level_series(m: PortfolioMetrics, dates):
-    """The three indicators as % over the window, each matching the hero's
+    """The indicators as % over the window, each matching the hero's
     definition, from existing series (no recomputation):
       * TWROR since inception — NAV index anchored at inception.
       * Total P&L %           — P&L ÷ net invested capital (value − P&L).
       * Unrealized P&L %       — unrealized ÷ cost basis (value − unrealized).
-    Returns ``(twror_si, total_pct, unreal_pct)`` (any may be None)."""
+      * MSCI ACWI              — benchmark cumulative return anchored at the
+        portfolio's inception, for a like-for-like since-inception compare.
+    Returns ``(twror_si, total_pct, unreal_pct, acwi_si)`` (any may be None)."""
     if m.portfolio_history is None or m.actual_value_series is None:
         return None
     idx = pd.DatetimeIndex(dates)
@@ -883,7 +885,17 @@ def _perf_level_series(m: PortfolioMetrics, dates):
     if m.unrealized_series is not None:
         ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
         unreal_pct = list((ur / (av - ur).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
-    return twror_si, total_pct, unreal_pct
+    # MSCI ACWI since inception: anchor the benchmark at the portfolio's
+    # inception value (same basis as twror_si) and sample the window.
+    acwi_si = None
+    acwi_raw = (m.benchmark_histories or {}).get("MSCI ACWI")
+    if acwi_raw is not None and len(acwi_raw) >= 2 and len(nav_full):
+        a_full = _norm_series(acwi_raw)
+        a_at_inception = a_full.reindex(nav_full.index, method="ffill").bfill()
+        if len(a_at_inception) and float(a_at_inception.iloc[0]):
+            acwi_full = (a_full / float(a_at_inception.iloc[0]) - 1.0) * 100.0
+            acwi_si = list(acwi_full.reindex(idx, method="ffill").bfill().values.astype(float))
+    return twror_si, total_pct, unreal_pct, acwi_si
 
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
@@ -924,7 +936,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         eur, pct = pair
         c = _sgn(eur)
         eur_s = _eur_smart(eur, signed=True) if eur is not None else "—"
-        pct_s = _pct(pct, decimals=1, signed=True) if pct is not None else ""
+        pct_s = _pct(pct, decimals=2, signed=True) if pct is not None else ""
         return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};">'
                 f'<div style="font-size:13px;font-weight:700;color:{c};font-variant-numeric:tabular-nums;">{eur_s}</div>'
                 + (f'<div style="font-size:11px;color:{c};font-variant-numeric:tabular-nums;">{pct_s}</div>' if pct_s else "")
@@ -977,9 +989,27 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return (f'<div style="margin-top:18px;font-size:11px;font-weight:700;color:{P["muted"]};'
                 f'text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">{t}</div>')
 
-    parts = [_sub("Patrimony (€) — ▲ deposits / ▼ withdrawals"),
-             _charts.chart_eur(win["value"], dates, flows=win["flows"]),
-             _charts.flow_chips(win["flows"], lambda v: _eur_smart(v, signed=True))]
+    # Patrimony chart embedded in a card with the portfolio value on top
+    # (mirrors the hero mountain card): label + big € value, then the
+    # area chart with deposit/withdrawal markers and the flow chips.
+    _patrimony_card = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+        f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
+        f'<tr><td style="padding:14px 16px;">'
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
+        f'text-transform:uppercase;">Patrimony <span style="color:{P["subtle"]};font-weight:600;">'
+        f'· ▲ deposits / ▼ withdrawals</span></div>'
+        f'<div style="margin-top:2px;font-size:30px;font-weight:700;color:{P["ink"]};'
+        f'line-height:1.05;letter-spacing:-0.015em;">{_eur(m.total_value, decimals=0)}</div>'
+        f'<div style="margin-top:10px;">'
+        + _charts.chart_eur(win["value"], dates, flows=win["flows"])
+        + '</div>'
+        + _charts.flow_chips(win["flows"], lambda v: _eur_smart(v, signed=True))
+        + '</td></tr></table>'
+    )
+
+    parts = [_patrimony_card]
 
     # Return vs benchmark (%) — TWROR, P&L %, MSCI ACWI on one rebased axis.
     ret_series, ret_leg = [], []
@@ -997,23 +1027,26 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         parts.append(_charts.chart_pct(ret_series, dates, flows=None, include_zero=True))
         parts.append(_charts.legend(ret_leg))
 
-    # Your return, three ways (%).
+    # Your return vs MSCI ACWI (%), since-inception trajectory.
     lvl = _perf_level_series(m, dates)
     if lvl is not None:
-        twror_si, total_pct, unreal_pct = lvl
+        twror_si, total_pct, unreal_pct, acwi_si = lvl
         pct3, leg3 = [], []
         if twror_si is not None:
             pct3.append({"values": twror_si, "color": _charts.GREEN})
-            leg3.append(("TWROR since inception", _charts.GREEN, False))
+            leg3.append((f'TWROR {_pct(twror_si[-1], signed=True)}', _charts.GREEN, False))
         if total_pct is not None:
             pct3.append({"values": total_pct, "color": _charts.ACCENT})
-            leg3.append(("Total P&L %", _charts.ACCENT, False))
+            leg3.append((f'Total P&L % {_pct(total_pct[-1], signed=True)}', _charts.ACCENT, False))
         if unreal_pct is not None:
             pct3.append({"values": unreal_pct, "color": _charts.PNL, "dash": True})
-            leg3.append(("Unrealized P&L %", _charts.PNL, True))
+            leg3.append((f'Unrealized P&L % {_pct(unreal_pct[-1], signed=True)}', _charts.PNL, True))
+        if acwi_si is not None:
+            pct3.append({"values": acwi_si, "color": _charts.BENCH, "dash": True})
+            leg3.append((f'MSCI ACWI {_pct(acwi_si[-1], signed=True)}', _charts.BENCH, True))
         if pct3:
             parts.append(f'<div style="border-top:1px solid {P["border"]};margin:20px 0 0 0;"></div>')
-            parts.append(_sub("Your return, three ways (%) — 30-day trajectory"))
+            parts.append(_sub("Your return vs MSCI ACWI (%) — since inception, last 30 days"))
             parts.append(_charts.chart_pct(pct3, dates, flows=None, include_zero=False))
             parts.append(_charts.legend(leg3))
 
