@@ -252,6 +252,60 @@ def _spark(vals: list[float], target: Optional[float], color: str,
     return "".join(parts)
 
 
+_day_spark_uid = 0
+
+
+def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> str:
+    """Yahoo-style intraday sparkline: green area where the line is above the
+    previous close (``baseline``), red where below, with a dashed baseline.
+
+    Uses two clipped copies of the line-to-baseline area (above/below the
+    baseline) so the fill is two-tone without per-segment crossing math.
+    Email clients that render inline SVG (Gmail, Apple Mail) show it;
+    legacy Outlook simply omits it, which is acceptable."""
+    global _day_spark_uid
+    n = len(vals)
+    if n < 2:
+        return ""
+    lo = min(min(vals), baseline)
+    hi = max(max(vals), baseline)
+    span = (hi - lo) or 1.0
+    pad = span * 0.14
+    lo -= pad
+    hi += pad
+    span = hi - lo
+
+    def _xx(i: int) -> float:
+        return i / (n - 1) * w
+
+    def _yy(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    yb = _yy(baseline)
+    line = " ".join(f"{_xx(i):.1f},{_yy(v):.1f}" for i, v in enumerate(vals))
+    poly = f"{line} {_xx(n - 1):.1f},{yb:.1f} {_xx(0):.1f},{yb:.1f}"
+    up = vals[-1] >= baseline
+    lc = PALETTE["green"] if up else PALETTE["red"]
+    _day_spark_uid += 1
+    gid, rid = f"sg{_day_spark_uid}", f"sr{_day_spark_uid}"
+    yb_c = max(0.0, min(yb, h))
+    return (
+        f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;">'
+        f'<defs>'
+        f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
+        f'</defs>'
+        f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
+        f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="0.75" stroke-dasharray="2,2"/>'
+        f'<polyline points="{line}" fill="none" stroke="{lc}" stroke-width="1.4" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'</svg>'
+    )
+
+
 def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
     """Extract the per-bucket weights for one category from an allocation
     timeline series. Returns None when the category never carried weight
@@ -959,35 +1013,35 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
         val = f'{d["value"]:,.2f}'
-        chg = f'{d["pct"]:+.2f}%'
-        spark = _spark(d["spark"], None, col, w=90, h=18)
+        chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
+        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]))
         return (
-            f'<td width="32%" style="vertical-align:top;padding:7px 9px;'
+            f'<td width="24%" style="vertical-align:top;padding:6px 7px;'
             f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:8px;">'
-            f'<div style="font-size:9px;font-weight:700;letter-spacing:0.02em;'
+            f'<div style="font-size:8px;font-weight:700;letter-spacing:0.02em;'
             f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
-            f'<div style="margin-top:1px;font-size:13px;font-weight:700;color:{P["ink"]};'
+            f'<div style="margin-top:1px;font-size:12px;font-weight:700;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;">{val}</div>'
-            f'<div style="font-size:10px;font-weight:700;color:{col};'
-            f'font-variant-numeric:tabular-nums;">{chg}</div>'
+            f'<div style="font-size:8.5px;font-weight:700;color:{col};'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{chg}</div>'
             f'<div style="margin-top:3px;">{spark}</div></td>'
         )
 
     sections = ""
     for cat in CATEGORY_ORDER:
-        # Max 2 rows per category: 3 columns × 2 rows = 6 cards.
-        cards = [_card(d) for d in snap if d.get("category") == cat][:6]
+        # Max 2 rows per category: 4 columns × 2 rows = 8 cards.
+        cards = [_card(d) for d in snap if d.get("category") == cat][:8]
         if not cards:
             continue
         sections += (f'<div style="margin-top:12px;font-size:10px;font-weight:700;'
                      f'letter-spacing:0.06em;color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
         rows = ""
-        for i in range(0, len(cards), 3):
-            group = cards[i:i + 3]
-            while len(group) < 3:
-                group.append('<td width="32%"></td>')
+        for i in range(0, len(cards), 4):
+            group = cards[i:i + 4]
+            while len(group) < 4:
+                group.append('<td width="24%"></td>')
             rows += ("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>"
-                     + '<tr><td colspan="5" style="font-size:0;line-height:7px;">&nbsp;</td></tr>')
+                     + '<tr><td colspan="7" style="font-size:0;line-height:6px;">&nbsp;</td></tr>')
         sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                      f'border="0" style="margin-top:6px;border-collapse:separate;">{rows}</table>')
 
