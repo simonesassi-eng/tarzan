@@ -44,7 +44,7 @@ _GEMINI_ENDPOINT = (
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 20
 _MAX_OUTPUT_TOKENS = 1024
-_MAX_CHARS = 900  # hard cap on the rendered summary length
+_MAX_CHARS = 1000  # hard cap on the rendered summary length
 
 
 def is_enabled() -> bool:
@@ -332,7 +332,7 @@ def _system_prompt(language: str, today_str: str) -> str:
         "- Refer to real, recent events (rate decisions, inflation prints, "
         "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
         "unsure, omit that point rather than guessing.\n"
-        "- Exactly 3 to 4 sentences, about 90 words (never more than 110). No "
+        "- Exactly 3 to 4 sentences, about 80 words (hard limit 100 words). No "
         "markdown, no bullet points, no headings. No predictions, no "
         "recommendations, no personalized investment advice.\n"
         f"- Write in {language}."
@@ -435,7 +435,16 @@ def _sanitize(text: str) -> Optional[str]:
     if not cleaned:
         return None
     if len(cleaned) > _MAX_CHARS:
-        cleaned = cleaned[: _MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+        cut = cleaned[:_MAX_CHARS]
+        # Prefer ending on a complete sentence so it never looks truncated;
+        # only fall back to a word-boundary ellipsis if no sentence end is
+        # reasonably far in.
+        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "),
+                  cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
+        if end >= _MAX_CHARS * 0.5:
+            cleaned = cut[:end + 1].rstrip()
+        else:
+            cleaned = cut.rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return cleaned
 
 

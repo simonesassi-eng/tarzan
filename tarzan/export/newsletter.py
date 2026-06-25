@@ -1032,22 +1032,30 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         )
 
     sections = ""
+    first = True
     for cat in CATEGORY_ORDER:
         # Max 2 rows per category: 4 columns × 2 rows = 8 cards.
         cards = [_card(d) for d in snap if d.get("category") == cat][:8]
         if not cards:
             continue
-        sections += (f'<div style="margin-top:12px;font-size:10px;font-weight:700;'
-                     f'letter-spacing:0.06em;color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
-        rows = ""
+        # Slim category label with a hairline divider above it (except the
+        # first) to "section" the strip without big vertical gaps.
+        divider = ("" if first else
+                   f"border-top:1px solid {P['border']};padding-top:8px;")
+        first = False
+        sections += (f'<div style="margin-top:{6 if divider else 2}px;{divider}'
+                     f'font-size:10px;font-weight:700;letter-spacing:0.06em;'
+                     f'color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
+        row_htmls = []
         for i in range(0, len(cards), 4):
             group = cards[i:i + 4]
             while len(group) < 4:
                 group.append('<td width="24%"></td>')
-            rows += ("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>"
-                     + '<tr><td colspan="7" style="font-size:0;line-height:6px;">&nbsp;</td></tr>')
+            row_htmls.append("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>")
+        spacer = '<tr><td colspan="7" style="font-size:0;line-height:5px;">&nbsp;</td></tr>'
         sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                     f'border="0" style="margin-top:6px;border-collapse:separate;">{rows}</table>')
+                     f'border="0" style="margin-top:5px;border-collapse:separate;">'
+                     + spacer.join(row_htmls) + '</table>')
 
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
               f'text-transform:uppercase;">Markets</div>'
