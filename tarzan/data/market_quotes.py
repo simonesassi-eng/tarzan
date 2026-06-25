@@ -19,25 +19,41 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # (display name, yfinance symbol, category) — ordered as shown in the strip.
-# Mirrors the yfinance markets bar most relevant to a global EUR investor.
+# Mirrors the yfinance markets bar. The strip shows at most 2 rows per
+# category (the newsletter caps it), so keep the most representative first.
 MARKETS: list[tuple[str, str, str]] = [
+    # US
     ("S&P 500", "^GSPC", "US"),
-    ("Nasdaq", "^IXIC", "US"),
     ("Dow 30", "^DJI", "US"),
+    ("Nasdaq", "^IXIC", "US"),
     ("Russell 2000", "^RUT", "US"),
     ("VIX", "^VIX", "US"),
+    # Europe
     ("Euro Stoxx 50", "^STOXX50E", "Europe"),
+    ("FTSE 100", "^FTSE", "Europe"),
     ("DAX", "^GDAXI", "Europe"),
     ("CAC 40", "^FCHI", "Europe"),
-    ("FTSE 100", "^FTSE", "Europe"),
+    ("Euronext 100", "^N100", "Europe"),
+    # Asia
     ("Nikkei 225", "^N225", "Asia"),
+    ("Hang Seng", "^HSI", "Asia"),
+    ("Shanghai", "000001.SS", "Asia"),
+    ("Sensex", "^BSESN", "Asia"),
+    # Commodities
     ("Gold", "GC=F", "Commodities"),
     ("Crude Oil", "CL=F", "Commodities"),
+    ("Silver", "SI=F", "Commodities"),
+    ("Natural Gas", "NG=F", "Commodities"),
+    # Crypto
     ("Bitcoin", "BTC-USD", "Crypto"),
-    ("EUR/USD", "EURUSD=X", "FX"),
+    ("Ethereum", "ETH-USD", "Crypto"),
+    # Currencies
+    ("EUR/USD", "EURUSD=X", "Currencies"),
+    ("USD/GBP", "GBP=X", "Currencies"),
+    ("USD/JPY", "JPY=X", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["US", "Europe", "Asia", "Commodities", "Crypto", "FX"]
+CATEGORY_ORDER = ["US", "Europe", "Asia", "Commodities", "Crypto", "Currencies"]
 
 _memo: Optional[list[dict]] = None
 

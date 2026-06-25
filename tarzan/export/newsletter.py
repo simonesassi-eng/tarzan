@@ -959,34 +959,35 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
         val = f'{d["value"]:,.2f}'
-        chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
-        spark = _spark(d["spark"], None, col, w=140, h=30)
+        chg = f'{d["pct"]:+.2f}%'
+        spark = _spark(d["spark"], None, col, w=90, h=18)
         return (
-            f'<td width="49%" style="vertical-align:top;padding:10px 12px;'
-            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
-            f'<div style="font-size:10px;font-weight:700;letter-spacing:0.04em;'
-            f'color:{P["muted"]};text-transform:uppercase;">{d["name"]}</div>'
-            f'<div style="margin-top:2px;font-size:16px;font-weight:700;color:{P["ink"]};'
+            f'<td width="32%" style="vertical-align:top;padding:7px 9px;'
+            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:8px;">'
+            f'<div style="font-size:9px;font-weight:700;letter-spacing:0.02em;'
+            f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
+            f'<div style="margin-top:1px;font-size:13px;font-weight:700;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;">{val}</div>'
-            f'<div style="font-size:11px;font-weight:700;color:{col};'
+            f'<div style="font-size:10px;font-weight:700;color:{col};'
             f'font-variant-numeric:tabular-nums;">{chg}</div>'
-            f'<div style="margin-top:5px;">{spark}</div></td>'
+            f'<div style="margin-top:3px;">{spark}</div></td>'
         )
 
     sections = ""
     for cat in CATEGORY_ORDER:
-        cards = [_card(d) for d in snap if d.get("category") == cat]
+        # Max 2 rows per category: 3 columns × 2 rows = 6 cards.
+        cards = [_card(d) for d in snap if d.get("category") == cat][:6]
         if not cards:
             continue
         sections += (f'<div style="margin-top:12px;font-size:10px;font-weight:700;'
                      f'letter-spacing:0.06em;color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
         rows = ""
-        for i in range(0, len(cards), 2):
-            pair = cards[i:i + 2]
-            if len(pair) == 1:
-                pair.append('<td width="49%"></td>')
-            rows += ("<tr>" + '<td width="2%"></td>'.join(pair) + "</tr>"
-                     + '<tr><td colspan="3" style="font-size:0;line-height:8px;">&nbsp;</td></tr>')
+        for i in range(0, len(cards), 3):
+            group = cards[i:i + 3]
+            while len(group) < 3:
+                group.append('<td width="32%"></td>')
+            rows += ("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>"
+                     + '<tr><td colspan="5" style="font-size:0;line-height:7px;">&nbsp;</td></tr>')
         sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                      f'border="0" style="margin-top:6px;border-collapse:separate;">{rows}</table>')
 
