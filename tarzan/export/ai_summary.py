@@ -41,8 +41,8 @@ _GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 _DEFAULT_MODEL = "gemini-2.5-flash"
-_TIMEOUT_SECONDS = 12
-_MAX_OUTPUT_TOKENS = 512
+_TIMEOUT_SECONDS = 20
+_MAX_OUTPUT_TOKENS = 1024
 _MAX_CHARS = 700  # hard cap on the rendered summary length
 
 
@@ -281,32 +281,37 @@ def _rebalancing(m) -> dict:
 
 def _system_prompt(language: str) -> str:
     return (
-        "You are a portfolio analyst writing a brief digest for the investor "
-        "who owns this portfolio. You are given a JSON snapshot of their "
-        "portfolio metrics.\n"
+        "You are a markets commentator writing a short 'market context' note "
+        "for a retail investor, explaining the macro backdrop behind their "
+        "portfolio's recent moves. Use Google Search to ground the note in "
+        "the most recent market news (the last 24-48 hours).\n"
         "RULES:\n"
-        "- Use ONLY the figures in the JSON. Never invent or estimate numbers.\n"
+        "- Search the web for what actually moved markets in the last 24-48 "
+        "hours, relevant to THIS portfolio's exposures (given in the JSON: "
+        "asset classes, equity geographies, top holdings, and recent returns).\n"
         "- Write 3 to 4 sentences of flowing prose. No markdown, no bullet "
         "points, no headings.\n"
-        "- Cover, concisely: recent performance (this week and 1-month), the "
-        "short/medium/long-term trend (1m vs 3m/6m vs 1y/since inception, "
-        "using TWROR), one notable risk or allocation observation, and the "
-        "recommended next action.\n"
-        "- For the action, ONLY restate the rebalancing actions provided in "
-        "the JSON. If there are none, say the allocation is on target. Never "
-        "invent trades or give personalized investment advice, predictions, "
-        "or guarantees.\n"
-        "- Returns are time-weighted (TWROR) unless a figure is labelled "
-        "otherwise. Be precise but plain-spoken.\n"
-        f"- Write in {language}. Keep it under 85 words."
+        "- Cover the macro drivers (major equity indices US / Europe / emerging "
+        "markets, gold, government-bond yields and rates, EUR/USD) ONLY where "
+        "they map to the portfolio's holdings, and connect them to why the "
+        "portfolio likely moved the way the JSON shows (use its recent "
+        "TWROR / PnL direction).\n"
+        "- Refer to real, recent events (rate decisions, inflation prints, "
+        "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
+        "unsure, stay general.\n"
+        "- No predictions, no recommendations, no personalized investment "
+        "advice.\n"
+        f"- Write in {language}. Keep it under 95 words."
     )
 
 
 def _user_prompt(digest: dict) -> str:
     return (
-        "Here is the portfolio metrics snapshot as JSON:\n\n"
+        "Here is the investor's portfolio context as JSON (exposures and "
+        "recent returns):\n\n"
         + json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
-        + "\n\nWrite the summary now."
+        + "\n\nSearch for the latest market news and write the market-context "
+        "note now."
     )
 
 
@@ -323,15 +328,14 @@ def _call_gemini(system_prompt: str, user_prompt: str) -> Optional[str]:
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        # Google Search grounding: lets the model pull the last 24-48h of
+        # market news so the context note reflects what actually moved
+        # markets, not just stale training data.
+        "tools": [{"google_search": {}}],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": 0.3,
             "maxOutputTokens": _MAX_OUTPUT_TOKENS,
             "topP": 0.9,
-            # Gemini 2.5 Flash is a "thinking" model: reasoning tokens count
-            # against maxOutputTokens and would otherwise truncate this short
-            # summary mid-sentence. Thinking adds nothing for paraphrasing
-            # given figures, so disable it (and keep latency/cost minimal).
-            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     req = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")

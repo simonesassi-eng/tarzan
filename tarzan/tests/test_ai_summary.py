@@ -126,7 +126,7 @@ def test_render_shows_ai_summary_when_present():
         _metrics(), _config(),
         ai_summary="Your portfolio is up 20% since inception, steady this month.",
     )
-    assert "Portfolio summary" in html
+    assert "Market context" in html
     assert "up 20% since inception" in html
     assert "not financial advice" in html
 
