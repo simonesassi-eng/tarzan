@@ -284,8 +284,6 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> 
     yb = _yy(baseline)
     line = " ".join(f"{_xx(i):.1f},{_yy(v):.1f}" for i, v in enumerate(vals))
     poly = f"{line} {_xx(n - 1):.1f},{yb:.1f} {_xx(0):.1f},{yb:.1f}"
-    up = vals[-1] >= baseline
-    lc = PALETTE["green"] if up else PALETTE["red"]
     _day_spark_uid += 1
     gid, rid = f"sg{_day_spark_uid}", f"sr{_day_spark_uid}"
     yb_c = max(0.0, min(yb, h))
@@ -296,12 +294,18 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> 
         f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
         f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
         f'</defs>'
+        # Two-tone fill: green above the previous-close baseline, red below.
         f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
         f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        # Dashed baseline = previous close (the 0% reference, Yahoo-style).
         f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
         f'stroke-width="0.75" stroke-dasharray="2,2"/>'
-        f'<polyline points="{line}" fill="none" stroke="{lc}" stroke-width="1.4" '
-        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        # Two-tone line: same clips, so each segment is green above the
+        # baseline and red below it, switching exactly at the dashed line.
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["green"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
         f'</svg>'
     )
 
