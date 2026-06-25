@@ -44,7 +44,8 @@ _GEMINI_ENDPOINT = (
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 20
 _MAX_OUTPUT_TOKENS = 1024
-_MAX_CHARS = 1000  # hard cap on the rendered summary length
+_MAX_CHARS = 1200  # generous safety cap; the prompt keeps the note short
+# and the trim always ends on a full sentence, never mid-thought.
 
 
 def is_enabled() -> bool:
@@ -323,16 +324,18 @@ def _system_prompt(language: str, today_str: str) -> str:
         "moves (use the 'markets_today' levels in the JSON plus what you find "
         "in search).\n"
         "- Every market move you mention MUST carry a specific number (level "
-        "and/or % change). NEVER use vague qualifiers such as 'slight', "
-        "'mixed', 'somewhat', 'a bit', 'modest', 'broadly' or 'edged' without "
-        "an attached figure.\n"
+        "and/or % change), and write every percentage CHANGE with an explicit "
+        "leading + or - sign (e.g. +0.81%, -0.6%). NEVER use vague qualifiers "
+        "such as 'slight', 'mixed', 'somewhat', 'a bit', 'modest', 'broadly' "
+        "or 'edged' without an attached figure.\n"
         "- Connect the macro drivers (US / Europe / emerging-market equities, "
         "gold, government-bond yields and rates, EUR/USD) to why the portfolio "
         "moved the way the JSON shows.\n"
         "- Refer to real, recent events (rate decisions, inflation prints, "
         "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
         "unsure, omit that point rather than guessing.\n"
-        "- Exactly 3 to 4 sentences, about 80 words (hard limit 100 words). No "
+        "- Write 3 to 4 sentences, about 80 words. Never exceed 1000 words "
+        "and ALWAYS finish your final sentence — never stop mid-thought. No "
         "markdown, no bullet points, no headings. No predictions, no "
         "recommendations, no personalized investment advice.\n"
         f"- Write in {language}."

@@ -160,7 +160,7 @@
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
-                    <div style="font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary }}</div>
+                    <div style="font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary_html|safe }}</div>
                     <div style="margin-top:8px;font-size:10px;color:{{ palette.subtle }};">✨ AI-generated market context · news may be imperfect · not financial advice</div>
                   </td>
                 </tr>
