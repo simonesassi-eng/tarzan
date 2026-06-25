@@ -1018,41 +1018,40 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         col = P["green"] if up else P["red"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
-        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]))
+        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]), w=64, h=20)
         return (
-            f'<td width="24%" style="vertical-align:top;padding:6px 7px;'
-            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:8px;">'
-            f'<div style="font-size:8px;font-weight:700;letter-spacing:0.02em;'
+            f'<td width="19%" style="vertical-align:top;padding:4px 5px;'
+            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:7px;">'
+            f'<div style="font-size:8px;font-weight:700;letter-spacing:0.01em;'
             f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
-            f'<div style="margin-top:1px;font-size:12px;font-weight:700;color:{P["ink"]};'
+            f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;">{val}</div>'
-            f'<div style="font-size:8.5px;font-weight:700;color:{col};'
+            f'<div style="font-size:8px;font-weight:700;color:{col};'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{chg}</div>'
-            f'<div style="margin-top:3px;">{spark}</div></td>'
+            f'<div style="margin-top:2px;">{spark}</div></td>'
         )
 
     sections = ""
     first = True
     for cat in CATEGORY_ORDER:
-        # Max 2 rows per category: 4 columns × 2 rows = 8 cards.
-        cards = [_card(d) for d in snap if d.get("category") == cat][:8]
+        # 5 columns: 5-instrument categories fit one row; 7-instrument ones
+        # take two (5 + 2). Cap at 2 rows (10 cards).
+        cards = [_card(d) for d in snap if d.get("category") == cat][:10]
         if not cards:
             continue
-        # Slim category label with a hairline divider above it (except the
-        # first) to "section" the strip without big vertical gaps.
         divider = ("" if first else
-                   f"border-top:1px solid {P['border']};padding-top:8px;")
+                   f"border-top:1px solid {P['border']};padding-top:7px;")
         first = False
         sections += (f'<div style="margin-top:{6 if divider else 2}px;{divider}'
                      f'font-size:10px;font-weight:700;letter-spacing:0.06em;'
                      f'color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
         row_htmls = []
-        for i in range(0, len(cards), 4):
-            group = cards[i:i + 4]
-            while len(group) < 4:
-                group.append('<td width="24%"></td>')
+        for i in range(0, len(cards), 5):
+            group = cards[i:i + 5]
+            while len(group) < 5:
+                group.append('<td width="19%"></td>')
             row_htmls.append("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>")
-        spacer = '<tr><td colspan="7" style="font-size:0;line-height:5px;">&nbsp;</td></tr>'
+        spacer = '<tr><td colspan="9" style="font-size:0;line-height:4px;">&nbsp;</td></tr>'
         sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                      f'border="0" style="margin-top:5px;border-collapse:separate;">'
                      + spacer.join(row_htmls) + '</table>')
@@ -2464,6 +2463,25 @@ def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _colorize_pct(text: str) -> str:
+    """HTML-escape ``text`` and wrap signed percentages (e.g. +0.81%, -1.2%)
+    in green/red spans, so the market-context note shows moves in colour.
+    Unsigned percentages (yield levels like 4.38%) are left neutral."""
+    import html as _html
+    import re as _re
+    if not text:
+        return ""
+    esc = _html.escape(text)
+
+    def _wrap(m):
+        tok = m.group(0)
+        neg = tok[0] in "-\u2212"
+        col = PALETTE["red"] if neg else PALETTE["green"]
+        return f'<span style="color:{col};font-weight:700;">{tok}</span>'
+
+    return _re.sub(r"[+\-\u2212]\d+(?:[.,]\d+)?\s?%", _wrap, esc)
+
+
 def build_context(
     metrics: PortfolioMetrics,
     config: InvestorConfig,
@@ -2500,6 +2518,7 @@ def build_context(
         "sparkline": _build_sparkline(nctx),
         "performance30": _build_performance30(nctx),
         "ai_summary": ai_summary,
+        "ai_summary_html": _colorize_pct(ai_summary) if ai_summary else None,
         "smart_insights": _build_smart_insights(nctx),
         "movers": _build_movers(nctx),
         "allocation": _build_allocation(nctx),
