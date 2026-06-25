@@ -937,23 +937,32 @@ def _perf_level_series(m: PortfolioMetrics, dates):
 
 
 def _build_markets(ctx: _NewsletterContext) -> dict:
-    """Markets strip (yfinance-style): major indices with level, daily
-    change and a mini sparkline, in a 2-column card grid. Sourced from the
-    already-fetched benchmark histories, so no extra network calls."""
+    """Markets strip (yfinance-style): major indices / commodities / crypto
+    / FX with level, daily change and a mini sparkline, grouped by category
+    in a 2-column card grid. Uses the live cached quotes, falling back to
+    the benchmark-derived snapshot if the live fetch yields nothing."""
     m = ctx.metrics
-    snap = market_snapshot(m)
+    P = PALETTE
+    try:
+        from tarzan.data.market_quotes import fetch_market_quotes, CATEGORY_ORDER
+        snap = fetch_market_quotes()
+    except Exception:  # noqa: BLE001
+        snap, CATEGORY_ORDER = [], []
+    if not snap:
+        # Offline fallback: the indices we already hold histories for.
+        snap = [dict(d, category="Indices") for d in market_snapshot(m)]
+        CATEGORY_ORDER = ["Indices"]
     if not snap:
         return {"available": False, "html": ""}
-    P = PALETTE
-    cards = []
-    for d in snap:
+
+    def _card(d: dict) -> str:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
         spark = _spark(d["spark"], None, col, w=140, h=30)
-        cards.append(
-            f'<td width="50%" style="vertical-align:top;padding:10px 12px;'
+        return (
+            f'<td width="49%" style="vertical-align:top;padding:10px 12px;'
             f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
             f'<div style="font-size:10px;font-weight:700;letter-spacing:0.04em;'
             f'color:{P["muted"]};text-transform:uppercase;">{d["name"]}</div>'
@@ -963,19 +972,28 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'font-variant-numeric:tabular-nums;">{chg}</div>'
             f'<div style="margin-top:5px;">{spark}</div></td>'
         )
-    rows = ""
-    for i in range(0, len(cards), 2):
-        pair = cards[i:i + 2]
-        if len(pair) == 1:
-            pair.append('<td width="50%"></td>')
-        rows += ("<tr>" + '<td width="2%"></td>'.join(pair) + "</tr>"
-                 + '<tr><td colspan="3" style="font-size:0;line-height:8px;">&nbsp;</td></tr>')
+
+    sections = ""
+    for cat in CATEGORY_ORDER:
+        cards = [_card(d) for d in snap if d.get("category") == cat]
+        if not cards:
+            continue
+        sections += (f'<div style="margin-top:12px;font-size:10px;font-weight:700;'
+                     f'letter-spacing:0.06em;color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
+        rows = ""
+        for i in range(0, len(cards), 2):
+            pair = cards[i:i + 2]
+            if len(pair) == 1:
+                pair.append('<td width="49%"></td>')
+            rows += ("<tr>" + '<td width="2%"></td>'.join(pair) + "</tr>"
+                     + '<tr><td colspan="3" style="font-size:0;line-height:8px;">&nbsp;</td></tr>')
+        sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                     f'border="0" style="margin-top:6px;border-collapse:separate;">{rows}</table>')
+
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
               f'text-transform:uppercase;">Markets</div>'
               f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Major indices · latest level and daily change.</div>')
-    html = (header + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-            f'border="0" style="margin-top:12px;border-collapse:separate;">{rows}</table>')
-    return {"available": True, "html": html}
+    return {"available": True, "html": header + sections}
 
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:

@@ -28,6 +28,11 @@ def _disable_ai_summary(monkeypatch):
     summary mock the call explicitly."""
     monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # The digest and the newsletter Markets strip pull live quotes through
+    # the price layer; stub them network-free for the suite (tests that
+    # exercise quotes mock the fetch explicitly).
+    monkeypatch.setattr("tarzan.data.market_quotes.fetch_market_quotes",
+                        lambda *a, **k: [], raising=True)
     yield
 
 
