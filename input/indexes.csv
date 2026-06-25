@@ -16,6 +16,7 @@ Vanguard LifeStrategy 60,V60A.DE,TRUE,,,58.6,7,15.9,4.8,13.7,ETF Proxy - Globall
 WisdomTree Global Efficient Core,NTSG.DE,TRUE,,,69.84,0,11.51,5.99,12.66,ETF Proxy - Global developed equities plus a leveraged government bond futures overlay (90/60).,6/24/26
 WisdomTree Enhanced Commodity Carry,CRRY.MI,TRUE,,,,,,,,ETF Proxy - Commodity carry factor via long/short positions in commodity futures.,6/24/26
 iMGP DBi Managed Futures,DBMFE.PA,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures.,6/24/26
+iMGP DBi Managed Futures EUR Hedged,MFEH.DE,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,6/25/26
 UBS CMCI Commodity Carry,UEQC.DE,TRUE,,,,,,,,ETF Proxy - 2.5x leveraged broad commodities basket excluding precious metals (carry strategy).,6/24/26
 MSCI World 2x Leveraged,LVWC.DE,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - 2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
 MSCI USA 2x Leveraged,CL2.MI,TRUE,,,100,0,0,0,0,ETF Proxy - 2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
