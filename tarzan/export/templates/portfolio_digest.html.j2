@@ -136,6 +136,18 @@
           </tr>
           {% endif %}
 
+          {# ─── MARKETS (yfinance-style index strip) ─────────────
+             Major indices with level, daily change and a mini sparkline,
+             from the already-fetched benchmark histories. Sits above the
+             AI market-context note so the data backs the narrative. #}
+          {% if markets.available %}
+          <tr>
+            <td class="px-32" style="padding:28px 32px 0 32px;">
+              {{ markets.html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── MARKET CONTEXT (AI) ─────────────────────────────
              Macro recap of the last 24-48h tied to the portfolio's
              exposures, grounded via Google Search. Renders directly below

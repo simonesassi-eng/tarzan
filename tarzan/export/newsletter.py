@@ -780,6 +780,44 @@ def _norm_series(s: pd.Series) -> pd.Series:
     return s[~s.index.duplicated(keep="last")]
 
 
+# Curated set of major indices for the "Markets" strip, in display order.
+# Only those present in the already-fetched benchmark histories are shown,
+# so the strip needs no extra network calls.
+_MARKETS_ORDER = [
+    "S&P 500", "Nasdaq 100", "MSCI World", "MSCI Emerging Markets",
+    "EURO STOXX 50", "STOXX Europe 600",
+]
+
+
+def market_snapshot(m: PortfolioMetrics, spark_points: int = 30) -> list[dict]:
+    """Latest level, daily change and a short spark series for the major
+    indices, derived from ``m.benchmark_histories`` (no extra network).
+
+    Each entry: ``{name, value, change, pct, spark}``. Indices with fewer
+    than two observations are skipped. Used by both the newsletter Markets
+    strip and the AI digest (so the narrative can cite real figures)."""
+    out: list[dict] = []
+    bh = m.benchmark_histories or {}
+    for name in _MARKETS_ORDER:
+        s = bh.get(name)
+        if s is None or len(s) < 2:
+            continue
+        s = _norm_series(s).dropna()
+        if len(s) < 2:
+            continue
+        last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+        if prev == 0:
+            continue
+        out.append({
+            "name": name,
+            "value": last,
+            "change": last - prev,
+            "pct": (last - prev) / prev * 100.0,
+            "spark": list(s.iloc[-spark_points:].values.astype(float)),
+        })
+    return out
+
+
 def _flow_list(external_flows, start, end, threshold: float = 500.0):
     """``{date: eur}`` → sorted ``[(Timestamp, eur)]`` inside ``[start, end]``,
     dropping flows below ``threshold`` (nets out small rebalancing trades so
@@ -896,6 +934,48 @@ def _perf_level_series(m: PortfolioMetrics, dates):
             acwi_full = (a_full / float(a_at_inception.iloc[0]) - 1.0) * 100.0
             acwi_si = list(acwi_full.reindex(idx, method="ffill").bfill().values.astype(float))
     return twror_si, total_pct, unreal_pct, acwi_si
+
+
+def _build_markets(ctx: _NewsletterContext) -> dict:
+    """Markets strip (yfinance-style): major indices with level, daily
+    change and a mini sparkline, in a 2-column card grid. Sourced from the
+    already-fetched benchmark histories, so no extra network calls."""
+    m = ctx.metrics
+    snap = market_snapshot(m)
+    if not snap:
+        return {"available": False, "html": ""}
+    P = PALETTE
+    cards = []
+    for d in snap:
+        up = d["pct"] >= 0
+        col = P["green"] if up else P["red"]
+        val = f'{d["value"]:,.2f}'
+        chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
+        spark = _spark(d["spark"], None, col, w=140, h=30)
+        cards.append(
+            f'<td width="50%" style="vertical-align:top;padding:10px 12px;'
+            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
+            f'<div style="font-size:10px;font-weight:700;letter-spacing:0.04em;'
+            f'color:{P["muted"]};text-transform:uppercase;">{d["name"]}</div>'
+            f'<div style="margin-top:2px;font-size:16px;font-weight:700;color:{P["ink"]};'
+            f'font-variant-numeric:tabular-nums;">{val}</div>'
+            f'<div style="font-size:11px;font-weight:700;color:{col};'
+            f'font-variant-numeric:tabular-nums;">{chg}</div>'
+            f'<div style="margin-top:5px;">{spark}</div></td>'
+        )
+    rows = ""
+    for i in range(0, len(cards), 2):
+        pair = cards[i:i + 2]
+        if len(pair) == 1:
+            pair.append('<td width="50%"></td>')
+        rows += ("<tr>" + '<td width="2%"></td>'.join(pair) + "</tr>"
+                 + '<tr><td colspan="3" style="font-size:0;line-height:8px;">&nbsp;</td></tr>')
+    header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
+              f'text-transform:uppercase;">Markets</div>'
+              f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Major indices · latest level and daily change.</div>')
+    html = (header + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'border="0" style="margin-top:12px;border-collapse:separate;">{rows}</table>')
+    return {"available": True, "html": html}
 
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
@@ -2342,6 +2422,7 @@ def build_context(
         "holdings": _build_holdings(nctx),
         "returns_snapshot": _build_returns_snapshot(nctx),
         "performance": _build_performance(nctx),
+        "markets": _build_markets(nctx),
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
         "sensitivity": _build_sensitivity(nctx),
