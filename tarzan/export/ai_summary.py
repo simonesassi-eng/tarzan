@@ -44,7 +44,7 @@ _GEMINI_ENDPOINT = (
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 20
 _MAX_OUTPUT_TOKENS = 1024
-_MAX_CHARS = 700  # hard cap on the rendered summary length
+_MAX_CHARS = 900  # hard cap on the rendered summary length
 
 
 def is_enabled() -> bool:
@@ -69,7 +69,8 @@ def generate_summary(metrics, config) -> Optional[str]:
     try:
         digest = build_digest(metrics, config)
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
-        system, user = _system_prompt(language), _user_prompt(digest)
+        today_str = datetime.now().strftime("%A, %B %d, %Y")
+        system, user = _system_prompt(language, today_str), _user_prompt(digest)
         # Try the grounded (Google Search) call first; if the key's tier or
         # model rejects grounding, retry once without it so the macro note
         # still appears (from model knowledge) rather than dropping all the
@@ -98,7 +99,26 @@ def build_digest(metrics, config) -> dict:
     no I/O — safe to unit-test.
     """
     m = metrics
-    digest: dict[str, Any] = {"as_of": datetime.now().strftime("%Y-%m-%d")}
+    digest: dict[str, Any] = {
+        "as_of": datetime.now().strftime("%Y-%m-%d"),
+        "today": datetime.now().strftime("%A, %B %d, %Y"),
+    }
+
+    # Today's major-index levels and daily moves (from the already-fetched
+    # benchmark histories — no extra network), so the model can cite real
+    # figures rather than vague wording. Lazy import to avoid an import-time
+    # cycle with the newsletter module.
+    try:
+        from tarzan.export.newsletter import market_snapshot as _market_snapshot
+        mk = _market_snapshot(m)
+        if mk:
+            digest["markets_today"] = [
+                {"name": d["name"], "level": _num(d["value"], 2),
+                 "change_pct": _num(d["pct"], 2)}
+                for d in mk
+            ]
+    except Exception:  # noqa: BLE001 — best-effort enrichment only
+        pass
 
     # Snapshot + lifetime figures.
     cost = 0.0
@@ -289,36 +309,37 @@ def _rebalancing(m) -> dict:
 # Prompt
 # ---------------------------------------------------------------------------
 
-def _system_prompt(language: str) -> str:
+def _system_prompt(language: str, today_str: str) -> str:
     return (
-        "You are a markets commentator writing a short 'market context' note "
-        "for a retail investor, explaining the macro backdrop behind their "
-        "portfolio's recent moves. Use Google Search to ground the note in "
-        "the most recent market news (the last 24-48 hours).\n"
+        f"You are a markets commentator writing a short 'market context' note "
+        f"for a retail investor on {today_str}, explaining the macro backdrop "
+        "behind their portfolio's recent moves. Use Google Search to ground "
+        "the note in the most recent market news (the last 24-48 hours).\n"
         "RULES:\n"
         "- Search the web for what actually moved markets in the last 24-48 "
-        "hours, relevant to THIS portfolio's exposures (given in the JSON: "
-        "asset classes, equity geographies, top holdings, and recent returns).\n"
-        "- Write 3 to 4 sentences of flowing prose. No markdown, no bullet "
-        "points, no headings.\n"
-        "- Cover the macro drivers (major equity indices US / Europe / emerging "
-        "markets, gold, government-bond yields and rates, EUR/USD) ONLY where "
-        "they map to the portfolio's holdings, and connect them to why the "
-        "portfolio likely moved the way the JSON shows (use its recent "
-        "TWROR / PnL direction).\n"
+        "hours, relevant to THIS portfolio's exposures (asset classes, equity "
+        "geographies, top holdings and recent returns in the JSON).\n"
+        "- Reference the ACTUAL day(s) by name and date (e.g. 'on Thursday the "
+        "25th') and cite CONCRETE figures — real index levels and percentage "
+        "moves (use the 'markets_today' levels in the JSON plus what you find "
+        "in search). Avoid vague wording like 'slight dip' or 'mixed'.\n"
+        "- Connect the macro drivers (US / Europe / emerging-market equities, "
+        "gold, government-bond yields and rates, EUR/USD) to why the portfolio "
+        "moved the way the JSON shows.\n"
         "- Refer to real, recent events (rate decisions, inflation prints, "
         "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
-        "unsure, stay general.\n"
-        "- No predictions, no recommendations, no personalized investment "
-        "advice.\n"
-        f"- Write in {language}. Keep it under 95 words."
+        "unsure, stay general on that point.\n"
+        "- Maximum 4 sentences, about 90 words. No markdown, no bullet points, "
+        "no headings. No predictions, no recommendations, no personalized "
+        "investment advice.\n"
+        f"- Write in {language}."
     )
 
 
 def _user_prompt(digest: dict) -> str:
     return (
-        "Here is the investor's portfolio context as JSON (exposures and "
-        "recent returns):\n\n"
+        "Here is the investor's portfolio context as JSON (exposures, recent "
+        "returns and today's index levels in 'markets_today'):\n\n"
         + json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
         + "\n\nSearch for the latest market news and write the market-context "
         "note now."
