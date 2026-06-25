@@ -33,6 +33,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Optional
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,16 @@ def generate_summary(metrics, config) -> Optional[str]:
     try:
         digest = build_digest(metrics, config)
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
-        text = _call_gemini(_system_prompt(language), _user_prompt(digest))
+        system, user = _system_prompt(language), _user_prompt(digest)
+        # Try the grounded (Google Search) call first; if the key's tier or
+        # model rejects grounding, retry once without it so the macro note
+        # still appears (from model knowledge) rather than dropping all the
+        # way back to the rule-based Signals.
+        try:
+            text = _call_gemini(system, user, use_search=True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Grounded AI summary failed (%s); retrying without search.", e)
+            text = _call_gemini(system, user, use_search=False)
         return _sanitize(text) if text else None
     except Exception as e:  # noqa: BLE001 — best-effort, never fatal
         logger.warning("AI summary unavailable (%s); falling back to Signals.", e)
@@ -319,7 +329,7 @@ def _user_prompt(digest: dict) -> str:
 # Gemini REST call (urllib — no extra dependency)
 # ---------------------------------------------------------------------------
 
-def _call_gemini(system_prompt: str, user_prompt: str) -> Optional[str]:
+def _call_gemini(system_prompt: str, user_prompt: str, use_search: bool = True) -> Optional[str]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         return None
@@ -328,22 +338,51 @@ def _call_gemini(system_prompt: str, user_prompt: str) -> Optional[str]:
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-        # Google Search grounding: lets the model pull the last 24-48h of
-        # market news so the context note reflects what actually moved
-        # markets, not just stale training data.
-        "tools": [{"google_search": {}}],
         "generationConfig": {
             "temperature": 0.3,
             "maxOutputTokens": _MAX_OUTPUT_TOKENS,
             "topP": 0.9,
+            # Disable "thinking": reasoning tokens count against
+            # maxOutputTokens and would otherwise truncate this short note to
+            # empty. Search grounding still works without thinking.
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
+    if use_search:
+        # Google Search grounding: pulls the last 24-48h of market news so
+        # the context note reflects what actually moved markets. Requires a
+        # model/tier that supports it (Gemini 2.x); rejected requests fall
+        # back to a non-grounded call by the caller.
+        payload["tools"] = [{"google_search": {}}]
     req = Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("x-goog-api-key", api_key)
-    with urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return _extract_text(data)
+    try:
+        with urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        # Surface the API's actual error body — the single most useful clue
+        # for why the summary fell back (bad key, grounding not enabled for
+        # the tier, quota, unknown field, ...).
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")[:600]
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("Gemini HTTP %s%s: %s", e.code,
+                       " [grounded]" if use_search else "", body)
+        raise
+    text = _extract_text(data)
+    if not text:
+        # No text despite a 200: log the finish reason so a truncation or
+        # safety block is visible rather than silently becoming Signals.
+        try:
+            fr = data["candidates"][0].get("finishReason")
+        except (KeyError, IndexError, TypeError):
+            fr = None
+        logger.warning("Gemini returned no text%s (finishReason=%s).",
+                       " [grounded]" if use_search else "", fr)
+    return text
 
 
 def _extract_text(data: dict) -> Optional[str]:
