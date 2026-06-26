@@ -879,51 +879,82 @@ def build_allocation_timeline(
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
     cash_class = AssetClass.CASH_EQUIVALENTS.value
 
-    # Group cum/ex ISIN variants (shared 9-char prefix) so they value as a
-    # single net position, exactly like ``build_holdings_from_orders``.
+    # Cum/ex ISIN variants share a 9-char prefix. The prefix group is used
+    # ONLY to (a) detect a fully rotated/closed position — a group whose held
+    # quantity nets to ~0 contributes nothing, avoiding a spurious residual
+    # from legs priced differently — and (b) let a priced leg stand in for a
+    # sibling that has no quote on a given day. Each held ISIN is still valued
+    # individually, so two *distinct* instruments that merely share a prefix
+    # (e.g. the Xtrackers MSCI World factor ETFs IE00BL25J…) are never merged.
     groups: dict[str, list[str]] = {}
     for isin in timeline.isins():
         groups.setdefault(isin[:_CUM_EX_PREFIX_LEN], []).append(isin)
 
-    def _value_group(group: list[str], d: datetime.date) -> tuple[float, Optional[str]]:
-        """EUR value of a cum/ex group on ``d`` plus the representative
-        ISIN (best-priced leg) used to classify it."""
-        net = sum(timeline.qty_at(i, d) for i in group)
-        if abs(net) < _QTY_EPS:
-            return 0.0, None
+    def _price_for(isin: str, members: list[str],
+                   d: datetime.date) -> tuple[Optional[float], str]:
+        """(price, source) for an ISIN, borrowing the best-priced sibling in
+        its cum/ex group when the ISIN itself has no quote on ``d``."""
+        price, source = resolver.price_on(isin, d)
+        if price is not None:
+            return price, source
         best = None
         best_rank = 99
-        for i in group:
-            price, source = resolver.price_on(i, d)
-            if price is None:
+        for s in members:
+            p, src = resolver.price_on(s, d)
+            if p is None:
                 continue
-            rank = _TIMELINE_SOURCE_RANK.get(source, 3)
+            rank = _TIMELINE_SOURCE_RANK.get(src, 3)
             if rank < best_rank:
-                best_rank, best = rank, (i, price, source)
-        if best is None:
-            return 0.0, None
-        isin, price, source = best
+                best_rank, best = rank, (p, src)
+        return best if best is not None else (None, "excluded")
+
+    def _value_isin(isin: str, members: list[str], qty: float,
+                    d: datetime.date) -> float:
+        """EUR value of a single ISIN's held quantity on ``d``. Mirrors the
+        source-tag handling of the prices: quotes from yfinance/Borsa are
+        already EUR-per-unit (and bond-rescaled), while synthetic/carry-flat
+        order prices still need ``value_position`` to apply the bond /100."""
+        price, source = _price_for(isin, members, d)
+        if price is None:
+            return 0.0
         if source in ("yfinance", "borsa_italiana"):
-            return net * price, isin
-        return value_position(net, price, bond=resolver.is_bond(isin)), isin
+            return qty * price
+        return value_position(qty, price, bond=resolver.is_bond(isin))
+
+    def _per_isin_values(d: datetime.date) -> dict[str, float]:
+        """{isin: eur_value} valuing each held ISIN individually, with cum/ex
+        safety: a prefix group whose held quantity nets to ~0 (a rotated or
+        closed position) contributes nothing."""
+        out: dict[str, float] = {}
+        for members in groups.values():
+            if abs(sum(timeline.qty_at(i, d) for i in members)) < _QTY_EPS:
+                continue
+            for isin in members:
+                q = timeline.qty_at(isin, d)
+                if abs(q) < _QTY_EPS:
+                    continue
+                v = _value_isin(isin, members, q, d)
+                if v > 0:
+                    out[isin] = out.get(isin, 0.0) + v
+        return out
 
     asset_series: list[dict[str, float]] = []
     geo_series: list[dict[str, float]] = []
-    # Per-holding weight as % of its own asset class (parallel to dates).
-    # Keyed by the representative (best-priced) ISIN of each net position so
-    # the newsletter can draw a per-instrument trend vs its target — the
-    # target itself is % of class, so this normalization matches it.
+    # Per-holding weight as % of its own asset class (parallel to dates),
+    # keyed by ISIN and derived from the SAME per-ISIN valuation as the
+    # aggregates, so the asset/geo trend lines and the by-holding trends all
+    # agree (and distinct prefix-sharing ETFs each keep their own line).
     holding_series: list[dict[str, float]] = []
     for d in dates:
+        iso_val = _per_isin_values(d)
+        iso_ac: dict[str, str] = {}
         class_val: dict[str, float] = {}
         geo_val: dict[str, float] = {}
         eq_val = 0.0
-        for group in groups.values():
-            v, rep = _value_group(group, d)
-            if v <= 0 or rep is None:
-                continue
-            h = enriched_by_isin.get(rep)
+        for isin, v in iso_val.items():
+            h = enriched_by_isin.get(isin)
             ac = h.asset_class.value if (h and h.asset_class) else AssetClass.ALTERNATIVE.value
+            iso_ac[isin] = ac
             class_val[ac] = class_val.get(ac, 0.0) + v
             if ac == "Equities":
                 eq_val += v
@@ -941,27 +972,10 @@ def build_allocation_timeline(
         geo_series.append({
             k: (val / eq_val * 100.0) for k, val in geo_val.items() if eq_val > 0
         })
-        # Per-holding attribution is computed per individual ISIN (NOT via the
-        # cum/ex group) because live holdings are per-ISIN — two distinct ETFs
-        # can share a 9-char ISIN prefix, so grouping would merge them. Each
-        # ISIN is normalized against the per-ISIN total of its own class so the
-        # weights match the per-holding targets (which are % of class).
-        iso_val: dict[str, float] = {}
-        iso_ac: dict[str, str] = {}
-        for isin in timeline.isins():
-            vv, _rep = _value_group([isin], d)
-            if vv <= 0:
-                continue
-            hh = enriched_by_isin.get(isin)
-            iso_val[isin] = vv
-            iso_ac[isin] = hh.asset_class.value if (hh and hh.asset_class) else AssetClass.ALTERNATIVE.value
-        ac_tot: dict[str, float] = {}
-        for isin, vv in iso_val.items():
-            ac_tot[iso_ac[isin]] = ac_tot.get(iso_ac[isin], 0.0) + vv
         holding_series.append({
-            isin: (vv / ac_tot[iso_ac[isin]] * 100.0)
-            for isin, vv in iso_val.items()
-            if ac_tot.get(iso_ac[isin], 0.0) > 0
+            isin: (v / class_val[iso_ac[isin]] * 100.0)
+            for isin, v in iso_val.items()
+            if class_val.get(iso_ac[isin], 0.0) > 0
         })
 
     return {"dates": dates, "asset": asset_series, "geo": geo_series,
