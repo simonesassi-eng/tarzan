@@ -310,6 +310,112 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> 
     )
 
 
+_dual_uid = 0
+
+
+def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> str:
+    """Dual-axis hero chart: portfolio value (€, left axis) as a two-tone
+    green/red line (green above the window-start baseline, red below) and the
+    Unrealized PnL % (right axis) as a grey dashed line, with cash-flow
+    triangles on the value line (▲ deposit green / ▼ withdrawal grey)."""
+    global _dual_uid
+    _dual_uid += 1
+    u = _dual_uid
+    P = PALETTE
+    n = len(values)
+    if n < 2 or not pct or len(pct) != n:
+        return ""
+    ML, MR, MT, MB = 52, 48, 12, 26
+    PW, PH = w - ML - MR, h - MT - MB
+    base = values[0]
+    from tarzan.export import _charts as _ch
+    vlo, vhi, vticks = _ch.nice_ticks(min(min(values), base), max(max(values), base), 4)
+    plo, phi, pticks = _ch.nice_ticks(min(pct), max(pct), 4)
+
+    def X(i):
+        return ML + (i / (n - 1) * PW if n > 1 else 0)
+
+    def Yv(v):
+        return MT + (1 - (v - vlo) / ((vhi - vlo) or 1)) * PH
+
+    def Yp(p):
+        return MT + (1 - (p - plo) / ((phi - plo) or 1)) * PH
+
+    grid = ""
+    for t in vticks:
+        if t < vlo - 1e-9 or t > vhi + 1e-9:
+            continue
+        y = Yv(t)
+        grid += (f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" stroke="{P["border"]}" stroke-width="1"/>'
+                 f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" font-size="9" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>')
+    for t in pticks:
+        if t < plo - 1e-9 or t > phi + 1e-9:
+            continue
+        grid += f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" text-anchor="start" font-size="9" fill="{P["muted"]}">{_ch.fmt_pct_tick(t)}</text>'
+    xlab = ""
+    for k in sorted({0, n // 3, 2 * n // 3, n - 1}):
+        x = X(k)
+        anc = "start" if k == 0 else "end" if k == n - 1 else "middle"
+        xlab += (f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="9" '
+                 f'fill="{P["subtle"]}">{pd.Timestamp(dates[k]).strftime("%b %d")}</text>')
+
+    vline = " ".join(f"{X(i):.1f},{Yv(v):.1f}" for i, v in enumerate(values))
+    yb = Yv(base)
+    poly = f"{vline} {X(n - 1):.1f},{yb:.1f} {X(0):.1f},{yb:.1f}"
+    pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
+    yb_c = max(MT, min(yb, MT + PH))
+
+    marks = ""
+    if flows:
+        xmap = {pd.Timestamp(d).normalize(): i for i, d in enumerate(dates)}
+        for d, v in flows:
+            i = xmap.get(pd.Timestamp(d).normalize())
+            if i is None:
+                continue
+            x, y = X(i), Yv(values[i])
+            col = P["green"] if v >= 0 else P["muted"]
+            if v >= 0:
+                marks += f'<polygon points="{x:.1f},{y-5:.1f} {x-4:.1f},{y+3:.1f} {x+4:.1f},{y+3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+            else:
+                marks += f'<polygon points="{x:.1f},{y+5:.1f} {x-4:.1f},{y-3:.1f} {x+4:.1f},{y-3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+
+    return (
+        f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;font-family:-apple-system,Helvetica,Arial,sans-serif;">'
+        f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="dr{u}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath></defs>'
+        + grid
+        + f'<polygon points="{poly}" fill="{P["green"]}" fill-opacity="0.16" clip-path="url(#dg{u})"/>'
+        + f'<polygon points="{poly}" fill="{P["red"]}" fill-opacity="0.16" clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["green"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
+        + marks + xlab + "</svg>"
+        + f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
+        f'<span style="margin-right:16px;"><span style="display:inline-block;width:22px;height:5px;border-radius:3px;background:{P["green"]};vertical-align:middle;margin-right:5px;"></span>Value (\u20ac) \u00b7 left</span>'
+        f'<span><span style="display:inline-block;width:22px;height:0;border-top:2px dashed {P["muted"]};vertical-align:middle;margin-right:5px;"></span>Unrealized PnL (%) \u00b7 right</span>'
+        f'</div>'
+    )
+
+
+def _hero_flow_chips(flows) -> str:
+    """Deposit/withdrawal chips with date + amount (green/grey), for the hero."""
+    if not flows:
+        return ""
+    P = PALETTE
+    items = ""
+    for d, v in sorted(flows, key=lambda t: t[0]):
+        col = P["green"] if v >= 0 else P["muted"]
+        arrow = "\u25b2" if v >= 0 else "\u25bc"
+        items += (f'<span style="display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:999px;'
+                  f'background:#fff;border:1px solid {P["border"]};font-size:11px;white-space:nowrap;">'
+                  f'<span style="color:{col};font-weight:700;">{arrow} {_eur_smart(v, signed=True)}</span>'
+                  f'<span style="color:{P["subtle"]};"> &middot; {pd.Timestamp(d).strftime("%b %d")}</span></span>')
+    return (f'<div style="margin-top:8px;font-size:9px;font-weight:700;letter-spacing:0.04em;'
+            f'color:{P["muted"]};text-transform:uppercase;">Cash flows</div>'
+            f'<div style="margin-top:2px;">{items}</div>')
+
+
 def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
     """Extract the per-bucket weights for one category from an allocation
     timeline series. Returns None when the category never carried weight
@@ -482,6 +588,24 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
 
+    # Dual-axis hero chart: 30-day portfolio value (€, left) + Unrealized
+    # PnL % (right, flow-adjusted via the daily cost-basis series), with
+    # cash-flow triangles. Empty string when the order-derived series are
+    # unavailable (holdings-only path).
+    value_chart_html = ""
+    hero_flow_chips = ""
+    win = _perf_window(m, 30)
+    if (win and win.get("value") and len(win["value"]) >= 2
+            and m.unrealized_series is not None and m.actual_value_series is not None):
+        dts = win["dates"]
+        idx = pd.DatetimeIndex(dts)
+        av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
+        ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
+        unreal_series = list(((ur / (av - ur).replace(0, float("nan"))) * 100.0)
+                             .bfill().values.astype(float))
+        value_chart_html = _hero_value_chart(win["value"], unreal_series, dts, win["flows"])
+        hero_flow_chips = _hero_flow_chips(win["flows"])
+
     # This-week figures, mirroring the since-inception group:
     #   * Total PnL — the real money gained over the last 7 days, net of any
     #     contributions in the week (delta of the cumulative P&L series);
@@ -576,6 +700,10 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # Cumulative time-weighted return since inception (order path only).
         "twror_pct": _pct(twror_pct, signed=True) if twror_pct is not None else None,
         "twror_is_positive": (twror_pct or 0.0) >= 0,
+        # Dual-axis hero chart (value € + Unrealized PnL %) and cash-flow
+        # chips, pre-rendered as safe HTML (empty on the holdings-only path).
+        "value_chart": value_chart_html or None,
+        "flow_chips_html": hero_flow_chips or None,
         "invested_value": _eur_smart(m.invested_value),
         "invested_pct": _pct(invested_pct, decimals=1),
         "cash_value": _eur_smart(m.cash_value),
@@ -1153,27 +1281,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return (f'<div style="margin-top:18px;font-size:11px;font-weight:700;color:{P["muted"]};'
                 f'text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">{t}</div>')
 
-    # Patrimony chart embedded in a card with the portfolio value on top
-    # (mirrors the hero mountain card): label + big € value, then the
-    # area chart with deposit/withdrawal markers and the flow chips.
-    _patrimony_card = (
-        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
-        f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
-        f'<tr><td style="padding:14px 16px;">'
-        f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
-        f'text-transform:uppercase;">Patrimony <span style="color:{P["subtle"]};font-weight:600;">'
-        f'· ▲ deposits / ▼ withdrawals</span></div>'
-        f'<div style="margin-top:2px;font-size:30px;font-weight:700;color:{P["ink"]};'
-        f'line-height:1.05;letter-spacing:-0.015em;">{_eur(m.total_value, decimals=0)}</div>'
-        f'<div style="margin-top:10px;">'
-        + _charts.chart_eur(win["value"], dates, flows=win["flows"])
-        + '</div>'
-        + _charts.flow_chips(win["flows"], lambda v: _eur_smart(v, signed=True))
-        + '</td></tr></table>'
-    )
-
-    parts = [_patrimony_card]
+    # The portfolio value chart now lives in the hero (dual-axis value €
+    # + Unrealized PnL %), so the Performance section no longer repeats it.
+    parts = []
 
     # Return vs benchmark (%) — TWROR, P&L %, MSCI ACWI on one rebased axis.
     ret_series, ret_leg = [], []
