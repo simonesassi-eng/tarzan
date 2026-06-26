@@ -21,8 +21,12 @@
                       and the rule-based Signals block is suppressed
      smart_insights   list of {icon, color, bg, category, headline, body}
      movers           {available, best, worst, benchmark_name}
-     allocation       {rows[], stacked[], tolerance}
-     geography        {rows[], stacked[], benchmark_name}
+     allocation       {rows[], stacked[], tolerance}  (consumed internally by
+                      diversification; not referenced directly in the template)
+     geography        {rows[], stacked[], benchmark_name}  (ditto)
+     diversification  {available, html} — pre-rendered tile dashboard
+                      (asset class + geography + by-holding), injected as
+                      safe HTML; see newsletter.py::_build_diversification
      holdings         {groups[], summary[], total_count}
      performance      {portfolio_row, benchmark_rows[],
                        benchmark_alpha_beta, benchmark_geo}
@@ -170,138 +174,16 @@
           {% endif %}
 
 
-          {# ─── DIVERSIFICATION (Asset Class + Geography, donut layout) ───── #}
-          {% if allocation.rows or geography.rows %}
+          {# ─── DIVERSIFICATION (tile dashboard: asset class + geography +
+             by holding) — pre-rendered in newsletter.py::_build_diversification
+             (SVG donut gauges + 1-month trend sparklines can't be expressed in
+             Jinja), injected as safe HTML. Each tile shows the actual weight, a
+             donut gauge whose fill is that weight with an ink notch at the
+             target, a drift pill, and a last-month trend vs target. ── #}
+          {% if diversification.available %}
           <tr>
             <td class="px-32" style="padding:28px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Diversification</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How your portfolio is spread</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">
-                Tolerance ±{{ allocation.tolerance }} &nbsp;·&nbsp;
-                <span style="color:{{ palette.green }};font-weight:600;">●</span> aligned &nbsp;·&nbsp;
-                <span style="color:{{ palette.amber }};font-weight:600;">●</span> drift &nbsp;·&nbsp;
-                <span style="color:{{ palette.red }};font-weight:600;">●</span> action
-              </div>
-
-              {% if allocation.rows %}
-              {# ── BY ASSET CLASS — donut + tabular list (same style
-                 as Geography below for visual consistency) ── #}
-              <div style="margin-top:18px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">By asset class</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                <tr>
-                  <td width="180" valign="middle" style="padding-right:18px;">
-                    {# CSS conic-gradient donut. Modern Gmail/Apple Mail
-                       render this natively; legacy Outlook desktop falls
-                       back to a flat-color disc, which is acceptable. #}
-                    {% set ns = namespace(acc=0) %}
-                    {% set total = allocation.stacked|sum(attribute='width') or 100 %}
-                    <div style="width:160px;height:160px;border-radius:50%;background:conic-gradient({% for seg in allocation.stacked %}{{ seg.color }} {{ ns.acc }}% {{ ns.acc + (seg.width / total * 100) }}%{% set ns.acc = ns.acc + (seg.width / total * 100) %}{% if not loop.last %},{% endif %}{% endfor %});position:relative;margin:0 auto;">
-                      <div style="position:absolute;top:50%;left:50%;width:96px;height:96px;background:#FFFFFF;border-radius:50%;transform:translate(-50%,-50%);text-align:center;line-height:96px;font-size:11px;color:{{ palette.muted }};font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Invested</div>
-                    </div>
-                  </td>
-                  <td valign="middle">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px;border-collapse:collapse;">
-                      <tr>
-                        <td style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Asset</td>
-                        <td align="right" style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">You</td>
-                        <td align="right" width="60" style="padding:0 0 6px 8px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Tgt</td>
-                        <td align="right" width="60" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Δ vs tgt</td>
-                      </tr>
-                      {% for r in allocation.rows %}{% if not r.is_eur %}
-                      <tr>
-                        <td style="padding:5px 0;border-top:1px solid #F1F2F8;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name }}</span></td>
-                        <td align="right" style="padding:5px 0;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
-                        <td align="right" width="60" style="padding:5px 0 5px 8px;border-top:1px solid #F1F2F8;font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ r.target_pct }}</td>
-                        <td align="right" width="60" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
-                      </tr>
-                      {% endif %}{% endfor %}
-                      {# Cash row — same 4-column layout, slightly
-                         heavier separator above so it reads as a
-                         distinct accounting bucket. #}
-                      {% for r in allocation.rows %}{% if r.is_eur %}
-                      <tr>
-                        <td style="padding:8px 0 5px 0;border-top:2px solid {{ palette.border }};"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name }}</span></td>
-                        <td align="right" style="padding:8px 0 5px 0;border-top:2px solid {{ palette.border }};font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
-                        <td align="right" width="60" style="padding:8px 0 5px 8px;border-top:2px solid {{ palette.border }};font-size:11px;color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{{ r.target_pct }}</td>
-                        <td align="right" width="60" style="padding:8px 0 5px 6px;border-top:2px solid {{ palette.border }};font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
-                      </tr>
-                      {% endif %}{% endfor %}
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              {# ── How it evolved — weekly sparkline per class, last 3
-                 months. Donut + table above stay the source of truth for
-                 the live numbers; this strip adds the temporal trend with
-                 a dashed target line. Omitted on the holdings-only path
-                 (no order history → no timeline). ── #}
-              {% if allocation.has_timeline %}
-              <div style="margin-top:16px;font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};text-transform:uppercase;">How it evolved — weekly, last 3 months</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
-                {% for r in allocation.rows %}{% if not r.is_eur and r.spark %}
-                <tr>
-                  <td width="150" valign="middle" style="padding:7px 12px 7px 0;border-top:1px solid #F1F2F8;">
-                    <div style="font-size:12px;font-weight:600;color:{{ r.color }};"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:{{ r.color }};vertical-align:middle;margin-right:6px;"></span>{{ r.name }}</div>
-                    <div style="margin-top:3px;font-size:10px;color:{{ palette.muted }};">tgt {{ r.target_pct or '—' }} &nbsp;·&nbsp; gap <span style="color:{{ r.delta_color }};font-weight:700;">●&nbsp;{{ r.delta or '—' }}</span></div>
-                  </td>
-                  <td valign="middle" style="padding:7px 0;border-top:1px solid #F1F2F8;">{{ r.spark|safe }}</td>
-                </tr>
-                {% endif %}{% endfor %}
-                <tr><td colspan="2" style="padding-top:6px;font-size:9px;color:{{ palette.subtle }};text-align:right;">solid = your weight &nbsp;·&nbsp; – – – = target</td></tr>
-              </table>
-              {% endif %}
-              {% endif %}
-
-              {% if geography.rows %}
-              {# ── BY GEOGRAPHY — donut + tabular list with ACWI column ── #}
-              <div style="margin-top:24px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.muted }};text-transform:uppercase;">By geography <span style="font-weight:500;color:{{ palette.subtle }};letter-spacing:0;text-transform:none;">— equity portion</span></div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;">
-                <tr>
-                  <td width="180" valign="middle" style="padding-right:18px;">
-                    {% set ns = namespace(acc=0) %}
-                    {% set total = geography.stacked|sum(attribute='width') or 100 %}
-                    <div style="width:160px;height:160px;border-radius:50%;background:conic-gradient({% for seg in geography.stacked %}{{ seg.color }} {{ ns.acc }}% {{ ns.acc + (seg.width / total * 100) }}%{% set ns.acc = ns.acc + (seg.width / total * 100) %}{% if not loop.last %},{% endif %}{% endfor %});position:relative;margin:0 auto;">
-                      <div style="position:absolute;top:50%;left:50%;width:96px;height:96px;background:#FFFFFF;border-radius:50%;transform:translate(-50%,-50%);text-align:center;line-height:96px;font-size:11px;color:{{ palette.muted }};font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Equity</div>
-                    </div>
-                  </td>
-                  <td valign="middle">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13px;border-collapse:collapse;">
-                      <tr>
-                        <td style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Region</td>
-                        <td align="right" style="padding:0 0 6px 0;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">You</td>
-                        <td align="right" width="50" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Tgt</td>
-                        <td align="right" width="50" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">{{ geography.benchmark_name }}</td>
-                        <td align="right" width="60" style="padding:0 0 6px 6px;font-size:9px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.04em;text-transform:uppercase;">Δ vs tgt</td>
-                      </tr>
-                      {% for r in geography.rows %}
-                      <tr>
-                        <td style="padding:5px 0;border-top:1px solid #F1F2F8;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ r.color }};vertical-align:middle;"></span> <span style="font-weight:600;color:{{ r.color }};vertical-align:middle;">{{ r.name|truncate(22, true, '…') }}</span></td>
-                        <td align="right" style="padding:5px 0;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:700;color:{{ palette.ink }};">{{ r.actual_pct }}</td>
-                        <td align="right" width="50" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.muted }};font-size:11px;">{{ r.target_pct }}</td>
-                        <td align="right" width="50" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.subtle }};font-size:11px;">{{ r.acwi_pct }}</td>
-                        <td align="right" width="60" style="padding:5px 0 5px 6px;border-top:1px solid #F1F2F8;font-size:11px;font-weight:700;color:{{ r.delta_color }};">●&nbsp;{{ r.delta }}</td>
-                      </tr>
-                      {% endfor %}
-                    </table>
-                  </td>
-                </tr>
-              </table>
-              {% if geography.has_timeline %}
-              <div style="margin-top:16px;font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};text-transform:uppercase;">How it evolved — weekly, last 3 months</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">
-                {% for r in geography.rows %}{% if r.spark %}
-                <tr>
-                  <td width="150" valign="middle" style="padding:7px 12px 7px 0;border-top:1px solid #F1F2F8;">
-                    <div style="font-size:12px;font-weight:600;color:{{ r.color }};"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:{{ r.color }};vertical-align:middle;margin-right:6px;"></span>{{ r.name|truncate(22, true, '…') }}</div>
-                    <div style="margin-top:3px;font-size:10px;color:{{ palette.muted }};">tgt {{ r.target_pct }} &nbsp;·&nbsp; gap <span style="color:{{ r.delta_color }};font-weight:700;">●&nbsp;{{ r.delta }}</span></div>
-                  </td>
-                  <td valign="middle" style="padding:7px 0;border-top:1px solid #F1F2F8;">{{ r.spark|safe }}</td>
-                </tr>
-                {% endif %}{% endfor %}
-                <tr><td colspan="2" style="padding-top:6px;font-size:9px;color:{{ palette.subtle }};text-align:right;">solid = your weight &nbsp;·&nbsp; – – – = target</td></tr>
-              </table>
-              {% endif %}
-              {% endif %}
+              {{ diversification.html|safe }}
             </td>
           </tr>
           {% endif %}

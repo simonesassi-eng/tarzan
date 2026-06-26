@@ -25,6 +25,7 @@ Public entry point: ``generate_newsletter(metrics, config, output_dir)``.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,6 +41,7 @@ from tarzan.export._format import (
     ASSET_CLASS_COLORS,
     GEO_COLORS as _GEO_COLORS,
     css,
+    short_instrument_name,
 )
 from tarzan.export import _charts
 
@@ -1456,6 +1458,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
                 "name": region,
                 "color": color,
                 "actual_pct": _pct_smart(actual),
+                "actual_pct_raw": actual,
                 "target_pct": _pct_smart(target) if target is not None else "—",
                 "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
                 "delta": _signed_pp(delta_target) if delta_target is not None else "—",
@@ -1475,6 +1478,249 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
         "benchmark_name": ctx.benchmark_geo,
         "has_timeline": any(r.get("spark") for r in rows),
     }
+
+
+# ── Diversification (tile dashboard) ──────────────────────────────────────────
+# A pre-rendered section (SVG rings + trend sparklines can't be expressed in
+# Jinja), injected as safe HTML — same pattern as the Markets / Performance
+# blocks. Each slice is a card: actual weight, a donut gauge whose fill is the
+# weight (with an ink notch at the target), a drift pill, and a small
+# last-month trend-vs-target sparkline. A new "By holding" block tracks each
+# position with an explicit per-instrument target the same way.
+
+_DV_TRACK = "#EEF0F6"   # neutral ring track (lighter than the card border)
+
+
+def _ring(actual: Optional[float], target: Optional[float],
+          color: str, size: int = 54) -> str:
+    """Donut gauge whose filled arc is the slice's ACTUAL weight (out of
+    100%) — so 74% fills ~3/4 of the ring — with a short ink notch marking
+    where the target sits. No center label (the weight is printed beside it)."""
+    r = size / 2 - 6
+    cx = cy = size / 2
+    circ = 2 * math.pi * r
+    frac = max(0.0, min((actual or 0.0) / 100.0, 1.0))
+    dash = frac * circ
+    tfrac = max(0.0, min((target or 0.0) / 100.0, 1.0))
+    ang = math.radians(-90 + tfrac * 360)
+    ri, ro = r - 4.5, r + 4.5
+    tx1, ty1 = cx + ri * math.cos(ang), cy + ri * math.sin(ang)
+    tx2, ty2 = cx + ro * math.cos(ang), cy + ro * math.sin(ang)
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{_DV_TRACK}" stroke-width="6"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{color}" stroke-width="6" '
+        f'stroke-linecap="round" stroke-dasharray="{dash:.1f} {circ - dash:.1f}" '
+        f'transform="rotate(-90 {cx} {cy})"/>'
+        f'<line x1="{tx1:.1f}" y1="{ty1:.1f}" x2="{tx2:.1f}" y2="{ty2:.1f}" '
+        f'stroke="{PALETTE["ink"]}" stroke-width="2"/></svg>'
+    )
+
+
+def _recent_timeline(series: Optional[list], dates: Optional[list],
+                     days: int = 31) -> Optional[list]:
+    """Slice a timeline series to its last ``days`` (the 1-month trend window).
+    Falls back to the last 5 buckets so a sparkline always has ≥2 points."""
+    if not series or not dates:
+        return series
+    cutoff = pd.Timestamp(dates[-1]) - pd.Timedelta(days=days)
+    keep = [i for i, d in enumerate(dates) if pd.Timestamp(d) >= cutoff]
+    if len(keep) < 2:
+        keep = list(range(max(0, len(dates) - 5), len(dates)))
+    return [series[i] for i in keep]
+
+
+def _build_diversification(ctx: _NewsletterContext) -> dict:
+    """Pre-render the Diversification section (tile dashboard) as HTML.
+
+    Reuses :func:`_build_allocation` / :func:`_build_geography` for the
+    numbers and semaphore logic, the rebalancer's per-holding checks for the
+    by-holding tiles, ``short_instrument_name`` for labels, the price-cache
+    ISIN→symbol map for clean tickers, and :func:`_spark` for the trends — so
+    this is a presentational layer, not a second source of truth.
+    """
+    P = PALETTE
+    alloc = _build_allocation(ctx)
+    geo = _build_geography(ctx)
+    tol_str = _pct(ctx.config.rebalancing_target_tolerance_pctg, decimals=1).rstrip("%")
+    tol = ctx.config.rebalancing_target_tolerance_pctg
+
+    tl = ctx.metrics.allocation_timeline or {}
+    dates = tl.get("dates") or []
+    asset_series = _recent_timeline(tl.get("asset"), dates)
+    geo_series = _recent_timeline(tl.get("geo"), dates)
+    hold_series = _recent_timeline(tl.get("holding"), dates)
+
+    available = bool(alloc.get("rows") or geo.get("rows"))
+    if not available:
+        return {"available": False, "html": ""}
+
+    def chip(text, color, bg):
+        return (f'<span style="display:inline-block;padding:1px 7px;border-radius:999px;'
+                f'background:{bg};color:{color};font-size:10px;font-weight:700;'
+                f'white-space:nowrap;">{text}</span>')
+
+    def swatch(color, sz=10):
+        return (f'<span style="display:inline-block;width:{sz}px;height:{sz}px;'
+                f'border-radius:2px;background:{color};vertical-align:middle;"></span>')
+
+    def _bg_for(color):
+        return {P["green"]: P["green_bg"], P["amber"]: P["amber_bg"],
+                P["red"]: P["red_bg"]}.get(color, P["card_alt"])
+
+    def tile(name, color, actual_raw, target_raw, actual_str, target_str,
+             delta_str, delta_color, spark_vals, spark_color):
+        sp = _spark(spark_vals, target_raw, spark_color, 200, 22) if spark_vals else ""
+        return (
+            f'<td width="50%" style="padding:5px;" valign="top">'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="background:{P["card_alt"]};border:1px solid {P["border"]};'
+            f'border-radius:10px;border-left:3px solid {color};border-collapse:separate;">'
+            f'<tr><td style="padding:10px 12px;"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td valign="top"><div style="font-size:11px;font-weight:700;color:{color};line-height:1.25;">{name}</div>'
+            f'<div style="margin-top:3px;font-size:22px;font-weight:700;color:{P["ink"]};line-height:1;">'
+            f'{actual_str}</div>'
+            f'<div style="margin-top:3px;">{chip("●&nbsp;" + delta_str, delta_color, _bg_for(delta_color))} '
+            f'<span style="font-size:10px;color:{P["subtle"]};">tgt {target_str}</span></div></td>'
+            f'<td align="right" valign="top" style="width:58px;">{_ring(actual_raw, target_raw, color)}</td>'
+            f'</tr></table>'
+            + (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;"><tr>'
+               f'<td style="width:26px;font-size:8px;font-weight:700;letter-spacing:0.03em;'
+               f'color:{P["subtle"]};text-transform:uppercase;vertical-align:bottom;">1-mo</td>'
+               f'<td style="vertical-align:bottom;">{sp}</td></tr></table>' if sp else "")
+            + '</td></tr></table></td>'
+        )
+
+    def grid(cells, ncol=2):
+        rows_html = []
+        for i in range(0, len(cells), ncol):
+            chunk = cells[i:i + ncol]
+            pad = "<td width='50%'></td>" * (ncol - len(chunk))
+            rows_html.append("<tr>" + "".join(chunk) + pad + "</tr>")
+        return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+                f'style="margin:0 -5px;">{"".join(rows_html)}</table>')
+
+    # ── Asset-class tiles + cash callout ──
+    asset_cells, cash_html = [], ""
+    for r in alloc["rows"]:
+        if r.get("is_eur"):
+            cash_html = (
+                f'<div style="margin-top:10px;padding:9px 12px;background:{P["green_bg"]};'
+                f'border-radius:8px;font-size:12px;color:{P["ink"]};">{swatch(r["color"])} '
+                f'<b>{r["name"]}</b> &nbsp;{r["actual_pct"]} '
+                f'<span style="color:{P["muted"]};">· target {r["target_pct"]} · '
+                f'<span style="color:{r["delta_color"]};font-weight:700;">{r["delta"]}</span></span></div>'
+            )
+            continue
+        asset_cells.append(tile(
+            r["name"], r["color"], r.get("actual_pct_raw"), r.get("target_left"),
+            r["actual_pct"], r.get("target_pct") or "—", r.get("delta") or "—",
+            r["delta_color"], _timeline_vals(asset_series, r["name"]), r["color"],
+        ))
+
+    # ── Geography tiles ──
+    geo_cells = [
+        tile(r["name"], r["color"], r.get("actual_pct_raw"), r.get("target_left"),
+             r["actual_pct"], r.get("target_pct") or "—", r.get("delta") or "—",
+             r["delta_color"], _timeline_vals(geo_series, r["name"]), r["color"])
+        for r in geo["rows"]
+    ]
+
+    # ── By-holding tiles (per-instrument target, % of class) ──
+    from tarzan.data import price_cache as _pc
+
+    def _clean_ticker(isin):
+        sym = _pc.load_resolution(isin) or ""
+        return sym.split(".")[0] if sym else ""
+
+    def holding_tiles(kind):
+        cells = []
+        for v in (ctx.metrics.rebalancing_verifications or []):
+            if v.get("kind") != kind:
+                continue
+            items = sorted(v.get("items", []) or [],
+                           key=lambda it: -float(it.get("actual_pct", 0.0)))
+            for it in items:
+                isin = it.get("ticker", "")
+                actual = float(it.get("actual_pct", 0.0))
+                target = float(it.get("target_pct", 0.0))
+                delta = actual - target
+                dcol = _semaphore_color(_semaphore(delta, tol))
+                tick = _clean_ticker(isin)
+                vals = None
+                if hold_series:
+                    xs = [float(pt.get(isin, 0.0)) for pt in hold_series]
+                    if any(x > 0 for x in xs) and len(xs) >= 2:
+                        vals = xs
+                sp = _spark(vals, target, P["muted"], 150, 16) if vals else ""
+                tick_html = (f'<span style="font-size:10px;font-weight:700;color:{P["muted"]};">{tick}</span> '
+                             if tick else "")
+                cells.append(
+                    f'<td width="50%" style="padding:4px;" valign="top">'
+                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+                    f'style="background:#FFFFFF;border:1px solid {P["border"]};border-radius:8px;border-collapse:separate;">'
+                    f'<tr><td style="padding:8px 10px;">'
+                    f'<div style="font-size:11px;font-weight:600;color:{P["ink"]};">{tick_html}'
+                    f'<span style="color:{P["subtle"]};font-weight:400;">{short_instrument_name(it.get("category") or isin, 22)}</span></div>'
+                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;"><tr>'
+                    f'<td><span style="font-size:16px;font-weight:700;color:{P["ink"]};">{_pct_smart(actual)}</span> '
+                    f'<span style="font-size:10px;color:{P["muted"]};">/ {_pct_smart(target)}</span></td>'
+                    f'<td align="right">{chip(_signed_pp(delta), dcol, _bg_for(dcol))}</td></tr></table>'
+                    + (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;"><tr>'
+                       f'<td style="width:24px;font-size:7px;font-weight:700;letter-spacing:0.03em;'
+                       f'color:{P["subtle"]};text-transform:uppercase;vertical-align:bottom;">1-mo</td>'
+                       f'<td style="vertical-align:bottom;">{sp}</td></tr></table>' if sp else "")
+                    + '</td></tr></table></td>'
+                )
+        return cells
+
+    eq_cells = holding_tiles("per_holding_equity")
+    fi_cells = holding_tiles("per_holding_fi")
+
+    def sub(title, extra=""):
+        tail = (f' <span style="font-weight:500;color:{P["subtle"]};letter-spacing:0;'
+                f'text-transform:none;">— {extra}</span>') if extra else ""
+        return (f'<div style="margin-top:20px;font-size:11px;font-weight:700;letter-spacing:0.06em;'
+                f'color:{P["muted"]};text-transform:uppercase;">{title}{tail}</div>')
+
+    legend = (
+        f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Tolerance ±{tol_str}% &nbsp;·&nbsp; '
+        f'<span style="color:{P["green"]};font-weight:700;">●</span> aligned &nbsp;·&nbsp; '
+        f'<span style="color:{P["amber"]};font-weight:700;">●</span> drift &nbsp;·&nbsp; '
+        f'<span style="color:{P["red"]};font-weight:700;">●</span> action &nbsp;·&nbsp; '
+        f'trend = last month</div>'
+    )
+
+    html = [
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};text-transform:uppercase;">Diversification</div>',
+        f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{P["ink"]};">How your portfolio is spread</div>',
+        legend,
+    ]
+    if asset_cells:
+        html.append(sub("By asset class"))
+        html.append(f'<div style="margin-top:8px;">{grid(asset_cells)}</div>')
+    if cash_html:
+        html.append(cash_html)
+    if geo_cells:
+        html.append(sub("By geography", "equity portion"))
+        html.append(f'<div style="margin-top:8px;">{grid(geo_cells)}</div>')
+    if eq_cells or fi_cells:
+        html.append(sub("By holding", "are individual positions on target?"))
+        if eq_cells:
+            html.append(f'<div style="margin-top:8px;font-size:11px;color:{P["muted"]};">'
+                        f'{swatch(ASSET_COLORS.get("Equities", P["accent"]))} <b>Equities</b> · % of equity sleeve</div>'
+                        f'<div style="margin-top:4px;">{grid(eq_cells)}</div>')
+        if fi_cells:
+            html.append(f'<div style="margin-top:12px;font-size:11px;color:{P["muted"]};">'
+                        f'{swatch(ASSET_COLORS.get("Fixed Income", P["accent"]))} <b>Fixed Income</b> · % of bond sleeve</div>'
+                        f'<div style="margin-top:4px;">{grid(fi_cells)}</div>')
+    html.append(
+        f'<div style="margin-top:10px;font-size:9px;color:{P["subtle"]};text-align:right;">'
+        f'ring fill = your weight · notch = target · pill = drift · trend = last month '
+        f'(solid you · – – – target)</div>'
+    )
+    return {"available": True, "html": "".join(html)}
 
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
@@ -2631,8 +2877,7 @@ def build_context(
         "ai_summary_html": _colorize_pct(ai_summary) if ai_summary else None,
         "smart_insights": _build_smart_insights(nctx),
         "movers": _build_movers(nctx),
-        "allocation": _build_allocation(nctx),
-        "geography": _build_geography(nctx),
+        "diversification": _build_diversification(nctx),
         "holdings": _build_holdings(nctx),
         "returns_snapshot": _build_returns_snapshot(nctx),
         "performance": _build_performance(nctx),

@@ -848,8 +848,9 @@ def build_allocation_timeline(
 
     Output (or ``None`` when there is no order history):
         ``{"dates": [date, ...],
-            "asset": [{class: pct_of_invested}, ...],
-            "geo":   [{region: pct_of_equity}, ...]}``
+            "asset":   [{class: pct_of_invested}, ...],
+            "geo":     [{region: pct_of_equity}, ...],
+            "holding": [{isin: pct_of_its_class}, ...]}``
     The lists are parallel to ``dates``; the caller typically anchors the
     final bucket to the authoritative live allocation.
     """
@@ -908,6 +909,11 @@ def build_allocation_timeline(
 
     asset_series: list[dict[str, float]] = []
     geo_series: list[dict[str, float]] = []
+    # Per-holding weight as % of its own asset class (parallel to dates).
+    # Keyed by the representative (best-priced) ISIN of each net position so
+    # the newsletter can draw a per-instrument trend vs its target — the
+    # target itself is % of class, so this normalization matches it.
+    holding_series: list[dict[str, float]] = []
     for d in dates:
         class_val: dict[str, float] = {}
         geo_val: dict[str, float] = {}
@@ -935,5 +941,28 @@ def build_allocation_timeline(
         geo_series.append({
             k: (val / eq_val * 100.0) for k, val in geo_val.items() if eq_val > 0
         })
+        # Per-holding attribution is computed per individual ISIN (NOT via the
+        # cum/ex group) because live holdings are per-ISIN — two distinct ETFs
+        # can share a 9-char ISIN prefix, so grouping would merge them. Each
+        # ISIN is normalized against the per-ISIN total of its own class so the
+        # weights match the per-holding targets (which are % of class).
+        iso_val: dict[str, float] = {}
+        iso_ac: dict[str, str] = {}
+        for isin in timeline.isins():
+            vv, _rep = _value_group([isin], d)
+            if vv <= 0:
+                continue
+            hh = enriched_by_isin.get(isin)
+            iso_val[isin] = vv
+            iso_ac[isin] = hh.asset_class.value if (hh and hh.asset_class) else AssetClass.ALTERNATIVE.value
+        ac_tot: dict[str, float] = {}
+        for isin, vv in iso_val.items():
+            ac_tot[iso_ac[isin]] = ac_tot.get(iso_ac[isin], 0.0) + vv
+        holding_series.append({
+            isin: (vv / ac_tot[iso_ac[isin]] * 100.0)
+            for isin, vv in iso_val.items()
+            if ac_tot.get(iso_ac[isin], 0.0) > 0
+        })
 
-    return {"dates": dates, "asset": asset_series, "geo": geo_series}
+    return {"dates": dates, "asset": asset_series, "geo": geo_series,
+            "holding": holding_series}
