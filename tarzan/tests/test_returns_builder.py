@@ -12,6 +12,7 @@ from tarzan.engine.returns_builder import (
     QuantityTimeline,
     build_holdings_from_orders,
     build_order_derived_series,
+    build_allocation_timeline,
     _open_isins,
     _net_qty_by_isin,
 )
@@ -522,3 +523,37 @@ class TestIncomeInTwror:
             orders, enriched, today=datetime.date(2025, 2, 28))
         res = twror(series.valuations, series.external_flows, series.span_days)
         assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)
+
+
+class TestAllocationTimelinePerHolding:
+    """The per-holding ``holding`` series feeds the newsletter Diversification
+    by-holding trends. It must attribute weight PER ISIN (% of its own class),
+    even when two distinct instruments share a 9-char cum/ex prefix — a real
+    case with Xtrackers MSCI World factor ETFs (IE00BL25J…)."""
+
+    def _enriched(self, isin):
+        return Holding(isin=isin, ticker=isin, quantity=100.0,
+                       cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
+                       asset_class=AssetClass.EQUITIES)
+
+    def test_holding_series_present_and_per_isin(self):
+        # Two equity ETFs sharing the first 9 ISIN chars, different prices.
+        a, b = "IE00BL25JP72", "IE00BL25JM42"
+        orders = [
+            _o(OrderType.BUY, a, qty=100.0, net=-5000.0, price=50.0, d=(2025, 4, 1)),
+            _o(OrderType.BUY, b, qty=100.0, net=-3000.0, price=30.0, d=(2025, 4, 1)),
+        ]
+        enriched = {a: self._enriched(a), b: self._enriched(b)}
+        tl = build_allocation_timeline(
+            orders, enriched, months=1, today=datetime.date(2025, 6, 1)
+        )
+        assert tl is not None
+        assert "holding" in tl
+        assert len(tl["holding"]) == len(tl["dates"])
+        last = tl["holding"][-1]
+        # Both kept distinct (not merged by the shared prefix)...
+        assert a in last and b in last
+        # ...and normalized to % of the equity class (50k vs 30k → 62.5/37.5).
+        assert last[a] == pytest.approx(62.5, abs=0.5)
+        assert last[b] == pytest.approx(37.5, abs=0.5)
+        assert last[a] + last[b] == pytest.approx(100.0, abs=0.5)
