@@ -52,8 +52,6 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Ethereum", "ETH-USD", "Crypto"),
     ("Tether", "USDT-USD", "Crypto"),
     ("BNB", "BNB-USD", "Crypto"),
-    ("Solana", "SOL-USD", "Crypto"),
-    ("Dogecoin", "DOGE-USD", "Crypto"),
     # Rates
     ("13-Wk Bond", "^IRX", "Rates"),
     ("5-Yr Bond", "^FVX", "Rates"),

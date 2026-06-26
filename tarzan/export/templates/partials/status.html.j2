@@ -10,13 +10,29 @@
           <tr>
             <td class="px-32" style="padding:28px 32px 8px 32px;background:#FFFFFF;">
 
-              {# Lifetime-state band: portfolio value + cash. #}
+              {# Lifetime-state band: portfolio value + cash + Unrealized PnL,
+                 with the dual-axis value/PnL chart and cash-flow chips. #}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:14px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:16px 18px;">
-                    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio{% if hero.inception_label %} · since {{ hero.inception_label }}{% endif %}</div>
-                    <div style="margin-top:4px;font-size:36px;font-weight:700;color:{{ palette.ink }};line-height:1.03;letter-spacing:-0.015em;">{{ hero.total_value }}</div>
-                    <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};">Cash <span style="color:{{ palette.ink }};font-weight:700;">{{ hero.cash_value }}</span></div>
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="vertical-align:top;">
+                          <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio{% if hero.inception_label %} · since {{ hero.inception_label }}{% endif %}</div>
+                          <div style="margin-top:4px;font-size:36px;font-weight:700;color:{{ palette.ink }};line-height:1.03;letter-spacing:-0.015em;">{{ hero.total_value }}</div>
+                          <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};">Cash <span style="color:{{ palette.ink }};font-weight:700;">{{ hero.cash_value }}</span></div>
+                        </td>
+                        <td align="right" style="vertical-align:top;">
+                          <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Unrealized PnL</div>
+                          <div style="margin-top:2px;font-size:19px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">{{ hero.unrealized_eur }}</div>
+                          <div style="font-size:14px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">({{ hero.unrealized_pct }})</div>
+                        </td>
+                      </tr>
+                    </table>
+                    {% if hero.value_chart %}
+                    <div style="margin-top:14px;">{{ hero.value_chart|safe }}</div>
+                    {% endif %}
+                    {% if hero.flow_chips_html %}{{ hero.flow_chips_html|safe }}{% endif %}
                   </td>
                 </tr>
               </table>
