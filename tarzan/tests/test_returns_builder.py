@@ -16,7 +16,7 @@ from tarzan.engine.returns_builder import (
     _open_isins,
     _net_qty_by_isin,
 )
-from tarzan.models.holding import Holding, AssetClass
+from tarzan.models.holding import Holding, AssetClass, Geography
 from tarzan.models.order import Order, OrderType
 
 
@@ -557,3 +557,49 @@ class TestAllocationTimelinePerHolding:
         assert last[a] == pytest.approx(62.5, abs=0.5)
         assert last[b] == pytest.approx(37.5, abs=0.5)
         assert last[a] + last[b] == pytest.approx(100.0, abs=0.5)
+
+    def test_distinct_same_prefix_not_merged_in_aggregates(self):
+        # Two DIFFERENT instruments sharing a 9-char prefix but in different
+        # asset classes / geographies. The old group-and-sum valuation would
+        # have collapsed them into one position (classified by a single leg);
+        # per-ISIN valuation must keep both in the asset and geo aggregates.
+        eq, fi = "IE00BL25JP72", "IE00BL25JM42"   # share "IE00BL25J"
+        orders = [
+            _o(OrderType.BUY, eq, qty=100.0, net=-5000.0, price=50.0, d=(2025, 4, 1)),
+            _o(OrderType.BUY, fi, qty=100.0, net=-3000.0, price=30.0, d=(2025, 4, 1)),
+        ]
+        h_eq = Holding(isin=eq, ticker=eq, quantity=100.0, cost_basis_eur=0.0,
+                       market_value_eur=0.0, currency="EUR",
+                       asset_class=AssetClass.EQUITIES,
+                       geo_breakdown={Geography.USA: 100.0})
+        h_fi = Holding(isin=fi, ticker=fi, quantity=100.0, cost_basis_eur=0.0,
+                       market_value_eur=0.0, currency="EUR",
+                       asset_class=AssetClass.EQUITIES,  # keep equity to avoid bond /100
+                       geo_breakdown={Geography.JAPAN: 100.0})
+        tl = build_allocation_timeline(
+            orders, {eq: h_eq, fi: h_fi}, months=1, today=datetime.date(2025, 6, 1)
+        )
+        # Geography aggregate keeps both regions, weighted by value (5k vs 3k).
+        geo = tl["geo"][-1]
+        assert geo.get(Geography.USA.value) == pytest.approx(62.5, abs=0.5)
+        assert geo.get(Geography.JAPAN.value) == pytest.approx(37.5, abs=0.5)
+
+    def test_closed_cum_ex_pair_contributes_nothing(self):
+        # A true cum/ex rotation that fully nets out (cum sold, ex never held
+        # on the boundary) must not leave a residual in the series.
+        cum, ex = "IT0005565392", "IT0005565400"   # share "IT0005565"
+        orders = [
+            _o(OrderType.TRANSFER_IN, cum, qty=20000.0, gross=20000.0, price=100.0,
+               d=(2025, 4, 1)),
+            _o(OrderType.SELL, cum, qty=-20000.0, net=20000.0, price=100.0,
+               d=(2025, 4, 15)),
+        ]
+        h = Holding(isin=cum, ticker=cum, quantity=0.0, cost_basis_eur=0.0,
+                    market_value_eur=0.0, currency="EUR",
+                    asset_class=AssetClass.FIXED_INCOME)
+        tl = build_allocation_timeline(
+            orders, {cum: h}, months=1, today=datetime.date(2025, 6, 1)
+        )
+        # Position is closed → no holding weight and an empty asset bucket.
+        assert all(not bucket for bucket in tl["holding"])
+        assert all(not bucket for bucket in tl["asset"])
