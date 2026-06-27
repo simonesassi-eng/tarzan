@@ -1,6 +1,6 @@
 index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
 FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
-MSCI ACWI,ISAC.MI,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,Official Index - Comprehensive global equity (Developed + Emerging).,6/15/26
+MSCI ACWI,ISAC.MI,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,ETF Proxy - Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
 MSCI World,SWDA.MI,TRUE,,,72.5,0,8.5,5.7,13.3,Official Index - Large and mid-cap stocks across 23 developed markets.,6/15/26
 MSCI World Momentum,IWMO.MI,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
@@ -17,7 +17,7 @@ WisdomTree Global Efficient Core,NTSG.DE,TRUE,,,69.84,0,11.51,5.99,12.66,ETF Pro
 WisdomTree Enhanced Commodity Carry,CRRY.MI,TRUE,,,,,,,,ETF Proxy - Commodity carry factor via long/short positions in commodity futures.,6/24/26
 iMGP DBi Managed Futures,DBMFE.PA,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures.,6/24/26
 iMGP DBi Managed Futures EUR Hedged,MFEH.DE,TRUE,,,,,,,,ETF Proxy - Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,6/25/26
-UBS CMCI Commodity Carry,UEQC.DE,TRUE,,,,,,,,ETF Proxy - 2.5x leveraged broad commodities basket excluding precious metals (carry strategy).,6/24/26
+UBS CMCI Commodity Carry,UEQC.DE,TRUE,,,,,,,,ETF Proxy - Commodity carry via 2.5x leveraged long/short spread between CMCI and BCOM ex-precious metals.,6/24/26
 MSCI World 2x Leveraged,LVWC.DE,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - 2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
 MSCI USA 2x Leveraged,CL2.MI,TRUE,,,100,0,0,0,0,ETF Proxy - 2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
 MSCI EAFE,EFA,,,,0,0,32.2,22.7,45.1,ETF Proxy - Developed markets excluding North America.,6/15/26
@@ -59,7 +59,7 @@ MSCI World SRI,SUSW.MI,,,,72.15,0,7.95,5.8,14.1,ETF Proxy - Stocks with high ESG
 Nasdaq Global Buyback Achievers,BUYB.L,,,,58,0,10,10,22,ETF Proxy - Global companies that have significantly reduced shares.,6/15/26
 Russell 1000,^RUI,,,,100,0,0,0,0,Official Index - 1000 largest US companies.,2/21/26
 Russell 2000,^RUT,,,,100,0,0,0,0,Official Index - 2000 small-cap US companies.,2/21/26
-S&P 500 Equal Weight,^SPXEW,,,,100,0,0,0,0,ETF Proxy - S&P 500 constituents with equal weighting.,2/22/26
+S&P 500 Equal Weight,^SPXEW,,,,100,0,0,0,0,Official Index - S&P 500 constituents with equal weighting.,2/22/26
 S&P 500 Low Volatility,SPLV,,,,100,0,0,0,0,ETF Proxy - 100 least volatile stocks in the S&P 500.,2/22/26
 S&P US Dividend Aristocrats,NOBL,,,,100,0,0,0,0,ETF Proxy - S&P 500 companies with 25+ years of div growth.,2/22/26
 Solactive Global Lithium,LIT,,,,13.3,42,0.6,10.7,33.4,ETF Proxy - Companies involved in lithium and battery production.,6/15/26
