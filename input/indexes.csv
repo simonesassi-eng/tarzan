@@ -1,13 +1,13 @@
 index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
-FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
+FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets (distributing).,2/21/26
 MSCI ACWI,ISAC.MI,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,ETF Proxy - Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
-MSCI World,SWDA.MI,TRUE,,,72.5,0,8.5,5.7,13.3,Official Index - Large and mid-cap stocks across 23 developed markets.,6/15/26
+MSCI World,SWDA.MI,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
 MSCI World Momentum,IWMO.MI,TRUE,,,55.94,0,11.5,11.69,20.87,ETF Proxy - Stocks with strong recent price performance.,6/15/26
 MSCI World Quality,IWQU.MI,TRUE,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Stocks with high return on equity and low debt.,6/15/26
 Nasdaq 100,^NDX,TRUE,,,100,0,0,0,0,Official Index - Top 100 non-financial companies on Nasdaq.,2/21/26
 S&P 500,^GSPC,TRUE,,,100,0,0,0,0,Official Index - 500 leading large-cap US companies.,2/21/26
-Bloomberg Global Aggregate,AGGH.MI,TRUE,,,44.53,5.18,12.28,13.81,24.2,ETF Proxy - Global investment grade debt from 24 local currency markets.,2/22/26
+Bloomberg Global Aggregate,AGGH.MI,TRUE,,,44.53,5.18,12.28,13.81,24.2,ETF Proxy - Global investment grade debt from 24 local currency markets (EUR hedged).,2/22/26
 EURO STOXX 50,^STOXX50E,TRUE,,,0,0,100,0,0,Official Index of the top 50 blue-chip stocks from the Eurozone.,2/21/26
 STOXX Europe 600,^STOXX,TRUE,,,0,0,51.7,0,48.3,Official Index - 600 large mid and small-cap stocks in Europe.,6/15/26
 MSCI World Enhanced Value,IWVL.MI,TRUE,,,51.29,0,16.05,18.57,14.09,ETF Proxy - Stocks with strong value characteristics.,6/15/26
@@ -50,7 +50,7 @@ MSCI World ex USA Quality,IQLT,,,,0,0,28.5,12.9,58.6,ETF Proxy - Developed-marke
 MSCI World ex USA Value,IVLU,,,,0,0,30.6,29.6,39.8,ETF Proxy - Developed-market stocks outside the US with attractive valuations.,6/15/26
 MSCI World Financials,XDWF.L,,,,52,0,14,6.7,27.3,ETF Proxy - Developed-market financial sector stocks.,6/15/26
 MSCI World Health Care,XDWH.L,,,,70,0,7,3.8,19.2,ETF Proxy - Developed-market health care sector stocks.,6/15/26
-MSCI World High Dividend,VIGI,,,,48.25,0,18.4,11.2,22.15,ETF Proxy - Global stocks with dividend appreciation.,2/21/26
+MSCI World High Dividend,VIGI,,,,48.25,0,18.4,11.2,22.15,ETF Proxy - International stocks with dividend growth ex-US (developed and emerging markets).,2/21/26
 MSCI World Info Tech,XDWT.L,,,,78,0,8.7,4.2,9.1,ETF Proxy - Developed-market technology sector stocks.,6/15/26
 MSCI World Minimum Volatility,MVOL.L,,,,66.64,0,8.35,10.24,14.77,ETF Proxy - Developed-market stocks with lower volatility characteristics.,6/15/26
 MSCI World Sector Neutral Quality,IWQU.MI,,,,73.38,0,8.89,3.21,14.52,ETF Proxy - Quality factor stocks adjusted for sector neutrality.,6/15/26
