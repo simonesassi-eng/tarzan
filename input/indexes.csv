@@ -64,4 +64,4 @@ S&P 500 Low Volatility,SPLV,,,,100,0,0,0,0,ETF Proxy - 100 least volatile stocks
 S&P US Dividend Aristocrats,NOBL,,,,100,0,0,0,0,ETF Proxy - S&P 500 companies with 25+ years of div growth.,2/22/26
 Solactive Global Lithium,LIT,,,,13.3,42,0.6,10.7,33.4,ETF Proxy - Companies involved in lithium and battery production.,6/15/26
 STOXX Europe 50,EUN.L,,,,0,0,56,0,44,Official Index - 50 largest blue-chip stocks from Europe.,6/15/26
-STOXX Europe Defense,EUAD,,,,0,0,66.2,0,33.8,ETF Proxy - European companies involved in defense.,6/15/26
+STOXX Europe Defense,EUAD,,,,0,0,66.2,0,33.8,ETF Proxy - European companies involved in defense.,6/15/26KRC Cat Bond,CATB.MI,TRUE,,,,,,,,ETF Proxy - Catastrophe bond (cat bond) portfolio providing uncorrelated income via insurance-linked securities.,6/27/26
