@@ -1,5 +1,5 @@
 index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
-FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets (distributing).,2/21/26
+FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
 MSCI ACWI,ISAC.MI,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,ETF Proxy - Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
 MSCI World,SWDA.MI,TRUE,,,72.5,0,8.5,5.7,13.3,ETF Proxy - Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
