@@ -1492,20 +1492,23 @@ _DV_TRACK = "#EEF0F6"   # neutral ring track (lighter than the card border)
 
 
 def _ring(actual: Optional[float], target: Optional[float],
-          color: str, size: int = 54) -> str:
+          color: str, size: int = 60) -> str:
     """Donut gauge whose filled arc is the slice's ACTUAL weight (out of
     100%) — so 74% fills ~3/4 of the ring — with a short ink notch marking
-    where the target sits. No center label (the weight is printed beside it)."""
+    where the target sits and the weight printed INSIDE the ring."""
     r = size / 2 - 6
     cx = cy = size / 2
     circ = 2 * math.pi * r
-    frac = max(0.0, min((actual or 0.0) / 100.0, 1.0))
+    a = actual or 0.0
+    frac = max(0.0, min(a / 100.0, 1.0))
     dash = frac * circ
     tfrac = max(0.0, min((target or 0.0) / 100.0, 1.0))
     ang = math.radians(-90 + tfrac * 360)
     ri, ro = r - 4.5, r + 4.5
     tx1, ty1 = cx + ri * math.cos(ang), cy + ri * math.sin(ang)
     tx2, ty2 = cx + ro * math.cos(ang), cy + ro * math.sin(ang)
+    lbl = f"{a:.0f}%" if a >= 10 else f"{a:.1f}%"
+    fs = 13 if size >= 60 else 11
     return (
         f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;">'
@@ -1514,7 +1517,9 @@ def _ring(actual: Optional[float], target: Optional[float],
         f'stroke-linecap="round" stroke-dasharray="{dash:.1f} {circ - dash:.1f}" '
         f'transform="rotate(-90 {cx} {cy})"/>'
         f'<line x1="{tx1:.1f}" y1="{ty1:.1f}" x2="{tx2:.1f}" y2="{ty2:.1f}" '
-        f'stroke="{PALETTE["ink"]}" stroke-width="2"/></svg>'
+        f'stroke="{PALETTE["ink"]}" stroke-width="2"/>'
+        f'<text x="{cx}" y="{cy + fs / 3:.1f}" text-anchor="middle" font-size="{fs}" '
+        f'font-weight="700" fill="{PALETTE["ink"]}">{lbl}</text></svg>'
     )
 
 
@@ -1569,27 +1574,42 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         return {P["green"]: P["green_bg"], P["amber"]: P["amber_bg"],
                 P["red"]: P["red_bg"]}.get(color, P["card_alt"])
 
-    def tile(name, color, actual_raw, target_raw, actual_str, target_str,
-             delta_str, delta_color, spark_vals, spark_color):
-        sp = _spark(spark_vals, target_raw, spark_color, 200, 22) if spark_vals else ""
+    def _month_badge(vals):
+        """Neutral grey '▲/▼ ±x pp' badge for the 1-month weight change."""
+        if not vals or len(vals) < 2:
+            return ""
+        pp = vals[-1] - vals[0]
+        arrow = "\u25b2" if pp > 0.01 else ("\u25bc" if pp < -0.01 else "\u2192")
+        txt = f"{pp:+.1f}pp".replace("+0.0pp", "0.0pp")
+        return (f'<span style="font-size:10px;font-weight:700;color:{P["muted"]};'
+                f'white-space:nowrap;">{arrow}&nbsp;{txt}</span>')
+
+    def tile(name, color, actual_raw, target_raw, target_str,
+             delta_str, delta_color, spark_vals, spark_color, ticker=None):
+        # Donut left (weight inside). Right: name, drift pill + target, then a
+        # half-width monthly trend with a neutral 1-month change.
+        sp = _spark(spark_vals, target_raw, spark_color, 100, 24) if spark_vals else ""
+        trend_row = (
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;"><tr>'
+            f'<td valign="bottom">{sp}</td>'
+            f'<td align="right" valign="bottom" style="padding-left:6px;white-space:nowrap;">{_month_badge(spark_vals)}</td>'
+            f'</tr></table>' if sp else ""
+        )
+        lab = (f'<span style="font-size:10px;font-weight:700;color:{P["muted"]};">{ticker}</span> '
+               if ticker else "")
         return (
             f'<td width="50%" style="padding:5px;" valign="top">'
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
             f'style="background:{P["card_alt"]};border:1px solid {P["border"]};'
             f'border-radius:10px;border-left:3px solid {color};border-collapse:separate;">'
             f'<tr><td style="padding:10px 12px;"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
-            f'<td valign="top"><div style="font-size:11px;font-weight:700;color:{color};line-height:1.25;">{name}</div>'
-            f'<div style="margin-top:3px;font-size:22px;font-weight:700;color:{P["ink"]};line-height:1;">'
-            f'{actual_str}</div>'
+            f'<td width="64" valign="middle" style="padding-right:10px;">{_ring(actual_raw, target_raw, color, 60)}</td>'
+            f'<td valign="middle">'
+            f'<div style="font-size:11.5px;font-weight:700;color:{color};line-height:1.2;">{lab}{name}</div>'
             f'<div style="margin-top:3px;">{chip("●&nbsp;" + delta_str, delta_color, _bg_for(delta_color))} '
-            f'<span style="font-size:10px;color:{P["subtle"]};">tgt {target_str}</span></div></td>'
-            f'<td align="right" valign="top" style="width:58px;">{_ring(actual_raw, target_raw, color)}</td>'
-            f'</tr></table>'
-            + (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;"><tr>'
-               f'<td style="width:26px;font-size:8px;font-weight:700;letter-spacing:0.03em;'
-               f'color:{P["subtle"]};text-transform:uppercase;vertical-align:bottom;">1-mo</td>'
-               f'<td style="vertical-align:bottom;">{sp}</td></tr></table>' if sp else "")
-            + '</td></tr></table></td>'
+            f'<span style="font-size:10px;color:{P["subtle"]};">tgt {target_str}</span></div>'
+            f'{trend_row}'
+            f'</td></tr></table></td></tr></table></td>'
         )
 
     def grid(cells, ncol=2):
@@ -1615,14 +1635,14 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             continue
         asset_cells.append(tile(
             r["name"], r["color"], r.get("actual_pct_raw"), r.get("target_left"),
-            r["actual_pct"], r.get("target_pct") or "—", r.get("delta") or "—",
+            r.get("target_pct") or "—", r.get("delta") or "—",
             r["delta_color"], _timeline_vals(asset_series, r["name"]), r["color"],
         ))
 
     # ── Geography tiles ──
     geo_cells = [
         tile(r["name"], r["color"], r.get("actual_pct_raw"), r.get("target_left"),
-             r["actual_pct"], r.get("target_pct") or "—", r.get("delta") or "—",
+             r.get("target_pct") or "—", r.get("delta") or "—",
              r["delta_color"], _timeline_vals(geo_series, r["name"]), r["color"])
         for r in geo["rows"]
     ]
@@ -1634,7 +1654,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         sym = _pc.load_resolution(isin) or ""
         return sym.split(".")[0] if sym else ""
 
-    def holding_tiles(kind):
+    def holding_tiles(kind, class_color):
         cells = []
         for v in (ctx.metrics.rebalancing_verifications or []):
             if v.get("kind") != kind:
@@ -1647,36 +1667,23 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                 target = float(it.get("target_pct", 0.0))
                 delta = actual - target
                 dcol = _semaphore_color(_semaphore(delta, tol))
-                tick = _clean_ticker(isin)
                 vals = None
                 if hold_series:
                     xs = [float(pt.get(isin, 0.0)) for pt in hold_series]
                     if any(x > 0 for x in xs) and len(xs) >= 2:
                         vals = xs
-                sp = _spark(vals, target, P["muted"], 150, 16) if vals else ""
-                tick_html = (f'<span style="font-size:10px;font-weight:700;color:{P["muted"]};">{tick}</span> '
-                             if tick else "")
-                cells.append(
-                    f'<td width="50%" style="padding:4px;" valign="top">'
-                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-                    f'style="background:#FFFFFF;border:1px solid {P["border"]};border-radius:8px;border-collapse:separate;">'
-                    f'<tr><td style="padding:8px 10px;">'
-                    f'<div style="font-size:11px;font-weight:600;color:{P["ink"]};">{tick_html}'
-                    f'<span style="color:{P["subtle"]};font-weight:400;">{short_instrument_name(it.get("category") or isin, 22)}</span></div>'
-                    f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px;"><tr>'
-                    f'<td><span style="font-size:16px;font-weight:700;color:{P["ink"]};">{_pct_smart(actual)}</span> '
-                    f'<span style="font-size:10px;color:{P["muted"]};">/ {_pct_smart(target)}</span></td>'
-                    f'<td align="right">{chip(_signed_pp(delta), dcol, _bg_for(dcol))}</td></tr></table>'
-                    + (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;"><tr>'
-                       f'<td style="width:24px;font-size:7px;font-weight:700;letter-spacing:0.03em;'
-                       f'color:{P["subtle"]};text-transform:uppercase;vertical-align:bottom;">1-mo</td>'
-                       f'<td style="vertical-align:bottom;">{sp}</td></tr></table>' if sp else "")
-                    + '</td></tr></table></td>'
-                )
+                # Same card as asset/geo: donut (weight inside) left, name +
+                # drift pill + target, half-width monthly trend on the right.
+                cells.append(tile(
+                    short_instrument_name(it.get("category") or isin, 20),
+                    class_color, actual, target, _pct_smart(target),
+                    _signed_pp(delta), dcol, vals, class_color,
+                    ticker=_clean_ticker(isin),
+                ))
         return cells
 
-    eq_cells = holding_tiles("per_holding_equity")
-    fi_cells = holding_tiles("per_holding_fi")
+    eq_cells = holding_tiles("per_holding_equity", ASSET_COLORS.get("Equities", P["accent"]))
+    fi_cells = holding_tiles("per_holding_fi", ASSET_COLORS.get("Fixed Income", P["accent"]))
 
     def sub(title, extra=""):
         tail = (f' <span style="font-weight:500;color:{P["subtle"]};letter-spacing:0;'
@@ -1717,8 +1724,8 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                         f'<div style="margin-top:4px;">{grid(fi_cells)}</div>')
     html.append(
         f'<div style="margin-top:10px;font-size:9px;color:{P["subtle"]};text-align:right;">'
-        f'ring fill = your weight · notch = target · pill = drift · trend = last month '
-        f'(solid you · – – – target)</div>'
+        f'donut = your weight (notch = target) · pill = drift vs target · '
+        f'trend = last month · ±pp = 1-month change</div>'
     )
     return {"available": True, "html": "".join(html)}
 
