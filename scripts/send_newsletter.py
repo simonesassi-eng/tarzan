@@ -244,15 +244,15 @@ def main() -> int:
 
     # Optional AI portfolio summary (free Gemini tier). Best-effort: when no
     # GEMINI_API_KEY is set, or the call fails, this returns None and the
-    # newsletter falls back to the rule-based Signals block.
+    # newsletter simply omits the market-context block.
     from tarzan.export.ai_summary import generate_summary, is_enabled as _ai_on
     ai_summary = None
     if _ai_on():
         logger.info("Generating AI portfolio summary...")
         ai_summary = generate_summary(metrics, config)
-        logger.info("AI summary %s", "generated" if ai_summary else "unavailable (using Signals)")
+        logger.info("AI summary %s", "generated" if ai_summary else "unavailable (no market-context block)")
     else:
-        logger.info("AI summary disabled (no GEMINI_API_KEY) — using Signals.")
+        logger.info("AI summary disabled (no GEMINI_API_KEY) — no market-context block.")
 
     html = render_newsletter(
         metrics=metrics,
