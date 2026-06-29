@@ -119,7 +119,7 @@ def test_extract_text_handles_malformed():
     assert ai_summary._extract_text({"candidates": []}) is None
 
 
-# ── Newsletter rendering: AI summary replaces Signals ────────────────────────
+# ── Newsletter rendering: AI summary is the only market-context surface ──────
 
 def test_render_shows_ai_summary_when_present():
     html = render_newsletter(
@@ -131,8 +131,12 @@ def test_render_shows_ai_summary_when_present():
     assert "not financial advice" in html
 
 
-def test_render_falls_back_to_signals_without_ai():
+def test_render_without_ai_has_no_market_context():
+    # No AI summary → no market-context block at all (the rule-based Signals
+    # block was removed; there is no longer a fallback).
     ctx = build_context(_metrics(), _config(), ai_summary=None)
     assert ctx["ai_summary"] is None
-    # The rule-based insights are still computed for the fallback.
-    assert "smart_insights" in ctx
+    assert "smart_insights" not in ctx
+    html = render_newsletter(_metrics(), _config(), ai_summary=None)
+    assert "Market context" not in html
+    assert "worth your attention" not in html
