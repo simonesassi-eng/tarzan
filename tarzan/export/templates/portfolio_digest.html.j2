@@ -34,6 +34,8 @@
                        benchmark_alpha_beta, benchmark_geo}
      optimizer        {available, direction, name, ticker, ...}
      return_contrib   {winners[], laggards[]}
+     tax_note         {available, html} — net-of-tax estimate, rendered at
+                      the very bottom (above the footer)
      preheader        str
      footer           {generated_at, version}
 
@@ -467,6 +469,16 @@
                 {% endfor %}
               </div>
               {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
+          {# ─── NET-OF-TAX NOTE (estimate) — moved to the very bottom so it
+             does not crowd the Performance headline numbers. ── #}
+          {% if tax_note.available %}
+          <tr>
+            <td class="px-32" style="padding:24px 32px 0 32px;">
+              {{ tax_note.html|safe }}
             </td>
           </tr>
           {% endif %}

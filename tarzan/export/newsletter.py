@@ -1124,6 +1124,42 @@ def _perf_level_series(m: PortfolioMetrics, dates):
     return twror_si, total_pct, unreal_pct, acwi_si
 
 
+def _build_tax_note(ctx: _NewsletterContext) -> dict:
+    """Bottom-of-newsletter net-of-tax estimate: the net figures plus the
+    methodology disclaimer, moved out of the Performance card so it does not
+    crowd the headline numbers. Renders only when a CGT estimate exists."""
+    m = ctx.metrics
+    P = PALETTE
+    if not (m.estimated_cgt_eur and m.estimated_cgt_eur > 0):
+        return {"available": False, "html": ""}
+
+    def _sgn(v):
+        return P["green"] if (v is not None and v >= 0) else P["red"]
+
+    figs = []
+    if m.xirr_net_tax_pct is not None:
+        figs.append(f'XIRR net of tax <strong style="color:{_sgn(m.xirr_net_tax_pct)};">'
+                    f'{_pct(m.xirr_net_tax_pct, signed=True)}</strong>')
+    if m.pnl_eur_net_tax is not None:
+        figs.append(f'P&amp;L net of tax <strong style="color:{_sgn(m.pnl_eur_net_tax)};">'
+                    f'{_eur_smart(m.pnl_eur_net_tax, signed=True)}</strong>')
+    figs_html = (" &nbsp;·&nbsp; ".join(figs)) if figs else ""
+    html = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;'
+        f'border-collapse:separate;border-spacing:0;"><tr><td style="padding:12px 14px;">'
+        f'<div style="font-size:11px;color:{P["muted"]};line-height:1.5;">'
+        f'<span style="font-weight:700;color:{P["ink"]};">Net-of-tax estimate</span>'
+        + (f' &nbsp;{figs_html}' if figs_html else "")
+        + f'<div style="margin-top:4px;font-size:10px;color:{P["subtle"]};">Estimate only: average-cost basis, '
+        f'26% / 12.5% on government bonds, realized losses offset later gains where Italian rules allow '
+        f'(ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of '
+        f'transferred-in positions. TWROR is gross of tax.</div>'
+        f'</div></td></tr></table>'
+    )
+    return {"available": True, "html": html}
+
+
 def _build_markets(ctx: _NewsletterContext) -> dict:
     """Markets strip (yfinance-style): major indices / commodities / crypto
     / FX with level, daily change and a mini sparkline, grouped by category
@@ -1258,79 +1294,77 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
               f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized — '
               f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> · '
               f'XIRR <strong style="color:{_sgn(m.xirr_pct)};">{_pct(m.xirr_pct, signed=True)}</strong>'
-              + (f' <span style="color:{P["subtle"]};">(net of tax {_pct(m.xirr_net_tax_pct, signed=True)})</span>'
-                 if m.xirr_net_tax_pct is not None else "")
-              + (f' · P&amp;L net of tax {_eur_smart(m.pnl_eur_net_tax, signed=True)}'
-                 if m.pnl_eur_net_tax is not None else "")
+              + (f' <span style="color:{P["subtle"]};">· net of tax: see note at the bottom &#8595;</span>'
+                 if (m.xirr_net_tax_pct is not None or m.pnl_eur_net_tax is not None) else "")
               + '</div>')
-
-    tax_note = ""
-    if m.estimated_cgt_eur and m.estimated_cgt_eur > 0:
-        tax_note = (f'<div style="margin-top:8px;font-size:10px;color:{P["subtle"]};font-style:italic;line-height:1.4;">'
-                    f'Net-of-tax is an estimate: average-cost basis, 26% / 12.5% on government bonds, realized losses '
-                    f'offset later gains where Italian rules allow (ETF/fund gains are not offsettable). Excludes '
-                    f'coupon/dividend withholding and the cost basis of transferred-in positions. TWROR is gross of tax.</div>')
 
     matrix_card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
                    f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
                    f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
-                   f'<tr><td style="padding:14px 16px;">{matrix}{footer}{tax_note}</td></tr></table>')
+                   f'<tr><td style="padding:14px 16px;">{matrix}{footer}</td></tr></table>')
 
-    # ── Charts ────────────────────────────────────────────────────────
+    # ── Charts: "You vs the market" — two compact side-by-side panels with
+    #    the SAME lines (TWROR, Total P&L %, MSCI ACWI), differing only in
+    #    window: last-30-days rebased vs since-inception cumulative. The
+    #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
+    GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
 
     def _sub(t: str) -> str:
         return (f'<div style="margin-top:18px;font-size:11px;font-weight:700;color:{P["muted"]};'
-                f'text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">{t}</div>')
+                f'text-transform:uppercase;letter-spacing:0.04em;">{t}</div>')
 
-    # The portfolio value chart now lives in the hero (dual-axis value €
-    # + Unrealized PnL %), so the Performance section no longer repeats it.
-    parts = []
+    def _colcap(t: str) -> str:
+        return f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};margin-bottom:3px;">{t}</div>'
 
-    # Return vs benchmark (%) — TWROR, P&L %, MSCI ACWI on one rebased axis.
-    ret_series, ret_leg = [], []
+    # Last 30 days (rebased to 0).
+    s30, l30 = [], []
     if win["twror"] is not None:
-        ret_series.append({"values": win["twror"], "color": _charts.GREEN})
-        ret_leg.append((f'TWROR {_pct(win["twror"][-1], signed=True)}', _charts.GREEN, False))
+        s30.append({"values": win["twror"], "color": GREEN})
+        l30.append((f'TWROR {_pct(win["twror"][-1], signed=True)}', GREEN, False))
     if win["pnl_pct"] is not None:
-        ret_series.append({"values": win["pnl_pct"], "color": _charts.PNL})
-        ret_leg.append((f'P&L % {_pct(win["pnl_pct"][-1], signed=True)}', _charts.PNL, False))
+        s30.append({"values": win["pnl_pct"], "color": PNL})
+        l30.append((f'Total P&L % {_pct(win["pnl_pct"][-1], signed=True)}', PNL, False))
     if win["acwi"] is not None:
-        ret_series.append({"values": win["acwi"], "color": _charts.BENCH, "dash": True})
-        ret_leg.append((f'MSCI ACWI {_pct(win["acwi"][-1], signed=True)}', _charts.BENCH, True))
-    if ret_series:
-        parts.append(_sub("Return vs MSCI ACWI (%, rebased to 0)"))
-        parts.append(_charts.chart_pct(ret_series, dates, flows=None, include_zero=True))
-        parts.append(_charts.legend(ret_leg))
+        s30.append({"values": win["acwi"], "color": BENCH, "dash": True})
+        l30.append((f'MSCI ACWI {_pct(win["acwi"][-1], signed=True)}', BENCH, True))
 
-    # Your return vs MSCI ACWI (%), since-inception trajectory.
+    # Since inception (cumulative). Total P&L % replaces the old unrealized line.
+    ssi, lsi = [], []
     lvl = _perf_level_series(m, dates)
     if lvl is not None:
-        twror_si, total_pct, unreal_pct, acwi_si = lvl
-        pct3, leg3 = [], []
+        twror_si, total_pct, _unreal_pct, acwi_si = lvl
         if twror_si is not None:
-            pct3.append({"values": twror_si, "color": _charts.GREEN})
-            leg3.append((f'TWROR {_pct(twror_si[-1], signed=True)}', _charts.GREEN, False))
+            ssi.append({"values": twror_si, "color": GREEN})
+            lsi.append((f'TWROR {_pct(twror_si[-1], signed=True)}', GREEN, False))
         if total_pct is not None:
-            pct3.append({"values": total_pct, "color": _charts.ACCENT})
-            leg3.append((f'Total P&L % {_pct(total_pct[-1], signed=True)}', _charts.ACCENT, False))
-        if unreal_pct is not None:
-            pct3.append({"values": unreal_pct, "color": _charts.PNL, "dash": True})
-            leg3.append((f'Unrealized P&L % {_pct(unreal_pct[-1], signed=True)}', _charts.PNL, True))
+            ssi.append({"values": total_pct, "color": PNL})
+            lsi.append((f'Total P&L % {_pct(total_pct[-1], signed=True)}', PNL, False))
         if acwi_si is not None:
-            pct3.append({"values": acwi_si, "color": _charts.BENCH, "dash": True})
-            leg3.append((f'MSCI ACWI {_pct(acwi_si[-1], signed=True)}', _charts.BENCH, True))
-        if pct3:
-            parts.append(f'<div style="border-top:1px solid {P["border"]};margin:20px 0 0 0;"></div>')
-            parts.append(_sub("Your return vs MSCI ACWI (%) — since inception, last 30 days"))
-            parts.append(_charts.chart_pct(pct3, dates, flows=None, include_zero=False))
-            parts.append(_charts.legend(leg3))
+            ssi.append({"values": acwi_si, "color": BENCH, "dash": True})
+            lsi.append((f'MSCI ACWI {_pct(acwi_si[-1], signed=True)}', BENCH, True))
+
+    parts = []
+    if s30 or ssi:
+        parts.append(_sub("You vs the market "
+                          f"<span style='font-weight:500;color:{P['subtle']};text-transform:none;letter-spacing:0;'>"
+                          f"— MSCI ACWI</span>"))
+        left = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
+                + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
+        right = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
+                 + _charts.chart_pct_compact(ssi, dates, include_zero=False) + _charts.legend(lsi, 9)) if ssi else ""
+        parts.append(
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;"><tr>'
+            f'<td width="50%" valign="top" style="padding-right:8px;">{left}</td>'
+            f'<td width="50%" valign="top" style="padding-left:8px;border-left:1px solid {P["border"]};">{right}</td>'
+            f'</tr></table>'
+        )
 
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
               f'text-transform:uppercase;">Performance</div>'
               f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{P["ink"]};">How your money moved</div>'
               f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Total &amp; unrealized P&amp;L and your '
-              f'time-weighted return across 1 day, 7 days, 30 days and since inception — then the 30-day trajectory.</div>')
+              f'time-weighted return across 1 day, 7 days, 30 days and since inception — then your return vs the market.</div>')
 
     return {"available": True, "html": header + matrix_card + "".join(parts)}
 
@@ -2893,6 +2927,7 @@ def build_context(
         "optimizer": _build_optimizer(nctx),
         "sensitivity": _build_sensitivity(nctx),
         "return_contrib": _build_return_contrib(nctx),
+        "tax_note": _build_tax_note(nctx),
         "preheader": _build_preheader(nctx, hero),
         "footer": {
             "generated_at": datetime.now().strftime("%d %b %Y, %H:%M"),

@@ -188,9 +188,56 @@ def chart_pct(series, dates, flows=None, include_zero=True) -> str:
     return "".join(parts)
 
 
+def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9) -> str:
+    """A smaller multi-line % chart for side-by-side use (same visual language
+    as :func:`chart_pct`, tuned so the axis labels stay legible at ~half
+    width). ``series``: list of ``{values, color, dash?}``."""
+    ml, mr, mt, mb = 30, 8, 10, 20
+    pw, ph = w - ml - mr, h - mt - mb
+    allv = [v for s in series for v in s["values"]]
+    dlo, dhi = min(allv), max(allv)
+    if include_zero:
+        dlo, dhi = min(dlo, 0.0), max(dhi, 0.0)
+    vmin, vmax, ticks = nice_ticks(dlo, dhi, 4)
+    n = len(dates)
+
+    def X(i):
+        return ml + (i / (n - 1) * pw if n > 1 else 0)
+
+    def Y(v):
+        return mt + (1 - (v - vmin) / ((vmax - vmin) or 1)) * ph
+
+    out = [f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto;'
+           f'font-family:-apple-system,Helvetica,Arial,sans-serif;">']
+    for t in ticks:
+        if t < vmin - 1e-9 or t > vmax + 1e-9:
+            continue
+        y = Y(t)
+        out.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml + pw}" y2="{y:.1f}" stroke="{BORDER}" stroke-width="1"/>')
+        out.append(f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="{fs}" fill="{SUBTLE}">{fmt_pct_tick(t)}</text>')
+    if include_zero and vmin < 0 < vmax:
+        y0 = Y(0.0)
+        out.append(f'<line x1="{ml}" y1="{y0:.1f}" x2="{ml + pw}" y2="{y0:.1f}" stroke="{MUTED}" stroke-width="1" stroke-dasharray="2,3"/>')
+    for k in sorted({0, n - 1}):
+        x = X(k)
+        anc = "start" if k == 0 else "end"
+        out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
+                   f'{pd.Timestamp(dates[k]).strftime("%b %d")}</text>')
+    for s in series:
+        pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
+        line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        dash = ' stroke-dasharray="5,4"' if s.get("dash") else ""
+        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="2.2"{dash} stroke-linejoin="round"/>')
+        lx, ly = pts[-1]
+        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="{s["color"]}" stroke="#fff" stroke-width="1.3"/>')
+    out.append("</svg>")
+    return "".join(out)
+
+
 # ── presentational HTML atoms (legend + flow chips) ──────────────────────────
 
-def legend(items) -> str:
+def legend(items, size: int = 11) -> str:
     """Inline legend. ``items``: list of ``(label, color, is_dashed)``."""
     out = []
     for label, color, dash in items:
@@ -200,8 +247,8 @@ def legend(items) -> str:
         else:
             mark = (f'<span style="display:inline-block;width:24px;height:5px;'
                     f'background:{color};border-radius:3px;vertical-align:middle;margin-right:6px;"></span>')
-        out.append(f'<span style="margin-right:14px;font-size:11px;font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
-    return '<div style="margin-top:8px;">' + "".join(out) + "</div>"
+        out.append(f'<span style="margin-right:14px;font-size:{size}px;font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
+    return '<div style="margin-top:8px;line-height:1.9;">' + "".join(out) + "</div>"
 
 
 def flow_chips(flows, eur_fmt) -> str:
