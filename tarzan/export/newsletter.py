@@ -1764,6 +1764,17 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     return {"available": True, "html": "".join(html)}
 
 
+def _clean_ticker(isin: str) -> str:
+    """Resolve an ISIN to its Yahoo symbol via the price cache and strip the
+    exchange suffix (XDEM.MI → XDEM). Empty when unresolved (e.g. bonds with
+    no listing), so callers can fall back to the name alone."""
+    if not isin:
+        return ""
+    from tarzan.data import price_cache as _pc
+    sym = _pc.load_resolution(isin) or ""
+    return sym.split(".")[0] if sym else ""
+
+
 def _build_holdings(ctx: _NewsletterContext) -> dict:
     """Build holdings grouped by asset class (Excel sort order)."""
     m = ctx.metrics
@@ -1805,22 +1816,26 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             quantity = float(h.get("quantity", 0) or 0)
             avg_price = float(h.get("avg_purchase_price", 0) or 0)
             gain_pct = h.get("gain_pct")
+            gain_eur = h.get("gain_eur")
             if is_cash_class:
                 weight_str = "—"
             elif invested_base > 0:
                 weight_str = _pct(value / invested_base * 100, decimals=1)
             else:
                 weight_str = "—"
+            has_gain = gain_pct is not None and not pd.isna(gain_pct)
             rows.append({
-                "name": h.get("name", ""),
-                "ticker": h.get("ticker", ""),
+                "name": short_instrument_name(h.get("name", ""), 34),
+                "ticker": _clean_ticker(h.get("isin", "")),
                 "isin": h.get("isin", ""),
                 "quantity": quantity,
                 "avg_price": _eur(avg_price, 2),
                 "value": _eur(value, 2),
                 "weight_pct": weight_str,
-                "gain_pct": _pct(gain_pct, signed=True) if gain_pct is not None and not pd.isna(gain_pct) else "—",
-                "gain_color": (PALETTE["green"] if (gain_pct or 0) >= 0 else PALETTE["red"]) if gain_pct is not None and not pd.isna(gain_pct) else PALETTE["muted"],
+                "gain_pct": _pct(gain_pct, signed=True) if has_gain else "—",
+                "gain_eur": (_eur_smart(gain_eur, signed=True)
+                             if gain_eur is not None and not pd.isna(gain_eur) else "—"),
+                "gain_color": (PALETTE["green"] if (gain_pct or 0) >= 0 else PALETTE["red"]) if has_gain else PALETTE["muted"],
                 "pct_class": _pct(pct_class, decimals=1),
                 "alt_bg": i % 2 == 1,
             })

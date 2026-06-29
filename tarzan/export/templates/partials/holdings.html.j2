@@ -31,7 +31,7 @@
                    summary on the right. Lighter than the previous full
                    colored block which felt too loud. #}
                 <tr>
-                  <td colspan="5" style="padding:8px 12px 8px 14px;background:#FFFFFF;border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};">
+                  <td colspan="6" style="padding:8px 12px 8px 14px;background:#FFFFFF;border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td style="vertical-align:middle;font-size:11px;font-weight:700;letter-spacing:0.04em;color:{{ g.color }};text-transform:uppercase;">{{ g.name }}</td>
@@ -43,22 +43,23 @@
                 {# Column headers #}
                 <tr>
                   <td style="padding:6px 12px 6px 14px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};border-left:4px solid {{ g.color }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Holding</td>
-                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:80px;">Value €</td>
-                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:62px;">% Inv.</td>
-                  <td align="right" style="padding:6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:54px;">% Class</td>
-                  <td align="right" style="padding:6px 12px 6px 6px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:60px;">Gain</td>
+                  <td align="right" style="padding:6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:72px;">Value €</td>
+                  <td align="right" style="padding:6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:50px;">% Inv.</td>
+                  <td align="right" style="padding:6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:48px;">% Class</td>
+                  <td align="right" style="padding:6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:50px;">Gain %</td>
+                  <td align="right" style="padding:6px 12px 6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:64px;">Gain €</td>
                 </tr>
-                {# Holding rows #}
+                {# Holding rows — inline "TICKER · name" identifier #}
                 {% for r in g.rows %}
                 <tr>
                   <td style="padding:8px 12px 8px 14px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}border-left:4px solid {{ g.color }};">
-                    <div style="font-size:12px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{{ r.name|truncate(48, true, '…') }}</div>
-                    <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.3;">{{ r.ticker }}</div>
+                    <div style="font-size:12px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{% if r.ticker %}<span style="font-family:SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-weight:700;color:{{ palette.ink }};">{{ r.ticker }}</span><span style="color:{{ palette.subtle }};"> · </span>{% endif %}<span style="color:{{ palette.ink }};">{{ r.name|truncate(40, true, '…') }}</span></div>
                   </td>
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.value }}</td>
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.ink }};">{{ r.weight_pct }}</td>
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;">{{ r.pct_class }}</td>
-                  <td align="right" style="padding:8px 12px 8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_pct }}</td>
+                  <td align="right" style="padding:8px 5px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.value }}</td>
+                  <td align="right" style="padding:8px 5px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ palette.ink }};">{{ r.weight_pct }}</td>
+                  <td align="right" style="padding:8px 5px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;">{{ r.pct_class }}</td>
+                  <td align="right" style="padding:8px 5px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_pct }}</td>
+                  <td align="right" style="padding:8px 12px 8px 5px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_eur }}</td>
                 </tr>
                 {% endfor %}
               </table>
