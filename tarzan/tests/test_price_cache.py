@@ -158,3 +158,52 @@ def test_disable_env_forces_cold(monkeypatch):
     assert price_cache.load_history("XDEM.MI") is None
     price_cache.store_resolution("ISIN", "SYM")  # no-op while disabled
     assert price_cache.load_resolution("ISIN") is None
+
+
+class TestRepairSplitJumps:
+    """Back-adjustment of unadjusted split/denomination discontinuities
+    (the CL2.MI failure mode that made a 5Y return read −99%)."""
+
+    def _series(self, prices):
+        idx = pd.date_range("2021-01-01", periods=len(prices), freq="D")
+        return pd.DataFrame({"Open": prices, "High": prices, "Low": prices,
+                             "Close": prices}, index=idx)
+
+    def test_persistent_split_is_back_adjusted(self):
+        # 30 sessions near 3000, then a ~291x drop to ~10 that PERSISTS.
+        pre = [3000.0 + i for i in range(30)]
+        post = [10.0 + i * 0.05 for i in range(30)]
+        df = self._series(pre + post)
+        out = price_cache.repair_split_jumps(df)
+        c = out["Close"]
+        # No catastrophic jump left → the series is continuous.
+        ratios = (c.shift(-1) / c).dropna()
+        assert ratios.min() > 0.5 and ratios.max() < 2.0
+        # Pre-split rows rescaled onto the post-split level (~10, not ~3000).
+        assert c.iloc[0] < 20
+        # Total return is now sensible (positive), not −99%.
+        assert (c.iloc[-1] / c.iloc[0] - 1) > 0
+        # OHLC scaled by the same factor as Close.
+        assert out["Open"].iloc[0] == pytest.approx(c.iloc[0])
+
+    def test_healthy_series_untouched(self):
+        prices = [100.0 * (1.005 ** i) for i in range(60)]   # smooth +0.5%/day
+        df = self._series(prices)
+        out = price_cache.repair_split_jumps(df)
+        pd.testing.assert_frame_equal(out, df)
+
+    def test_transient_spike_not_treated_as_split(self):
+        # A single bad print that immediately reverts is NOT a split, so the
+        # earlier history must NOT be rescaled.
+        prices = [100.0] * 20 + [5.0] + [100.0] * 20
+        df = self._series(prices)
+        out = price_cache.repair_split_jumps(df)
+        assert out["Close"].iloc[0] == pytest.approx(100.0)
+
+    def test_idempotent(self):
+        pre = [3000.0 + i for i in range(30)]
+        post = [10.0 + i * 0.05 for i in range(30)]
+        df = self._series(pre + post)
+        once = price_cache.repair_split_jumps(df)
+        twice = price_cache.repair_split_jumps(once)
+        pd.testing.assert_frame_equal(once, twice)
