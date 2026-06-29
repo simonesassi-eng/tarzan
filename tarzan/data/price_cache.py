@@ -139,6 +139,62 @@ def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.Dat
     return combined
 
 
+# Daily Close ratios outside this band are not real market moves for the
+# diversified ETFs/indices/funds we track (even a 2x-leveraged fund would
+# need its underlying to move >±50% in one session). A *persistent* jump
+# past it is an unadjusted split/denomination change, which we back-adjust.
+SPLIT_JUMP_LO = 0.5
+SPLIT_JUMP_HI = 2.0
+
+
+def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Back-adjust unadjusted split/denomination discontinuities in a daily
+    OHLC history so multi-period returns stay correct.
+
+    Yahoo sometimes fails to split-adjust non-US listings: the series then
+    carries a single huge day-over-day jump (e.g. CL2.MI fell ~291x on
+    2023-10-09), which makes a 5Y return read −99% instead of the true
+    +150%+. We detect such a jump on Close, confirm it *persists* for ~10
+    sessions — distinguishing a real split from a transient bad print —
+    then multiply every earlier row by the jump factor so the series is
+    continuous (the standard back-adjustment). Healthy series are returned
+    untouched, and the operation is idempotent (an already-adjusted series
+    has no jump left to fix).
+    """
+    if df is None or len(df) == 0 or "Close" not in df.columns:
+        return df
+    valid = df["Close"].astype(float).dropna()
+    if len(valid) < 5:
+        return df
+    vals = list(valid.values)
+    n = len(vals)
+    factor = [1.0] * n
+    cum = 1.0
+    splits = 0
+    for i in range(n - 2, -1, -1):
+        prev = vals[i]
+        r = (vals[i + 1] / prev) if prev else 1.0
+        if r < SPLIT_JUMP_LO or r > SPLIT_JUMP_HI:
+            before = pd.Series(vals[max(0, i - 9):i + 1]).median()
+            after = pd.Series(vals[i + 1:i + 11]).median()
+            expected = before * r if before else 0.0
+            # Persistent split: the new level holds near before×ratio.
+            if expected > 0 and after > 0 and abs(after - expected) / expected <= 0.35:
+                cum *= r
+                splits += 1
+        factor[i] = cum
+    if splits == 0:
+        return df
+    fseries = (pd.Series(factor, index=valid.index)
+               .reindex(df.index).ffill().bfill().fillna(1.0))
+    out = df.copy()
+    for col in ("Open", "High", "Low", "Close"):
+        if col in out.columns:
+            out[col] = out[col].astype(float) * fseries
+    logger.info("repair_split_jumps: back-adjusted %d split(s) in a price series", splits)
+    return out
+
+
 def refresh_start(cached: Optional[pd.DataFrame]) -> Optional[datetime]:
     """The date from which to re-fetch given a cached series: a few days
     before the last cached date. None means "no cache → full fetch"."""

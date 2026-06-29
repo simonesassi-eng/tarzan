@@ -605,6 +605,10 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
 
     merged = price_cache.merge_history(cached, fresh)
     result = merged if merged is not None and not merged.empty else fresh
+    # Back-adjust any unadjusted split/denomination jump (e.g. Yahoo's
+    # CL2.MI) so multi-period returns are correct, and persist the cleaned
+    # series so the disk cache self-heals on the next run.
+    result = price_cache.repair_split_jumps(result)
     if result is not None and not result.empty:
         price_cache.store_history(symbol, result)
 
