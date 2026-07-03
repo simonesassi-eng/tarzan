@@ -1,4 +1,4 @@
-index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp
+index,ticker,is_benchmark,is_benchmark_alfa_and_beta,is_benchmark_geo_allocation,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,timestamp,isin
 FTSE All-World,VWRL.MI,TRUE,,,62.15,10.12,7.85,6.1,13.78,ETF Proxy - Large and mid-cap stocks across developed and emerging markets.,2/21/26
 MSCI ACWI,ISAC.MI,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,ETF Proxy - Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 MSCI Emerging Markets,EEM,TRUE,,,0,100,0,0,0,ETF Proxy - Equity performance across major emerging markets.,2/21/26
@@ -66,3 +66,12 @@ Solactive Global Lithium,LIT,,,,13.3,42,0.6,10.7,33.4,ETF Proxy - Companies invo
 STOXX Europe 50,EUN.L,,,,0,0,56,0,44,Official Index - 50 largest blue-chip stocks from Europe.,6/15/26
 STOXX Europe Defense,EUAD,,,,0,0,66.2,0,33.8,ETF Proxy - European companies involved in defense.,6/15/26
 KRC Cat Bond,CATB.MI,TRUE,,,,,,,,ETF Proxy - Catastrophe bond portfolio providing uncorrelated income via insurance-linked securities.,6/27/26
+Avantis Global Equity,AVWC.DE,TRUE,,,66,0,10,7,17,Active ETF - Developed all-cap with value and profitability tilt (vs MSCI World IMI). Geo approximated from benchmark universe and factor tilt.,7/3/26,IE000RJECXS5
+Avantis Global Small Cap Value,AVWS.DE,TRUE,,,57,0,9.5,13,20.5,Active ETF - Developed small-cap value with profitability tilt (vs MSCI World Small Cap Value). Strong size/value tilt shifts weight from US to Japan/Europe.,7/3/26,IE0003R87OG3
+Avantis America Equity,AVUS.DE,TRUE,,,97,0,0,0,3,Active ETF - US and Canada all-cap with value and profitability tilt (vs Russell 3000). Canada mapped to Dev ex-USA ex-EMU ex-JP.,7/3/26,IE000OW54ZX1
+Avantis Europe Equity,AVEU.DE,TRUE,,,0,0,52,0,48,Active ETF - European developed all-cap with value and profitability tilt (vs MSCI Europe IMI). Split Eurozone vs non-EMU Europe (UK/CH/Nordics).,7/3/26,IE000SDFJUU0
+Avantis Emerging Markets Equity,AVEG.DE,TRUE,,,0,100,0,0,0,Active ETF - Emerging markets all-cap with value and profitability tilt (vs MSCI Emerging Markets IMI).,7/3/26,IE000K975W13
+Dimensional Global Core Equity,DEGC.DE,TRUE,,,68,0,9,6.5,16.5,Active ETF - Developed all-cap integrated size/value/profitability tilt (vs MSCI World). Mild tilt so geo close to cap-weight.,7/3/26,IE000EGGFVG6
+Dimensional Global Targeted Value,DEGT.DE,TRUE,,,59,0,9.5,12,19.5,Active ETF - Developed small/mid value with profitability tilt (vs MSCI World SMID). Strong tilt shifts weight from US to Japan/Europe.,7/3/26,IE000S67ID55
+Dimensional Global ex US Core Equity Market,DDXM.L,TRUE,,,0,26,21,15,38,Active ETF - Ex-US core equity market incl emerging (vs MSCI ACWI ex USA IMI). Verify EM inclusion; if developed-only use EMU 29 JP 21 rest 50.,7/3/26,IE0002YHUWS3
+Dimensional US Core Equity Market,DDUM.L,TRUE,,,100,0,0,0,0,Active ETF - US total market with integrated size/value/profitability tilt (vs Russell 3000).,7/3/26,IE000XKK4AV2
