@@ -75,3 +75,4 @@ Dimensional Global Core Equity,DEGC.DE,TRUE,,,68,0,9,6.5,16.5,Active ETF - Devel
 Dimensional Global Targeted Value,DEGT.DE,TRUE,,,59,0,9.5,12,19.5,Active ETF - Developed small/mid value with profitability tilt (vs MSCI World SMID). Strong tilt shifts weight from US to Japan/Europe.,7/3/26,IE000S67ID55
 Dimensional Global ex US Core Equity Market,DDXM.L,TRUE,,,0,26,21,15,38,Active ETF - Ex-US core equity market incl emerging (vs MSCI ACWI ex USA IMI). Verify EM inclusion; if developed-only use EMU 29 JP 21 rest 50.,7/3/26,IE0002YHUWS3
 Dimensional US Core Equity Market,DDUM.L,TRUE,,,100,0,0,0,0,Active ETF - US total market with integrated size/value/profitability tilt (vs Russell 3000).,7/3/26,IE000XKK4AV2
+WisdomTree Eurozone Efficient Core,NTSZ.DE,TRUE,,,0,0,100,0,0,ETF Proxy - Eurozone equities plus a leveraged EUR government bond futures overlay (90/60).,7/3/26,IE000OV4XWA3
