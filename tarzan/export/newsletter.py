@@ -2418,8 +2418,12 @@ def _build_risk_legend() -> list[dict]:
 
     def _fmt(value: Optional[float], unit: str) -> str:
         if value is None:
-            return "—"
-        return f"{value:.1f}{unit}"
+            return "\u2014"
+        v = float(value)
+        # Drop the ".0" on integer thresholds so the bands read tight
+        # ("<3%" not "< 3.0%") — they sit inline next to the metric name.
+        num = f"{int(round(v))}" if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
+        return f"{num}{unit}"
 
     legend_rows = []
     for label, key, description in legend_specs:
@@ -2430,16 +2434,16 @@ def _build_risk_legend() -> list[dict]:
         good_t, warn_t = (thresholds + [None, None])[:2]
 
         if good_t is None or warn_t is None:
-            strong = fair = weak = "—"
+            strong = fair = weak = "\u2014"
         elif invert:
             # Lower-is-better metrics: better when below good threshold.
-            strong = f"< {_fmt(abs(good_t), unit)}"
-            fair = f"{_fmt(abs(warn_t), unit)} – {_fmt(abs(good_t), unit)}"
-            weak = f"> {_fmt(abs(warn_t), unit)}"
+            strong = f"<{_fmt(abs(good_t), unit)}"
+            fair = f"{_fmt(abs(warn_t), unit)}\u2013{_fmt(abs(good_t), unit)}"
+            weak = f">{_fmt(abs(warn_t), unit)}"
         else:
-            strong = f"> {_fmt(good_t, unit)}"
-            fair = f"{_fmt(warn_t, unit)} – {_fmt(good_t, unit)}"
-            weak = f"< {_fmt(warn_t, unit)}"
+            strong = f">{_fmt(good_t, unit)}"
+            fair = f"{_fmt(warn_t, unit)}\u2013{_fmt(good_t, unit)}"
+            weak = f"<{_fmt(warn_t, unit)}"
 
         legend_rows.append({
             "label": label,
@@ -2715,8 +2719,8 @@ def render_newsletter(
     metrics: PortfolioMetrics,
     config: InvestorConfig,
     issue_number: int = 1,
-    benchmark_alpha_beta: str = "S&P 500",
-    benchmark_geo: str = "MSCI ACWI",
+    benchmark_alpha_beta: Optional[str] = None,
+    benchmark_geo: Optional[str] = None,
     ai_summary: Optional[str] = None,
 ) -> str:
     """Render the newsletter HTML to a string.
@@ -2725,12 +2729,32 @@ def render_newsletter(
         metrics: Computed portfolio metrics.
         config: Investor configuration.
         issue_number: Sequential issue number for branding.
-        benchmark_alpha_beta: Display name of α/β benchmark.
-        benchmark_geo: Display name of geographic allocation benchmark.
+        benchmark_alpha_beta: Display name of α/β benchmark. When None it is
+            resolved from configuration (indexes.csv
+            ``is_benchmark_alfa_and_beta``) so the label/tag always match the
+            benchmark the engine actually computed α/β against.
+        benchmark_geo: Display name of geographic allocation benchmark. When
+            None it is resolved from configuration
+            (``is_benchmark_geo_allocation``).
 
     Returns:
         The full HTML newsletter as a single string.
     """
+    # Resolve benchmark display names from config when not explicitly passed.
+    # This closes a mismatch where the α/β footnote/tag could name a different
+    # index than the β=1.00 row the engine produced.
+    from tarzan import config as _cfg
+    if benchmark_alpha_beta is None:
+        try:
+            benchmark_alpha_beta = _cfg.benchmark_beta_name()
+        except Exception:
+            benchmark_alpha_beta = "S&P 500"
+    if benchmark_geo is None:
+        try:
+            benchmark_geo = _cfg.benchmark_geo_allocation()
+        except Exception:
+            benchmark_geo = "MSCI ACWI"
+
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
     env = Environment(
         loader=FileSystemLoader(template_dir),
@@ -2751,8 +2775,8 @@ def generate_newsletter(
     config: InvestorConfig,
     output_dir: str,
     issue_number: int = 1,
-    benchmark_alpha_beta: str = "S&P 500",
-    benchmark_geo: str = "MSCI ACWI",
+    benchmark_alpha_beta: Optional[str] = None,
+    benchmark_geo: Optional[str] = None,
 ) -> str:
     """Render the newsletter and write it to disk.
 
@@ -2764,8 +2788,10 @@ def generate_newsletter(
         config: Investor configuration.
         output_dir: Directory for the output file.
         issue_number: Sequential issue number for branding.
-        benchmark_alpha_beta: Display name of α/β benchmark.
+        benchmark_alpha_beta: Display name of α/β benchmark. When None,
+            resolved from configuration (so labels match the engine).
         benchmark_geo: Display name of geographic allocation benchmark.
+            When None, resolved from configuration.
 
     Returns:
         Path to the generated HTML file.
