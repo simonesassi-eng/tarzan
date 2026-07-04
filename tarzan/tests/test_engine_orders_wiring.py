@@ -58,7 +58,9 @@ class TestProperty1Identity:
         assert names[-1] == "_allocation_timeline"
         # Same number of computers as default + 2 appended (the history
         # provider swap is in-place): _returns and _allocation_timeline.
-        assert len(names) == 14
+        assert len(names) == 15
+        # The historical-risk computer is part of the base pipeline.
+        assert "_historical_risk" in names
 
 
 class TestProperty6SingleSeries:

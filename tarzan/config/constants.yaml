@@ -65,6 +65,11 @@ metric_ratings:
     labels: ["Low", "Moderate", "Elevated"]
     invert: true
     unit: "%"
+  ulcer_index:                       # lower-is-better (RMS drawdown, % )
+    thresholds: [5.0, 10.0]         # <5% green, 5-10% amber, >10% red (Martin & McCann 1989)
+    labels: ["Smooth", "Moderate", "Bumpy"]
+    invert: true
+    unit: "%"
 
 
 # =============================================================================

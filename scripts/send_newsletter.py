@@ -33,7 +33,7 @@ Optional:
     DRIVE_FOLDER_ID                 Drive folder ID (no slashes)
     GOOGLE_DRIVE_CREDENTIALS_JSON   Service-account JSON key
     ISSUE_NUMBER                    Default 1
-    SUBJECT_PREFIX                  Default "Tarzan Portfolio Digest"
+    SUBJECT_PREFIX                  Default "Portfolio Digest"
     DRY_RUN                         If "1", render only, do not send
     TRIGGER_LABEL                   Free-form tag added to the subject
 """
@@ -92,18 +92,22 @@ def _now_local() -> datetime:
 def _build_subject(metrics, prefix: str, trigger_label: str) -> str:
     """Build the newsletter subject line.
 
-    Example: "Tarzan Portfolio Digest · 15/05/2026 18:42 · RTD +8.59%"
+    Example: "Portfolio Digest - 19:35 - uP&L +6.68%"
+
+    The percentage is the unrealized P&L on current holdings
+    ((total value − cost basis) / cost basis), the same figure the Hero
+    shows as "Unrealized PnL".
     """
     cost = float(metrics.holdings_df["cost_basis_eur"].sum()) if not metrics.holdings_df.empty else 0.0
     total_gain = metrics.total_value - cost
     gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
-    generated_at = _now_local().strftime("%d/%m/%Y %H:%M")
+    generated_at = _now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 
-    parts = [prefix or "Tarzan Portfolio Digest", generated_at, f"RTD {sign}{abs(gain_pct):.2f}%"]
+    parts = [prefix or "Portfolio Digest", generated_at, f"uP&L {sign}{abs(gain_pct):.2f}%"]
     if trigger_label:
         parts.append(trigger_label)
-    return " · ".join(parts)
+    return " - ".join(parts)
 
 
 def _send_email(html: str, subject: str, sender: str, recipient: str,
@@ -205,7 +209,7 @@ def main() -> int:
     smtp_host = _env("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(_env("SMTP_PORT", "465"))
     issue_number = int(_env("ISSUE_NUMBER", "1"))
-    subject_prefix = _env("SUBJECT_PREFIX", "Tarzan Portfolio Digest")
+    subject_prefix = _env("SUBJECT_PREFIX", "Portfolio Digest")
     trigger_label = _env("TRIGGER_LABEL", "")
     dry_run = _env("DRY_RUN", "0") == "1"
 

@@ -181,6 +181,31 @@ def _signed_pp(value: Optional[float], decimals: int = 1) -> str:
     return f"{sign}{abs(value):.{decimals}f}"
 
 
+def _display_ticker(symbol: Optional[str]) -> Optional[str]:
+    """Short, human-facing ticker for an inline pin: strip the exchange
+    suffix (``XDEM.MI`` → ``XDEM``, the same ``split('.')[0]`` convention
+    used by :func:`_clean_ticker`) and the index caret (``^GSPC`` →
+    ``GSPC``). Returns None when there is nothing worth showing (empty, the
+    synthetic PORTFOLIO ticker, or a blended-mix pseudo-ticker) so the
+    caller can skip the pin entirely.
+
+    Shared by the Holdings, Returns-vs-benchmarks and Historical-risk
+    sections so the ticker is derived one way everywhere."""
+    if not symbol:
+        return None
+    t = str(symbol).strip()
+    if not t or t.upper() in ("PORTFOLIO", "—", "NAN"):
+        return None
+    if t.startswith("^"):
+        t = t[1:]
+    t = t.split(".")[0]  # strip exchange suffix (XDEM.MI → XDEM)
+    # Blended-mix pseudo-tickers (e.g. "60/40 ACWI+Bond") carry no clean
+    # symbol — skip the pin rather than show something confusing.
+    if not t or "/" in t or " " in t:
+        return None
+    return t
+
+
 def _semaphore(delta: Optional[float], tolerance: float) -> str:
     """Return 'green' / 'amber' / 'red' based on |delta| vs tolerance."""
     if delta is None or (isinstance(delta, float) and pd.isna(delta)):
@@ -1772,7 +1797,9 @@ def _clean_ticker(isin: str) -> str:
         return ""
     from tarzan.data import price_cache as _pc
     sym = _pc.load_resolution(isin) or ""
-    return sym.split(".")[0] if sym else ""
+    # Reuse the single ticker-shortening helper so Holdings, Returns and
+    # Historical-risk all strip the exchange suffix identically.
+    return _display_ticker(sym) or ""
 
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
@@ -2174,6 +2201,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             benchmark_rows.append({
                 "name": name,
+                "ticker": _display_ticker(r.get("ticker")),
                 "tags": tags,
                 # Back-compat single tag (first one) for any old template ref.
                 "tag": tags[0] if tags else None,
@@ -2220,32 +2248,27 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
 
 def _build_risk_profile(ctx: _NewsletterContext) -> dict:
-    """Build the unified Risk Profile table (transposed layout).
+    """Build the "Historical risk profile" table (transposed layout).
 
-    Columns are the risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD,
-    VaR 95%, CVaR 95%, α, β) and rows are the series: ``Your portfolio``
-    first, then every benchmark in ``benchmark_comparison`` (the same set
-    shown in the Performance table). This mirrors the Performance /
-    Returns tables for visual consistency.
+    Data source is ``metrics.historical_risk`` (MetricsEngine._historical_risk):
+    each instrument is measured over its OWN full available price history
+    (uncapped, span shown per row), and the portfolio row is a current-weight
+    static backtest over the common window of holdings with ≥1Y of history.
+    This deliberately trades the old apples-to-apples single window for
+    maximum history per series.
 
-    Portfolio numbers come from ``performance_full`` (5y cap, holdings
-    <1Y excluded); benchmark numbers come straight from each
-    ``benchmark_comparison`` row, so the cells are apples-to-apples. α and
-    β are computed against the configured α/β benchmark (so that row reads
-    β=1.00 / α≈0), noted in a footnote below the table.
+    Columns are the risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Ulcer,
+    VaR 95%, CVaR 95%, α, β). α and β are computed against the configured α/β
+    benchmark (so that row reads β≈1.00 / α≈0), noted in a footnote.
     """
     m = ctx.metrics
-    perf_full = m.performance_full or {}
-    bench_cmp = m.benchmark_comparison
-
-    if (
-        not perf_full
-        or bench_cmp is None or bench_cmp.empty
-        or "benchmark" not in bench_cmp.columns
-    ):
+    hr = m.historical_risk or {}
+    if not hr.get("available"):
         return {"available": False, "rows": [], "columns": []}
 
     ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
+    ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
+    geo_name = (ctx.benchmark_geo or "").strip().lower()
 
     def _fmt_pct(v) -> str:
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -2259,93 +2282,80 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
 
     # Metric columns, in display order. Tuple: (label, key, is_pct, note).
     # α and β carry a "*" footnote marker because they are referenced to
-    # a specific market index (and could ideally use two different ones).
+    # a specific market index. Ulcer Index sits next to Max DD as a
+    # duration-aware companion (RMS of drawdowns).
     metric_cols = [
         ("CAGR", "cagr", True, ""),
         ("Vol", "volatility", True, ""),
         ("Sharpe", "sharpe", False, ""),
         ("Sortino", "sortino", False, ""),
         ("Max DD", "max_drawdown", True, ""),
+        ("Ulcer", "ulcer_index", True, ""),
         ("VaR 95%", "var_95", True, ""),
         ("CVaR 95%", "cvar_95", True, ""),
         ("\u03b1", "alpha", True, "*"),
         ("\u03b2", "beta", False, "*"),
     ]
 
-    def _cells_from(source: dict) -> list[str]:
+    def _cells_from(metrics: dict) -> list[str]:
         out = []
         for _label, key, is_pct, _note in metric_cols:
-            v = source.get(key)
+            v = (metrics or {}).get(key)
             out.append(_fmt_pct(v) if is_pct else _fmt_num(v))
         return out
 
-    rows = [{
-        "label": "Your portfolio",
-        "is_portfolio": True,
-        "cells": _cells_from(perf_full),
-    }]
-    for _, r in bench_cmp.iterrows():
-        rd = r.to_dict()
-        name = str(rd.get("benchmark", "") or "")
-        if not name:
-            continue
+    def _tags_for(name: str) -> list:
+        """Reuse the Performance table's α/β + GEO pins so the reference
+        benchmarks are recognisable here too."""
+        name_norm = (name or "").strip().lower()
+        tags = []
+        if ab_name and name_norm == ab_name:
+            tags.append(("\u03b1/\u03b2", PALETTE["accent"], PALETTE["accent_bg"]))
+        if geo_name and name_norm == geo_name:
+            tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
+        return tags
+
+    rows = []
+    port = hr.get("portfolio")
+    if port:
         rows.append({
-            "label": name,
+            "label": port.get("label", "Your portfolio"),
+            "ticker": None,
+            "span_label": port.get("span_label", "\u2014"),
+            "tags": [],
+            "is_portfolio": True,
+            "cells": _cells_from(port.get("metrics")),
+        })
+    for inst in hr.get("instruments", []):
+        rows.append({
+            "label": inst.get("label", ""),
+            "ticker": _display_ticker(inst.get("ticker")),
+            "span_label": inst.get("span_label", "\u2014"),
+            "tags": _tags_for(inst.get("label", "")),
             "is_portfolio": False,
-            "cells": _cells_from(rd),
+            "cells": _cells_from(inst.get("metrics")),
         })
 
-    # Track-record length drives a caveat that scales as the portfolio
-    # matures: annualized risk stats off a short window are noisy and only
-    # firm up with years of data.
-    window_years = None
-    ph = m.portfolio_history
-    if ph is not None and len(ph) > 1:
-        try:
-            span_days = (ph.index.max() - ph.index.min()).days
-            window_years = span_days / 365.25 if span_days > 0 else None
-        except Exception:
-            window_years = None
-
-    if window_years is None:
-        window_label = "the available history"
-    elif window_years < 1:
-        months = max(1, round(window_years * 12))
-        window_label = f"~{months} month{'s' if months != 1 else ''}"
-    else:
-        window_label = f"~{window_years:.1f} years"
+    if not rows:
+        return {"available": False, "rows": [], "columns": []}
 
     description = (
-        "All figures use the same window for your portfolio and the "
-        f"benchmarks (apples-to-apples), based on your track record so far "
-        f"— {window_label} — capped at 5 years, with holdings under 1Y of "
-        "history excluded."
+        "Each instrument is measured over its full available price history "
+        "\u2014 the span is shown next to its name. Your portfolio is a "
+        "backtest at today's weights held constant, over the longest window "
+        "where every holding with at least 1 year of history overlaps."
     )
-
-    if window_years is None or window_years < 1:
-        caveat = (
-            f"Your track record is only {window_label}. Annualized risk "
-            "figures (Sharpe, Sortino, \u03b1) are very sensitive to such a "
-            "short window — read them as indicative, not definitive. They "
-            "become statistically meaningful from about 3 years of history."
-        )
-    elif window_years < 3:
-        caveat = (
-            f"Based on about {window_label} of history. These risk figures "
-            "keep firming up with more data — roughly 3 years for full "
-            "confidence."
-        )
-    else:
-        caveat = None
 
     return {
         "available": True,
+        "title": "Historical risk profile",
+        "subtitle": "Full available history, per instrument",
         "columns": [{"label": label, "note": note}
                     for (label, _k, _p, note) in metric_cols],
         "rows": rows,
         "description": description,
-        "caveat": caveat,
-        "window_label": window_label,
+        # Backtest transparency note (holdings excluded / renormalized).
+        "portfolio_note": (port or {}).get("note"),
         # Footnote: α and β are both referenced to the α/β benchmark.
         "alpha_beta_note": (
             f"\u03b1 and \u03b2 are computed against {ab_bench_name}."
@@ -2388,6 +2398,10 @@ def _build_risk_legend() -> list[dict]:
         ("Max Drawdown", "max_drawdown",
          "Worst peak-to-trough loss over the period. -20% is typical for "
          "diversified equity; deeper drops signal concentration risk."),
+        ("Ulcer Index", "ulcer_index",
+         "Root-mean-square of drawdowns from the running peak — captures both "
+         "depth and time spent underwater. Lower is smoother; penalizes long "
+         "slumps more than a one-point Max DD."),
         ("VaR 95%", "var_pct",
          "Daily loss exceeded only 5% of the time (historical sim). "
          "Non-parametric — no normal-distribution assumption."),

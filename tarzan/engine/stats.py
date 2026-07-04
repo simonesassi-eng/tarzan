@@ -255,6 +255,25 @@ def compute_max_drawdown(series: pd.Series) -> float:
     return float(drawdown.min())
 
 
+def compute_ulcer_index(series: pd.Series) -> float:
+    """Ulcer Index (Martin & McCann, 1989): the root-mean-square of the
+    percentage drawdowns from the running peak, in percent.
+
+    Unlike Max Drawdown (a single worst point) the Ulcer Index captures
+    both the *depth* and the *duration* of every drawdown — a portfolio
+    that spends long stretches underwater scores worse. Lower is better;
+    a value of 0 means the series only ever made new highs. Returned as a
+    positive percentage (e.g. 7.3 = 7.3%), comparable to volatility.
+    """
+    if series is None or series.empty or len(series) < 2:
+        return 0.0
+    cummax = series.cummax()
+    # Percentage drawdown at each point (≤ 0); square removes the sign so
+    # depth and time-underwater both accumulate.
+    drawdown_pct = (series - cummax) / cummax * 100.0
+    return float(np.sqrt((drawdown_pct ** 2).mean()))
+
+
 def compute_var(daily_returns: pd.Series, confidence: float = 0.95) -> float:
     if daily_returns.empty or len(daily_returns) < 5:
         return float("nan")

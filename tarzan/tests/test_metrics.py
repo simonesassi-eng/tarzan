@@ -18,6 +18,7 @@ from tarzan.engine.metrics import (
     compute_period_return,
     compute_sharpe,
     compute_sortino,
+    compute_ulcer_index,
     compute_var,
     compute_ytd_return,
 )
@@ -80,6 +81,30 @@ class TestMaxDrawdown:
 
     def test_empty_series_returns_zero(self):
         assert compute_max_drawdown(pd.Series(dtype=float)) == 0.0
+
+
+class TestUlcerIndex:
+    def test_monotonic_increase_is_zero(self):
+        # Only ever making new highs → no drawdown → Ulcer = 0.
+        idx = pd.date_range("2024-01-01", periods=10, freq="D")
+        series = pd.Series([100, 110, 120, 130, 140, 150, 160, 170, 180, 190], index=idx)
+        assert compute_ulcer_index(series) == pytest.approx(0.0, abs=1e-9)
+
+    def test_known_single_drawdown(self):
+        # Flat at 100 then one day at 90 (−10% drawdown) then back.
+        # Drawdowns (%): 0, 0, -10, 0, 0 → RMS = sqrt(100/5) = sqrt(20) ≈ 4.472.
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        series = pd.Series([100.0, 100.0, 90.0, 100.0, 100.0], index=idx)
+        assert compute_ulcer_index(series) == pytest.approx(math.sqrt(20.0), abs=1e-6)
+
+    def test_deeper_or_longer_drawdown_scores_higher(self):
+        idx = pd.date_range("2024-01-01", periods=6, freq="D")
+        shallow = pd.Series([100, 100, 95, 100, 100, 100], index=idx)
+        deep = pd.Series([100, 100, 70, 70, 70, 100], index=idx)
+        assert compute_ulcer_index(deep) > compute_ulcer_index(shallow)
+
+    def test_empty_series_returns_zero(self):
+        assert compute_ulcer_index(pd.Series(dtype=float)) == 0.0
 
 
 class TestSharpe:
