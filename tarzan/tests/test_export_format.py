@@ -63,23 +63,33 @@ class TestRiskProfileBenchmarkLabels:
     not hardcoded 'S&P 500' / 'MSCI ACWI' literals."""
 
     def _ctx(self, ab_name, geo_name):
-        import pandas as pd
         from tarzan.models.portfolio import PortfolioMetrics
         from tarzan.models.investor_config import InvestorConfig
 
+        def _metrics(cagr, vol, sh, so, mdd, ui, var, cvar, a, b):
+            return {"cagr": cagr, "volatility": vol, "sharpe": sh, "sortino": so,
+                    "max_drawdown": mdd, "ulcer_index": ui, "var_95": var,
+                    "cvar_95": cvar, "alpha": a, "beta": b}
+
         m = PortfolioMetrics()
-        m.performance_full = {"cagr": 5.0, "volatility": 12.0, "sharpe": 1.0,
-                              "sortino": 1.2, "max_drawdown": -10.0,
-                              "var_95": -1.0, "cvar_95": -1.5,
-                              "alpha": 0.5, "beta": 0.9}
-        m.benchmark_comparison = pd.DataFrame([
-            {"benchmark": ab_name, "cagr": 4.0, "volatility": 15.0, "sharpe": 0.8,
-             "sortino": 1.0, "max_drawdown": -20.0, "var_95": -1.5, "cvar_95": -2.0,
-             "alpha": 0.0, "beta": 1.0},
-            {"benchmark": geo_name, "cagr": 4.5, "volatility": 14.0, "sharpe": 0.9,
-             "sortino": 1.1, "max_drawdown": -18.0, "var_95": -1.4, "cvar_95": -1.9,
-             "alpha": 0.2, "beta": 0.95},
-        ])
+        # New contract: the Historical risk profile reads metrics.historical_risk
+        # (per-instrument full history + a current-weight portfolio backtest).
+        m.historical_risk = {
+            "available": True,
+            "portfolio": {
+                "label": "Your portfolio", "ticker": None, "span_label": "3.0Y",
+                "note": None, "is_portfolio": True,
+                "metrics": _metrics(5.0, 12.0, 1.0, 1.2, -10.0, 6.0, -1.0, -1.5, 0.5, 0.9),
+            },
+            "instruments": [
+                {"label": ab_name, "ticker": "SWDA.MI", "span_label": "10.0Y",
+                 "note": None, "is_portfolio": False,
+                 "metrics": _metrics(4.0, 15.0, 0.8, 1.0, -20.0, 9.0, -1.5, -2.0, 0.0, 1.0)},
+                {"label": geo_name, "ticker": "VWCE.MI", "span_label": "9.0Y",
+                 "note": None, "is_portfolio": False,
+                 "metrics": _metrics(4.5, 14.0, 0.9, 1.1, -18.0, 8.0, -1.4, -1.9, 0.2, 0.95)},
+            ],
+        }
         return nl._NewsletterContext(
             metrics=m, config=InvestorConfig(),
             benchmark_alpha_beta=ab_name, benchmark_geo=geo_name,
@@ -94,22 +104,27 @@ class TestRiskProfileBenchmarkLabels:
         assert labels[0] == "Your portfolio"
         assert profile["rows"][0]["is_portfolio"] is True
         assert "MSCI World" in labels and "FTSE All-World" in labels
-        # 9 metric columns, with α/β carrying the footnote marker.
+        # 10 metric columns now (Ulcer added), with α/β carrying the marker.
         col_labels = [c["label"] for c in profile["columns"]]
-        assert col_labels[0] == "CAGR" and len(profile["columns"]) == 9
+        assert col_labels[0] == "CAGR" and len(profile["columns"]) == 10
+        assert "Ulcer" in col_labels
         assert profile["columns"][-2]["note"] == "*"  # α
         assert profile["columns"][-1]["note"] == "*"  # β
         assert "MSCI World" in profile["alpha_beta_note"]
+        # Ticker pins are shortened (exchange suffix stripped).
+        ab_row = next(r for r in profile["rows"] if r["label"] == "MSCI World")
+        assert ab_row["ticker"] == "SWDA"
+        assert ab_row["span_label"] == "10.0Y"
 
     def test_benchmark_values_populated_in_rows(self):
-        # Each benchmark row must carry real values (not blank), proving
-        # the metrics are read straight from benchmark_comparison.
+        # Each instrument row must carry real values (not blank), proving
+        # the metrics are read straight from historical_risk.
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
         bench_rows = [r for r in profile["rows"] if not r["is_portfolio"]]
         assert bench_rows
         for r in bench_rows:
-            assert len(r["cells"]) == 9
+            assert len(r["cells"]) == 10
             assert r["cells"][0] != "—"  # CAGR populated
 
 

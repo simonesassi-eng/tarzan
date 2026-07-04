@@ -75,6 +75,14 @@ class PortfolioMetrics:
     acwi_geo: dict = field(default_factory=dict)
     holding_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     holding_histories: dict = field(default_factory=dict)
+    # Historical risk profile (newsletter "Historical risk profile" section).
+    # Uncapped, per-instrument full-history risk stats plus a current-weight
+    # static backtest for the portfolio row. Populated by
+    # MetricsEngine._historical_risk. Shape:
+    #   {"available": bool,
+    #    "portfolio": {"label", "ticker", "span_label", "note", "metrics": {..}},
+    #    "instruments": [{"label", "ticker", "span_label", "metrics": {..}}, ..]}
+    historical_risk: Optional[dict] = None
     # Holdings excluded from the TOTAL PORTFOLIO time series because their
     # price history span is below the minimum (used for the Performance tab
     # warning banner). Each entry: {"ticker", "name", "value_eur",

@@ -24,6 +24,7 @@ from tarzan.engine.stats import (
     compute_period_return,
     compute_sharpe,
     compute_sortino,
+    compute_ulcer_index,
     compute_var,
     compute_ytd_return,
     _compute_beta_alpha,
@@ -135,6 +136,7 @@ def _compute_single_benchmark_metrics(
         "volatility": vol, "sharpe": compute_sharpe(cagr, vol),
         "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
         "max_drawdown": compute_max_drawdown(bench) * 100,
+        "ulcer_index": compute_ulcer_index(bench),
         "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
         "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
         "alpha": float("nan"),
@@ -192,6 +194,7 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
     row["sharpe"] = compute_sharpe(cagr_val, vol)
     row["sortino"] = compute_sortino(daily_ret, cagr_val) if len(daily_ret) > 0 else float("nan")
     row["max_drawdown"] = compute_max_drawdown(s) * 100
+    row["ulcer_index"] = compute_ulcer_index(s)
     # Tail risk (historical simulation, 95% confidence)
     row["var_95"] = _scale_or_nan(compute_var(daily_ret, 0.95), 100)
     row["cvar_95"] = _scale_or_nan(compute_cvar(daily_ret, 0.95), 100)

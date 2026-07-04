@@ -33,6 +33,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     compute_period_return,
     compute_sharpe,
     compute_sortino,
+    compute_ulcer_index,
     compute_var,
     compute_ytd_return,
     twror,
@@ -78,6 +79,7 @@ class MetricsEngine:
             self._holding_performance,
             self._geo_benchmark,
             self._holding_histories,
+            self._historical_risk,
         ]
         # Option Y: when an order list is supplied it becomes the single
         # source of truth for the historical value series. Swap the
@@ -791,6 +793,133 @@ class MetricsEngine:
         ctx["holding_histories"] = hh
 
     # ------------------------------------------------------------------
+    # Historical risk profile (uncapped, per-instrument full history)
+    # ------------------------------------------------------------------
+    def _historical_risk(self, ctx: dict) -> None:
+        """Build the newsletter "Historical risk profile" section.
+
+        Unlike the apples-to-apples Risk table (portfolio window, 5Y cap),
+        this section maximises history:
+
+          * Portfolio row — a **current-weight static backtest** (Approach
+            A): daily returns are the weighted sum of each held
+            instrument's daily return, weights = today's market value
+            renormalized over the included set, over the COMMON window
+            where every included holding has data. Holdings with under
+            1 year of price history are excluded so a freshly-bought
+            position cannot shrink the common window.
+          * Instrument rows — each configured benchmark over its OWN full
+            available history (uncapped), labelled with its span.
+
+        Every row carries the full metric set incl. the Ulcer Index.
+        """
+        MIN_DAYS = 365  # exclude holdings younger than 1Y from the backtest
+
+        def _norm(s: pd.Series) -> pd.Series:
+            idx = s.index
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_convert("UTC").tz_localize(None)
+            out = s.copy()
+            out.index = idx.normalize()
+            return out[~out.index.duplicated(keep="last")]
+
+        def _span_label(s: pd.Series) -> str:
+            if s is None or len(s) < 2:
+                return "—"
+            days = int((s.index[-1] - s.index[0]).days)
+            yrs = days / DAYS_PER_YEAR
+            if yrs >= 1.0:
+                return f"{yrs:.1f}Y"
+            if days >= 30:
+                return f"{int(round(days / 30))}M"
+            return f"{days}D"
+
+        # α/β reference series (full history) so α/β are comparable across rows.
+        ab_bench = pd.Series(dtype=float)
+        try:
+            ab_bench = _fetch_benchmark_history(cfg.benchmark_beta())
+        except Exception as e:
+            logger.warning("Historical risk α/β benchmark fetch failed: %s", e)
+
+        # ---- Portfolio: current-weight static backtest (common window) ----
+        candidates = []  # (ticker, weight_value, daily_returns Series, span_days)
+        for h in self.holdings:
+            ph = h.price_history
+            if ph is None or len(ph) < 2:
+                continue
+            value = float(h.current_value if h.current_value is not None
+                          else (h.market_value_eur or 0.0))
+            if value <= 0:
+                continue
+            s = _norm(ph)
+            span_days = int((s.index[-1] - s.index[0]).days)
+            candidates.append((h.ticker, value, s, span_days))
+
+        portfolio_block = None
+        if candidates:
+            eligible = [c for c in candidates if c[3] >= MIN_DAYS]
+            used = eligible if eligible else candidates
+            n_excluded = len(candidates) - len(used)
+            total_w = sum(v for (_, v, _, _) in used) or 1.0
+            # Align on the common window (inner join → every day has all series).
+            ret_df = pd.concat(
+                {tk: s.pct_change() for (tk, _v, s, _sp) in used}, axis=1
+            ).dropna(how="any")
+            if len(ret_df) >= 2:
+                weights = pd.Series(
+                    {tk: v / total_w for (tk, v, _s, _sp) in used}
+                ).reindex(ret_df.columns).fillna(0.0)
+                port_ret = ret_df.mul(weights, axis=1).sum(axis=1)
+                nav = (1.0 + port_ret).cumprod() * 100.0
+                # Prepend the window-start baseline so the NAV starts at 100.
+                first_day = ret_df.index[0] - pd.Timedelta(days=1)
+                nav = pd.concat([pd.Series([100.0], index=[first_day]), nav])
+                metrics = _compute_single_benchmark_metrics(nav, ab_bench)
+                note = None
+                if n_excluded > 0:
+                    note = (
+                        f"{n_excluded} holding(s) with under 1Y of history "
+                        "excluded from the backtest; weights renormalized "
+                        "over the rest. Before the common start date not all "
+                        "instruments existed."
+                    )
+                portfolio_block = {
+                    "label": "Your portfolio",
+                    "ticker": None,
+                    "span_label": _span_label(nav),
+                    "note": note,
+                    "metrics": metrics,
+                    "is_portfolio": True,
+                }
+
+        # ---- Instruments: each benchmark over its OWN full history ----
+        instrument_rows = []
+        for name, ticker in BENCHMARKS.items():
+            try:
+                bench = _fetch_benchmark_history(ticker)
+            except Exception as e:
+                logger.warning("Historical risk fetch failed for %s: %s", name, e)
+                continue
+            if bench is None or bench.empty or len(bench) < 2:
+                continue
+            bench = _norm(bench)
+            metrics = _compute_single_benchmark_metrics(bench, ab_bench)
+            instrument_rows.append({
+                "label": name,
+                "ticker": ticker,
+                "span_label": _span_label(bench),
+                "note": None,
+                "metrics": metrics,
+                "is_portfolio": False,
+            })
+
+        ctx["historical_risk"] = {
+            "available": bool(portfolio_block or instrument_rows),
+            "portfolio": portfolio_block,
+            "instruments": instrument_rows,
+        }
+
+    # ------------------------------------------------------------------
     # Build final PortfolioMetrics
     # ------------------------------------------------------------------
     def _build_result(self, ctx: dict) -> PortfolioMetrics:
@@ -819,6 +948,7 @@ class MetricsEngine:
             benchmark_histories=ctx.get("benchmark_histories", {}),
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),
             holding_histories=ctx.get("holding_histories", {}),
+            historical_risk=ctx.get("historical_risk"),
             acwi_geo=ctx.get("acwi_geo", {}),
             excluded_short_tenure=ctx.get("excluded_short_tenure", []),
             xirr_pct=ctx.get("xirr_pct"),
