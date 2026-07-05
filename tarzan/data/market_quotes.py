@@ -28,18 +28,28 @@ logger = logging.getLogger(__name__)
 # (display name, yfinance symbol, category), in display order. The strip
 # shows at most 2 rows per category (the newsletter caps it).
 MARKETS: list[tuple[str, str, str]] = [
-    # US
+    # US — equity indices + US Treasury yields (^IRX/^FVX/^TNX/^TYX), grouped
+    # together since they are all US-market references.
     ("S&P 500", "^GSPC", "US"),
     ("Dow 30", "^DJI", "US"),
     ("Nasdaq", "^IXIC", "US"),
     ("Russell 2000", "^RUT", "US"),
     ("VIX", "^VIX", "US"),
-    # Europe
+    ("US 13-Wk", "^IRX", "US"),
+    ("US 5-Yr", "^FVX", "US"),
+    ("US 10-Yr", "^TNX", "US"),
+    ("US 30-Yr", "^TYX", "US"),
+    # Europe — equity indices + a German 10Y reference. Yahoo exposes no
+    # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
+    # government-bond ETF proxy: iShares eb.rexx Government Germany 5.5-10.5yr
+    # (EXHD.DE), a EUR PRICE centered on the ~10Y segment (moves inverse to
+    # yield), not a yield.
     ("FTSE 100", "^FTSE", "Europe"),
     ("CAC 40", "^FCHI", "Europe"),
     ("DAX", "^GDAXI", "Europe"),
     ("Euronext 100", "^N100", "Europe"),
     ("Euro Stoxx 50", "^STOXX50E", "Europe"),
+    ("Bund 10Y", "EXHD.DE", "Europe"),
     # Asia
     ("SSE Composite", "000001.SS", "Asia"),
     ("Nikkei 225", "^N225", "Asia"),
@@ -48,18 +58,6 @@ MARKETS: list[tuple[str, str, str]] = [
     ("KOSPI", "^KS11", "Asia"),
     # Crypto
     ("Bitcoin", "BTC-USD", "Crypto"),
-    ("XRP", "XRP-USD", "Crypto"),
-    ("Ethereum", "ETH-USD", "Crypto"),
-    ("Tether", "USDT-USD", "Crypto"),
-    ("BNB", "BNB-USD", "Crypto"),
-    # Rates
-    ("13-Wk Bond", "^IRX", "Rates"),
-    ("5-Yr Bond", "^FVX", "Rates"),
-    ("10-Yr Bond", "^TNX", "Rates"),
-    ("30-Yr Bond", "^TYX", "Rates"),
-    ("2Y T-Note Fut", "ZT=F", "Rates"),
-    ("10Y T-Note Fut", "ZN=F", "Rates"),
-    ("iShares 20+ Treasury", "TLT", "Rates"),
     # Commodities
     ("Crude Oil", "CL=F", "Commodities"),
     ("Gold", "GC=F", "Commodities"),
@@ -72,13 +70,9 @@ MARKETS: list[tuple[str, str, str]] = [
     ("EUR/USD", "EURUSD=X", "Currencies"),
     ("USD/JPY", "JPY=X", "Currencies"),
     ("USD/GBP", "GBP=X", "Currencies"),
-    ("USD/AUD", "AUD=X", "Currencies"),
-    ("USD/CAD", "CAD=X", "Currencies"),
-    ("USD/MXN", "MXN=X", "Currencies"),
-    ("USD/HKD", "HKD=X", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["US", "Europe", "Asia", "Crypto", "Rates",
+CATEGORY_ORDER = ["US", "Europe", "Asia", "Crypto",
                   "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None

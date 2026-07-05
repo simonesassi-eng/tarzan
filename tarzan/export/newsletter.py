@@ -76,6 +76,19 @@ ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
 ASSET_BG = {k: css(v) for k, v in ASSET_CLASS_BG.items()}
 GEO_COLORS = {k: css(v) for k, v in _GEO_COLORS.items()}
 
+# Markets-strip region accent colours (left border + legend). Chosen from
+# six clearly distinct hue families so no two regions look alike — in
+# particular Asia (pink) and Commodities (green) no longer collide.
+MARKET_REGION_COLORS = {
+    "US": "#2563EB",           # blue
+    "Europe": "#D97706",       # amber
+    "Asia": "#DB2777",         # pink
+    "Crypto": "#7C3AED",       # purple
+    "Commodities": "#15803D",  # green
+    "Currencies": "#64748B",   # slate
+    "Indices": "#64748B",      # slate (offline fallback bucket)
+}
+
 # Asset class display order in the newsletter Holdings section.
 # Cash is shown after Gold so the invested asset classes flow visually
 # from highest-risk equity down to commodities/crypto/alternative; cash
@@ -282,7 +295,8 @@ def _spark(vals: list[float], target: Optional[float], color: str,
 _day_spark_uid = 0
 
 
-def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> str:
+def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
+               stretch: bool = False) -> str:
     """Yahoo-style intraday sparkline: green area where the line is above the
     previous close (``baseline``), red where below, with a dashed baseline.
 
@@ -314,9 +328,15 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22) -> 
     _day_spark_uid += 1
     gid, rid = f"sg{_day_spark_uid}", f"sr{_day_spark_uid}"
     yb_c = max(0.0, min(yb, h))
+    # ``stretch`` makes the sparkline fill its container width (width:100% +
+    # preserveAspectRatio="none") so a card leaves no unused space on the
+    # right; otherwise it renders at the fixed ``w`` px.
+    _svg_w = "100%" if stretch else str(w)
+    _par = 'preserveAspectRatio="none" ' if stretch else ""
+    _style_w = "width:100%;" if stretch else ""
     return (
-        f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
-        f'xmlns="http://www.w3.org/2000/svg" style="display:block;">'
+        f'<svg width="{_svg_w}" height="{h}" viewBox="0 0 {w} {h}" {_par}'
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;{_style_w}">'
         f'<defs>'
         f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
         f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
@@ -1186,12 +1206,15 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
 
 
 def _build_markets(ctx: _NewsletterContext) -> dict:
-    """Markets strip (yfinance-style): major indices / commodities / crypto
-    / FX with level, daily change and a mini sparkline, grouped by category
-    in a 2-column card grid. Uses the live cached quotes, falling back to
+    """Markets strip (yfinance-style): a single continuous 6-column grid of
+    uniform cards — level, daily change and a stretched mini sparkline —
+    flowing across regions with no per-region row breaks (a new region keeps
+    filling the same row). Each card carries a region-coloured left border and
+    a colour legend maps border→region. Live cached quotes, falling back to
     the benchmark-derived snapshot if the live fetch yields nothing."""
     m = ctx.metrics
     P = PALETTE
+    COLS = 6
     try:
         from tarzan.data.market_quotes import fetch_market_quotes, CATEGORY_ORDER
         snap = fetch_market_quotes()
@@ -1204,53 +1227,66 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     if not snap:
         return {"available": False, "html": ""}
 
+    # Card width: equal share of the row minus the 1% spacers between cards.
+    cw = f"{(100 - (COLS - 1)) // COLS}%"
+
+    def _rc(cat) -> str:
+        return MARKET_REGION_COLORS.get(cat, P["subtle"])
+
     def _card(d: dict) -> str:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
-        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]), w=64, h=20)
+        # Stretched sparkline fills the card width → no unused right-side gap.
+        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
+                           w=64, h=18, stretch=True)
         return (
-            f'<td width="19%" style="vertical-align:top;padding:4px 5px;'
-            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:7px;">'
-            f'<div style="font-size:8px;font-weight:700;letter-spacing:0.01em;'
+            f'<td width="{cw}" style="vertical-align:top;padding:3px 4px;'
+            f'background:{P["card_alt"]};border:1px solid {P["border"]};'
+            f'border-left:3px solid {_rc(d.get("category"))};border-radius:6px;">'
+            f'<div style="font-size:7px;font-weight:700;letter-spacing:0.01em;'
             f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
-            f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};'
-            f'font-variant-numeric:tabular-nums;">{val}</div>'
-            f'<div style="font-size:8px;font-weight:700;color:{col};'
+            f'<div style="font-size:10px;font-weight:700;color:{P["ink"]};'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{val}</div>'
+            f'<div style="font-size:7px;font-weight:700;color:{col};'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{chg}</div>'
-            f'<div style="margin-top:2px;">{spark}</div></td>'
+            f'<div style="margin-top:1px;">{spark}</div></td>'
         )
 
-    sections = ""
-    first = True
-    for cat in CATEGORY_ORDER:
-        # 5 columns: 5-instrument categories fit one row; 7-instrument ones
-        # take two (5 + 2). Cap at 2 rows (10 cards).
-        cards = [_card(d) for d in snap if d.get("category") == cat][:10]
-        if not cards:
-            continue
-        divider = ("" if first else
-                   f"border-top:1px solid {P['border']};padding-top:7px;")
-        first = False
-        sections += (f'<div style="margin-top:{6 if divider else 2}px;{divider}'
-                     f'font-size:10px;font-weight:700;letter-spacing:0.06em;'
-                     f'color:{P["subtle"]};text-transform:uppercase;">{cat}</div>')
-        row_htmls = []
-        for i in range(0, len(cards), 5):
-            group = cards[i:i + 5]
-            while len(group) < 5:
-                group.append('<td width="19%"></td>')
-            row_htmls.append("<tr>" + '<td width="1%"></td>'.join(group) + "</tr>")
-        spacer = '<tr><td colspan="9" style="font-size:0;line-height:4px;">&nbsp;</td></tr>'
-        sections += ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                     f'border="0" style="margin-top:5px;border-collapse:separate;">'
-                     + spacer.join(row_htmls) + '</table>')
+    # Cards flow in region order, continuously across regions (no row breaks).
+    # Any category missing from CATEGORY_ORDER is appended, never dropped.
+    ordered = [d for cat in CATEGORY_ORDER for d in snap if d.get("category") == cat]
+    ordered += [d for d in snap if d.get("category") not in CATEGORY_ORDER]
+
+    cells = [_card(d) for d in ordered]
+    while len(cells) % COLS != 0:
+        cells.append(f'<td width="{cw}"></td>')
+    spacer = (f'<tr><td colspan="{COLS * 2}" style="font-size:0;'
+              f'line-height:5px;">&nbsp;</td></tr>')
+    rows = [
+        "<tr>" + '<td width="1%"></td>'.join(cells[i:i + COLS]) + "</tr>"
+        for i in range(0, len(cells), COLS)
+    ]
+    grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            'border="0" style="margin-top:6px;border-collapse:separate;">'
+            + spacer.join(rows) + '</table>')
+
+    # Colour legend: only the regions actually present, in canonical order.
+    present = [c for c in CATEGORY_ORDER if any(d.get("category") == c for d in snap)]
+    chips = ""
+    for cat in present:
+        c = _rc(cat)
+        chips += (f'<span style="display:inline-block;margin:0 10px 4px 0;font-size:10px;'
+                  f'color:{P["muted"]};"><span style="display:inline-block;width:9px;height:9px;'
+                  f'background:{c};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>{cat}</span>')
 
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
               f'text-transform:uppercase;">Markets</div>'
-              f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Major indices · latest level and daily change.</div>')
-    return {"available": True, "html": header + sections}
+              f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">'
+              f'Indices, rates &amp; FX &middot; latest level and daily change, coloured by region.</div>'
+              f'<div style="margin-top:6px;">{chips}</div>')
+    return {"available": True, "html": header + grid}
 
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
