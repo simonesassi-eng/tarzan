@@ -2584,30 +2584,17 @@ def _build_sensitivity(ctx: _NewsletterContext) -> dict:
     }
 
 
-def _build_optimizer(ctx: _NewsletterContext) -> dict:
-    """Build the suggested-action card.
-
-    Surfaces every rebalancing suggestion produced by the engine, ordered
-    by absolute amount so the most impactful trades come first.
-    """
-    m = ctx.metrics
-    suggestions = list(m.rebalancing_suggestions or [])
-    if not suggestions:
-        return {"available": False}
-
+def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
+    """Build one optimizer plan's render context (actions + totals) from a
+    list of rebalancing suggestions."""
     df = m.holdings_df
-
-    # Plan totals across the entire suggestion set.
     total_buy = sum(float(s["amount_eur"]) for s in suggestions
                     if s["direction"].lower() == "buy")
     total_sell = sum(float(s["amount_eur"]) for s in suggestions
                      if s["direction"].lower() == "sell")
 
-    # Display order: largest absolute amount first.
-    selected = sorted(suggestions, key=lambda s: -float(s["amount_eur"]))
-
     actions = []
-    for s in selected:
+    for s in sorted(suggestions, key=lambda s: -float(s["amount_eur"])):
         direction = s["direction"].upper()
         amount = float(s["amount_eur"])
         pct_of_port = (amount / m.total_value * 100) if m.total_value > 0 else 0.0
@@ -2626,8 +2613,6 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             "isin": s.get("isin", ""),
             "asset_class": klass,
             "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-            # Always show amounts as positive — the colored chip already
-            # encodes the direction. Net is shown in the summary below.
             "amount": _eur(amount, decimals=2),
             "pct_of_portfolio": _pct(pct_of_port, decimals=1),
             "reason": s.get("reason", ""),
@@ -2635,20 +2620,48 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
 
     n_total = len(suggestions)
     n_buy = sum(1 for s in suggestions if s["direction"].lower() == "buy")
-    n_sell = n_total - n_buy
-
     return {
-        "available": True,
         "actions": actions,
         "n_total": n_total,
         "n_buy": n_buy,
-        "n_sell": n_sell,
+        "n_sell": n_total - n_buy,
         "total_buy": _eur_smart(total_buy),
         "total_sell": _eur_smart(total_sell),
         "net": _eur_smart(total_buy - total_sell, signed=True),
         "net_color": (PALETTE["green"] if (total_buy - total_sell) >= 0
                       else PALETTE["red"]),
     }
+
+
+def _build_optimizer(ctx: _NewsletterContext) -> dict:
+    """Build the suggested-action card with BOTH rebalancing plans (buy-only
+    and buy & sell), each ordered by absolute amount.
+
+    Reads ``metrics.rebalancing_plans`` (always computed by the engine); falls
+    back to the single ``rebalancing_suggestions`` set for back-compat.
+    """
+    m = ctx.metrics
+    plans_src = getattr(m, "rebalancing_plans", None)
+
+    if plans_src:
+        plans = []
+        for p in plans_src:
+            pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []))
+            pc["label"] = p.get("label", "")
+            pc["no_sell"] = p.get("no_sell")
+            plans.append(pc)
+        if not any(pc["actions"] for pc in plans):
+            return {"available": False}
+        return {"available": True, "plans": plans}
+
+    # Back-compat: single plan.
+    suggestions = list(m.rebalancing_suggestions or [])
+    if not suggestions:
+        return {"available": False}
+    pc = _optimizer_plan_ctx(m, suggestions)
+    pc["label"] = "Suggested actions"
+    pc["no_sell"] = None
+    return {"available": True, "plans": [pc]}
 
 
 

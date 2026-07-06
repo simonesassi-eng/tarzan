@@ -91,6 +91,13 @@ class InvestorConfig:
     # and growth-oriented deployment of fresh capital.
     rebalancing_drift_penalty_weight: float = 1.0
 
+    # When TRUE the optimizer ignores the asset-class and equity-geo targets
+    # and rebalances purely toward the per-instrument portfolio-level targets
+    # (``target_portfolio`` in targets_per_holding.csv): every held instrument
+    # not listed there is driven to 0% (sold), and listed instruments not yet
+    # held are seeded so they can be bought. FALSE = classic behavior.
+    target_use_per_holding_only: bool = False
+
     # Cash buffer (absolute EUR amount)
     target_cash_buffer_eur: float = 0.0
 
@@ -153,6 +160,8 @@ class InvestorConfig:
             config.rebalancing_no_sell = _parse_bool(rows["rebalancing_no_sell"])
         if "rebalancing_auto_relax" in rows:
             config.rebalancing_auto_relax = _parse_bool(rows["rebalancing_auto_relax"])
+        if "target_use_per_holding_only" in rows:
+            config.target_use_per_holding_only = _parse_bool(rows["target_use_per_holding_only"])
 
         # Dict fields
         _parse_invested_allocation(config, rows)
@@ -248,6 +257,7 @@ _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_capital_gains_tax_standard_pctg",
     "rebalancing_capital_gains_tax_government_pctg",
     "rebalancing_drift_penalty_weight",
+    "target_use_per_holding_only",
     "target_cash_buffer_eur",
 })
 

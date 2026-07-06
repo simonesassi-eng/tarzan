@@ -87,7 +87,11 @@ class Holding:
     data_source: Optional[str] = None
     target_equities: Optional[float] = None  # target weight as % of equity portion
     target_fixed_income: Optional[float] = None  # target weight as % of fixed income portion
+    target_portfolio: Optional[float] = None  # target weight as % of the whole invested portfolio
     no_buy_no_sell: bool = False  # if True, exclude from rebalancing actions
+    # Seeded target instrument not currently held (quantity 0), added so the
+    # optimizer can open a new position toward its target_portfolio weight.
+    is_seeded_target: bool = False
     fetch_timestamp: Optional[datetime] = None
     price_history: Optional[pd.Series] = field(default=None, repr=False)
 

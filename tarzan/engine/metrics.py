@@ -659,10 +659,33 @@ class MetricsEngine:
             compute_drift_penalty_sensitivity,
         )
         lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
-        suggestions, verifications = compute_unified_rebalancing(
-            self.holdings, self.config, ctx["total_value"], lump_sum=lump)
-        ctx["rebalancing_suggestions"] = suggestions
-        ctx["rebalancing_verifications"] = verifications
+
+        # Always compute BOTH rebalancing variants so Excel and the
+        # newsletter can present them side by side: a buy-only
+        # (accumulation) plan and a full buy & sell plan. They differ only
+        # in the ``rebalancing_no_sell`` flag; everything else (targets,
+        # tolerance, lump sum) is identical.
+        import dataclasses
+
+        def _plan(no_sell: bool):
+            cfg2 = dataclasses.replace(self.config, rebalancing_no_sell=no_sell)
+            return compute_unified_rebalancing(
+                self.holdings, cfg2, ctx["total_value"], lump_sum=lump)
+
+        s_true, v_true = _plan(True)
+        s_false, v_false = _plan(False)
+        ctx["rebalancing_plans"] = [
+            {"label": "Buy only (accumulate)", "no_sell": True,
+             "suggestions": s_true, "verifications": v_true},
+            {"label": "Buy & sell (full rebalance)", "no_sell": False,
+             "suggestions": s_false, "verifications": v_false},
+        ]
+        # Primary plan = the one matching the user's configured no_sell, kept
+        # for back-compat (hero status banner, dashboard alert, etc.).
+        if self.config.rebalancing_no_sell:
+            ctx["rebalancing_suggestions"], ctx["rebalancing_verifications"] = s_true, v_true
+        else:
+            ctx["rebalancing_suggestions"], ctx["rebalancing_verifications"] = s_false, v_false
 
         # Drift-penalty sensitivity sweep — surfaces the optimization
         # turning points so the user can pick the weight that matches
@@ -942,6 +965,7 @@ class MetricsEngine:
             goal_deltas=ctx.get("goal_deltas"),
             rebalancing_suggestions=ctx.get("rebalancing_suggestions"),
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
+            rebalancing_plans=ctx.get("rebalancing_plans"),
             rebalancing_sensitivity=ctx.get("rebalancing_sensitivity"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
             portfolio_history=ctx.get("portfolio_history"),

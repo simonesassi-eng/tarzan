@@ -294,7 +294,29 @@ def generate_excel(
                 ws.sheet_properties.tabColor = TAB_COLORS[name]
 
         _write_dashboard(workbook, sheets["Dashboard"], metrics, config)
-        _write_allocations(workbook, sheets["Optimizer"], metrics, config)
+        # Optimizer: always render BOTH rebalancing plans (buy-only and
+        # buy & sell) on two tabs so the reader can compare accumulation vs
+        # full rebalance. Falls back to a single tab if plans are absent.
+        plans = getattr(metrics, "rebalancing_plans", None)
+        if plans:
+            import dataclasses as _dc
+            opt = sheets["Optimizer"]
+            opt.title = "Optimizer (Buy only)"
+            m_buyonly = _dc.replace(
+                metrics, rebalancing_suggestions=plans[0]["suggestions"],
+                rebalancing_verifications=plans[0]["verifications"])
+            _write_allocations(workbook, opt, m_buyonly, config)
+            opt2 = workbook.create_sheet(
+                title="Optimizer (Buy & Sell)", index=workbook.index(opt) + 1)
+            opt2.sheet_view.showGridLines = False
+            opt2.sheet_properties.tabColor = TAB_COLORS.get("Optimizer", "16A34A")
+            m_buysell = _dc.replace(
+                metrics, rebalancing_suggestions=plans[1]["suggestions"],
+                rebalancing_verifications=plans[1]["verifications"])
+            _write_allocations(workbook, opt2, m_buysell, config)
+            sheets["Optimizer (Buy & Sell)"] = opt2
+        else:
+            _write_allocations(workbook, sheets["Optimizer"], metrics, config)
         _write_holdings(workbook, sheets["Holdings"], metrics)
         _write_performance(workbook, sheets["Performance"], metrics)
         _write_analysis(workbook, sheets["Return Contribution"], metrics)
@@ -336,11 +358,14 @@ def _set_column_widths(sheets: dict) -> None:
     for col_letter in ['P', 'Q', 'R']:
         s["Holdings"].column_dimensions[col_letter].width = 16
 
-    s["Optimizer"].column_dimensions['A'].width = 45
-    s["Optimizer"].column_dimensions['B'].width = 12
-    s["Optimizer"].column_dimensions['C'].width = 14
-    s["Optimizer"].column_dimensions['D'].width = 12
-    s["Optimizer"].column_dimensions['E'].width = 22
+    for _opt_key in ("Optimizer", "Optimizer (Buy & Sell)"):
+        if _opt_key not in s:
+            continue
+        s[_opt_key].column_dimensions['A'].width = 45
+        s[_opt_key].column_dimensions['B'].width = 12
+        s[_opt_key].column_dimensions['C'].width = 14
+        s[_opt_key].column_dimensions['D'].width = 12
+        s[_opt_key].column_dimensions['E'].width = 22
 
     s["Performance"].column_dimensions['A'].width = 35
     for i in range(2, 15):

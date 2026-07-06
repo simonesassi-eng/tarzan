@@ -23,28 +23,65 @@ logger = logging.getLogger(__name__)
 from tarzan.models.investor_config import InvestorConfig
 
 
-def _apply_per_holding_targets(holdings, targets_by_isin: dict) -> None:
-    """Attach per-holding rebalancing targets (by ISIN) in place.
+def _apply_per_holding_targets(holdings, targets: dict) -> None:
+    """Attach per-holding rebalancing targets in place.
 
-    Used in order-only mode: the order list has no target columns, so the
-    rebalancer's per-instrument targets are sourced from the side file
-    loaded by ``load_targets_per_holding``. A holding with no matching
-    ISIN is left untouched (no target).
+    ``targets`` is keyed by ISIN (when present) or uppercased ticker, as
+    produced by ``load_targets_per_holding``. Each holding is matched by its
+    ISIN first, then by its (uppercased) ticker — so ticker-only target rows
+    still attach. A holding with no matching target is left untouched.
     """
-    if not targets_by_isin:
+    if not targets:
         return
     matched = 0
     for h in holdings:
-        t = targets_by_isin.get(h.isin)
+        t = targets.get(h.isin)
+        if t is None and h.ticker:
+            t = targets.get(h.ticker.strip().upper())
         if not t:
             continue
         if t.get("target_equities") is not None:
             h.target_equities = t["target_equities"]
         if t.get("target_fixed_income") is not None:
             h.target_fixed_income = t["target_fixed_income"]
+        if t.get("target_portfolio") is not None:
+            h.target_portfolio = t["target_portfolio"]
         h.no_buy_no_sell = bool(t.get("no_buy_no_sell", False))
         matched += 1
     logger.info("Applied per-holding targets to %d/%d holdings", matched, len(holdings))
+
+
+def _seed_missing_targets(holdings, targets: dict) -> list:
+    """Create zero-value holdings for target instruments not currently held.
+
+    Used by the per-holding-only rebalancing mode so the optimizer can open
+    a new position toward an instrument's ``target_portfolio`` weight. Matches
+    existing holdings by ISIN or (uppercased) ticker; every remaining target
+    row with a positive ``target_portfolio`` becomes a seeded Holding
+    (quantity 0) to be enriched alongside the rest.
+    """
+    from tarzan.models.holding import Holding
+
+    held_isins = {h.isin for h in holdings if h.isin}
+    held_tickers = {(h.ticker or "").strip().upper() for h in holdings if h.ticker}
+    seeded = []
+    for row in targets.values():
+        tpf = row.get("target_portfolio")
+        if tpf is None or tpf <= 0:
+            continue
+        r_isin = (row.get("isin") or "").strip()
+        r_ticker = (row.get("ticker") or "").strip()
+        if not r_isin and not r_ticker:
+            continue
+        if (r_isin and r_isin in held_isins) or (r_ticker and r_ticker.upper() in held_tickers):
+            continue  # already held
+        seeded.append(Holding(
+            isin=r_isin, ticker=r_ticker, quantity=0.0,
+            cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
+            name=row.get("name") or r_ticker or r_isin,
+            target_portfolio=float(tpf), is_seeded_target=True,
+        ))
+    return seeded
 
 
 def run(
@@ -107,6 +144,17 @@ def run(
     if not holdings:
         logger.error("Order list produced no holdings.")
         return PortfolioMetrics(), config
+
+    # Per-holding-only mode: seed zero-value positions for target instruments
+    # not currently held, so the optimizer can buy them toward target.
+    if config.target_use_per_holding_only and targets_by_isin:
+        seeded = _seed_missing_targets(holdings, targets_by_isin)
+        if seeded:
+            logger.info(
+                "Seeding %d not-held target instrument(s) for buy-new: %s",
+                len(seeded), ", ".join(h.ticker or h.isin for h in seeded),
+            )
+            holdings.extend(seeded)
 
     logger.info("Snapshot derived from orders: %d holdings", len(holdings))
 
