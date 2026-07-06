@@ -65,6 +65,10 @@ class PortfolioMetrics:
     goal_deltas: Optional[pd.DataFrame] = None
     rebalancing_suggestions: Optional[list] = None
     rebalancing_verifications: Optional[list] = None
+    # Both rebalancing variants (buy-only and buy & sell), always computed so
+    # Excel and the newsletter can show them side by side. Each entry:
+    # {"label", "no_sell", "suggestions", "verifications"}.
+    rebalancing_plans: Optional[list] = None
     # Drift-penalty sensitivity sweep: list of regimes describing how
     # the optimization changes as ``rebalancing_drift_penalty_weight``
     # varies. Used by the Optimizer tab to surface tuning hints.

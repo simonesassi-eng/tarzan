@@ -110,6 +110,41 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     # "OK / PARTIAL" status does not contradict the user-facing colors.
     tol = float(config.rebalancing_target_tolerance_pctg)
 
+    # Per-holding-only mode: verify each instrument's % of invested vs its
+    # portfolio-level target (unlisted → 0), plus cash. Asset-class and geo
+    # checks are intentionally skipped here.
+    if getattr(config, "target_use_per_holding_only", False):
+        details, items, max_d = [], [], 0.0
+        for i, h in enumerate(holdings):
+            if h.asset_class == AssetClass.CASH_EQUIVALENTS:
+                continue
+            tgt = float(h.target_portfolio or 0.0)
+            actual = new_values[i] / invested_new * 100 if invested_new > 0 else 0.0
+            d = abs(actual - tgt)
+            max_d = max(max_d, d)
+            if tgt > 0 or actual > 0.05:
+                details.append(f"{h.ticker} {actual:.1f}% (tgt. {tgt:.0f}%)")
+                items.append({"category": h.name or h.ticker, "ticker": h.ticker,
+                              "actual_pct": actual, "target_pct": tgt})
+        verifications.append({"check": "Per-Holding Portfolio Targets",
+                              "kind": "per_holding_portfolio",
+                              "status": "\u2713 OK" if max_d <= tol else "\u26a0 PARTIAL",
+                              "detail": ", ".join(details) or "No targets set",
+                              "items": items})
+        cash_target = float(config.target_cash_buffer_eur or 0.0)
+        cash_delta_eur = cash_new - cash_target
+        cash_band_eur = abs(tol / 100.0 * cash_target)
+        cash_ok = abs(cash_delta_eur) <= max(cash_band_eur, 1.0)
+        verifications.append({
+            "check": "Cash & Cash Equivalents", "kind": "cash",
+            "status": "\u2713 OK" if cash_ok else "\u26a0 PARTIAL",
+            "detail": (f"Cash {cash_new:.2f} EUR (tgt. {cash_target:.2f} EUR, "
+                       f"delta {cash_delta_eur:+.2f} EUR)"),
+            "items": [{"category": "Cash & Cash Equivalents", "actual_eur": cash_new,
+                       "target_eur": cash_target, "delta_eur": cash_delta_eur}],
+        })
+        return verifications
+
     # Invested asset allocation: percentages relative to invested_new
     # (excludes cash). Cash is never in invested_allocation_targets_pctg.
     class_pcts = {}
@@ -267,6 +302,9 @@ class _ObjectiveModel:
         n = len(holdings)
         self.n = n
         self.tol = float(config.rebalancing_target_tolerance_pctg or 2.0)
+        # Per-holding-only mode: drive each instrument to its portfolio-level
+        # target (% of invested), ignoring asset-class and geo objectives.
+        self.per_holding_only = bool(getattr(config, "target_use_per_holding_only", False))
 
         cls = [(h.asset_class.value if h.asset_class else "Alternative") for h in holdings]
         self.noncash_mask = np.array(
@@ -320,26 +358,47 @@ class _ObjectiveModel:
                           if h.target_fixed_income is not None and h.asset_class == AssetClass.FIXED_INCOME]
         self.ph_fi_tgt = np.array([float(holdings[i].target_fixed_income) for i in self.ph_fi_idx])
 
+        # Per-holding PORTFOLIO objectives (% of invested portfolio). Active
+        # only in per-holding-only mode: every non-cash holding gets a target
+        # (unlisted → 0, i.e. sell out).
+        self.ph_pf_idx: list[int] = []
+        self.ph_pf_tgt = np.zeros(0)
+        if self.per_holding_only:
+            self.ph_pf_idx = [i for i, h in enumerate(holdings)
+                              if h.asset_class != AssetClass.CASH_EQUIVALENTS]
+            self.ph_pf_tgt = np.array(
+                [float(holdings[i].target_portfolio or 0.0) for i in self.ph_pf_idx]
+            )
+
         self.cash_target = float(config.target_cash_buffer_eur or 0.0)
 
-        # Stable label list parallel to the gap vector (for reporting / ambits).
-        self.labels = (
-            [("asset", k) for k in self.ac_keys]
-            + [("geo", g) for g in self.all_geos]
-            + [("ph_eq", holdings[i].ticker) for i in self.ph_eq_idx]
-            + [("ph_fi", holdings[i].ticker) for i in self.ph_fi_idx]
-            + ([("cash", "Cash & Cash Equivalents")] if self.cash_target > 0 else [])
-        )
-        # Ambit grouping: the macro-areas the user cares about. Per-holding
-        # equity and FI are one "per_holding" ambit so a single unfixable
-        # holding does not sink the whole ambit.
-        self.ambit_of = []
-        for kind, _ in self.labels:
-            self.ambit_of.append("per_holding" if kind in ("ph_eq", "ph_fi") else kind)
-        self.targets = np.concatenate([
-            self.ac_targets, self.geo_targets, self.ph_eq_tgt, self.ph_fi_tgt,
-            (np.array([self.cash_target]) if self.cash_target > 0 else np.zeros(0)),
-        ])
+        cash_lbl = [("cash", "Cash & Cash Equivalents")] if self.cash_target > 0 else []
+        cash_tgt = np.array([self.cash_target]) if self.cash_target > 0 else np.zeros(0)
+
+        if self.per_holding_only:
+            # Only per-instrument portfolio targets (+ cash). Asset-class and
+            # geo objectives are intentionally excluded.
+            self.labels = [("ph_pf", holdings[i].ticker) for i in self.ph_pf_idx] + cash_lbl
+            self.ambit_of = ["per_holding" for _ in self.ph_pf_idx] + (["cash"] if cash_lbl else [])
+            self.targets = np.concatenate([self.ph_pf_tgt, cash_tgt])
+        else:
+            # Stable label list parallel to the gap vector (for reporting / ambits).
+            self.labels = (
+                [("asset", k) for k in self.ac_keys]
+                + [("geo", g) for g in self.all_geos]
+                + [("ph_eq", holdings[i].ticker) for i in self.ph_eq_idx]
+                + [("ph_fi", holdings[i].ticker) for i in self.ph_fi_idx]
+                + cash_lbl
+            )
+            # Ambit grouping: the macro-areas the user cares about. Per-holding
+            # equity and FI are one "per_holding" ambit so a single unfixable
+            # holding does not sink the whole ambit.
+            self.ambit_of = []
+            for kind, _ in self.labels:
+                self.ambit_of.append("per_holding" if kind in ("ph_eq", "ph_fi") else kind)
+            self.targets = np.concatenate([
+                self.ac_targets, self.geo_targets, self.ph_eq_tgt, self.ph_fi_tgt, cash_tgt,
+            ])
 
     def gaps(self, new_values: np.ndarray) -> np.ndarray:
         """Signed deviations (pp) for every objective, in ``labels`` order.
@@ -347,6 +406,15 @@ class _ObjectiveModel:
         inv = max(float(self.noncash_mask @ new_values), 1e-9)
         eq = max(float(self.eq_mask @ new_values), 1e-9)
         fi = max(float(self.fi_mask @ new_values), 1e-9)
+
+        if self.per_holding_only:
+            parts = []
+            if self.ph_pf_idx:
+                parts.append(new_values[self.ph_pf_idx] / inv * 100.0 - self.ph_pf_tgt)
+            if self.cash_target > 0:
+                cash_actual = float(self.cash_mask @ new_values)
+                parts.append(np.array([(cash_actual - self.cash_target) / self.cash_target * 100.0]))
+            return np.concatenate(parts) if parts else np.zeros(0)
 
         parts = []
         if self.ac_masks.shape[0]:
@@ -482,8 +550,15 @@ class _Cost:
 # Local search
 # ---------------------------------------------------------------------------
 
-def _bounds(holdings: list[Holding], values: np.ndarray, no_sell: bool):
-    """Return (lo, hi, tradeable) arrays for the signed trade vector t."""
+def _bounds(holdings: list[Holding], values: np.ndarray, no_sell: bool,
+            per_holding_only: bool = False):
+    """Return (lo, hi, tradeable) arrays for the signed trade vector t.
+
+    In per-holding-only mode a 0% target means "fully exit" — when selling is
+    allowed such a held position is pinned to a full sell (lo=hi=-value), so
+    the tolerance band can never leave a residual behind. Callers seed the
+    initial trade from ``lo`` where ``lo == hi`` so these pins take effect.
+    """
     n = len(holdings)
     lo = np.full(n, -np.inf)
     hi = np.full(n, np.inf)
@@ -494,6 +569,11 @@ def _bounds(holdings: list[Holding], values: np.ndarray, no_sell: bool):
             tradeable[i] = False
             continue
         lo[i] = 0.0 if no_sell else -float(values[i])  # cannot sell more than held
+        if (per_holding_only and not no_sell and values[i] > 0
+                and float(getattr(h, "target_portfolio", 0.0) or 0.0) == 0.0):
+            # Target 0% ⇒ liquidate fully, ignoring the tolerance band.
+            lo[i] = hi[i] = -float(values[i])
+            tradeable[i] = False
     return lo, hi, tradeable
 
 
@@ -617,13 +697,16 @@ def optimize_local_search(
 
     model = _ObjectiveModel(holdings, config, values)
     cost = _Cost(model, values, config, float(lump_sum or 0.0), params)
-    lo, hi, tradeable = _bounds(holdings, values, bool(config.rebalancing_no_sell))
+    lo, hi, tradeable = _bounds(
+        holdings, values, bool(config.rebalancing_no_sell),
+        getattr(config, "target_use_per_holding_only", False))
     tv = float(values.sum())
     steps = [tv * f for f in params.step_fractions]
     rng = np.random.default_rng(params.seed)
 
-    # Initial descent from "no trades".
-    t = np.zeros(n)
+    # Initial trade: pinned positions (lo == hi) start at that value — this
+    # seeds the forced full-sell of 0%-target holdings; everything else at 0.
+    t = np.where(lo == hi, lo, 0.0)
     best, best_cost = _descent(t, cost, lo, hi, tradeable, steps, params)
 
     # Iterated Local Search.
@@ -667,6 +750,14 @@ def _extract_actions(t: np.ndarray, holdings: list[Holding], model: _ObjectiveMo
 
 def _reason(i: int, h: Holding, model: _ObjectiveModel, new_values: np.ndarray) -> str:
     """Short 'why' string: which objective(s) this holding's trade serves."""
+    if model.per_holding_only:
+        inv = max(float(model.noncash_mask @ new_values), 1e-9)
+        actual = float(new_values[i]) / inv * 100.0
+        tgt = float(h.target_portfolio or 0.0)
+        # ``actual`` is the POST-trade weight, so make that explicit — a
+        # not-yet-held instrument being bought shows where it lands, not a
+        # current position.
+        return f"post-trade \u2192 {actual:.1f}% of portfolio (target {tgt:.0f}%)"
     bits = []
     ac = h.asset_class.value if h.asset_class else "Alternative"
     if ac in model.ac_keys:

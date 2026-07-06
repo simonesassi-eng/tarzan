@@ -147,3 +147,98 @@ def test_run_without_orders_returns_empty(tmp_path, monkeypatch):
         orders_source=str(tmp_path / "does_not_exist.csv"),
     )
     assert metrics.total_value == 0
+
+
+# ── Per-holding PORTFOLIO targets + buy-new seeding ──────────────────────────
+
+def test_load_targets_portfolio_and_ticker_key(tmp_path):
+    p = tmp_path / "tph.csv"
+    p.write_text(
+        "name,isin,ticker,target_equities,target_fixed_income,target_portfolio,no_buy_no_sell\n"
+        "Held,IE00BDBRDM35,AGGH.MI,,,30,\n"
+        "NewOne,,NTSG.DE,,,40,\n"
+    )
+    t = load_targets_per_holding(str(p))
+    # ISIN-keyed row carries the portfolio target.
+    assert t["IE00BDBRDM35"]["target_portfolio"] == pytest.approx(30.0)
+    # Ticker-only row is kept, keyed by uppercased ticker.
+    assert "NTSG.DE" in t
+    assert t["NTSG.DE"]["target_portfolio"] == pytest.approx(40.0)
+    assert t["NTSG.DE"]["isin"] == ""
+
+
+def test_seed_missing_targets_only_creates_not_held():
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0),
+    ])
+    holdings[0].ticker = "AGGH.MI"  # held instrument, matched by ISIN
+    targets = {
+        "IE00BDBRDM35": {"isin": "IE00BDBRDM35", "ticker": "AGGH.MI",
+                         "name": "Held", "target_portfolio": 30.0,
+                         "no_buy_no_sell": False},
+        "NTSG.DE": {"isin": "", "ticker": "NTSG.DE", "name": "New",
+                    "target_portfolio": 40.0, "no_buy_no_sell": False},
+    }
+    seeded = orchestrator._seed_missing_targets(holdings, targets)
+    assert len(seeded) == 1
+    s = seeded[0]
+    assert s.ticker == "NTSG.DE"
+    assert s.quantity == 0.0
+    assert s.is_seeded_target is True
+    assert s.target_portfolio == pytest.approx(40.0)
+
+
+def test_per_holding_only_objective_uses_portfolio_targets():
+    import numpy as np
+    from tarzan.engine.rebalancer import _ObjectiveModel
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.holding import AssetClass
+
+    cfg = InvestorConfig()
+    cfg.target_use_per_holding_only = True
+    cfg.target_cash_buffer_eur = 0.0
+
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0),
+        _o(OrderType.BUY, "IE00BL25JP72", qty=10.0, net=-1000.0),
+    ])
+    for h in holdings:
+        h.asset_class = AssetClass.EQUITIES
+    holdings[0].target_portfolio = 70.0
+    holdings[1].target_portfolio = 30.0
+
+    model = _ObjectiveModel(holdings, cfg, np.array([6000.0, 4000.0]))
+    assert model.per_holding_only is True
+    # Only per-holding-portfolio objectives (no asset/geo labels).
+    assert all(kind == "ph_pf" for kind, _ in model.labels)
+    assert list(model.targets) == [70.0, 30.0]
+
+
+def test_zero_target_pins_full_sell_when_selling_allowed():
+    import numpy as np
+    from tarzan.engine.rebalancer import _bounds
+    from tarzan.models.holding import AssetClass
+
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0),
+        _o(OrderType.BUY, "IE00BL25JP72", qty=10.0, net=-1000.0),
+    ])
+    for h in holdings:
+        h.asset_class = AssetClass.EQUITIES
+    holdings[0].target_portfolio = 0.0     # unlisted → exit fully
+    holdings[1].target_portfolio = 100.0
+    values = np.array([2000.0, 3000.0])
+
+    # Selling allowed: the 0%-target position is pinned to a full sell,
+    # regardless of tolerance; the positive-target one stays freely tradeable.
+    lo, hi, tr = _bounds(holdings, values, no_sell=False, per_holding_only=True)
+    assert lo[0] == hi[0] == -2000.0 and not tr[0]
+    assert tr[1] and lo[1] == -3000.0
+
+    # Buy-only: nothing is force-sold (can't sell at all).
+    lo2, _, tr2 = _bounds(holdings, values, no_sell=True, per_holding_only=True)
+    assert lo2[0] == 0.0 and tr2[0]
+
+    # Classic mode (flag off): no pinning even with selling allowed.
+    lo3, hi3, tr3 = _bounds(holdings, values, no_sell=False, per_holding_only=False)
+    assert tr3[0] and hi3[0] == np.inf

@@ -175,10 +175,19 @@ def load_targets_per_holding(
     A missing path returns ``{}`` (non-fatal) so the pipeline runs without
     it — holdings simply carry no per-instrument target.
 
+    Columns (case-insensitive): ``name, isin, ticker, target_equities,
+    target_fixed_income, target_portfolio, no_buy_no_sell``. ``target_portfolio``
+    is the instrument's target weight as a % of the whole invested portfolio
+    (used by the per-holding-only rebalancing mode). At least one of ``isin``
+    / ``ticker`` must be present per row.
+
+    Each row is keyed by its ISIN when present, otherwise by its uppercased
+    ticker — so ticker-only rows (e.g. a not-yet-held instrument to buy) are
+    kept, and the caller can match holdings by ISIN or ticker.
+
     Returns:
-        ``{isin: {"target_equities": float|None,
-                  "target_fixed_income": float|None,
-                  "no_buy_no_sell": bool}}``.
+        ``{key: {"isin", "ticker", "name", "target_equities",
+                 "target_fixed_income", "target_portfolio", "no_buy_no_sell"}}``.
     """
     if isinstance(source, str) and not os.path.exists(source):
         logger.info("No per-holding targets at %s; none applied.", source)
@@ -186,22 +195,28 @@ def load_targets_per_holding(
 
     df = _read_source(source, filename)
     df.columns = [c.strip().lower() for c in df.columns]
-    if "isin" not in df.columns:
-        logger.warning("Per-holding targets file has no 'isin' column; ignoring.")
+    if "isin" not in df.columns and "ticker" not in df.columns:
+        logger.warning("Per-holding targets file has no 'isin'/'ticker' column; ignoring.")
         return {}
 
     result: dict[str, dict] = {}
     for _, row in df.iterrows():
         isin = _clean_str(row.get("isin"))
-        if not isin:
+        ticker = _clean_str(row.get("ticker"))
+        key = isin or ticker.upper()
+        if not key:
             continue
         nbns = str(row.get("no_buy_no_sell", "")).strip().lower()
-        result[isin] = {
+        result[key] = {
+            "isin": isin,
+            "ticker": ticker,
+            "name": _clean_str(row.get("name")),
             "target_equities": _parse_number_optional(row.get("target_equities")),
             "target_fixed_income": _parse_number_optional(row.get("target_fixed_income")),
+            "target_portfolio": _parse_number_optional(row.get("target_portfolio")),
             "no_buy_no_sell": nbns in ("true", "1", "yes"),
         }
-    logger.info("Loaded per-holding targets for %d ISIN(s)", len(result))
+    logger.info("Loaded per-holding targets for %d instrument(s)", len(result))
     return result
 
 
