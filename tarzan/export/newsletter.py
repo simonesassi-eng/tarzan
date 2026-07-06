@@ -1244,7 +1244,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return (
             f'<td width="{cw}" style="vertical-align:top;padding:3px 4px;'
             f'background:{P["card_alt"]};border:1px solid {P["border"]};'
-            f'border-left:3px solid {_rc(d.get("category"))};border-radius:6px;">'
+            f'border-left:2px solid {_rc(d.get("category"))};border-radius:6px;">'
             f'<div style="font-size:7px;font-weight:700;letter-spacing:0.01em;'
             f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
             f'<div style="font-size:10px;font-weight:700;color:{P["ink"]};'
@@ -1254,23 +1254,40 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'<div style="margin-top:1px;">{spark}</div></td>'
         )
 
-    # Cards flow in region order, continuously across regions (no row breaks).
-    # Any category missing from CATEGORY_ORDER is appended, never dropped.
-    ordered = [d for cat in CATEGORY_ORDER for d in snap if d.get("category") == cat]
-    ordered += [d for d in snap if d.get("category") not in CATEGORY_ORDER]
+    # Row-break groups: each region starts on a new row. Crypto (just
+    # Bitcoin) is folded into Commodities so a single card never strands a
+    # near-empty row. Categories outside CATEGORY_ORDER become their own
+    # group (never dropped).
+    MERGE = {"Crypto": "Commodities"}
+    group_order, group_members = [], {}
+    for cat in CATEGORY_ORDER:
+        if cat in MERGE:
+            continue  # folded into its target group
+        group_order.append(cat)
+        group_members[cat] = [cat] + [c for c in CATEGORY_ORDER if MERGE.get(c) == cat]
+    for d in snap:
+        c = d.get("category")
+        if c not in CATEGORY_ORDER and c not in group_order:
+            group_order.append(c)
+            group_members[c] = [c]
 
-    cells = [_card(d) for d in ordered]
-    while len(cells) % COLS != 0:
-        cells.append(f'<td width="{cw}"></td>')
     spacer = (f'<tr><td colspan="{COLS * 2}" style="font-size:0;'
               f'line-height:5px;">&nbsp;</td></tr>')
-    rows = [
-        "<tr>" + '<td width="1%"></td>'.join(cells[i:i + COLS]) + "</tr>"
-        for i in range(0, len(cells), COLS)
-    ]
+    all_rows = []
+    for g in group_order:
+        cards = []
+        for cat in group_members[g]:
+            cards += [_card(d) for d in snap if d.get("category") == cat]
+        if not cards:
+            continue
+        # Pad this region's last row so the next region starts on a new line.
+        while len(cards) % COLS != 0:
+            cards.append(f'<td width="{cw}"></td>')
+        for i in range(0, len(cards), COLS):
+            all_rows.append("<tr>" + '<td width="1%"></td>'.join(cards[i:i + COLS]) + "</tr>")
     grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
             'border="0" style="margin-top:6px;border-collapse:separate;">'
-            + spacer.join(rows) + '</table>')
+            + spacer.join(all_rows) + '</table>')
 
     # Colour legend: only the regions actually present, in canonical order.
     present = [c for c in CATEGORY_ORDER if any(d.get("category") == c for d in snap)]
@@ -1371,10 +1388,6 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     dates = win["dates"]
     GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
 
-    def _sub(t: str) -> str:
-        return (f'<div style="margin-top:18px;font-size:11px;font-weight:700;color:{P["muted"]};'
-                f'text-transform:uppercase;letter-spacing:0.04em;">{t}</div>')
-
     def _colcap(t: str) -> str:
         return f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};margin-bottom:3px;">{t}</div>'
 
@@ -1407,18 +1420,30 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     parts = []
     if s30 or ssi:
-        parts.append(_sub("You vs the market "
-                          f"<span style='font-weight:500;color:{P['subtle']};text-transform:none;letter-spacing:0;'>"
-                          f"— MSCI ACWI</span>"))
         left = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
                 + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
         right = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
                  + _charts.chart_pct_compact(ssi, dates, include_zero=False) + _charts.legend(lsi, 9)) if ssi else ""
-        parts.append(
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;"><tr>'
+        charts_tbl = (
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;"><tr>'
             f'<td width="50%" valign="top" style="padding-right:8px;">{left}</td>'
             f'<td width="50%" valign="top" style="padding-left:8px;border-left:1px solid {P["border"]};">{right}</td>'
             f'</tr></table>'
+        )
+        inner = (
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
+            f'text-transform:uppercase;">You vs the market</div>'
+            f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">Your return paths vs '
+            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong> — last 30 days (rebased) and '
+            f'since inception (cumulative).</div>{charts_tbl}'
+        )
+        # Wrapped in the same card shell as the matrix above so the section
+        # reads consistently with the rest of the newsletter.
+        parts.append(
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+            f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
+            f'<tr><td style="padding:14px 16px;">{inner}</td></tr></table>'
         )
 
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
