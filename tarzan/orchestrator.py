@@ -146,29 +146,34 @@ def run(
         return PortfolioMetrics(), config
 
     # Per-holding-only mode: seed zero-value positions for target instruments
-    # not currently held, so the optimizer can buy them toward target.
+    # not currently held, so the optimizer can buy them toward target. These
+    # seeds are kept SEPARATE from the real snapshot — they must never appear
+    # in Holdings / Returns / allocations, only feed the rebalancer.
+    seeds = []
     if config.target_use_per_holding_only and targets_by_isin:
-        seeded = _seed_missing_targets(holdings, targets_by_isin)
-        if seeded:
+        seeds = _seed_missing_targets(holdings, targets_by_isin)
+        if seeds:
             logger.info(
                 "Seeding %d not-held target instrument(s) for buy-new: %s",
-                len(seeded), ", ".join(h.ticker or h.isin for h in seeded),
+                len(seeds), ", ".join(h.ticker or h.isin for h in seeds),
             )
-            holdings.extend(seeded)
 
     logger.info("Snapshot derived from orders: %d holdings", len(holdings))
 
-    # Enrich
+    # Enrich real holdings and seeds together, then split them back apart.
     from tarzan.data.enricher import enrich_holdings, set_portfolio_backtest_period
     set_portfolio_backtest_period(config.portfolio_backtest_period)
     logger.info("Enriching holdings (period=%s)...", config.portfolio_backtest_period)
-    holdings = enrich_holdings(holdings)
+    combined = enrich_holdings(holdings + seeds)
+    holdings = [h for h in combined if not getattr(h, "is_seeded_target", False)]
+    seeds = [h for h in combined if getattr(h, "is_seeded_target", False)]
     enriched = sum(1 for h in holdings if h.is_enriched())
-    logger.info("Enriched %d/%d holdings", enriched, len(holdings))
+    logger.info("Enriched %d/%d holdings (+%d rebalance seeds)",
+                enriched, len(holdings), len(seeds))
 
     # Compute
     logger.info("Computing metrics...")
-    engine = MetricsEngine(holdings, config, orders=orders)
+    engine = MetricsEngine(holdings, config, orders=orders, rebalance_seeds=seeds)
     metrics = engine.compute_all()
     logger.info("Total portfolio value: €%.2f", metrics.total_value)
 
