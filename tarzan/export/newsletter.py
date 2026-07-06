@@ -1206,15 +1206,15 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
 
 
 def _build_markets(ctx: _NewsletterContext) -> dict:
-    """Markets strip (yfinance-style): a single continuous 6-column grid of
-    uniform cards — level, daily change and a stretched mini sparkline —
-    flowing across regions with no per-region row breaks (a new region keeps
-    filling the same row). Each card carries a region-coloured left border and
-    a colour legend maps border→region. Live cached quotes, falling back to
-    the benchmark-derived snapshot if the live fetch yields nothing."""
+    """Markets strip (yfinance-style): roomy, neutral 5-column cards — level,
+    a daily-change pill and a stretched mini sparkline — grouped by region.
+    Each region is introduced by its own heading with a region-accent colour
+    swatch, so colour lives in the section labels (not on every card) and no
+    separate legend is needed. Live cached quotes, falling back to the
+    benchmark-derived snapshot if the live fetch yields nothing."""
     m = ctx.metrics
     P = PALETTE
-    COLS = 6
+    COLS = 5
     try:
         from tarzan.data.market_quotes import fetch_market_quotes, CATEGORY_ORDER
         snap = fetch_market_quotes()
@@ -1236,22 +1236,23 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def _card(d: dict) -> str:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
+        bg = P["green_bg"] if up else P["red_bg"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
         # Stretched sparkline fills the card width → no unused right-side gap.
         spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                           w=64, h=18, stretch=True)
+                           w=90, h=18, stretch=True)
         return (
-            f'<td width="{cw}" style="vertical-align:top;padding:3px 4px;'
-            f'background:{P["card_alt"]};border:1px solid {P["border"]};'
-            f'border-left:2px solid {_rc(d.get("category"))};border-radius:6px;">'
-            f'<div style="font-size:7px;font-weight:700;letter-spacing:0.01em;'
+            f'<td width="{cw}" style="vertical-align:top;padding:6px 10px;'
+            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
+            f'<div style="font-size:9px;font-weight:700;letter-spacing:0.02em;'
             f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
-            f'<div style="font-size:10px;font-weight:700;color:{P["ink"]};'
+            f'<div style="margin-top:1px;font-size:15px;font-weight:700;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{val}</div>'
-            f'<div style="font-size:7px;font-weight:700;color:{col};'
-            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{chg}</div>'
-            f'<div style="margin-top:1px;">{spark}</div></td>'
+            f'<div style="margin-top:2px;"><span style="font-size:10px;font-weight:700;color:{col};'
+            f'background:{bg};padding:1px 6px;border-radius:999px;font-variant-numeric:tabular-nums;'
+            f'white-space:nowrap;">{chg}</span></div>'
+            f'<div style="margin-top:3px;">{spark}</div></td>'
         )
 
     # Row-break groups: each region starts on a new row. Crypto (just
@@ -1271,39 +1272,34 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             group_order.append(c)
             group_members[c] = [c]
 
-    spacer = (f'<tr><td colspan="{COLS * 2}" style="font-size:0;'
-              f'line-height:5px;">&nbsp;</td></tr>')
-    all_rows = []
+    # Each region: an underlined heading (region-accent colour) followed by its
+    # own card grid. Colour lives in the heading, so the cards stay neutral and
+    # no separate legend is needed.
+    blocks = []
     for g in group_order:
         cards = []
         for cat in group_members[g]:
             cards += [_card(d) for d in snap if d.get("category") == cat]
         if not cards:
             continue
-        # Pad this region's last row so the next region starts on a new line.
         while len(cards) % COLS != 0:
             cards.append(f'<td width="{cw}"></td>')
+        rows = []
         for i in range(0, len(cards), COLS):
-            all_rows.append("<tr>" + '<td width="1%"></td>'.join(cards[i:i + COLS]) + "</tr>")
-    grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-            'border="0" style="margin-top:6px;border-collapse:separate;">'
-            + spacer.join(all_rows) + '</table>')
-
-    # Colour legend: only the regions actually present, in canonical order.
-    present = [c for c in CATEGORY_ORDER if any(d.get("category") == c for d in snap)]
-    chips = ""
-    for cat in present:
-        c = _rc(cat)
-        chips += (f'<span style="display:inline-block;margin:0 10px 4px 0;font-size:10px;'
-                  f'color:{P["muted"]};"><span style="display:inline-block;width:9px;height:9px;'
-                  f'background:{c};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>{cat}</span>')
+            rows.append("<tr>" + '<td width="1%"></td>'.join(cards[i:i + COLS]) + "</tr>")
+        heading = (f'<div style="margin:14px 0 6px;font-size:11px;font-weight:700;'
+                   f'color:{P["ink"]};letter-spacing:0.02em;">'
+                   f'<span style="display:inline-block;width:10px;height:10px;background:{_rc(g)};'
+                   f'border-radius:3px;vertical-align:middle;margin-right:6px;"></span>{g}</div>')
+        grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                'border="0" style="border-collapse:separate;">' + "".join(rows) + '</table>')
+        blocks.append(heading + grid)
 
     header = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
               f'text-transform:uppercase;">Markets</div>'
               f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">'
-              f'Indices, rates &amp; FX &middot; latest level and daily change, coloured by region.</div>'
-              f'<div style="margin-top:6px;">{chips}</div>')
-    return {"available": True, "html": header + grid}
+              f'Indices, rates &amp; FX &middot; latest level and daily change, grouped by region.</div>')
+    return {"available": True, "html": header + "".join(blocks)}
 
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
@@ -1656,6 +1652,113 @@ def _recent_timeline(series: Optional[list], dates: Optional[list],
     return [series[i] for i in keep]
 
 
+def _ph_target_table(ctx: _NewsletterContext, tol: float) -> str:
+    """Compact per-holding portfolio-target table for ``target_use_per_holding_only``.
+
+    Shows each targeted instrument's CURRENT weight (% of invested, straight
+    from the snapshot — so an instrument you don't own yet reads 0%, not a
+    post-trade projection) next to its portfolio target and drift. Instruments
+    with a 0% target that you still hold are summarised as "to exit" so the
+    table stays short. Returns "" when there is nothing to show.
+    """
+    P = PALETTE
+    m = ctx.metrics
+    df = getattr(m, "holdings_df", None)
+
+    # Current weight (% of invested) keyed by ISIN and by ticker (uppercased),
+    # so verification items can be matched either way.
+    cur: dict[str, float] = {}
+    if df is not None and not df.empty:
+        invested = float(getattr(m, "invested_value", 0.0) or 0.0)
+        for _, row in df.iterrows():
+            val = float(row.get("current_value", 0.0) or 0.0)
+            w = (val / invested * 100.0) if invested > 0 else 0.0
+            for key in (row.get("isin"), row.get("ticker")):
+                if key and str(key).strip():
+                    cur[str(key).strip().upper()] = w
+
+    items = []
+    for v in (m.rebalancing_verifications or []):
+        if v.get("kind") == "per_holding_portfolio":
+            items = v.get("items", []) or []
+            break
+
+    def _now_weight(it) -> float:
+        for key in (it.get("ticker"), it.get("category")):
+            if key and str(key).strip().upper() in cur:
+                return cur[str(key).strip().upper()]
+        return 0.0
+
+    targeted, exits = [], []
+    for it in items:
+        tgt = float(it.get("target_pct", 0.0) or 0.0)
+        (targeted if tgt > 0 else exits).append(it)
+
+    if not targeted:
+        return ""
+
+    targeted.sort(key=lambda it: -float(it.get("target_pct", 0.0) or 0.0))
+
+    def pin(it) -> str:
+        key = it.get("ticker") or it.get("category") or ""
+        tk = _clean_ticker(key) or _display_ticker(key) or ""
+        return (f'<span style="font-size:10px;font-weight:700;color:{P["muted"]};">{tk}</span> '
+                if tk else "")
+
+    rows = []
+    for it in targeted:
+        name = short_instrument_name(it.get("category") or it.get("ticker") or "", 48)
+        now = _now_weight(it)
+        tgt = float(it.get("target_pct", 0.0) or 0.0)
+        drift = now - tgt
+        dcol = _semaphore_color(_semaphore(drift, tol))
+        rows.append(
+            f'<tr>'
+            f'<td style="padding:5px 8px;border-bottom:1px solid {P["border"]};font-size:12px;color:{P["ink"]};">'
+            f'{pin(it)}{name}</td>'
+            f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
+            f'font-size:12px;color:{P["muted"]};white-space:nowrap;">{_pct_smart(now)}</td>'
+            f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
+            f'font-size:12px;font-weight:700;color:{P["ink"]};white-space:nowrap;">{_pct_smart(tgt)}</td>'
+            f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
+            f'font-size:12px;font-weight:700;color:{dcol};white-space:nowrap;">'
+            f'● {_signed_pp(drift)}</td>'
+            f'</tr>'
+        )
+
+    head = (
+        f'<tr>'
+        f'<td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;'
+        f'text-transform:uppercase;color:{P["subtle"]};">Instrument</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'text-transform:uppercase;color:{P["subtle"]};">Now</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'text-transform:uppercase;color:{P["subtle"]};">Target</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'text-transform:uppercase;color:{P["subtle"]};">Drift</td>'
+        f'</tr>'
+    )
+    table = (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin-top:8px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+        f'border-radius:10px;border-collapse:separate;overflow:hidden;">'
+        f'{head}{"".join(rows)}</table>'
+    )
+
+    note = ""
+    held_exits = [it for it in exits if _now_weight(it) > 0.05]
+    if held_exits:
+        names = ", ".join(
+            (_clean_ticker(it.get("ticker") or "") or _display_ticker(it.get("ticker") or "")
+             or short_instrument_name(it.get("category") or "", 16))
+            for it in held_exits
+        )
+        note = (f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
+                f'To exit (0% target): <b>{names}</b></div>')
+
+    return table + note
+
+
 def _build_diversification(ctx: _NewsletterContext) -> dict:
     """Pre-render the Diversification section (tile dashboard) as HTML.
 
@@ -1805,6 +1908,13 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     eq_cells = holding_tiles("per_holding_equity", ASSET_COLORS.get("Equities", P["accent"]))
     fi_cells = holding_tiles("per_holding_fi", ASSET_COLORS.get("Fixed Income", P["accent"]))
 
+    # Per-holding-only mode: a compact CURRENT-weight vs target table (not the
+    # big donut tiles). Uses actual weights from the snapshot — so a target
+    # instrument you don't hold yet reads 0% (not a post-trade projection).
+    pf_table = ""
+    if getattr(ctx.config, "target_use_per_holding_only", False):
+        pf_table = _ph_target_table(ctx, tol)
+
     def sub(title, extra=""):
         tail = (f' <span style="font-weight:500;color:{P["subtle"]};letter-spacing:0;'
                 f'text-transform:none;">— {extra}</span>') if extra else ""
@@ -1832,8 +1942,13 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     if geo_cells:
         html.append(sub("By geography", "equity portion"))
         html.append(f'<div style="margin-top:8px;">{grid(geo_cells)}</div>')
-    if eq_cells or fi_cells:
+    if eq_cells or fi_cells or pf_table:
         html.append(sub("By holding", "are individual positions on target?"))
+        if pf_table:
+            html.append(f'<div style="margin-top:8px;font-size:11px;color:{P["muted"]};">'
+                        f'{swatch(P["accent"])} <b>Per instrument</b> · % of portfolio · '
+                        f'now vs target</div>')
+            html.append(pf_table)
         if eq_cells:
             html.append(f'<div style="margin-top:8px;font-size:11px;color:{P["muted"]};">'
                         f'{swatch(ASSET_COLORS.get("Equities", P["accent"]))} <b>Equities</b> · % of equity sleeve</div>'
@@ -2084,11 +2199,15 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             }
 
     for _, h in df.iterrows():
-        ticker = str(h.get("ticker", "") or "")
+        ticker = str(h.get("ticker", "") or "")  # join key for holding_performance
         raw_name = str(h.get("name", "") or ticker)
+        # Display pin: resolve the real Yahoo symbol from the ISIN (same as
+        # the Holdings section), since the order-derived ``ticker`` column
+        # often holds the ISIN. Fall back to the ticker field.
+        display_tk = _clean_ticker(str(h.get("isin", "") or "")) or _display_ticker(ticker) or ""
         rows.append(_row(
             short_instrument_name(raw_name),
-            ticker,
+            display_tk,
             str(h.get("asset_class", "") or ""),
             perf_by_ticker.get(ticker, {}),
         ))

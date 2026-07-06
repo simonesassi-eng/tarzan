@@ -564,7 +564,12 @@ def _bounds(holdings: list[Holding], values: np.ndarray, no_sell: bool,
     hi = np.full(n, np.inf)
     tradeable = np.ones(n, dtype=bool)
     for i, h in enumerate(holdings):
-        if h.no_buy_no_sell:
+        # Cash is the settlement account, never a tradeable instrument: it is
+        # frozen so the optimiser can neither sell it nor (in per-holding-only
+        # mode, where its implicit target is 0%) liquidate it as a "0% exit".
+        # The cash buffer is preserved via the net-cash-flow == lump_sum
+        # constraint, not by trading the cash line itself.
+        if h.asset_class == AssetClass.CASH_EQUIVALENTS or h.no_buy_no_sell:
             lo[i] = hi[i] = 0.0
             tradeable[i] = False
             continue

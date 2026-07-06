@@ -62,10 +62,15 @@ class MetricsEngine:
     """Computes all portfolio metrics. Extensible via register()."""
 
     def __init__(self, holdings: list[Holding], config: InvestorConfig,
-                 orders: Optional[list] = None):
+                 orders: Optional[list] = None,
+                 rebalance_seeds: Optional[list] = None):
         self.holdings = holdings
         self.config = config
         self.orders = orders
+        # Not-held target instruments (quantity 0) used ONLY by the rebalancer
+        # so it can open new positions. They are deliberately excluded from
+        # the portfolio snapshot (holdings, returns, allocations).
+        self.rebalance_seeds = rebalance_seeds or []
         self._computers: list[Callable] = [
             self._valuation,
             self._portfolio_history,
@@ -667,10 +672,15 @@ class MetricsEngine:
         # tolerance, lump sum) is identical.
         import dataclasses
 
+        # The rebalancer sees the real holdings PLUS any seeded (not-held)
+        # target instruments, so it can buy positions the user does not hold
+        # yet. Seeds never enter the snapshot elsewhere.
+        rebal_holdings = list(self.holdings) + list(self.rebalance_seeds)
+
         def _plan(no_sell: bool):
             cfg2 = dataclasses.replace(self.config, rebalancing_no_sell=no_sell)
             return compute_unified_rebalancing(
-                self.holdings, cfg2, ctx["total_value"], lump_sum=lump)
+                rebal_holdings, cfg2, ctx["total_value"], lump_sum=lump)
 
         s_true, v_true = _plan(True)
         s_false, v_false = _plan(False)
@@ -693,7 +703,7 @@ class MetricsEngine:
         # trades / more leftover drift). Cheap enough to always run.
         try:
             ctx["rebalancing_sensitivity"] = compute_drift_penalty_sensitivity(
-                self.holdings, self.config, ctx["total_value"], lump_sum=lump,
+                rebal_holdings, self.config, ctx["total_value"], lump_sum=lump,
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("Drift-penalty sensitivity sweep failed: %s", exc)

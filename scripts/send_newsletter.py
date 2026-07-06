@@ -104,9 +104,10 @@ def _build_subject(metrics, prefix: str, trigger_label: str) -> str:
     generated_at = _now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 
+    # Subject is exactly "<prefix> - HH:MM - uP&L ±X.XX%". The trigger label
+    # is intentionally NOT appended: the scheduler's slot label already
+    # carries the time, which duplicated the HH:MM in the subject.
     parts = [prefix or "Portfolio Digest", generated_at, f"uP&L {sign}{abs(gain_pct):.2f}%"]
-    if trigger_label:
-        parts.append(trigger_label)
     return " - ".join(parts)
 
 
