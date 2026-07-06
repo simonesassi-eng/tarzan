@@ -247,8 +247,9 @@ def legend(items, size: int = 11) -> str:
         else:
             mark = (f'<span style="display:inline-block;width:24px;height:5px;'
                     f'background:{color};border-radius:3px;vertical-align:middle;margin-right:6px;"></span>')
-        out.append(f'<span style="margin-right:14px;font-size:{size}px;font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
-    return '<div style="margin-top:8px;line-height:1.9;">' + "".join(out) + "</div>"
+        out.append(f'<span style="display:inline-block;margin:0 14px 2px 0;font-size:{size}px;'
+                   f'font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
+    return '<div style="margin-top:6px;line-height:1.35;">' + "".join(out) + "</div>"
 
 
 def flow_chips(flows, eur_fmt) -> str:
