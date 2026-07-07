@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any, Optional
 from urllib.error import HTTPError
@@ -43,9 +44,9 @@ _GEMINI_ENDPOINT = (
 )
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 20
-_MAX_OUTPUT_TOKENS = 1024
-_MAX_CHARS = 1200  # generous safety cap; the prompt keeps the note short
-# and the trim always ends on a full sentence, never mid-thought.
+_MAX_OUTPUT_TOKENS = 1400
+_MAX_CHARS = 1600  # generous safety cap for a ~150-word, 6-7 sentence note;
+# the trim always ends on a full sentence, never mid-thought or mid-number.
 
 
 def is_enabled() -> bool:
@@ -311,14 +312,28 @@ def _rebalancing(m) -> dict:
 
 def _system_prompt(language: str, today_str: str) -> str:
     return (
-        f"You are a markets commentator writing a short 'market context' note "
+        f"You are a markets commentator writing a 'market context' note "
         f"for a retail investor on {today_str}, explaining the macro backdrop "
         "behind their portfolio's recent moves. Use Google Search to ground "
-        "the note in the most recent market news (the last 24-48 hours).\n"
+        "the note in real, recent market news.\n"
+        "WEAVE TOGETHER THREE TIME HORIZONS into one flowing note (about two "
+        "sentences each). Do NOT label them, number them, or use the words "
+        "'breaking', 'previous session' or 'weekly trend' as headings — just "
+        "let the note move naturally from the newest to the broader picture:\n"
+        "1. The last few hours / today: what is moving world financial markets "
+        "right now — the latest headlines, pre-market or intraday moves, and "
+        "any news breaking in the last few hours.\n"
+        "2. The previous trading session (yesterday): what happened in the last "
+        "completed session and the events that drove it.\n"
+        "3. The past week's trend: the week's direction — cite the portfolio's "
+        "own weekly figures from the JSON (twror_by_period_pct '1w', movers_1w) "
+        "alongside the week's macro theme.\n"
         "RULES:\n"
-        "- Search the web for what actually moved markets in the last 24-48 "
-        "hours, relevant to THIS portfolio's exposures (asset classes, equity "
-        "geographies, top holdings and recent returns in the JSON).\n"
+        "- Start directly with the market content. No preamble, no salutation, "
+        "no 'Here is your...' opener, no date restatement at the start.\n"
+        "- Keep every point relevant to THIS portfolio's exposures (asset "
+        "classes, equity geographies, top holdings and recent returns in the "
+        "JSON).\n"
         "- Reference the ACTUAL day(s) by name and date (e.g. 'on Thursday the "
         "25th') and cite CONCRETE figures — real index levels and percentage "
         "moves (use the 'markets_today' levels in the JSON plus what you find "
@@ -334,10 +349,11 @@ def _system_prompt(language: str, today_str: str) -> str:
         "- Refer to real, recent events (rate decisions, inflation prints, "
         "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
         "unsure, omit that point rather than guessing.\n"
-        "- Write 3 to 4 sentences, about 80 words. Never exceed 1000 words "
-        "and ALWAYS finish your final sentence — never stop mid-thought. No "
-        "markdown, no bullet points, no headings. No predictions, no "
-        "recommendations, no personalized investment advice.\n"
+        "- Write 6 to 8 sentences (roughly two per horizon), about 150 words "
+        "(never more than 180), as a single flowing paragraph. ALWAYS finish "
+        "your final sentence — never stop mid-thought. No markdown, no bullet "
+        "points, no headings, no labels. No predictions, no recommendations, "
+        "no personalized investment advice.\n"
         f"- Write in {language}."
     )
 
@@ -347,8 +363,9 @@ def _user_prompt(digest: dict) -> str:
         "Here is the investor's portfolio context as JSON (exposures, recent "
         "returns and today's index levels in 'markets_today'):\n\n"
         + json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
-        + "\n\nSearch for the latest market news and write the market-context "
-        "note now."
+        + "\n\nSearch for the latest market news — covering the last few "
+        "hours, the previous trading session, and the past week's trend — and "
+        "write the market-context note now."
     )
 
 
@@ -439,13 +456,15 @@ def _sanitize(text: str) -> Optional[str]:
         return None
     if len(cleaned) > _MAX_CHARS:
         cut = cleaned[:_MAX_CHARS]
-        # Prefer ending on a complete sentence so it never looks truncated;
-        # only fall back to a word-boundary ellipsis if no sentence end is
-        # reasonably far in.
-        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "),
-                  cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
+        # Prefer ending on a complete sentence so it never looks truncated.
+        # A sentence end is .!? (optionally closing quote/paren) FOLLOWED BY
+        # whitespace — requiring the trailing space means a decimal point
+        # ("3.50%") or an in-word dot is never mistaken for a sentence end,
+        # which is what used to leave the note cut mid-number.
+        matches = list(re.finditer(r'[.!?]["\')\]]?(?=\s)', cut))
+        end = matches[-1].end() if matches else -1
         if end >= _MAX_CHARS * 0.5:
-            cleaned = cut[:end + 1].rstrip()
+            cleaned = cut[:end].rstrip()
         else:
             cleaned = cut.rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return cleaned
