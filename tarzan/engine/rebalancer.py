@@ -761,8 +761,11 @@ def _reason(i: int, h: Holding, model: _ObjectiveModel, new_values: np.ndarray) 
         tgt = float(h.target_portfolio or 0.0)
         # ``actual`` is the POST-trade weight, so make that explicit — a
         # not-yet-held instrument being bought shows where it lands, not a
-        # current position.
-        return f"post-trade \u2192 {actual:.1f}% of portfolio (target {tgt:.0f}%)"
+        # current position. The target is shown both as a % of the invested
+        # portfolio and as its absolute euro value on the same invested base.
+        tgt_eur = tgt / 100.0 * inv
+        return (f"post-trade \u2192 {actual:.1f}% of portfolio "
+                f"(target {tgt:.0f}% \u00b7 \u20ac{tgt_eur:,.0f})")
     bits = []
     ac = h.asset_class.value if h.asset_class else "Alternative"
     if ac in model.ac_keys:
