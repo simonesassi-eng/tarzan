@@ -785,7 +785,7 @@ class MetricsEngine:
             _populate_perf_row(row, s, bench_history)
             rows.append(row)
 
-        # Add benchmark rows (from indexes.csv is_benchmark=true)
+        # Add benchmark rows (from instrument_taxonomy.csv is_benchmark=true)
         for bench_name, bench_ticker in BENCHMARKS.items():
             try:
                 bs = _fetch_benchmark_history(bench_ticker)

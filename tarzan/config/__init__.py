@@ -1,11 +1,11 @@
-"""Configuration loader — reads constants.yaml + static.yaml + indexes.csv.
+"""Configuration loader — reads constants.yaml + static.yaml + instrument_taxonomy.csv.
 
 Two-layer config:
 - constants.yaml: investment parameters (classification, metric thresholds, risk-free rate)
 - static.yaml: rarely-changed infrastructure mappings (exchanges, FIGI)
 
-Benchmarks and geo references come from indexes.csv (is_benchmark,
-is_benchmark_alfa_and_beta, is_benchmark_geo_allocation columns).
+Benchmarks and geo references come from instrument_taxonomy.csv (is_benchmark,
+is_benchmark_alpha_beta, is_benchmark_geo columns).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from tarzan.models.holding import Geography
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "constants.yaml")
 _STATIC_PATH = os.path.join(os.path.dirname(__file__), "static.yaml")
-_INDEXES_CSV_PATH = os.path.join("input", "indexes.csv")
+_INDEXES_CSV_PATH = os.path.join("input", "instrument_taxonomy.csv")
 
 
 @lru_cache(maxsize=1)
@@ -38,7 +38,7 @@ def _load_static() -> dict:
 
 @lru_cache(maxsize=1)
 def _load_indexes_csv() -> pd.DataFrame:
-    """Load indexes.csv into a DataFrame."""
+    """Load instrument_taxonomy.csv into a DataFrame."""
     if not os.path.exists(_INDEXES_CSV_PATH):
         return pd.DataFrame()
     try:
@@ -47,6 +47,44 @@ def _load_indexes_csv() -> pd.DataFrame:
         return df
     except Exception:
         return pd.DataFrame()
+
+
+@lru_cache(maxsize=1)
+def _taxonomy_lookup() -> dict:
+    """Build the curated instrument taxonomy lookup from instrument_taxonomy.csv.
+
+    Returns a dict keyed by both ISIN (uppercased) and bare ticker (uppercased,
+    suffix stripped) → ``(asset_class_str, role_str_or_None)``. ISIN keys take
+    precedence at lookup time (the caller checks ISIN before ticker). Rows
+    without an ``asset_class`` value are skipped.
+    """
+    df = _load_indexes_csv()
+    if df.empty or "asset_class" not in df.columns:
+        return {}
+    by_isin: dict[str, tuple] = {}
+    by_ticker: dict[str, tuple] = {}
+    for _, row in df.iterrows():
+        ac = str(row.get("asset_class", "")).strip()
+        if not ac or ac.lower() == "nan":
+            continue
+        role = str(row.get("role", "")).strip()
+        val = (ac, role or None)
+        isin = str(row.get("isin", "")).strip().upper()
+        if isin and isin.lower() != "nan":
+            by_isin.setdefault(isin, val)
+        tk = str(row.get("ticker", "")).strip()
+        bare = tk.split(".")[0].upper() if tk else ""
+        if bare and bare.lower() != "nan":
+            by_ticker.setdefault(bare, val)
+    # ISIN entries win over ticker entries on key collisions.
+    merged = dict(by_ticker)
+    merged.update(by_isin)
+    return merged
+
+
+def instrument_taxonomy() -> dict:
+    """Curated ISIN/ticker → (asset_class, role) lookup (see _taxonomy_lookup)."""
+    return _taxonomy_lookup()
 
 
 def get(key: str, default=None):
@@ -60,7 +98,7 @@ def get(key: str, default=None):
 def reset_input_caches() -> None:
     """Drop the per-process caches of the input/config files.
 
-    constants.yaml and static.yaml ship with the code, but indexes.csv is
+    constants.yaml and static.yaml ship with the code, but instrument_taxonomy.csv is
     a user-supplied input (downloaded from each user's Google Drive), so it
     must be re-read fresh on every run. Clearing all three keeps the rule
     simple and consistent: a run never serves a previous run's inputs. The
@@ -69,6 +107,7 @@ def reset_input_caches() -> None:
     _load_raw.cache_clear()
     _load_static.cache_clear()
     _load_indexes_csv.cache_clear()
+    _taxonomy_lookup.cache_clear()
 
 
 # --- Risk & Performance ---
@@ -80,11 +119,11 @@ def trading_days() -> int:
     return 252
 
 def benchmark_beta() -> str:
-    """Get the ticker for Alpha/Beta calculation from indexes.csv (is_benchmark_alfa_and_beta=true)."""
+    """Get the ticker for Alpha/Beta calculation from instrument_taxonomy.csv (is_benchmark_alpha_beta=true)."""
     df = _load_indexes_csv()
-    if df.empty or "is_benchmark_alfa_and_beta" not in df.columns:
+    if df.empty or "is_benchmark_alpha_beta" not in df.columns:
         return "^GSPC"
-    match = df[df["is_benchmark_alfa_and_beta"].astype(str).str.strip().str.lower() == "true"]
+    match = df[df["is_benchmark_alpha_beta"].astype(str).str.strip().str.lower() == "true"]
     if not match.empty:
         return str(match.iloc[0]["ticker"]).strip()
     return "^GSPC"
@@ -93,11 +132,11 @@ def benchmark_beta() -> str:
 def benchmark_beta_name() -> str:
     """Get the index name for Alpha/Beta calculation (used for column headers)."""
     df = _load_indexes_csv()
-    if df.empty or "is_benchmark_alfa_and_beta" not in df.columns:
+    if df.empty or "is_benchmark_alpha_beta" not in df.columns:
         return "S&P 500"
-    match = df[df["is_benchmark_alfa_and_beta"].astype(str).str.strip().str.lower() == "true"]
+    match = df[df["is_benchmark_alpha_beta"].astype(str).str.strip().str.lower() == "true"]
     if not match.empty:
-        return str(match.iloc[0]["index"]).strip()
+        return str(match.iloc[0]["name"]).strip()
     return "S&P 500"
 
 def chart_benchmarks() -> list[str]:
@@ -106,16 +145,16 @@ def chart_benchmarks() -> list[str]:
     if df.empty or "is_benchmark" not in df.columns:
         return []
     match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
-    return match["index"].tolist() if not match.empty else []
+    return match["name"].tolist() if not match.empty else []
 
 def benchmark_geo_allocation() -> str:
-    """Get the index name for geo benchmark reference (is_benchmark_geo_allocation=true)."""
+    """Get the index name for geo benchmark reference (is_benchmark_geo=true)."""
     df = _load_indexes_csv()
-    if df.empty or "is_benchmark_geo_allocation" not in df.columns:
+    if df.empty or "is_benchmark_geo" not in df.columns:
         return "MSCI ACWI"
-    match = df[df["is_benchmark_geo_allocation"].astype(str).str.strip().str.lower() == "true"]
+    match = df[df["is_benchmark_geo"].astype(str).str.strip().str.lower() == "true"]
     if not match.empty:
-        return str(match.iloc[0]["index"]).strip()
+        return str(match.iloc[0]["name"]).strip()
     return "MSCI ACWI"
 
 def mix_60_40() -> dict:
@@ -142,31 +181,31 @@ def geography_map() -> dict[str, Geography]:
     }
 
 
-# --- Benchmarks (from indexes.csv) ---
+# --- Benchmarks (from instrument_taxonomy.csv) ---
 
 def benchmarks() -> dict[str, str]:
-    """Get benchmark dict {index_name: ticker} from indexes.csv where is_benchmark=true."""
+    """Get benchmark dict {index_name: ticker} from instrument_taxonomy.csv where is_benchmark=true."""
     df = _load_indexes_csv()
     if df.empty or "is_benchmark" not in df.columns:
         return {}
     match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
     result = {}
     for _, row in match.iterrows():
-        name = str(row.get("index", "")).strip()
+        name = str(row.get("name", "")).strip()
         ticker = str(row.get("ticker", "")).strip()
         if name and ticker:
             result[name] = ticker
     return result
 
 def benchmark_details() -> dict[str, dict]:
-    """Get benchmark metadata from indexes.csv where is_benchmark=true."""
+    """Get benchmark metadata from instrument_taxonomy.csv where is_benchmark=true."""
     df = _load_indexes_csv()
     if df.empty or "is_benchmark" not in df.columns:
         return {}
     match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
     result = {}
     for _, row in match.iterrows():
-        name = str(row.get("index", "")).strip()
+        name = str(row.get("name", "")).strip()
         if name:
             result[name] = {
                 "name": name,

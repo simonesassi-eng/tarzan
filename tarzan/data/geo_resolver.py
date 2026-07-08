@@ -1,11 +1,11 @@
 """Geographic allocation resolver.
 
 Priority chain for assigning geo exposure to a holding:
-1. Lookup in input/indexes.csv by ISIN, ticker, or index name
+1. Lookup in input/instrument_taxonomy.csv by ISIN, ticker, or index name
 2. yfinance fund_top_holdings → country of each top holding → aggregated geo
 
 The justETF index name lookup is used to bridge holdings to index names
-in the indexes.csv file.
+in the instrument_taxonomy.csv file.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _GEO_MAP: Optional[dict[str, Geography]] = None
 _ASSET_GEO_DF: Optional[pd.DataFrame] = None
 
-ASSET_GEO_PATH = os.path.join("input", "indexes.csv")
+ASSET_GEO_PATH = os.path.join("input", "instrument_taxonomy.csv")
 
 # Geo column names in the CSV → Geography enum value
 _GEO_COLUMNS = {
@@ -46,10 +46,10 @@ def _geo_map() -> dict[str, Geography]:
 
 
 def reset_caches() -> None:
-    """Drop the per-process caches of indexes.csv and the geography map.
+    """Drop the per-process caches of instrument_taxonomy.csv and the geography map.
 
     Called at the start of each pipeline run so a user's edited input
-    files (indexes.csv, constants) are re-read fresh — the same "inputs
+    files (instrument_taxonomy.csv, constants) are re-read fresh — the same "inputs
     are never shadowed" guarantee the enricher's run-memos provide. This
     matters when several runs happen in one process (e.g. an interactive
     dashboard refresh, or a multi-tenant service where each user supplies
@@ -60,21 +60,21 @@ def reset_caches() -> None:
 
 
 def _load_asset_geo() -> Optional[pd.DataFrame]:
-    """Load and cache the indexes.csv file."""
+    """Load and cache the instrument_taxonomy.csv file."""
     global _ASSET_GEO_DF
     if _ASSET_GEO_DF is not None:
         return _ASSET_GEO_DF
     if not os.path.exists(ASSET_GEO_PATH):
-        logger.debug("No indexes.csv found at %s", ASSET_GEO_PATH)
+        logger.debug("No instrument_taxonomy.csv found at %s", ASSET_GEO_PATH)
         return None
     try:
         df = pd.read_csv(ASSET_GEO_PATH)
         df.columns = [c.strip().lower() for c in df.columns]
         _ASSET_GEO_DF = df
-        logger.info("Loaded %d rows from indexes.csv", len(df))
+        logger.info("Loaded %d rows from instrument_taxonomy.csv", len(df))
         return df
     except Exception as e:
-        logger.warning("Failed to load indexes.csv: %s", e)
+        logger.warning("Failed to load instrument_taxonomy.csv: %s", e)
         return None
 
 
@@ -109,13 +109,13 @@ def _parse_geo_row(row: pd.Series) -> Optional[dict[Geography, float]]:
 
 
 # ---------------------------------------------------------------------------
-# Priority 2: Lookup in indexes.csv
+# Priority 2: Lookup in instrument_taxonomy.csv
 # ---------------------------------------------------------------------------
 
 def _lookup_asset_geo(
     isin: str, ticker: str, index_name: str = ""
 ) -> Optional[tuple[dict[Geography, float], str]]:
-    """Look up geo exposure in indexes.csv.
+    """Look up geo exposure in instrument_taxonomy.csv.
 
     Matches by ISIN, ticker, or index name (in that order).
     """
@@ -142,12 +142,12 @@ def _lookup_asset_geo(
                 return geo, "index_geo_allocation (ticker)"
 
     # Match by index name (best match by word overlap, longest wins ties)
-    if index_name and "index" in df.columns:
+    if index_name and "name" in df.columns:
         idx_normalized = _normalize_index_str(index_name)
         idx_words = set(idx_normalized.split())
         candidates = []
         for i, row in df.iterrows():
-            row_index = str(row.get("index", "")).strip()
+            row_index = str(row.get("name", "")).strip()
             if not row_index or row_index.lower() == "nan":
                 continue
             row_normalized = _normalize_index_str(row_index)
@@ -241,7 +241,7 @@ def justetf_index_name(isin: str) -> Optional[str]:
     """Query justETF to find the benchmark index name for an ISIN.
 
     Used to bridge a holding's ISIN to an index name for matching
-    against indexes.csv rows with an 'index' column.
+    against instrument_taxonomy.csv rows with an 'index' column.
     """
     if not isin:
         return None
@@ -267,17 +267,17 @@ def justetf_index_name(isin: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def lookup_geo_by_index_name(index_name: str) -> Optional[dict[Geography, float]]:
-    """Look up geo exposure from indexes.csv by exact index name.
+    """Look up geo exposure from instrument_taxonomy.csv by exact index name.
 
     Used for benchmark geo comparison (e.g. MSCI ACWI in Allocations tab).
     """
     df = _load_asset_geo()
-    if df is None or df.empty or "index" not in df.columns:
+    if df is None or df.empty or "name" not in df.columns:
         return None
 
     name_normalized = _normalize_index_str(index_name)
     for _, row in df.iterrows():
-        row_index = str(row.get("index", "")).strip()
+        row_index = str(row.get("name", "")).strip()
         if not row_index or row_index.lower() == "nan":
             continue
         if _normalize_index_str(row_index) == name_normalized:
@@ -293,7 +293,7 @@ def resolve_geo(
     """Resolve geographic exposure for a holding.
 
     Priority:
-    1. indexes.csv lookup (by ISIN, ticker, or index name)
+    1. instrument_taxonomy.csv lookup (by ISIN, ticker, or index name)
     2. yfinance top holdings fallback
 
     Args:
@@ -304,7 +304,7 @@ def resolve_geo(
     Returns:
         (breakdown_dict, source_name) or None.
     """
-    # Priority 2: indexes.csv
+    # Priority 2: instrument_taxonomy.csv
     # First try direct ISIN/ticker match
     result = _lookup_asset_geo(isin, ticker)
     if result:

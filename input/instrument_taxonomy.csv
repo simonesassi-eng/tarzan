@@ -1,0 +1,64 @@
+name,ticker,isin,kind,asset_class,role,is_benchmark,is_benchmark_alpha_beta,is_benchmark_geo,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,description,updated
+iShares Core EUR Aggregate Bond,IEAG.L,,etf,Fixed Income,Aggregate/Credit,,,,,0,100,0,0,Tracks EUR-denominated investment grade bonds.,2/22/26
+iShares Core Global Aggregate Bond EUR Hedged,,IE00BDBRDM35,etf,Fixed Income,Aggregate/Credit,,,,,,,,,Global aggregate investment grade bonds - EUR hedged.,7/8/26
+L&G Multi-Strategy Enhanced Commodities,ENCO.MI,,etc,Commodities,Broad Basket,TRUE,,,,,,,,Broad commodities long-only with enhanced roll (multi-strategy) to reduce contango drag.,7/8/26
+Invesco Bloomberg Commodity,CMOD.MI,,etc,Commodities,Broad Basket,TRUE,,,,,,,,Broad commodities long-only tracking the Bloomberg Commodity Index.,7/8/26
+WisdomTree Enhanced Commodity,WCOA.MI,,etc,Commodities,Broad Basket,TRUE,,,,,,,,Broad commodities long-only with enhanced roll (WisdomTree) to reduce contango drag.,7/8/26
+WisdomTree Enhanced Commodity Carry,CRRY.MI,,etc,Commodities,Carry,TRUE,,,,,,,,Commodity carry factor via long/short positions in commodity futures.,6/24/26
+UBS CMCI Commodity Carry,UEQC.DE,,etc,Commodities,Carry,TRUE,,,,,,,,Commodity carry via 2.5x leveraged long/short spread between CMCI and BCOM ex-precious metals.,6/24/26
+Fineco AM ESTR Plus,,IE0005PGDJ30,etf,Cash & Cash Equivalents,Cash / Money Market,,,,,,,,,EUR overnight rate (ESTR) money market.,7/8/26
+KRC Cat Bond,CATB.MI,,etf,Alternative,Cat Bond,TRUE,,,,,,,,Catastrophe bond portfolio providing uncorrelated income via insurance-linked securities.,6/27/26
+WisdomTree Global Efficient Core,NTSG.DE,,etf,Equities,Efficient Core,TRUE,,,69.84,0,11.51,5.99,12.66,Global developed equities plus a leveraged government bond futures overlay (90/60).,6/24/26
+WisdomTree Eurozone Efficient Core,NTSZ.DE,IE000OV4XWA3,etf,Equities,Efficient Core,TRUE,,,0,0,100,0,0,Eurozone equities plus a leveraged EUR government bond futures overlay (90/60).,7/3/26
+Vanguard FTSE All-World,VWRL.MI,,etf,Equities,Equity Broad,TRUE,,,62.15,10.12,7.85,6.1,13.78,Large and mid-cap stocks across developed and emerging markets.,2/21/26
+iShares MSCI ACWI,ISAC.MI,,etf,Equities,Equity Broad,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
+iShares Core MSCI World,SWDA.MI,,etf,Equities,Equity Broad,,,,72.5,0,8.5,5.7,13.3,Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
+Nasdaq 100,^NDX,,index,Equities,Equity Broad,TRUE,,,100,0,0,0,0,Top 100 non-financial companies on Nasdaq.,2/21/26
+S&P 500,^GSPC,,index,Equities,Equity Broad,TRUE,,,100,0,0,0,0,500 leading large-cap US companies.,2/21/26
+CAC 40,^FCHI,,index,Equities,Equity Broad,,,,0,0,100,0,0,French stock market (40 largest stocks).,2/22/26
+DAX 40,^GDAXI,,index,Equities,Equity Broad,,,,0,0,100,0,0,40 major German blue-chip companies.,2/22/26
+FTSE MIB,FTSEMIB.MI,,etf,Equities,Equity Broad,,,,0,0,100,0,0,Italian stock market.,2/22/26
+SPDR MSCI ACWI IMI,ACIM,,etf,Equities,Equity Broad,,,,63.5,10.2,7.4,5.4,13.5,All Country World Investable Market Index (incl. small caps).,6/15/26
+Xtrackers MSCI World ex USA,EXUS.MI,IE0006WW1TQ4,etf,Equities,Equity Broad,,,,0,0,29.63,20.75,49.62,Developed markets outside the US.,6/15/26
+Russell 1000,^RUI,,index,Equities,Equity Broad,,,,100,0,0,0,0,1000 largest US companies.,2/21/26
+iShares STOXX Europe 50,EUN.L,,etf,Equities,Equity Broad,,,,0,0,56,0,44,50 largest blue-chip stocks from Europe.,6/15/26
+Xtrackers MSCI Emerging Markets,XMME.MI,IE00BTJRMP35,etf,Equities,Equity Broad,,,,0,100,0,0,0,MSCI Emerging Markets broad.,7/8/26
+Xtrackers MSCI Japan,,LU0274209740,etf,Equities,Equity Broad,,,,0,0,0,100,0,MSCI Japan broad.,7/8/26
+Xtrackers Euro Stoxx 50,,LU0380865021,etf,Equities,Equity Broad,,,,0,0,100,0,0,Euro Stoxx 50 - Eurozone large cap.,7/8/26
+Xtrackers S&P 500 Swap EUR Hedged,,LU2196472984,etf,Equities,Equity Broad,,,,100,0,0,0,0,S&P 500 (swap) - EUR hedged.,7/8/26
+Xtrackers Stoxx Europe 600,,LU0328475792,etf,Equities,Equity Broad,,,,0,0,51.7,0,48.3,Stoxx Europe 600 - broad Europe.,7/8/26
+Avantis Global Equity,AVWC.DE,IE000RJECXS5,etf,Equities,Equity Factor,TRUE,,,66,0,10,7,17,Developed all-cap with value and profitability tilt (vs MSCI World IMI).,7/3/26
+Avantis Global Small Cap Value,AVWS.DE,IE0003R87OG3,etf,Equities,Equity Factor,TRUE,,,57,0,9.5,13,20.5,Developed small-cap value with profitability tilt (vs MSCI World Small Cap Value).,7/3/26
+Avantis America Equity,AVUS.DE,IE000OW54ZX1,etf,Equities,Equity Factor,TRUE,,,97,0,0,0,3,US and Canada all-cap with value and profitability tilt (vs Russell 3000).,7/3/26
+Avantis Europe Equity,AVEU.DE,IE000SDFJUU0,etf,Equities,Equity Factor,TRUE,,,0,0,52,0,48,European developed all-cap with value and profitability tilt (vs MSCI Europe IMI).,7/3/26
+Avantis Emerging Markets Equity,AVEM.DE,IE000K975W13,etf,Equities,Equity Factor,TRUE,,,0,100,0,0,0,Emerging markets all-cap with value and profitability tilt (vs MSCI Emerging Markets IMI).,7/3/26
+Dimensional Global Core Equity,DEGC.DE,IE000EGGFVG6,etf,Equities,Equity Factor,TRUE,,,68,0,9,6.5,16.5,Developed all-cap integrated size/value/profitability tilt (vs MSCI World).,7/3/26
+Dimensional Global Targeted Value,DEGT.DE,IE000S67ID55,etf,Equities,Equity Factor,TRUE,,,59,0,9.5,12,19.5,Developed small/mid value with profitability tilt (vs MSCI World SMID).,7/3/26
+Dimensional Global ex US Core Equity Market,DDXM.L,IE0002YHUWS3,etf,Equities,Equity Factor,TRUE,,,0,26,21,15,38,Ex-US core equity market incl emerging (vs MSCI ACWI ex USA IMI).,7/3/26
+Dimensional US Core Equity Market,DDUM.L,IE000XKK4AV2,etf,Equities,Equity Factor,TRUE,,,100,0,0,0,0,US total market with integrated size/value/profitability tilt (vs Russell 3000).,7/3/26
+Avantis Pacific Equity,AVPE.DE,IE000T62NEO6,etf,Equities,Equity Factor,TRUE,,,0,0,0,61,39,Developed Pacific all-cap incl. Japan with value and profitability tilt (vs MSCI Pacific IMI).,7/8/26
+Invesco MSCI World Equal Weight,MWEQ.L,,etf,Equities,Equity Factor,,,,42.07,0.8,16.45,12.88,27.8,Equal-weighted developed-market global equity.,6/15/26
+iShares MSCI Intl Momentum Factor,IMTM,,etf,Equities,Equity Factor,,,,0,0,23.4,23.1,53.5,Developed-market stocks outside the US with strong price momentum.,6/15/26
+iShares MSCI Intl Quality Factor,IQLT,,etf,Equities,Equity Factor,,,,0,0,28.5,12.9,58.6,Developed-market stocks outside the US with high quality scores.,6/15/26
+iShares Edge MSCI Intl Value Factor,IVLU,,etf,Equities,Equity Factor,,,,0,0,30.6,29.6,39.8,Developed-market stocks outside the US with attractive valuations.,6/15/26
+iShares Edge MSCI World Minimum Volatility,MVOL.L,,etf,Equities,Equity Factor,,,,66.64,0,8.35,10.24,14.77,Developed-market stocks with lower volatility characteristics.,6/15/26
+iShares MSCI World Small Cap,WSML.L,,etf,Equities,Equity Factor,,,,62.46,0,6,11.98,19.56,Small-cap stocks across developed market countries.,6/15/26
+Russell 2000,^RUT,,index,Equities,Equity Factor,,,,100,0,0,0,0,2000 small-cap US companies.,2/21/26
+S&P 500 Equal Weight,^SPXEW,,index,Equities,Equity Factor,,,,100,0,0,0,0,S&P 500 constituents with equal weighting.,2/22/26
+Invesco S&P 500 Low Volatility,SPLV,,etf,Equities,Equity Factor,,,,100,0,0,0,0,100 least volatile stocks in the S&P 500.,2/22/26
+Xtrackers MSCI World Value,XDEV.MI,IE00BL25JM42,etf,Equities,Equity Factor,,,,51.29,0,16.05,18.57,14.09,MSCI World Value factor.,7/8/26
+Xtrackers MSCI World Quality,XDEQ.MI,IE00BL25JL35,etf,Equities,Equity Factor,,,,73.38,0,8.89,3.21,14.52,MSCI World Sector Neutral Quality factor.,7/8/26
+Xtrackers MSCI World Momentum,XDEM.MI,IE00BL25JP72,etf,Equities,Equity Factor,,,,55.94,0,11.5,11.69,20.87,MSCI World Momentum factor.,7/8/26
+Amundi MSCI World (2x) Leveraged,LVWC.DE,,etf,Equities,Equity Leveraged,TRUE,,,72.5,0,8.5,5.7,13.3,2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
+Amundi MSCI USA (2x) Leveraged,CL2.MI,,etf,Equities,Equity Leveraged,TRUE,,,100,0,0,0,0,2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
+Invesco Physical Gold,SGLD.MI,IE00B579F325,etc,Gold,Gold,,,,,,,,,Physical gold ETC.,7/8/26
+Xtrackers Global Inflation-Linked EUR Hedged,,LU0290357929,etf,Fixed Income,Govt Linkers,,,,,,,,,Global inflation-linked government bonds - EUR hedged.,7/8/26
+Xtrackers II Eurozone Government Bond 7-10,X710.MI,,etf,Fixed Income,Govt Nominal,TRUE,,,,,,,,Eurozone government bonds 7-10y.,7/8/26
+Xtrackers Eurozone Govt Bond 15-30,,LU0290357507,etf,Fixed Income,Long Duration,,,,,,,,,Eurozone government bonds 15-30y (long duration).,7/8/26
+Amundi Euro Government Bond 25+ (LMTH),LMTH.MI,LU1686832194,etf,Fixed Income,Long Duration,,,,,,,,,Long EUR government bonds 25+ (long duration).,7/8/26
+Xtrackers II Eurozone Government Bond 25+,X25E.MI,,etf,Fixed Income,Long Duration,TRUE,,,,,,,,Eurozone government bonds 25+ (long duration).,7/8/26
+iMGP DBi Managed Futures,DBMFE.PA,,etf,Alternative,Managed Futures,TRUE,,,,,,,,Active managed futures (CTA) strategy using long/short global futures.,6/24/26
+iMGP DBi Managed Futures (EUR Hedged),MFEH.DE,,etf,Alternative,Managed Futures,TRUE,,,,,,,,Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,6/25/26
+L&G Market Neutral Commodities,COMN.MI,,etc,Commodities,Market Neutral,TRUE,,,,,,,,Market-neutral commodities (long/short) - uncorrelated diversifier and not directional commodity beta.,7/8/26
+Vanguard LifeStrategy 80% Equity,V80A.DE,,etf,Equities,Multi-Asset,TRUE,,,59.2,9.3,10.4,5.7,15.4,Globally diversified multi-asset fund holding 80% equities and 20% bonds.,6/24/26
+Vanguard LifeStrategy 60% Equity,V60A.DE,,etf,Equities,Multi-Asset,TRUE,,,58.6,7,15.9,4.8,13.7,Globally diversified multi-asset fund holding 60% equities and 40% bonds.,6/24/26

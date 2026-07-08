@@ -1497,8 +1497,8 @@ def _write_performance(workbook, sheet, metrics: PortfolioMetrics):
     on the full available history per instrument, capped at 5 years. The Period Used
     column shows the actual window used.
 
-    Alpha and Beta are computed vs the benchmark marked is_benchmark_alfa_and_beta=true
-    in indexes.csv (column headers are dynamic).
+    Alpha and Beta are computed vs the benchmark marked is_benchmark_alpha_beta=true
+    in instrument_taxonomy.csv (column headers are dynamic).
     """
     _apply_title(sheet, 1, 1, "Performance Analysis")
 
