@@ -2923,12 +2923,12 @@ def render_newsletter(
         config: Investor configuration.
         issue_number: Sequential issue number for branding.
         benchmark_alpha_beta: Display name of α/β benchmark. When None it is
-            resolved from configuration (indexes.csv
-            ``is_benchmark_alfa_and_beta``) so the label/tag always match the
+            resolved from configuration (instrument_taxonomy.csv
+            ``is_benchmark_alpha_beta``) so the label/tag always match the
             benchmark the engine actually computed α/β against.
         benchmark_geo: Display name of geographic allocation benchmark. When
             None it is resolved from configuration
-            (``is_benchmark_geo_allocation``).
+            (``is_benchmark_geo``).
 
     Returns:
         The full HTML newsletter as a single string.

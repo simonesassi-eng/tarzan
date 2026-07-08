@@ -82,7 +82,7 @@ Optional columns (`trade_date`, `name`, `ticker`, `currency`,
 `price_native`, `fx_rate`, `fees_eur`, `source`) are used when present.
 
 Geographic allocation is resolved automatically: first by ticker / ISIN
-lookup in `input/indexes.csv`, then via yfinance fund composition data.
+lookup in `input/instrument_taxonomy.csv`, then via yfinance fund composition data.
 
 #### Optional: build the order list from a Fineco export
 

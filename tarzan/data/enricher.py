@@ -1048,11 +1048,11 @@ def get_geo_breakdown(
     """Get geographic breakdown for an ETF ticker via dynamic scraping.
 
     Returns (breakdown_dict, source_name) or None. Memoized per run
-    (thread-safe). The live resolution (indexes.csv + justETF + yfinance)
+    (thread-safe). The live resolution (instrument_taxonomy.csv + justETF + yfinance)
     runs first so it is always authoritative and fresh; the immutable disk
     cache (keyed by the stable ISIN when available) is consulted only as a
     fallback, so a justETF/scrape outage does not degrade the geography
-    section to "Not Available" — while never shadowing an indexes.csv edit.
+    section to "Not Available" — while never shadowing an instrument_taxonomy.csv edit.
     """
     cached = _get_geo_breakdown_cached(ticker)
     if cached is not None:
@@ -1062,8 +1062,8 @@ def get_geo_breakdown(
 
     geo_key = isin or ticker
 
-    # indexes.csv (and the justETF index-name bridge) are authoritative and
-    # cheap enough to run fresh on every call, so an edit to indexes.csv
+    # instrument_taxonomy.csv (and the justETF index-name bridge) are authoritative and
+    # cheap enough to run fresh on every call, so an edit to instrument_taxonomy.csv
     # takes effect immediately instead of being shadowed for the cache TTL.
     # The on-disk cache is consulted ONLY as a fallback below, when the live
     # resolution is unavailable.
@@ -1079,7 +1079,7 @@ def get_geo_breakdown(
     # Fallback: a previously-resolved breakdown from the immutable disk
     # cache. This keeps the geography section resilient to a justETF /
     # scrape outage (which would otherwise degrade it to "Not Available")
-    # without ever shadowing a fresh indexes.csv edit.
+    # without ever shadowing a fresh instrument_taxonomy.csv edit.
     disk = price_cache.load_geo(geo_key)
     if disk:
         breakdown = _geo_from_cache(disk["breakdown"])
@@ -1365,6 +1365,40 @@ def _try_terrapin_fallback(holding: Holding) -> None:
 # Enrichment + classification pipeline
 # ---------------------------------------------------------------------------
 
+def _apply_taxonomy_override(holding: Holding) -> bool:
+    """Pin asset_class + role from the curated instrument_taxonomy.csv.
+
+    Looks up by ISIN first, then bare ticker (suffix stripped). On a match,
+    sets ``holding.asset_class`` and ``holding.role`` and returns True so the
+    caller skips the auto-classification chain. Returns False when the
+    instrument is not in the curated catalog (auto-classification takes over).
+    """
+    lut = cfg.instrument_taxonomy()
+    if not lut:
+        return False
+    keys = []
+    if holding.isin:
+        keys.append(holding.isin.strip().upper())
+    if holding.ticker:
+        keys.append(holding.ticker.split(".")[0].strip().upper())
+    for k in keys:
+        hit = lut.get(k)
+        if not hit:
+            continue
+        ac_str, role = hit
+        try:
+            holding.asset_class = AssetClass(ac_str)
+        except ValueError:
+            logger.warning(
+                "Curated asset_class '%s' for %s is not a valid AssetClass; ignoring override",
+                ac_str, k,
+            )
+            return False
+        holding.role = role
+        return True
+    return False
+
+
 def _enrich_and_classify(holding: Holding) -> Holding:
     """Enrich a holding with market data and then classify it.
 
@@ -1376,15 +1410,29 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     """
     holding, info = _enrich_single(holding)
 
-    if holding.asset_class is None:
-        holding.asset_class = classify_asset_class(info, holding.ticker, holding)
+    # Priority 0 — curated taxonomy override (deterministic, by ISIN then
+    # ticker). A hit in instrument_taxonomy.csv pins asset_class + role and
+    # skips the auto-classification/reclassification/OpenFIGI chain, which
+    # would otherwise mis-bucket names like an efficient-core "government bond
+    # overlay" (→ Fixed Income) or a commodity-carry ETF (→ Alternative).
+    curated = _apply_taxonomy_override(holding)
 
-    # Post-classification: use enriched name as additional signal
-    _reclassify_by_name(holding)
+    if not curated:
+        if holding.asset_class is None:
+            holding.asset_class = classify_asset_class(info, holding.ticker, holding)
 
-    # OpenFIGI fallback
-    if holding.asset_class == AssetClass.ALTERNATIVE or holding.instrument_type in (None, "Other"):
-        _apply_openfigi_fallback(holding)
+        # Post-classification: use enriched name as additional signal
+        _reclassify_by_name(holding)
+
+        # OpenFIGI fallback
+        if holding.asset_class == AssetClass.ALTERNATIVE or holding.instrument_type in (None, "Other"):
+            _apply_openfigi_fallback(holding)
+
+        logger.debug(
+            "No curated taxonomy for %s / %s → auto-classified %s (role unset). "
+            "Add a row to instrument_taxonomy.csv to pin it.",
+            holding.isin, holding.ticker, holding.asset_class,
+        )
 
     if holding.security_type is None:
         holding.security_type = _derive_security_type(holding)

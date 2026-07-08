@@ -23,6 +23,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Office/Excel lock files (created while a workbook is open)
+~$*
+
 # IDE
 .vscode/
 .idea/
@@ -57,3 +60,8 @@ input/targets_per_holding.csv
 # outside the repo; this guards the TARZAN_CACHE_DIR override landing here).
 .cache/
 tarzan_cache/
+
+# TBTF analysis — raw corpus pulled from Arctic Shift (third-party archive).
+# Personal/educational use only, NOT for redistribution. Regenerate locally
+# with tbtf-analisi/fetch_arcticshift.py. Derived stats (small JSON) are kept.
+tbtf-analisi/tbtf_arcticshift.json

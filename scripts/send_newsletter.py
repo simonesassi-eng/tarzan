@@ -236,7 +236,7 @@ def main() -> int:
 
     # 2. Render newsletter HTML.
     # The α/β and geo benchmark names are read from configuration
-    # (indexes.csv: is_benchmark_alfa_and_beta / is_benchmark_geo_allocation)
+    # (instrument_taxonomy.csv: is_benchmark_alpha_beta / is_benchmark_geo)
     # rather than hardcoded, so the labels and the cells they color match
     # the benchmark the engine actually computed against.
     from tarzan import config as tarzan_config

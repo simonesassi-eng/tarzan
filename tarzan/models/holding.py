@@ -76,6 +76,7 @@ class Holding:
     weight_pct: Optional[float] = None
     gain_pct: Optional[float] = None
     asset_class: Optional[AssetClass] = None
+    role: Optional[str] = None  # sub-category within the asset class (e.g. "Equity Factor", "Managed Futures")
     geography: Optional[Geography] = None
     geo_breakdown: Optional[dict[Geography, float]] = None
     geo_source: Optional[str] = None

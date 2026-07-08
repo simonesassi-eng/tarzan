@@ -105,7 +105,7 @@ def run(
         Tuple of (PortfolioMetrics, InvestorConfig).
     """
     # Re-read user inputs fresh on every run: drop the per-process caches of
-    # indexes.csv / config and the geo resolver's copy, so an edit to a
+    # instrument_taxonomy.csv / config and the geo resolver's copy, so an edit to a
     # user's Drive inputs is never shadowed by a previous run in the same
     # process. (Universal market data in price_cache is left cached.)
     from tarzan import config as _cfg
