@@ -164,35 +164,8 @@
             <td class="px-32" style="padding:32px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
               <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How each holding is moving</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Per-instrument returns are the security's own market return over each window (a 5Y column shows the full 5 years even if you've held it less), colored by sign. Your <strong>Total Portfolio</strong> row is the consolidated history, capped to the youngest holding with ≥1Y of data — currently <strong>{{ returns_snapshot.history_label }}</strong> — so longer periods show "—"; its cells are colored by delta vs <strong>{{ returns_snapshot.benchmark_alpha_beta }}</strong> (<span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under). Holdings with &lt;1Y of history don't shorten it.</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Instrument</td>
-                  {% for p in returns_snapshot.period_labels %}
-                  <td align="right" style="padding:8px 6px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ p|upper }}</td>
-                  {% endfor %}
-                </tr>
-                {% for r in returns_snapshot.rows %}
-                {% if r.is_portfolio %}
-                {# Portfolio row (highlighted) — same styling as the Performance table below. #}
-                <tr>
-                  <td style="padding:10px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;">★ {{ r.name }}</td>
-                  {% for c in r.cells %}
-                  <td align="right" style="padding:10px 6px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ c.color }};font-weight:700;">{{ c.value }}</td>
-                  {% endfor %}
-                </tr>
-                {% else %}
-                <tr>
-                  <td style="padding:8px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
-                    {{ r.name }}{% if r.ticker %}<span style="display:inline-block;margin-left:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ r.ticker }}</span>{% endif %}
-                  </td>
-                  {% for c in r.cells %}
-                  <td align="right" style="padding:8px 6px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid #F1F2F8;{% endif %}font-variant-numeric:tabular-nums;color:{{ c.color }};font-weight:600;">{{ c.value }}</td>
-                  {% endfor %}
-                </tr>
-                {% endif %}
-                {% endfor %}
-              </table>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};"><strong>1D</strong> is a live intraday sparkline (<span style="color:{{ palette.green }};font-weight:800;">●&nbsp;LIVE</span> when the market is open, <strong>PREV. DAY</strong> for the last completed session), grouped by asset class · role like the Performance table; instruments with no intraday trades show a dashed line + the % vs the previous close. Other per-instrument returns are the security's own market return over each window (a 5Y column shows the full 5 years even if you've held it less), colored by sign. Your <strong>Total Portfolio</strong> row is the consolidated history, capped to the youngest holding with ≥1Y of data — currently <strong>{{ returns_snapshot.history_label }}</strong> — so longer periods show "—"; its cells are colored by delta vs <strong>{{ returns_snapshot.benchmark_alpha_beta }}</strong> (<span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under).</div>
+              {{ returns_snapshot.table_html|safe }}
             </td>
           </tr>
           {% endif %}
