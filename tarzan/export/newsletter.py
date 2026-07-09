@@ -2441,13 +2441,17 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     if n < 2:
         return ""
     t0, t_last = ts[0], ts[-1]
-    # A completed session (the last bar is not from *today* in the bar's own
-    # timezone — e.g. a US index in the European morning) fills the full
-    # width. Only the session currently in progress grows from the left, so
-    # early in that market's day the line covers just the elapsed portion.
+    # A completed session (its last bar has aged out — e.g. a US index in the
+    # European morning, or any market viewed after its close) fills the full
+    # width. Only the session trading *now* (a recent last bar) grows from the
+    # left, so early in that market's day the line covers just the elapsed
+    # portion. Recency is used (not "date == today") so an evening view of a
+    # closed same-day session correctly renders full width.
     try:
-        now_tz = datetime.now(getattr(t_last, "tzinfo", None))
-        in_progress = (t_last.date() == now_tz.date())
+        _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
+               else t_last.tz_localize("UTC"))
+        _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
+        in_progress = _age_min <= 60
     except Exception:  # noqa: BLE001
         in_progress = False
     if in_progress:
