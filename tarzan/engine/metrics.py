@@ -27,6 +27,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     TRADING_DAYS,
     DAYS_PER_YEAR,
     TwrorResult,
+    PERIOD_DAYS,
     compute_cagr,
     compute_cvar,
     compute_max_drawdown,
@@ -487,9 +488,8 @@ class MetricsEngine:
                                   "1m": None, "3m": None, "6m": None, "1y": None,
                                   "3y": None, "5y": None}
         else:
-            periods = {"1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180, "1y": 365, "3y": 1095, "5y": 1825}
             result = {"cagr": compute_cagr(ph), "ytd": compute_ytd_return(ph)}
-            for key, days in periods.items():
+            for key, days in PERIOD_DAYS.items():
                 result[key] = compute_period_return(ph, days)
             ctx["performance"] = result
 
@@ -766,8 +766,8 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _holding_performance(self, ctx: dict) -> None:
         rows = []
-        periods = {"1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180,
-                   "1y": 365, "3y": 1095, "5y": 1825}
+        # Period returns are populated by ``_populate_perf_row`` from the
+        # shared ``stats.PERIOD_DAYS`` bucket map (no local copy to drift).
 
         # Fetch Alpha/Beta benchmark once for all holdings
         bench_history = pd.Series(dtype=float)

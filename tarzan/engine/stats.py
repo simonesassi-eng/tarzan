@@ -37,6 +37,17 @@ TRADING_DAYS = cfg.trading_days()
 # the money-weighted and time-weighted figures are directly comparable.
 DAYS_PER_YEAR = 365.25
 
+# The single source of truth for return-bucket windows, in *calendar* days.
+# Every per-instrument / portfolio period return in Tarzan (benchmarks,
+# holding performance, the portfolio performance_full, the newsletter Returns
+# tables and the Excel Performance tab) is computed from this mapping, so the
+# columns mean exactly the same thing everywhere. ``ytd`` is special-cased
+# (since Jan 1) and handled by ``compute_ytd_return``.
+PERIOD_DAYS: dict[str, int] = {
+    "1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180,
+    "1y": 365, "3y": 1095, "5y": 1825,
+}
+
 
 # ======================================================================
 # Period returns
@@ -74,7 +85,14 @@ def compute_period_return(
         Percentage return over the period, or ``None`` if there is not
         enough data.
     """
-    if series.empty or len(series) < 2:
+    # Drop missing observations first: a period return must be measured
+    # between real closes. Data providers often append a trailing NaN bar
+    # for the current (not-yet-closed) session — especially for European
+    # instruments queried outside their trading hours — which would
+    # otherwise null out every window (last/prev = NaN).
+    if series is not None:
+        series = series.dropna()
+    if series is None or series.empty or len(series) < 2:
         return None
     if days <= 1:
         start = float(series.iloc[-2])
@@ -94,7 +112,9 @@ def compute_period_return(
 
 
 def compute_ytd_return(series: pd.Series) -> Optional[float]:
-    if series.empty:
+    if series is not None:
+        series = series.dropna()
+    if series is None or series.empty:
         return None
     ytd = series[series.index.year == series.index[-1].year]
     if ytd.empty or len(ytd) < 2:

@@ -585,6 +585,19 @@ def build_order_derived_series(
         timeline, resolver, external_flows, cf_dates, today
     )
 
+    # Trim the trailing carried-forward tail. The daily calendar runs to
+    # ``today``, but a data vendor often has not yet served the most recent
+    # close(s) — e.g. early next morning the previous European session is
+    # still NaN at Yahoo while the US index already has it. On those days
+    # the resolver carries the last real price forward, producing bit-
+    # identical trailing NAV points. Measuring a "1 day" (or 7/30-day)
+    # move against these stale duplicates would report a fake 0% change,
+    # so we cut the series back to the last date that actually moved. The
+    # terminal ``valuations``/``xirr_cashflows`` (which drive XIRR/TWROR)
+    # are left untouched: their value equals the carried price anyway.
+    daily_series = _trim_carried_tail(daily_series)
+    actual_value_series = _trim_carried_tail(actual_value_series)
+
     # Coverage: share of today's value priced by real market data. Use the
     # SAME value_position basis as value_on so bonds (priced /100) are
     # Coverage: share of today's value priced by real market data. Borsa
@@ -660,6 +673,34 @@ def build_order_derived_series(
         pnl_series=pnl_series,
         unrealized_series=unrealized_series,
     )
+
+
+def _trim_carried_tail(s: pd.Series, max_trim: int = 10) -> pd.Series:
+    """Drop a *short, recent* trailing run of bit-identical values.
+
+    These appear when the price vendor has not yet published the latest
+    close(s) and the resolver carries the last real price forward onto the
+    calendar days up to ``today`` (weekends included). The carried points
+    are exact duplicates of the last real value, so a strict-equality trim
+    removes only stale filler — never a genuine move — leaving the series
+    ending on the last date that actually changed.
+
+    Guards keep this conservative: it only cuts a short tail (``max_trim``
+    points, enough for a long weekend plus a stale session or two), always
+    leaves at least two points, and never collapses a genuinely flat
+    series (where the whole series is one constant value). Non-mutating;
+    returns a (possibly shorter) view.
+    """
+    if s is None or len(s) < 3:
+        return s
+    last = s.iloc[-1]
+    i = len(s) - 1
+    while i > 0 and s.iloc[i - 1] == last:
+        i -= 1
+    trimmed = (len(s) - 1) - i
+    if trimmed == 0 or trimmed > max_trim or i < 1:
+        return s
+    return s.iloc[: i + 1]
 
 
 def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
