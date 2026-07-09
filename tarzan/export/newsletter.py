@@ -1243,15 +1243,16 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
     spans: dict = {}
     for k, days in PERIOD_DAYS.items():
         if k == "1d":
-            spans[k] = (s.index[-2], s.index[-1])
-        else:
-            sub = s[s.index >= end - pd.Timedelta(days=days)]
-            spans[k] = (sub.index[0], sub.index[-1]) if len(sub) >= 2 else None
+            continue  # 1D is broker-style (live vs previous close), not a fixed span
+        sub = s[s.index >= end - pd.Timedelta(days=days)]
+        spans[k] = (sub.index[0], sub.index[-1]) if len(sub) >= 2 else None
     ytd = s[s.index.year == end.year]
     spans["ytd"] = (ytd.index[0], ytd.index[-1]) if len(ytd) >= 2 else None
 
-    parts = []
+    parts = [f'<strong style="color:{P["ink"]};">1D</strong> latest price vs previous close (live)']
     for k in order:
+        if k == "1d":
+            continue
         sp = spans.get(k)
         if sp:
             lbl = "YTD" if k == "ytd" else labels[k]
@@ -1401,6 +1402,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     nav_norm = _norm_series(m.portfolio_history)
     tw = {d: _window_twror(nav_norm, d) for d in (1, 7, 30)}
     tw_since = m.twror_pct
+
+    # Broker-style 1 Day: use the live "since previous close" portfolio move
+    # (value-weighted from the intraday quotes, in performance_full["1d"]) so
+    # the 1-day column updates during the session like the Returns tables.
+    # The 7/30-day columns stay close-based. Falls back to the window figures
+    # when no live quote is available.
+    live_1d = (m.performance_full or {}).get("1d")
+    if live_1d is not None and not (isinstance(live_1d, float) and math.isnan(live_1d)):
+        tw[1] = float(live_1d)
+        prev_val = m.total_value / (1.0 + float(live_1d) / 100.0) if (1.0 + float(live_1d) / 100.0) else None
+        eur_1d = (m.total_value - prev_val) if prev_val is not None else None
+        tot[1] = (eur_1d, float(live_1d))
+        unr[1] = (eur_1d, float(live_1d))
 
     bt = f"1px solid {P['border']}"
 

@@ -83,6 +83,7 @@ class MetricsEngine:
             self._rebalancing,
             self._benchmarks,
             self._holding_performance,
+            self._live_1d,
             self._geo_benchmark,
             self._holding_histories,
             self._historical_risk,
@@ -799,6 +800,69 @@ class MetricsEngine:
                 logger.warning("Benchmark %s performance computation failed: %s", bench_name, e)
 
         ctx["holding_performance"] = pd.DataFrame(rows)
+
+    # ------------------------------------------------------------------
+    # Broker-style (live) 1D
+    # ------------------------------------------------------------------
+    def _live_1d(self, ctx: dict) -> None:
+        """Override the 1D column with a broker-style "since previous close"
+        return: the latest intraday price vs the previous official close.
+
+        This makes the 1D figure update live during the session (like a
+        broker) instead of only advancing once today closes. It is applied
+        consistently everywhere the 1D is shown — per-instrument
+        (holding_performance → newsletter Returns tables + Excel) and the
+        portfolio (performance / performance_full → the highlighted rows).
+        Best-effort: tickers without a usable intraday series keep their
+        end-of-day close return, and any failure leaves the numbers
+        untouched, so an offline run degrades cleanly to the close-based 1D.
+        """
+        hp = ctx.get("holding_performance")
+        if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
+            return
+        try:
+            from tarzan.data.market_quotes import broker_1d
+            from tarzan.data import price_cache as _pc
+            # holding_performance keys rows by whatever the holding/benchmark
+            # carries: benchmarks use a real Yahoo ticker, but order-derived
+            # holdings key by ISIN. Resolve each to its Yahoo symbol before
+            # fetching intraday, then map the result back to the original key.
+            keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
+            resolve = {k: (_pc.load_resolution(k) or k) for k in keys}
+            live_by_sym = broker_1d(list({s for s in resolve.values()}))
+            live = {k: live_by_sym[s] for k, s in resolve.items() if s in live_by_sym}
+        except Exception as e:  # noqa: BLE001
+            logger.debug("live 1D fetch failed: %s", e)
+            return
+        if not live:
+            return
+        ctx["live_1d"] = live
+
+        # Per-instrument override (keeps the close-based value when no live).
+        hp["1d"] = [live.get(str(tk), old)
+                    for tk, old in zip(hp["ticker"], hp["1d"])]
+        ctx["holding_performance"] = hp
+
+        # Portfolio 1D = value-weighted live move over the holdings that have
+        # a live quote (renormalized to the covered weight), applied to both
+        # the inception and full performance dicts so every portfolio 1D
+        # agrees.
+        df = ctx.get("holdings_df")
+        if df is not None and not df.empty and {"ticker", "weight_pct"}.issubset(df.columns):
+            num = 0.0
+            wsum = 0.0
+            for tk, w in zip(df["ticker"], df["weight_pct"]):
+                pct = live.get(str(tk))
+                if pct is None or w is None:
+                    continue
+                num += float(w) * float(pct)
+                wsum += float(w)
+            if wsum > 0:
+                port_1d = num / wsum
+                for key in ("performance", "performance_full"):
+                    d = ctx.get(key)
+                    if isinstance(d, dict):
+                        d["1d"] = port_1d
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)
