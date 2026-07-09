@@ -1436,7 +1436,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     def _label(txt) -> str:
         return f'<td style="padding:7px 0;border-top:{bt};font-size:12px;color:{P["ink"]};">{txt}</td>'
 
-    heads = ("1 Day", "7 Days", "30 Days", "Since inception")
+    # Flag the 1-Day column as live when the portfolio 1D is a market-open
+    # quote (set by the engine's _live_1d step).
+    _1d_live = bool((m.performance_full or {}).get("1d_live"))
+    head_1d = "1 Day \u25CF LIVE" if _1d_live else "1 Day"
+    heads = (head_1d, "7 Days", "30 Days", "Since inception")
     head_html = '<tr><td></td>' + "".join(
         f'<td align="right" style="padding:0 0 5px 10px;font-size:9px;font-weight:700;color:{P["muted"]};'
         f'letter-spacing:0.04em;text-transform:uppercase;">{h}</td>' for h in heads) + '</tr>'
@@ -2401,7 +2405,8 @@ def _perf_daily_series(ticker: str) -> "pd.Series | None":
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
-                     daily_series: "pd.Series | None" = None) -> tuple:
+                     daily_series: "pd.Series | None" = None,
+                     live: bool = False) -> tuple:
     """Render the 1D cell: a sign-colored % pill above a Markets-style
     intraday sparkline (green above the previous close, red below).
 
@@ -2450,8 +2455,13 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                                   'stroke-width="1.5" stroke-dasharray="3,2"')
     bgc = f"background:{bg};" if bg else ""
     chart = spark or f'<div style="font-size:9px;color:{P["subtle"]};">\u2014</div>'
+    # A small green "LIVE" tag marks rows whose 1D is a live market-open
+    # quote; rows without it are the last completed session (market closed).
+    marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:800;'
+              f'color:{P["green"]};letter-spacing:0.04em;vertical-align:middle;">'
+              f'&#9679;&nbsp;LIVE</span>') if live else ""
     cell = (f'<td width="96" align="center" style="padding:6px 8px;{bgc}">'
-            f'<div>{pill}</div><div style="margin-top:3px;">{chart}</div></td>')
+            f'<div>{pill}{marker}</div><div style="margin-top:3px;">{chart}</div></td>')
     return cell, is_daily
 
 
@@ -2583,6 +2593,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "asset_class": asset_class,
                 "role": role,
                 "d1": r.get("1d"),
+                "live": bool(r.get("live_1d", False)),
                 "tags": tags,
                 # Back-compat single tag (first one) for any old template ref.
                 "tag": tags[0] if tags else None,
@@ -2657,6 +2668,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         daily_series=(m.portfolio_history
                       if m.portfolio_history is not None
                       and len(m.portfolio_history) >= 2 else None),
+        live=bool(pf.get("1d_live")),
     )
     rows_html = [
         "<tr>"
@@ -2695,7 +2707,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             )
             for r in roles[role]:
                 spark_cell, is_daily = _perf_spark_cell(
-                    r.get("d1"), r.get("raw_ticker"), intraday_map)
+                    r.get("d1"), r.get("raw_ticker"), intraday_map,
+                    live=bool(r.get("live")))
                 tk_chip = ""
                 if r.get("ticker"):
                     tk_chip = (
@@ -2729,8 +2742,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
     subtitle_html = (
         "1D is the intraday move as a mini chart (green above the previous close, "
-        "red below) with the day&rsquo;s % above it; a dashed line marks a daily "
-        "fallback when intraday data is missing. Other columns are % returns &mdash; "
+        "red below) with the day&rsquo;s % above it; a "
+        f'<span style="color:{P["green"]};font-weight:800;">&#9679;&nbsp;LIVE</span> tag '
+        "marks instruments whose market is open now (else it is the last completed "
+        "session). A dashed line marks a daily fallback when intraday data is missing. "
+        "Other columns are % returns &mdash; "
         f"your portfolio history is <strong>{history_label}</strong>, so longer "
         "periods show &ldquo;\u2014&rdquo; on the portfolio row. Portfolio cells "
         f"colored by delta vs <strong>{ctx.benchmark_alpha_beta or 'S&amp;P 500'}</strong>: "
