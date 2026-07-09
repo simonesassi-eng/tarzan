@@ -138,11 +138,15 @@ def broker_1d(tickers: list[str]) -> dict:
 
     This is the "since previous close" figure a broker shows live during the
     session (and the last completed session's change once closed). Returns
-    ``{ticker: pct}`` only for tickers with a usable intraday series (>=2
-    points); callers fall back to the end-of-day close return for the rest.
-    Best-effort and currency-consistent: both the live price and the
+    ``{ticker: {"pct": float, "live": bool}}`` only for tickers with a usable
+    intraday series (>=2 points); callers fall back to the end-of-day close
+    return for the rest. ``live`` is True when the latest intraday bar belongs
+    to *today's* session (its market is open / has traded today) and False
+    when the intraday endpoint returned a past completed session (market
+    closed). Best-effort and currency-consistent: both the live price and the
     previous close come from the same native yfinance feed, so for a
     EUR-listed ETF the % is the EUR daily move. Never raises."""
+    from datetime import datetime
     uniq = [t for t in {t for t in tickers if t}]
     if not uniq:
         return {}
@@ -157,7 +161,17 @@ def broker_1d(tickers: list[str]) -> dict:
         if intra is None or len(intra) < 2:
             continue
         cur = float(intra.iloc[-1])
-        iday = intra.index[-1].date()
+        last_ts = intra.index[-1]
+        iday = last_ts.date()
+        # "live" = the latest intraday bar is from today's session in the
+        # instrument's own timezone (market open / has traded today). When the
+        # market is closed the intraday endpoint returns the last completed
+        # session, whose date is in the past → not live.
+        try:
+            today_local = datetime.now(getattr(last_ts, "tzinfo", None)).date()
+        except Exception:  # noqa: BLE001
+            today_local = datetime.now().date()
+        is_live = iday == today_local
         prev = None
         try:
             hist = _fetch_history(tk)
@@ -171,7 +185,7 @@ def broker_1d(tickers: list[str]) -> dict:
         if prev is None:
             prev = float(intra.iloc[0])
         if prev:
-            out[tk] = (cur / prev - 1.0) * 100.0
+            out[tk] = {"pct": (cur / prev - 1.0) * 100.0, "live": bool(is_live)}
     return out
 
 

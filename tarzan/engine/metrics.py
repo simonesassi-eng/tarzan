@@ -829,8 +829,9 @@ class MetricsEngine:
             # fetching intraday, then map the result back to the original key.
             keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
             resolve = {k: (_pc.load_resolution(k) or k) for k in keys}
-            live_by_sym = broker_1d(list({s for s in resolve.values()}))
-            live = {k: live_by_sym[s] for k, s in resolve.items() if s in live_by_sym}
+            res = broker_1d(list({s for s in resolve.values()}))
+            live = {k: res[s]["pct"] for k, s in resolve.items() if s in res}
+            live_flag = {k: bool(res[s]["live"]) for k, s in resolve.items() if s in res}
         except Exception as e:  # noqa: BLE001
             logger.debug("live 1D fetch failed: %s", e)
             return
@@ -838,31 +839,39 @@ class MetricsEngine:
             return
         ctx["live_1d"] = live
 
-        # Per-instrument override (keeps the close-based value when no live).
+        # Per-instrument override (keeps the close-based value when no live),
+        # plus a boolean column flagging the rows whose 1D is a live
+        # (market-open) quote vs a last-completed-session close.
         hp["1d"] = [live.get(str(tk), old)
                     for tk, old in zip(hp["ticker"], hp["1d"])]
+        hp["live_1d"] = [bool(live_flag.get(str(tk), False)) for tk in hp["ticker"]]
         ctx["holding_performance"] = hp
 
         # Portfolio 1D = value-weighted live move over the holdings that have
         # a live quote (renormalized to the covered weight), applied to both
         # the inception and full performance dicts so every portfolio 1D
-        # agrees.
+        # agrees. The portfolio is flagged live when any contributing holding
+        # is live (they share the same session, so it is effectively all or
+        # nothing for a single-region book).
         df = ctx.get("holdings_df")
         if df is not None and not df.empty and {"ticker", "weight_pct"}.issubset(df.columns):
             num = 0.0
             wsum = 0.0
+            any_live = False
             for tk, w in zip(df["ticker"], df["weight_pct"]):
                 pct = live.get(str(tk))
                 if pct is None or w is None:
                     continue
                 num += float(w) * float(pct)
                 wsum += float(w)
+                any_live = any_live or bool(live_flag.get(str(tk), False))
             if wsum > 0:
                 port_1d = num / wsum
                 for key in ("performance", "performance_full"):
                     d = ctx.get(key)
                     if isinstance(d, dict):
                         d["1d"] = port_1d
+                        d["1d_live"] = any_live
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)
