@@ -13,7 +13,7 @@ The newsletter has the following structure:
     5. Allocation by asset class (with stacked bar + per-class rows)
     6. Geographic exposure (equity, with target & ACWI ticks)
     7. Holdings (grouped by class, sorted as per Excel)
-    8. Performance (returns vs benchmarks)
+    8. Performance (returns by asset class & role, with 1D sparkline)
     9. Risk profile (chips + vs S&P 500 + vs MSCI ACWI)
    10. Suggested action (Optimizer)
    11. Return contribution (winners / laggards)
@@ -1205,6 +1205,74 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
     return {"available": True, "html": html}
 
 
+def _build_methodology(ctx: _NewsletterContext) -> dict:
+    """Bottom-of-newsletter methodology note: the *actual* calendar spans each
+    return bucket covers, computed live from the longest available price
+    series so the reader sees exactly which dates a 1D / 1W / … return is
+    measured between. Window lengths come from the shared ``stats.PERIOD_DAYS``
+    map (same buckets the engine uses everywhere), so this note can never
+    drift from the numbers in the tables."""
+    from tarzan.engine.stats import PERIOD_DAYS
+    P = PALETTE
+    m = ctx.metrics
+
+    # Longest daily series available (a benchmark spans ~5y, so every bucket
+    # resolves); fall back to the portfolio's own history.
+    series = None
+    for s in (m.benchmark_histories or {}).values():
+        if s is not None and len(s) >= 2 and (series is None or len(s) > len(series)):
+            series = s
+    if series is None:
+        series = m.portfolio_history
+    if series is None or len(series) < 2:
+        return {"available": False, "html": ""}
+    s = _norm_series(series).dropna()
+    if len(s) < 2:
+        return {"available": False, "html": ""}
+    end = s.index[-1]
+
+    def _fmt(a, b) -> str:
+        cross = a.year != b.year
+        def d(x):
+            return f"{x.day} {x.strftime('%b')}" + (f" &rsquo;{x.strftime('%y')}" if cross else "")
+        return f"{d(a)}\u2192{d(b)}"
+
+    labels = {"1d": "1D", "1w": "1W", "1m": "1M", "3m": "3M", "6m": "6M",
+              "1y": "1Y", "3y": "3Y", "5y": "5Y"}
+    order = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
+    spans: dict = {}
+    for k, days in PERIOD_DAYS.items():
+        if k == "1d":
+            spans[k] = (s.index[-2], s.index[-1])
+        else:
+            sub = s[s.index >= end - pd.Timedelta(days=days)]
+            spans[k] = (sub.index[0], sub.index[-1]) if len(sub) >= 2 else None
+    ytd = s[s.index.year == end.year]
+    spans["ytd"] = (ytd.index[0], ytd.index[-1]) if len(ytd) >= 2 else None
+
+    parts = []
+    for k in order:
+        sp = spans.get(k)
+        if sp:
+            lbl = "YTD" if k == "ytd" else labels[k]
+            parts.append(f'<strong style="color:{P["ink"]};">{lbl}</strong> {_fmt(sp[0], sp[1])}')
+    windows = " &nbsp;&middot;&nbsp; ".join(parts)
+
+    html = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;'
+        f'border-collapse:separate;border-spacing:0;"><tr><td style="padding:12px 14px;">'
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
+        f'text-transform:uppercase;">Methodology &middot; return windows</div>'
+        f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};line-height:1.7;">{windows}</div>'
+        f'<div style="margin-top:6px;font-size:10px;color:{P["subtle"]};line-height:1.5;">'
+        f'Closing prices, ending at the last available close. If an instrument&rsquo;s history '
+        f'is shorter than a window, its start is capped (or it shows &ldquo;\u2014&rdquo;).</div>'
+        f'</td></tr></table>'
+    )
+    return {"available": True, "html": html}
+
+
 def _build_markets(ctx: _NewsletterContext) -> dict:
     """Markets strip (yfinance-style): roomy, neutral 5-column cards — level,
     a daily-change pill and a stretched mini sparkline — grouped by region.
@@ -2266,8 +2334,117 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
     }
 
 
+# Performance section grouping. The tracked instruments are sectioned by
+# asset class and then by role (from instrument_taxonomy), in a fixed
+# sequence that reads growth-engine → diversifiers → defensive. Classes or
+# roles not listed here are appended (never dropped), so a new taxonomy
+# value still shows up.
+_PERF_CLASS_ORDER = [
+    "Equities", "Fixed Income", "Commodities", "Gold",
+    "Alternative", "Cash & Cash Equivalents",
+]
+_PERF_ROLE_ORDER = {
+    "Equities": ["Equity Broad", "Equity Factor", "Equity Leveraged",
+                 "Efficient Core", "Multi-Asset"],
+    "Fixed Income": ["Govt Nominal", "Govt Linkers", "Aggregate/Credit",
+                     "Long Duration"],
+    "Commodities": ["Broad Basket", "Carry", "Market Neutral"],
+    "Gold": ["Gold"],
+    "Alternative": ["Managed Futures", "Cat Bond"],
+    "Cash & Cash Equivalents": ["Cash / Money Market"],
+}
+
+
+def _perf_intraday_map(tickers: list[str]) -> dict:
+    """Batched intraday close series per ticker for the 1D sparkline.
+
+    Reuses the Markets strip's single-request intraday download. Returns an
+    empty dict on any failure so callers transparently fall back to the
+    daily-history sparkline."""
+    uniq = [t for t in {t for t in tickers if t}]
+    if not uniq:
+        return {}
+    try:
+        from tarzan.data.market_quotes import _fetch_intraday
+        return _fetch_intraday(uniq)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("performance intraday fetch failed: %s", e)
+        return {}
+
+
+def _perf_daily_series(ticker: str) -> "pd.Series | None":
+    """EUR daily close history for a ticker (memoized), used as the 1D
+    sparkline fallback when there is no usable intraday series."""
+    if not ticker:
+        return None
+    try:
+        from tarzan.engine.benchmarks import _fetch_benchmark_history
+        s = _fetch_benchmark_history(ticker)
+        return s if s is not None and len(s) >= 2 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
+                     bg: Optional[str] = None,
+                     daily_series: "pd.Series | None" = None) -> tuple:
+    """Render the 1D cell: a sign-colored % pill above a Markets-style
+    intraday sparkline (green above the previous close, red below).
+
+    Falls back to a dashed daily-history sparkline when intraday is missing
+    or too sparse (<2 points). Returns ``(cell_html, is_daily)`` so the
+    caller can annotate the instrument name with a small "daily" marker."""
+    P = PALETTE
+    if day_val is None or (isinstance(day_val, float) and pd.isna(day_val)):
+        pill_txt, pill_col, pill_bg = "\u2014", P["muted"], P["page"]
+        dv = None
+    else:
+        dv = float(day_val)
+        pill_txt = _pct_compact(dv, signed=True)
+        pill_col = P["green"] if dv >= 0 else P["red"]
+        pill_bg = P["green_bg"] if dv >= 0 else P["red_bg"]
+    pill = (f'<span style="font-size:10px;font-weight:700;color:{pill_col};'
+            f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
+
+    vals: Optional[list] = None
+    baseline: Optional[float] = None
+    is_daily = False
+    intra = intraday_map.get(raw_ticker) if raw_ticker else None
+    if intra is not None and len(intra) >= 2:
+        vals = [float(x) for x in intra.values]
+        # Baseline = previous close, derived from the known 1D return so no
+        # extra fetch is needed: prev = last / (1 + day%).
+        if dv is not None and (1.0 + dv / 100.0) != 0:
+            baseline = vals[-1] / (1.0 + dv / 100.0)
+        else:
+            baseline = vals[0]
+    else:
+        daily = daily_series if daily_series is not None else _perf_daily_series(raw_ticker)
+        if daily is not None and len(daily) >= 2:
+            vals = [float(x) for x in daily.iloc[-40:].values]
+            baseline = vals[0]
+            is_daily = True
+
+    spark = ""
+    if vals and len(vals) >= 2 and baseline is not None:
+        spark = _day_spark(vals, baseline, w=84, h=18, stretch=True)
+        if is_daily and spark:
+            # Dash only the data polylines (stroke-width 1.5); the baseline
+            # (0.75) is left solid — signals "daily, not intraday".
+            spark = spark.replace('stroke-width="1.5"',
+                                  'stroke-width="1.5" stroke-dasharray="3,2"')
+    bgc = f"background:{bg};" if bg else ""
+    chart = spark or f'<div style="font-size:9px;color:{P["subtle"]};">\u2014</div>'
+    cell = (f'<td width="96" align="center" style="padding:6px 8px;{bgc}">'
+            f'<div>{pill}</div><div style="margin-top:3px;">{chart}</div></td>')
+    return cell, is_daily
+
+
 def _build_performance(ctx: _NewsletterContext) -> dict:
-    """Build returns table (portfolio + benchmarks) and risk metrics."""
+    """Build the performance section: instruments sectioned by asset class &
+    role, with a 1D intraday sparkline and multi-horizon % returns."""
+    from tarzan import config as cfg
     m = ctx.metrics
 
     # Portfolio history span shown in the disclaimer. We use the
@@ -2362,7 +2539,10 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         "returns": _build_portfolio_returns_dict(pf),
     }
 
-    # Benchmark rows (from holding_performance, type contains 'enchmark')
+    # Benchmark rows (from holding_performance, type contains 'enchmark').
+    # Each row is tagged with its curated (asset_class, role) from the
+    # instrument taxonomy so the section can be grouped and ordered.
+    taxonomy = cfg.instrument_taxonomy()
     benchmark_rows = []
     if not hp.empty and "type" in hp.columns:
         ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
@@ -2379,9 +2559,16 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 tags.append(("α/β", PALETTE["accent"], PALETTE["accent_bg"]))
             if geo_name and name_norm == geo_name:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
+            raw_ticker = str(r.get("ticker") or "").strip()
+            bare = raw_ticker.split(".")[0].upper() if raw_ticker else ""
+            asset_class, role = taxonomy.get(bare, (None, None))
             benchmark_rows.append({
                 "name": name,
                 "ticker": _display_ticker(r.get("ticker")),
+                "raw_ticker": raw_ticker,
+                "asset_class": asset_class,
+                "role": role,
+                "d1": r.get("1d"),
                 "tags": tags,
                 # Back-compat single tag (first one) for any old template ref.
                 "tag": tags[0] if tags else None,
@@ -2416,7 +2603,133 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             "fallback_count": len(set(fallback)),
         }
 
+    # ── Pre-rendered table (grouped by asset class + role) ──────────────
+    # 1D is a Markets-style intraday sparkline (with the % pill on top); the
+    # remaining columns are % returns. One batched intraday fetch covers all
+    # tracked tickers; instruments without a usable intraday series fall back
+    # to a dashed daily sparkline.
+    P = PALETTE
+    period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
+    intraday_map = _perf_intraday_map([r.get("raw_ticker") for r in benchmark_rows])
+
+    def _th(label, first=False, last=False, center=False):
+        radius = ("border-top-left-radius:8px;" if first else
+                  "border-top-right-radius:8px;" if last else "")
+        align = "center" if center else ("left" if first else "right")
+        return (f'<td align="{align}" style="padding:8px 6px;background:{P["ink"]};'
+                f'color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;'
+                f'text-transform:uppercase;{radius}">{label}</td>')
+
+    # Header: Instrument | 1D | period_cols (last cell rounds the corner).
+    hcells = [_th("Instrument", first=True), _th("1D", center=True)]
+    for i, p in enumerate(period_cols):
+        hcells.append(_th(p.upper(), last=(i == len(period_cols) - 1)))
+    header = "<tr>" + "".join(hcells) + "</tr>"
+
+    def _period_cells(returns_dict, *, weight, bg=None):
+        bgc = f"background:{bg};" if bg else ""
+        out = ""
+        for p in period_cols:
+            cell = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
+            out += (f'<td align="right" style="padding:8px 6px;{bgc}'
+                    f'font-variant-numeric:tabular-nums;color:{cell["color"]};'
+                    f'font-weight:{weight};">{cell["value"]}</td>')
+        return out
+
+    # Portfolio row (highlighted): 1D pill + daily sparkline of its own
+    # recent history (no intraday tick for a portfolio).
+    port_spark, _ = _perf_spark_cell(
+        pf.get("1d"), "", {}, bg=P["accent_bg"],
+        daily_series=(m.portfolio_history
+                      if m.portfolio_history is not None
+                      and len(m.portfolio_history) >= 2 else None),
+    )
+    rows_html = [
+        "<tr>"
+        f'<td style="padding:10px 8px;background:{P["accent_bg"]};color:{P["accent"]};'
+        f'font-weight:700;font-size:12px;">\u2605 {portfolio_row["name"]}</td>'
+        + port_spark
+        + _period_cells(portfolio_row["returns"], weight=700, bg=P["accent_bg"])
+        + "</tr>"
+    ]
+
+    # Group benchmark rows by asset class → role, in the configured order.
+    grouped: dict = {}
+    for r in benchmark_rows:
+        ac = r.get("asset_class") or "Other"
+        role = r.get("role") or "\u2014"
+        grouped.setdefault(ac, {}).setdefault(role, []).append(r)
+
+    def _ordered(keys, preferred):
+        seen = [k for k in preferred if k in keys]
+        extra = [k for k in keys if k not in preferred]
+        return seen + extra
+
+    for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
+        col = ASSET_COLORS.get(ac, P["accent"])
+        roles = grouped[ac]
+        for role in _ordered(list(roles.keys()), _PERF_ROLE_ORDER.get(ac, [])):
+            # Compact "Class · Role" divider.
+            rows_html.append(
+                '<tr><td colspan="9" style="padding:8px 8px 4px;'
+                f'border-bottom:1px solid {P["border"]};font-size:10px;font-weight:700;'
+                f'color:{P["muted"]};letter-spacing:0.02em;">'
+                f'<span style="display:inline-block;width:8px;height:8px;background:{col};'
+                f'border-radius:2px;vertical-align:middle;margin-right:6px;"></span>'
+                f'<span style="color:{col};font-weight:800;text-transform:uppercase;">{ac}</span>'
+                f'&nbsp;&middot;&nbsp;{role}</td></tr>'
+            )
+            for r in roles[role]:
+                spark_cell, is_daily = _perf_spark_cell(
+                    r.get("d1"), r.get("raw_ticker"), intraday_map)
+                tk_chip = ""
+                if r.get("ticker"):
+                    tk_chip = (
+                        f'<span style="display:inline-block;margin-left:5px;padding:1px 5px;'
+                        f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
+                        f'border-radius:4px;font-size:9px;font-weight:700;'
+                        f'font-family:SFMono-Regular,Menlo,Consolas,monospace;'
+                        f'letter-spacing:0.02em;vertical-align:middle;">{r["ticker"]}</span>')
+                tag_chips = "".join(
+                    f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
+                    f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;'
+                    f'font-weight:700;letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>'
+                    for t in r.get("tags", []))
+                daily_mark = ("" if not is_daily else
+                              f'<span style="margin-left:5px;font-size:9px;color:{P["subtle"]};">'
+                              f'&middot; daily</span>')
+                rows_html.append(
+                    "<tr>"
+                    f'<td style="padding:6px 8px;border-bottom:1px solid #F1F2F8;'
+                    f'color:{P["ink"]};font-size:12px;">{r["name"]}{tk_chip}{tag_chips}{daily_mark}</td>'
+                    + spark_cell
+                    + _period_cells(r["returns"], weight=600)
+                    + "</tr>"
+                )
+
+    table_html = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;'
+        f'border-spacing:0;">{header}{"".join(rows_html)}</table>'
+    )
+
+    subtitle_html = (
+        "1D is the intraday move as a mini chart (green above the previous close, "
+        "red below) with the day&rsquo;s % above it; a dashed line marks a daily "
+        "fallback when intraday data is missing. Other columns are % returns &mdash; "
+        f"your portfolio history is <strong>{history_label}</strong>, so longer "
+        "periods show &ldquo;\u2014&rdquo; on the portfolio row. Portfolio cells "
+        f"colored by delta vs <strong>{ctx.benchmark_alpha_beta or 'S&amp;P 500'}</strong>: "
+        f'<span style="color:{P["green"]};font-weight:700;">&#9679;</span> beat &nbsp;&middot;&nbsp; '
+        f'<span style="color:{P["amber"]};font-weight:700;">&#9679;</span> in line &nbsp;&middot;&nbsp; '
+        f'<span style="color:{P["red"]};font-weight:700;">&#9679;</span> underperform.'
+    )
+
     return {
+        "title": "How markets moved",
+        "kicker": "Performance",
+        "subtitle_html": subtitle_html,
+        "table_html": table_html,
         "portfolio_row": portfolio_row,
         "benchmark_rows": benchmark_rows,  # show all configured benchmarks
         "periods": list(periods),
@@ -2900,6 +3213,7 @@ def build_context(
         "sensitivity": _build_sensitivity(nctx),
         "return_contrib": _build_return_contrib(nctx),
         "tax_note": _build_tax_note(nctx),
+        "methodology": _build_methodology(nctx),
         "preheader": _build_preheader(nctx, hero),
         "footer": {
             "generated_at": datetime.now().strftime("%d %b %Y, %H:%M"),
