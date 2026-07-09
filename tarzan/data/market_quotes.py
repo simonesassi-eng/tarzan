@@ -25,6 +25,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# A market is treated as "trading now" (live) when its latest intraday bar is
+# no older than this. yfinance intraday lags ~15-30 min, so this keeps a live
+# session marked live while flipping to "previous day" within ~1h of the close
+# (so an evening newsletter doesn't mislabel a closed market as live).
+_MARKET_OPEN_MAX_LAG_MIN = 60
+
 # (display name, yfinance symbol, category), in display order. The strip
 # shows at most 2 rows per category (the newsletter caps it).
 MARKETS: list[tuple[str, str, str]] = [
@@ -144,13 +150,13 @@ def broker_1d(tickers: list[str]) -> dict:
     session (and the last completed session's change once closed). Returns
     ``{ticker: {"pct": float, "live": bool}}`` only for tickers with a usable
     intraday series (>=2 points); callers fall back to the end-of-day close
-    return for the rest. ``live`` is True when the latest intraday bar belongs
-    to *today's* session (its market is open / has traded today) and False
-    when the intraday endpoint returned a past completed session (market
-    closed). Best-effort and currency-consistent: both the live price and the
-    previous close come from the same native yfinance feed, so for a
-    EUR-listed ETF the % is the EUR daily move. Never raises."""
-    from datetime import datetime
+    return for the rest. ``live`` is True only when the market is trading
+    *now* — i.e. the latest intraday bar is recent. A same-day bar from a
+    session that has already closed (e.g. viewed in the evening) is NOT live.
+    Best-effort and currency-consistent: both the live price and the previous
+    close come from the same native yfinance feed, so for a EUR-listed ETF
+    the % is the EUR daily move. Never raises."""
+    import pandas as pd
     uniq = [t for t in {t for t in tickers if t}]
     if not uniq:
         return {}
@@ -167,15 +173,17 @@ def broker_1d(tickers: list[str]) -> dict:
         cur = float(intra.iloc[-1])
         last_ts = intra.index[-1]
         iday = last_ts.date()
-        # "live" = the latest intraday bar is from today's session in the
-        # instrument's own timezone (market open / has traded today). When the
-        # market is closed the intraday endpoint returns the last completed
-        # session, whose date is in the past → not live.
+        # "live" = the market is trading now, judged by how recent the latest
+        # intraday bar is (yfinance lags ~15-30 min). Once the session closes
+        # its last bar quickly ages out, so an evening view flips to not-live
+        # even though the bar is still dated today.
         try:
-            today_local = datetime.now(getattr(last_ts, "tzinfo", None)).date()
+            lt = (last_ts.tz_convert("UTC") if getattr(last_ts, "tzinfo", None)
+                  else last_ts.tz_localize("UTC"))
+            age_min = (pd.Timestamp.now(tz="UTC") - lt).total_seconds() / 60.0
+            is_live = age_min <= _MARKET_OPEN_MAX_LAG_MIN
         except Exception:  # noqa: BLE001
-            today_local = datetime.now().date()
-        is_live = iday == today_local
+            is_live = False
         prev = None
         try:
             hist = _fetch_history(tk)
