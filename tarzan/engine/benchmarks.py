@@ -18,6 +18,7 @@ from tarzan import config as cfg
 from tarzan.engine.stats import (
     TRADING_DAYS,
     DAYS_PER_YEAR,
+    PERIOD_DAYS,
     compute_cagr,
     compute_cvar,
     compute_max_drawdown,
@@ -128,11 +129,8 @@ def _compute_single_benchmark_metrics(
     vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
     metrics = {
         "cagr": cagr,
-        "1d": compute_period_return(bench, 1), "1w": compute_period_return(bench, 7),
-        "1m": compute_period_return(bench, 30), "3m": compute_period_return(bench, 90),
-        "6m": compute_period_return(bench, 180), "ytd": compute_ytd_return(bench),
-        "1y": compute_period_return(bench, 365), "3y": compute_period_return(bench, 1095),
-        "5y": compute_period_return(bench, 1825),
+        **{k: compute_period_return(bench, d) for k, d in PERIOD_DAYS.items()},
+        "ytd": compute_ytd_return(bench),
         "volatility": vol, "sharpe": compute_sharpe(cagr, vol),
         "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
         "max_drawdown": compute_max_drawdown(bench) * 100,
@@ -177,11 +175,9 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
     All risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Alpha, Beta) use the full series `s`
     (already capped to max 5 years). Period Used reflects the actual window covered.
     """
-    periods = {"1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180,
-               "1y": 365, "3y": 1095, "5y": 1825}
-
-    # Period returns
-    for key, days in periods.items():
+    # Period returns — single shared bucket→days mapping (stats.PERIOD_DAYS)
+    # so every table in Tarzan measures the same windows.
+    for key, days in PERIOD_DAYS.items():
         row[key] = compute_period_return(s, days)
     row["ytd"] = compute_ytd_return(s)
 
