@@ -328,6 +328,9 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
     _day_spark_uid += 1
     gid, rid = f"sg{_day_spark_uid}", f"sr{_day_spark_uid}"
     yb_c = max(0.0, min(yb, h))
+    # Endpoint dot, colored by sign vs the previous-close baseline.
+    _dot_col = PALETTE["green"] if vals[-1] >= baseline else PALETTE["red"]
+    _dot = f'<circle cx="{_xx(n - 1):.1f}" cy="{_yy(vals[-1]):.1f}" r="1.8" fill="{_dot_col}"/>'
     # ``stretch`` makes the sparkline fill its container width (width:100% +
     # preserveAspectRatio="none") so a card leaves no unused space on the
     # right; otherwise it renders at the fixed ``w`` px.
@@ -353,6 +356,7 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
         f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
         f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
         f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
+        f'{_dot}'
         f'</svg>'
     )
 
@@ -1308,9 +1312,15 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         bg = P["green_bg"] if up else P["red_bg"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
-        # Stretched sparkline fills the card width → no unused right-side gap.
-        spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                           w=90, h=18, stretch=True)
+        # Intraday time-axis sparkline (line grows through the session, with
+        # an endpoint dot) when a timestamped series is available; otherwise
+        # the stretched daily fallback.
+        ss = d.get("spark_series")
+        if ss is not None and len(ss) >= 2:
+            spark = _intraday_spark(ss, d.get("baseline", d["value"]), w=90, h=18)
+        else:
+            spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
+                               w=90, h=18, stretch=True)
         return (
             f'<td width="{cw}" style="vertical-align:top;padding:6px 10px;'
             f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
@@ -2187,10 +2197,28 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # short of the per-instrument columns.
     history_label = str(port_full.get("period_used") or "—")
 
-    # Keep these aligned with ``_build_performance``'s ``periods`` tuple
-    # so both tables always show the same columns in the same order.
-    period_keys = ["1d", "1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
-    period_labels = ["1D", "1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
+    # 1D is now its own sparkline column (same concept as the "How markets
+    # moved" table), so it is dropped from the numeric columns here. The rest
+    # stay aligned with ``_build_performance``.
+    period_keys = ["1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
+    period_labels = ["1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
+
+    # Intraday + live-flag inputs for the per-row 1D sparkline cell. Resolve
+    # each holding_performance key (often an ISIN) to its Yahoo symbol so the
+    # intraday lookup matches, and carry the raw 1D value + live flag.
+    from tarzan.data import price_cache as _pc
+    _hp_keys = ([str(t) for t in hp["ticker"].dropna().unique() if t]
+                if (hp is not None and not hp.empty and "ticker" in hp.columns) else [])
+    _resolve = {k: (_pc.load_resolution(k) or k) for k in _hp_keys}
+    _snap_intraday = _perf_intraday_map(list({s for s in _resolve.values()}))
+    _raw1d: dict = {}
+    _live1d: dict = {}
+    if hp is not None and not hp.empty:
+        for _, _pr in hp.iterrows():
+            _k = str(_pr.get("ticker", ""))
+            _raw1d[_k] = _pr.get("1d")
+            _live1d[_k] = bool(_pr.get("live_1d", False))
+
 
     # Locate the α/β benchmark's per-period returns so the Total
     # Portfolio row can be colored "did we beat the benchmark this
@@ -2221,89 +2249,93 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             return PALETTE["amber"]
         return PALETTE["green"] if delta > 0 else PALETTE["red"]
 
-    def _row(name: str, ticker: str, asset_class: str, source: dict, *,
-             is_portfolio: bool = False, is_benchmark: bool = False) -> dict:
-        cells = []
+    def _returns_dict(source: dict, *, is_portfolio: bool) -> dict:
+        """Per-period ``{value, color}`` map for the shared table renderer."""
+        out: dict = {}
         for key in period_keys:
             val = source.get(key) if source else None
             if val is None or (isinstance(val, float) and pd.isna(val)):
-                cells.append({"value": "—", "color": PALETTE["subtle"], "is_positive": True})
+                out[key] = {"value": "\u2014", "color": PALETTE["subtle"]}
                 continue
             try:
                 v = float(val)
             except (TypeError, ValueError):
-                cells.append({"value": "—", "color": PALETTE["subtle"], "is_positive": True})
+                out[key] = {"value": "\u2014", "color": PALETTE["subtle"]}
                 continue
-            if is_portfolio:
-                color = _vs_bench_color(v, ab_bench_returns.get(key))
-            else:
-                color = PALETTE["green"] if v >= 0 else PALETTE["red"]
-            cells.append({
-                "value": _pct_compact(v, signed=True),
-                "color": color,
-                "is_positive": v >= 0,
-            })
-        return {
-            "name": name,
-            "ticker": ticker,
-            "asset_class": asset_class,
-            "asset_color": ASSET_COLORS.get(asset_class, PALETTE["accent"]),
-            "is_portfolio": is_portfolio,
-            "is_benchmark": is_benchmark,
-            "cells": cells,
-        }
+            color = (_vs_bench_color(v, ab_bench_returns.get(key)) if is_portfolio
+                     else (PALETTE["green"] if v >= 0 else PALETTE["red"]))
+            out[key] = {"value": _pct_compact(v, signed=True), "color": color}
+        return out
 
-    rows: list[dict] = []
-    rows.append(_row("Total Portfolio", "", "", port_full, is_portfolio=True))
-
-    # Use ``holdings_df`` as the source of truth for ordering and
-    # membership, then enrich each row with the per-period returns
-    # from ``holding_performance``. Going holdings-first guarantees
-    # the snapshot lists every position the user sees in the
-    # "All positions" table — even the ones (typically illiquid
-    # single bonds) that Yahoo cannot price, which would otherwise
-    # be silently dropped because ``holding_performance`` only
-    # contains tickers with usable history.
     df = m.holdings_df
     if df is None or df.empty:
-        return {
-            "available": False,
-            "period_labels": period_labels,
-            "history_label": history_label,
-            "benchmark_alpha_beta": ab_bench_name,
-            "rows": rows,
-        }
+        return {"available": False, "table_html": "",
+                "history_label": history_label, "benchmark_alpha_beta": ab_bench_name}
 
+    # Per-holding period returns (join by ticker).
     perf_by_ticker: dict[str, dict] = {}
     if hp is not None and not hp.empty and "ticker" in hp.columns:
         type_col = hp["type"].astype(str).str.lower() if "type" in hp.columns else None
         is_holding = type_col.str.contains("portfolio") if type_col is not None else None
         holdings_perf = hp[is_holding] if is_holding is not None else hp
         for _, pr in holdings_perf.iterrows():
-            perf_by_ticker[str(pr.get("ticker", ""))] = {
-                k: pr.get(k) for k in period_keys
-            }
+            perf_by_ticker[str(pr.get("ticker", ""))] = {k: pr.get(k) for k in period_keys}
 
+    # Role per holding from the curated taxonomy (asset_class already on df),
+    # so the snapshot groups exactly like the Performance table.
+    from tarzan import config as cfg
+    _tax = cfg.instrument_taxonomy()
+
+    def _role_for(isin: str, ticker: str) -> str:
+        for k in (str(isin or "").strip().upper(),
+                  str(ticker or "").split(".")[0].upper()):
+            if k and k in _tax and _tax[k][1]:
+                return _tax[k][1]
+        return "\u2014"
+
+    # Portfolio (highlighted) row — % vs previous close, no chart.
+    _, port_inner = _perf_spark_cell(
+        port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")))
+    portfolio = {"name": "Total Portfolio", "spark_inner": port_inner,
+                 "returns": _returns_dict(port_full, is_portfolio=True)}
+
+    # Group holdings by asset class → role.
+    grouped: dict = {}
     for _, h in df.iterrows():
-        ticker = str(h.get("ticker", "") or "")  # join key for holding_performance
+        ticker = str(h.get("ticker", "") or "")
+        isin = str(h.get("isin", "") or "")
+        ac = str(h.get("asset_class", "") or "") or "Other"
+        role = _role_for(isin, ticker)
         raw_name = str(h.get("name", "") or ticker)
-        # Display pin: resolve the real Yahoo symbol from the ISIN (same as
-        # the Holdings section), since the order-derived ``ticker`` column
-        # often holds the ISIN. Fall back to the ticker field.
-        display_tk = _clean_ticker(str(h.get("isin", "") or "")) or _display_ticker(ticker) or ""
-        rows.append(_row(
-            short_instrument_name(raw_name),
-            display_tk,
-            str(h.get("asset_class", "") or ""),
-            perf_by_ticker.get(ticker, {}),
-        ))
+        display_tk = _clean_ticker(isin) or _display_ticker(ticker) or ""
+        sym = _resolve.get(ticker, ticker)
+        _, inner = _perf_spark_cell(
+            _raw1d.get(ticker), sym, _snap_intraday,
+            live=bool(_live1d.get(ticker, False)))
+        grouped.setdefault(ac, {}).setdefault(role, []).append({
+            "name_html": _perf_name_html(short_instrument_name(raw_name),
+                                         display_tk, []),
+            "spark_inner": inner,
+            "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
+        })
+
+    def _ordered(keys, preferred):
+        return ([k for k in preferred if k in keys]
+                + [k for k in keys if k not in preferred])
+
+    groups = []
+    for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
+        col = ASSET_COLORS.get(ac, PALETTE["accent"])
+        role_list = [(role, grouped[ac][role])
+                     for role in _ordered(list(grouped[ac].keys()),
+                                          _PERF_ROLE_ORDER.get(ac, []))]
+        groups.append((ac, col, role_list))
 
     return {
-        "available": len(rows) > 1,  # at least one holding/benchmark beyond the portfolio row
-        "period_labels": period_labels,
+        "available": True,
+        "table_html": _returns_table_html(period_keys, portfolio, groups),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
-        "rows": rows,
     }
 
 
@@ -2390,29 +2422,123 @@ def _perf_intraday_map(tickers: list[str]) -> dict:
         return {}
 
 
-def _perf_daily_series(ticker: str) -> "pd.Series | None":
-    """EUR daily close history for a ticker (memoized), used as the 1D
-    sparkline fallback when there is no usable intraday series."""
-    if not ticker:
-        return None
+def _intraday_spark(intra: "pd.Series", baseline: float,
+                    w: int = 84, h: int = 18) -> str:
+    """Intraday sparkline on a full-session time axis.
+
+    Unlike the stretched ``_day_spark`` (which spreads N points across the
+    whole width regardless of how many there are), each bar is placed at its
+    real position within the trading session [open → open+session_length], so
+    early in the day the line only fills the left portion and grows rightward
+    as the session progresses. A completed session fills the full width. This
+    makes "how far into the day we are" visible and doubles as a live vs
+    closed cue. Two-tone (green above the previous close, red below), with a
+    dashed baseline; stretches to the cell width."""
+    global _day_spark_uid
+    ts = list(intra.index)
+    vals = [float(x) for x in intra.values]
+    n = len(vals)
+    if n < 2:
+        return ""
+    t0, t_last = ts[0], ts[-1]
+    # A completed session (the last bar is not from *today* in the bar's own
+    # timezone — e.g. a US index in the European morning) fills the full
+    # width. Only the session currently in progress grows from the left, so
+    # early in that market's day the line covers just the elapsed portion.
     try:
-        from tarzan.engine.benchmarks import _fetch_benchmark_history
-        s = _fetch_benchmark_history(ticker)
-        return s if s is not None and len(s) >= 2 else None
+        now_tz = datetime.now(getattr(t_last, "tzinfo", None))
+        in_progress = (t_last.date() == now_tz.date())
     except Exception:  # noqa: BLE001
-        return None
+        in_progress = False
+    if in_progress:
+        # Session length from the open's UTC hour (yfinance returns intraday
+        # timestamps in UTC): US cash opens ~13:30 UTC, Europe ~07:00 UTC.
+        try:
+            oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
+        except Exception:  # noqa: BLE001
+            oh = 8
+        sess = (6.5 if oh >= 12 else 8.5) * 3600.0
+
+        def _xpos(t) -> float:
+            try:
+                return max(0.0, min(1.0, (t - t0).total_seconds() / sess)) * w
+            except Exception:  # noqa: BLE001
+                return 0.0
+        xs = [_xpos(t) for t in ts]
+    else:
+        xs = [i / (n - 1) * w for i in range(n)]
+
+    lo = min(min(vals), baseline)
+    hi = max(max(vals), baseline)
+    span = (hi - lo) or 1.0
+    pad = span * 0.16
+    lo -= pad
+    hi += pad
+    span = hi - lo
+
+    def _yy(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    yb = _yy(baseline)
+    line = " ".join(f"{x:.1f},{_yy(v):.1f}" for x, v in zip(xs, vals))
+    x_last = xs[-1]
+    y_last = _yy(vals[-1])
+    poly = f"{line} {x_last:.1f},{yb:.1f} {xs[0]:.1f},{yb:.1f}"
+    _day_spark_uid += 1
+    gid, rid = f"pg{_day_spark_uid}", f"pr{_day_spark_uid}"
+    yb_c = max(0.0, min(yb, h))
+    # Endpoint dot, colored by sign vs the previous close (baseline): anchors
+    # the eye to the current level and its up/down direction for the day.
+    dot_col = PALETTE["green"] if vals[-1] >= baseline else PALETTE["red"]
+    dot = (f'<circle cx="{x_last:.1f}" cy="{y_last:.1f}" r="1.8" fill="{dot_col}"/>')
+    return (
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
+        f'<defs>'
+        f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
+        f'</defs>'
+        f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
+        f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="0.75" stroke-dasharray="2,2"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["green"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
+        f'{dot}'
+        f'</svg>'
+    )
+
+
+def _flat_dashed_spark(w: int = 84, h: int = 18) -> str:
+    """Placeholder sparkline for instruments with no intraday trades: a single
+    dashed horizontal line (the previous-close reference). Keeps the 1D cell
+    the same height as the intraday rows so the pill stays aligned, while
+    signalling 'no intraday, this is the previous-day change'."""
+    y = h / 2.0
+    return (
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
+        f'<line x1="0" y1="{y:.1f}" x2="{w}" y2="{y:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="1" stroke-dasharray="3,2"/></svg>'
+    )
 
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
-                     daily_series: "pd.Series | None" = None,
                      live: bool = False) -> tuple:
-    """Render the 1D cell: a sign-colored % pill above a Markets-style
-    intraday sparkline (green above the previous close, red below).
+    """Render the 1D cell: a sign-colored % pill (the change vs the previous
+    close) above a Markets-style intraday sparkline (green above the previous
+    close, red below).
 
-    Falls back to a dashed daily-history sparkline when intraday is missing
-    or too sparse (<2 points). Returns ``(cell_html, is_daily)`` so the
-    caller can annotate the instrument name with a small "daily" marker."""
+    The sparkline is drawn ONLY when there is a real intraday series (>=2
+    points). When the instrument has not traded intraday (illiquid, or the
+    market is closed and the vendor exposes no session), there is no chart —
+    just the % pill vs the previous close — because a synthetic line would be
+    misleading. Returns ``(cell_html, inner_html)``; ``inner_html`` is the
+    pill (+ optional LIVE tag) + sparkline without the surrounding ``<td>`` so
+    callers that need a specific cell background can wrap it themselves."""
     P = PALETTE
     if day_val is None or (isinstance(day_val, float) and pd.isna(day_val)):
         pill_txt, pill_col, pill_bg = "\u2014", P["muted"], P["page"]
@@ -2426,43 +2552,145 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
             f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
 
-    vals: Optional[list] = None
-    baseline: Optional[float] = None
-    is_daily = False
     intra = intraday_map.get(raw_ticker) if raw_ticker else None
     if intra is not None and len(intra) >= 2:
-        vals = [float(x) for x in intra.values]
         # Baseline = previous close, derived from the known 1D return so no
         # extra fetch is needed: prev = last / (1 + day%).
+        last = float(intra.iloc[-1])
         if dv is not None and (1.0 + dv / 100.0) != 0:
-            baseline = vals[-1] / (1.0 + dv / 100.0)
+            baseline = last / (1.0 + dv / 100.0)
         else:
-            baseline = vals[0]
+            baseline = float(intra.iloc[0])
+        # Time-axis intraday: line fills only the elapsed part of the session.
+        spark = _intraday_spark(intra, baseline)
     else:
-        daily = daily_series if daily_series is not None else _perf_daily_series(raw_ticker)
-        if daily is not None and len(daily) >= 2:
-            vals = [float(x) for x in daily.iloc[-40:].values]
-            baseline = vals[0]
-            is_daily = True
+        # No intraday trades → a dashed placeholder line (prev-close
+        # reference), so the cell keeps the same height and the pill stays
+        # aligned with the intraday rows.
+        spark = _flat_dashed_spark()
 
-    spark = ""
-    if vals and len(vals) >= 2 and baseline is not None:
-        spark = _day_spark(vals, baseline, w=84, h=18, stretch=True)
-        if is_daily and spark:
-            # Dash only the data polylines (stroke-width 1.5); the baseline
-            # (0.75) is left solid — signals "daily, not intraday".
-            spark = spark.replace('stroke-width="1.5"',
-                                  'stroke-width="1.5" stroke-dasharray="3,2"')
     bgc = f"background:{bg};" if bg else ""
-    chart = spark or f'<div style="font-size:9px;color:{P["subtle"]};">\u2014</div>'
-    # A small green "LIVE" tag marks rows whose 1D is a live market-open
-    # quote; rows without it are the last completed session (market closed).
-    marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:800;'
-              f'color:{P["green"]};letter-spacing:0.04em;vertical-align:middle;">'
-              f'&#9679;&nbsp;LIVE</span>') if live else ""
-    cell = (f'<td width="96" align="center" style="padding:6px 8px;{bgc}">'
-            f'<div>{pill}{marker}</div><div style="margin-top:3px;">{chart}</div></td>')
-    return cell, is_daily
+    # Tag the 1D basis: green "● LIVE" for a live market-open quote, else a
+    # muted "PREV. DAY" (last completed session / no intraday trades).
+    if live:
+        marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:800;'
+                  f'color:{P["green"]};letter-spacing:0.04em;vertical-align:middle;">'
+                  f'&#9679;&nbsp;LIVE</span>')
+    else:
+        marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:700;'
+                  f'color:{P["subtle"]};letter-spacing:0.04em;vertical-align:middle;">'
+                  f'PREV.&nbsp;DAY</span>')
+    inner = f'<div>{pill}{marker}</div><div style="margin-top:3px;">{spark}</div>'
+    cell = f'<td width="96" align="center" style="padding:6px 8px;{bgc}">{inner}</td>'
+    return cell, inner
+
+
+def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
+    """Shared renderer for the grouped per-instrument returns tables.
+
+    Used by both the Performance ("How markets moved") and the Returns
+    snapshot sections so their font sizes, spacing, alternating-row
+    backgrounds and asset-class · role grouping are identical by
+    construction.
+
+    Args:
+        period_cols: ordered numeric column keys (e.g. 1w…5y); 1D is always
+            the dedicated sparkline column before them.
+        portfolio: ``{name, spark_inner, returns}`` where ``returns`` maps
+            each period key to ``{value, color}``. ``spark_inner`` is the
+            pill+sparkline inner HTML from ``_perf_spark_cell``.
+        groups: ordered ``[(class_name, class_color, [(role_name, [row])])]``
+            where each ``row`` is ``{name_html, spark_inner, returns}``.
+    """
+    P = PALETTE
+    ncols = len(period_cols) + 2
+
+    def _th(label, first=False, last=False, center=False):
+        radius = ("border-top-left-radius:8px;" if first else
+                  "border-top-right-radius:8px;" if last else "")
+        align = "center" if center else ("left" if first else "right")
+        return (f'<td align="{align}" style="padding:8px 6px;background:{P["ink"]};'
+                f'color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;'
+                f'text-transform:uppercase;{radius}">{label}</td>')
+
+    hcells = [_th("Instrument", first=True), _th("1D", center=True)]
+    for i, p in enumerate(period_cols):
+        hcells.append(_th(p.upper(), last=(i == len(period_cols) - 1)))
+    header = "<tr>" + "".join(hcells) + "</tr>"
+
+    def _period_cells(returns_dict, *, weight, bg):
+        bgc = f"background:{bg};" if bg else ""
+        out = ""
+        for p in period_cols:
+            cell = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
+            out += (f'<td align="right" style="padding:8px 6px;{bgc}'
+                    f'font-variant-numeric:tabular-nums;color:{cell["color"]};'
+                    f'font-weight:{weight};">{cell["value"]}</td>')
+        return out
+
+    pbg = P["accent_bg"]
+    rows_html = [
+        "<tr>"
+        f'<td style="padding:10px 8px;background:{pbg};color:{P["accent"]};'
+        f'font-weight:700;font-size:12px;">\u2605 {portfolio["name"]}</td>'
+        f'<td width="96" align="center" style="padding:6px 8px;background:{pbg};">'
+        f'{portfolio.get("spark_inner", "")}</td>'
+        + _period_cells(portfolio["returns"], weight=700, bg=pbg)
+        + "</tr>"
+    ]
+
+    ridx = 0  # running instrument-row index for the alternating background
+    for cls, col, role_list in groups:
+        for role, insts in role_list:
+            if not insts:
+                continue
+            rows_html.append(
+                f'<tr><td colspan="{ncols}" style="padding:8px 8px 4px;'
+                f'border-bottom:1px solid {P["border"]};font-size:10px;font-weight:700;'
+                f'color:{P["muted"]};letter-spacing:0.02em;">'
+                f'<span style="display:inline-block;width:8px;height:8px;background:{col};'
+                f'border-radius:2px;vertical-align:middle;margin-right:6px;"></span>'
+                f'<span style="color:{col};font-weight:800;text-transform:uppercase;">{cls}</span>'
+                f'&nbsp;&middot;&nbsp;{role}</td></tr>'
+            )
+            for inst in insts:
+                ridx += 1
+                rowbg = "#FFFFFF" if (ridx % 2 == 1) else P["card_alt"]
+                rows_html.append(
+                    "<tr>"
+                    f'<td style="padding:8px;background:{rowbg};border-bottom:1px solid #F1F2F8;'
+                    f'color:{P["ink"]};font-size:12px;">{inst["name_html"]}</td>'
+                    f'<td width="96" align="center" style="padding:6px 8px;background:{rowbg};'
+                    f'border-bottom:1px solid #F1F2F8;">{inst.get("spark_inner", "")}</td>'
+                    + _period_cells(inst["returns"], weight=600, bg=rowbg)
+                    + "</tr>"
+                )
+
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;'
+        f'border-spacing:0;">{header}{"".join(rows_html)}</table>'
+    )
+
+
+def _perf_name_html(name: str, ticker: str, tags: list) -> str:
+    """Instrument label used in the returns tables: name + ticker chip +
+    optional reference tags (α/β, GEO)."""
+    P = PALETTE
+    tk_chip = ""
+    if ticker:
+        tk_chip = (
+            f'<span style="display:inline-block;margin-left:5px;padding:1px 5px;'
+            f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
+            f'border-radius:4px;font-size:9px;font-weight:700;'
+            f'font-family:SFMono-Regular,Menlo,Consolas,monospace;'
+            f'letter-spacing:0.02em;vertical-align:middle;">{ticker}</span>')
+    tag_chips = "".join(
+        f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
+        f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;'
+        f'font-weight:700;letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>'
+        for t in (tags or []))
+    return f"{name}{tk_chip}{tag_chips}"
 
 
 def _build_performance(ctx: _NewsletterContext) -> dict:
@@ -2637,115 +2865,51 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
     intraday_map = _perf_intraday_map([r.get("raw_ticker") for r in benchmark_rows])
 
-    def _th(label, first=False, last=False, center=False):
-        radius = ("border-top-left-radius:8px;" if first else
-                  "border-top-right-radius:8px;" if last else "")
-        align = "center" if center else ("left" if first else "right")
-        return (f'<td align="{align}" style="padding:8px 6px;background:{P["ink"]};'
-                f'color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;'
-                f'text-transform:uppercase;{radius}">{label}</td>')
-
-    # Header: Instrument | 1D | period_cols (last cell rounds the corner).
-    hcells = [_th("Instrument", first=True), _th("1D", center=True)]
-    for i, p in enumerate(period_cols):
-        hcells.append(_th(p.upper(), last=(i == len(period_cols) - 1)))
-    header = "<tr>" + "".join(hcells) + "</tr>"
-
-    def _period_cells(returns_dict, *, weight, bg=None):
-        bgc = f"background:{bg};" if bg else ""
-        out = ""
-        for p in period_cols:
-            cell = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
-            out += (f'<td align="right" style="padding:8px 6px;{bgc}'
-                    f'font-variant-numeric:tabular-nums;color:{cell["color"]};'
-                    f'font-weight:{weight};">{cell["value"]}</td>')
-        return out
-
-    # Portfolio row (highlighted): 1D pill + daily sparkline of its own
-    # recent history (no intraday tick for a portfolio).
-    port_spark, _ = _perf_spark_cell(
-        pf.get("1d"), "", {}, bg=P["accent_bg"],
-        daily_series=(m.portfolio_history
-                      if m.portfolio_history is not None
-                      and len(m.portfolio_history) >= 2 else None),
-        live=bool(pf.get("1d_live")),
-    )
-    rows_html = [
-        "<tr>"
-        f'<td style="padding:10px 8px;background:{P["accent_bg"]};color:{P["accent"]};'
-        f'font-weight:700;font-size:12px;">\u2605 {portfolio_row["name"]}</td>'
-        + port_spark
-        + _period_cells(portfolio_row["returns"], weight=700, bg=P["accent_bg"])
-        + "</tr>"
-    ]
-
-    # Group benchmark rows by asset class → role, in the configured order.
-    grouped: dict = {}
-    for r in benchmark_rows:
-        ac = r.get("asset_class") or "Other"
-        role = r.get("role") or "\u2014"
-        grouped.setdefault(ac, {}).setdefault(role, []).append(r)
-
     def _ordered(keys, preferred):
         seen = [k for k in preferred if k in keys]
         extra = [k for k in keys if k not in preferred]
         return seen + extra
 
+    # Portfolio row (highlighted): 1D pill (no single intraday series for a
+    # portfolio, so the % vs previous close carries it — no chart).
+    _, port_inner = _perf_spark_cell(
+        pf.get("1d"), "", {}, live=bool(pf.get("1d_live")))
+    portfolio = {"name": portfolio_row["name"], "spark_inner": port_inner,
+                 "returns": portfolio_row["returns"]}
+
+    # Group benchmark rows by asset class → role, in the configured order,
+    # then hand off to the shared table renderer.
+    grouped: dict = {}
+    for r in benchmark_rows:
+        grouped.setdefault(r.get("asset_class") or "Other", {}) \
+               .setdefault(r.get("role") or "\u2014", []).append(r)
+    groups = []
     for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
         col = ASSET_COLORS.get(ac, P["accent"])
-        roles = grouped[ac]
-        for role in _ordered(list(roles.keys()), _PERF_ROLE_ORDER.get(ac, [])):
-            # Compact "Class · Role" divider.
-            rows_html.append(
-                '<tr><td colspan="9" style="padding:8px 8px 4px;'
-                f'border-bottom:1px solid {P["border"]};font-size:10px;font-weight:700;'
-                f'color:{P["muted"]};letter-spacing:0.02em;">'
-                f'<span style="display:inline-block;width:8px;height:8px;background:{col};'
-                f'border-radius:2px;vertical-align:middle;margin-right:6px;"></span>'
-                f'<span style="color:{col};font-weight:800;text-transform:uppercase;">{ac}</span>'
-                f'&nbsp;&middot;&nbsp;{role}</td></tr>'
-            )
-            for r in roles[role]:
-                spark_cell, is_daily = _perf_spark_cell(
+        role_list = []
+        for role in _ordered(list(grouped[ac].keys()), _PERF_ROLE_ORDER.get(ac, [])):
+            insts = []
+            for r in grouped[ac][role]:
+                _, inner = _perf_spark_cell(
                     r.get("d1"), r.get("raw_ticker"), intraday_map,
                     live=bool(r.get("live")))
-                tk_chip = ""
-                if r.get("ticker"):
-                    tk_chip = (
-                        f'<span style="display:inline-block;margin-left:5px;padding:1px 5px;'
-                        f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
-                        f'border-radius:4px;font-size:9px;font-weight:700;'
-                        f'font-family:SFMono-Regular,Menlo,Consolas,monospace;'
-                        f'letter-spacing:0.02em;vertical-align:middle;">{r["ticker"]}</span>')
-                tag_chips = "".join(
-                    f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
-                    f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;'
-                    f'font-weight:700;letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>'
-                    for t in r.get("tags", []))
-                daily_mark = ("" if not is_daily else
-                              f'<span style="margin-left:5px;font-size:9px;color:{P["subtle"]};">'
-                              f'&middot; daily</span>')
-                rows_html.append(
-                    "<tr>"
-                    f'<td style="padding:6px 8px;border-bottom:1px solid #F1F2F8;'
-                    f'color:{P["ink"]};font-size:12px;">{r["name"]}{tk_chip}{tag_chips}{daily_mark}</td>'
-                    + spark_cell
-                    + _period_cells(r["returns"], weight=600)
-                    + "</tr>"
-                )
+                insts.append({
+                    "name_html": _perf_name_html(r["name"], r.get("ticker"),
+                                                 r.get("tags")),
+                    "spark_inner": inner,
+                    "returns": r["returns"],
+                })
+            role_list.append((role, insts))
+        groups.append((ac, col, role_list))
 
-    table_html = (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;'
-        f'border-spacing:0;">{header}{"".join(rows_html)}</table>'
-    )
+    table_html = _returns_table_html(period_cols, portfolio, groups)
 
     subtitle_html = (
         "1D is the intraday move as a mini chart (green above the previous close, "
         "red below) with the day&rsquo;s % above it; a "
         f'<span style="color:{P["green"]};font-weight:800;">&#9679;&nbsp;LIVE</span> tag '
-        "marks instruments whose market is open now (else it is the last completed "
-        "session). A dashed line marks a daily fallback when intraday data is missing. "
+        "marks a live market-open quote; <strong>PREV. DAY</strong> marks the last "
+        "completed session (an instrument with no intraday trades shows a dashed line). "
         "Other columns are % returns &mdash; "
         f"your portfolio history is <strong>{history_label}</strong>, so longer "
         "periods show &ldquo;\u2014&rdquo; on the portfolio row. Portfolio cells "

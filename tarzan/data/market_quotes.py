@@ -108,6 +108,7 @@ def _fetch_intraday(symbols: list[str]) -> dict:
 def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
     """Assemble one quote from the daily close series and (optional)
     intraday close series. Returns None when there is not enough data."""
+    spark_series = None
     if intra is not None and len(intra) >= 2:
         cur = float(intra.iloc[-1])
         iday = intra.index[-1].date()
@@ -120,6 +121,9 @@ def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
             prev = float(intra.iloc[0])
         spark = [float(x) for x in intra.values]
         baseline = prev
+        # Keep the timestamped intraday series so the newsletter can draw it
+        # on a full-session time axis (line grows through the day).
+        spark_series = intra
     elif dclose is not None and len(dclose) >= 2:
         cur, prev = float(dclose.iloc[-1]), float(dclose.iloc[-2])
         spark = [float(x) for x in dclose.iloc[-spark_points:].values]
@@ -129,7 +133,7 @@ def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
     change = cur - prev
     pct = (change / prev * 100.0) if prev else 0.0
     return {"value": cur, "change": change, "pct": pct,
-            "spark": spark, "baseline": baseline}
+            "spark": spark, "baseline": baseline, "spark_series": spark_series}
 
 
 def broker_1d(tickers: list[str]) -> dict:
