@@ -132,6 +132,49 @@ def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
             "spark": spark, "baseline": baseline}
 
 
+def broker_1d(tickers: list[str]) -> dict:
+    """Broker-style 1D return per ticker: the latest intraday price vs the
+    previous official close, in the instrument's listing currency.
+
+    This is the "since previous close" figure a broker shows live during the
+    session (and the last completed session's change once closed). Returns
+    ``{ticker: pct}`` only for tickers with a usable intraday series (>=2
+    points); callers fall back to the end-of-day close return for the rest.
+    Best-effort and currency-consistent: both the live price and the
+    previous close come from the same native yfinance feed, so for a
+    EUR-listed ETF the % is the EUR daily move. Never raises."""
+    uniq = [t for t in {t for t in tickers if t}]
+    if not uniq:
+        return {}
+    try:
+        from tarzan.data.enricher import _fetch_history
+    except Exception:  # noqa: BLE001
+        return {}
+    intraday = _fetch_intraday(uniq)
+    out: dict = {}
+    for tk in uniq:
+        intra = intraday.get(tk)
+        if intra is None or len(intra) < 2:
+            continue
+        cur = float(intra.iloc[-1])
+        iday = intra.index[-1].date()
+        prev = None
+        try:
+            hist = _fetch_history(tk)
+            if hist is not None and len(hist) and "Close" in getattr(hist, "columns", []):
+                dclose = hist["Close"].dropna()
+                prior = dclose[[ts.date() < iday for ts in dclose.index]]
+                if len(prior):
+                    prev = float(prior.iloc[-1])
+        except Exception:  # noqa: BLE001
+            pass
+        if prev is None:
+            prev = float(intra.iloc[0])
+        if prev:
+            out[tk] = (cur / prev - 1.0) * 100.0
+    return out
+
+
 def fetch_market_quotes(force: bool = False) -> list[dict]:
     """Fetch the curated market quotes (memoised per process). Best-effort:
     returns whatever could be fetched; never raises."""
