@@ -1761,11 +1761,16 @@ def _ph_target_table(ctx: _NewsletterContext, tol: float) -> str:
     m = ctx.metrics
     df = getattr(m, "holdings_df", None)
 
+    # Invested base for the absolute (€) target: per-holding targets are a
+    # share of the invested value (fall back to total value).
+    invested = float(getattr(m, "invested_value", 0.0) or 0.0)
+    if invested <= 0:
+        invested = float(getattr(m, "total_value", 0.0) or 0.0)
+
     # Current weight (% of invested) keyed by ISIN and by ticker (uppercased),
     # so verification items can be matched either way.
     cur: dict[str, float] = {}
     if df is not None and not df.empty:
-        invested = float(getattr(m, "invested_value", 0.0) or 0.0)
         for _, row in df.iterrows():
             val = float(row.get("current_value", 0.0) or 0.0)
             w = (val / invested * 100.0) if invested > 0 else 0.0
@@ -1817,6 +1822,9 @@ def _ph_target_table(ctx: _NewsletterContext, tol: float) -> str:
             f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
             f'font-size:12px;font-weight:700;color:{P["ink"]};white-space:nowrap;">{_pct_smart(tgt)}</td>'
             f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
+            f'font-size:12px;color:{P["muted"]};white-space:nowrap;">'
+            f'{_eur_smart(tgt / 100.0 * invested) if invested > 0 else "—"}</td>'
+            f'<td align="right" style="padding:5px 8px;border-bottom:1px solid {P["border"]};'
             f'font-size:12px;font-weight:700;color:{dcol};white-space:nowrap;">'
             f'● {_signed_pp(drift)}</td>'
             f'</tr>'
@@ -1830,6 +1838,8 @@ def _ph_target_table(ctx: _NewsletterContext, tol: float) -> str:
         f'text-transform:uppercase;color:{P["subtle"]};">Now</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'text-transform:uppercase;color:{P["subtle"]};">Target</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'text-transform:uppercase;color:{P["subtle"]};">Target &euro;</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'text-transform:uppercase;color:{P["subtle"]};">Drift</td>'
         f'</tr>'
