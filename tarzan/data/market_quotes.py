@@ -21,6 +21,7 @@ sparkline shades green above / red below).
 from __future__ import annotations
 
 import logging
+from datetime import datetime, time as dtime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,93 @@ logger = logging.getLogger(__name__)
 # session marked live while flipping to "previous day" within ~1h of the close
 # (so an evening newsletter doesn't mislabel a closed market as live).
 _MARKET_OPEN_MAX_LAG_MIN = 60
+
+# Regular cash-session hours per exchange group, keyed by a normalized code.
+# (IANA timezone, (open_h, open_m), (close_h, close_m)). Holidays and lunch
+# breaks are not modelled (best-effort); weekends are handled separately.
+_SESSIONS: dict[str, tuple[str, tuple[int, int], tuple[int, int]]] = {
+    "EU": ("Europe/Rome", (9, 0), (17, 30)),      # Milan/Xetra/Paris/Amsterdam
+    "L":  ("Europe/London", (8, 0), (16, 30)),    # London
+    "US": ("America/New_York", (9, 30), (16, 0)),  # US cash session
+    "JP": ("Asia/Tokyo", (9, 0), (15, 0)),        # Tokyo
+    "HK": ("Asia/Hong_Kong", (9, 30), (16, 0)),   # Hong Kong
+    "CN": ("Asia/Shanghai", (9, 30), (15, 0)),    # Shanghai
+    "AU": ("Australia/Sydney", (10, 0), (16, 0)),  # Sydney
+    "KR": ("Asia/Seoul", (9, 0), (15, 30)),       # Seoul
+}
+
+# Index / bare symbols → exchange group (symbols without a Yahoo suffix).
+_INDEX_EXCHANGE: dict[str, str] = {
+    "^GSPC": "US", "^DJI": "US", "^IXIC": "US", "^RUT": "US", "^RUI": "US",
+    "^VIX": "US", "^NDX": "US", "^SPXEW": "US",
+    "^IRX": "US", "^FVX": "US", "^TNX": "US", "^TYX": "US",
+    "^FTSE": "L",
+    "^FCHI": "EU", "^GDAXI": "EU", "^STOXX50E": "EU", "^N100": "EU",
+    "^N225": "JP", "^HSI": "HK", "^AXJO": "AU", "^KS11": "KR",
+}
+
+# Yahoo listing suffix → exchange group.
+_SUFFIX_EXCHANGE: dict[str, str] = {
+    "MI": "EU", "DE": "EU", "PA": "EU", "AS": "EU", "F": "EU",
+    "L": "L",
+    "SS": "CN", "SZ": "CN", "HK": "HK", "T": "JP",
+    "AX": "AU", "KS": "KR",
+}
+
+
+def _exchange_for(ticker: str) -> Optional[str]:
+    """Map a Yahoo ticker to its exchange-session group, or None when it has
+    no fixed cash session (crypto/FX/futures)."""
+    t = (ticker or "").upper()
+    if not t:
+        return None
+    if t.endswith("-USD") or t.endswith("=X") or t.endswith("=F"):
+        return None
+    if t.startswith("^"):
+        return _INDEX_EXCHANGE.get(t)
+    if "." in t:
+        return _SUFFIX_EXCHANGE.get(t.rsplit(".", 1)[1])
+    # Bare ticker (no suffix, no caret) → assume a US listing.
+    return "US"
+
+
+def is_continuous_market(ticker: str) -> bool:
+    """Whether the instrument trades ~around the clock with no bounded cash
+    session: commodity/index futures (``=F``), FX pairs (``=X``) and crypto
+    (``-USD``). These have no equity-style open→close, so their intraday
+    sparkline should be drawn full-width (stretched) rather than "growing
+    through the session"."""
+    t = (ticker or "").upper()
+    return t.endswith("=F") or t.endswith("=X") or t.endswith("-USD")
+
+
+def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[bool]:
+    """Whether the instrument's primary exchange is in its regular trading
+    session right now, judged by exchange hours (NOT bar recency).
+
+    Returns True/False for instruments on a known cash exchange (mapped by
+    Yahoo suffix or index symbol); True for 24/7 crypto; and None when the
+    session concept doesn't cleanly apply (FX and futures trade nearly around
+    the clock) so callers can fall back to recency. Weekends are closed;
+    holidays are not modelled. Never raises."""
+    t = (ticker or "").upper()
+    if t.endswith("-USD"):
+        return True  # crypto trades 24/7
+    if t.endswith("=X") or t.endswith("=F"):
+        return None  # FX / futures → let the caller decide by recency
+    ex = _exchange_for(t)
+    if ex is None:
+        return None
+    tzname, (oh, om), (ch, cm) = _SESSIONS[ex]
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tzname)
+        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+    except Exception:  # noqa: BLE001
+        return None
+    if n.weekday() >= 5:  # Saturday / Sunday
+        return False
+    return dtime(oh, om) <= n.time() <= dtime(ch, cm)
 
 # (display name, yfinance symbol, category), in display order. The strip
 # shows at most 2 rows per category (the newsletter caps it).
@@ -62,24 +150,25 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Hang Seng", "^HSI", "Asia"),
     ("ASX 200", "^AXJO", "Asia"),
     ("KOSPI", "^KS11", "Asia"),
-    # Crypto
-    ("Bitcoin", "BTC-USD", "Crypto"),
-    # Commodities
-    ("Crude Oil", "CL=F", "Commodities"),
+    # Commodities. Two global crude benchmarks are shown side by side: WTI
+    # (CL=F, NYMEX/CME — the US reference) and Brent (BZ=F, ICE Futures Europe
+    # — the international reference used for most of the world incl. Europe).
+    ("WTI Crude", "CL=F", "Commodities"),
     ("Gold", "GC=F", "Commodities"),
     ("Silver", "SI=F", "Commodities"),
     ("Copper", "HG=F", "Commodities"),
     ("Natural Gas", "NG=F", "Commodities"),
     ("Brent Crude", "BZ=F", "Commodities"),
     ("Platinum", "PL=F", "Commodities"),
-    # Currencies
+    # Currencies (fiat FX pairs + Bitcoin, both quoted vs USD and traded
+    # ~around the clock).
     ("EUR/USD", "EURUSD=X", "Currencies"),
     ("USD/JPY", "JPY=X", "Currencies"),
     ("USD/GBP", "GBP=X", "Currencies"),
+    ("Bitcoin", "BTC-USD", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["US", "Europe", "Asia", "Crypto",
-                  "Commodities", "Currencies"]
+CATEGORY_ORDER = ["US", "Europe", "Asia", "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None
 
@@ -173,17 +262,23 @@ def broker_1d(tickers: list[str]) -> dict:
         cur = float(intra.iloc[-1])
         last_ts = intra.index[-1]
         iday = last_ts.date()
-        # "live" = the market is trading now, judged by how recent the latest
-        # intraday bar is (yfinance lags ~15-30 min). Once the session closes
-        # its last bar quickly ages out, so an evening view flips to not-live
-        # even though the bar is still dated today.
-        try:
-            lt = (last_ts.tz_convert("UTC") if getattr(last_ts, "tzinfo", None)
-                  else last_ts.tz_localize("UTC"))
-            age_min = (pd.Timestamp.now(tz="UTC") - lt).total_seconds() / 60.0
-            is_live = age_min <= _MARKET_OPEN_MAX_LAG_MIN
-        except Exception:  # noqa: BLE001
-            is_live = False
+        # "live" = the instrument's exchange is in its regular session right
+        # now, judged by EXCHANGE HOURS (not bar recency). This keeps all
+        # instruments on the same exchange consistent: at 17:30 every .MI ETF
+        # flips to "previous day" together, regardless of each one's intraday
+        # liquidity. FX/futures/crypto have no fixed session → market_open_now
+        # returns None and we fall back to bar recency for those.
+        mkt_open = market_open_now(tk)
+        if mkt_open is None:
+            try:
+                lt = (last_ts.tz_convert("UTC") if getattr(last_ts, "tzinfo", None)
+                      else last_ts.tz_localize("UTC"))
+                age_min = (pd.Timestamp.now(tz="UTC") - lt).total_seconds() / 60.0
+                is_live = age_min <= _MARKET_OPEN_MAX_LAG_MIN
+            except Exception:  # noqa: BLE001
+                is_live = False
+        else:
+            is_live = bool(mkt_open)
         prev = None
         try:
             hist = _fetch_history(tk)
