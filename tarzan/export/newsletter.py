@@ -1084,7 +1084,19 @@ def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
     return (float(s.iloc[-1]) / base - 1.0) * 100.0 if base > 0 else None
 
 
-def _perf_window(m: PortfolioMetrics, n_days: int = 30) -> Optional[dict]:
+def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.Series | None":
+    """Price history of the geographic benchmark (the taxonomy row flagged
+    ``is_benchmark_geo=TRUE``, e.g. iShares MSCI ACWI) from
+    ``benchmark_histories``. Looked up by that configured name — no fuzzy
+    matching — since ``benchmark_histories`` is keyed by the same curated
+    instrument names as the taxonomy."""
+    if not geo_name:
+        return None
+    return (m.benchmark_histories or {}).get(geo_name)
+
+
+def _perf_window(m: PortfolioMetrics, n_days: int = 30,
+                 geo_name: Optional[str] = None) -> Optional[dict]:
     """Last ``n_days`` of value (€), TWROR (%), MSCI ACWI (%) and P&L (€→%),
     on a common daily index, plus deposit/withdrawal markers. Reuses the
     order-derived series (no recomputation). None when unavailable."""
@@ -1106,7 +1118,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30) -> Optional[dict]:
              if nav is not None and float(nav.iloc[0]) else None)
 
     acwi = None
-    acwi_raw = (m.benchmark_histories or {}).get("MSCI ACWI")
+    acwi_raw = _geo_benchmark_series(m, geo_name)
     if acwi_raw is not None and len(acwi_raw) >= 2:
         a = _norm_series(acwi_raw).reindex(idx, method="ffill").bfill()
         if float(a.iloc[0]):
@@ -1130,7 +1142,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30) -> Optional[dict]:
     }
 
 
-def _perf_level_series(m: PortfolioMetrics, dates):
+def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = None):
     """The indicators as % over the window, each matching the hero's
     definition, from existing series (no recomputation):
       * TWROR since inception — NAV index anchored at inception.
@@ -1163,7 +1175,7 @@ def _perf_level_series(m: PortfolioMetrics, dates):
     # MSCI ACWI since inception: anchor the benchmark at the portfolio's
     # inception value (same basis as twror_si) and sample the window.
     acwi_si = None
-    acwi_raw = (m.benchmark_histories or {}).get("MSCI ACWI")
+    acwi_raw = _geo_benchmark_series(m, geo_name)
     if acwi_raw is not None and len(acwi_raw) >= 2 and len(nav_full):
         a_full = _norm_series(acwi_raw)
         a_at_inception = a_full.reindex(nav_full.index, method="ffill").bfill()
@@ -1288,8 +1300,16 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     P = PALETTE
     COLS = 5
+
+    def market_open_now(_ticker):  # safe default if the import below fails
+        return None
+
+    def is_continuous_market(_ticker):  # safe default if the import fails
+        return False
+
     try:
-        from tarzan.data.market_quotes import fetch_market_quotes, CATEGORY_ORDER
+        from tarzan.data.market_quotes import (fetch_market_quotes, CATEGORY_ORDER,
+                                               market_open_now, is_continuous_market)
         snap = fetch_market_quotes()
     except Exception:  # noqa: BLE001
         snap, CATEGORY_ORDER = [], []
@@ -1312,33 +1332,45 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         bg = P["green_bg"] if up else P["red_bg"]
         val = f'{d["value"]:,.2f}'
         chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
+        sym = d.get("symbol", "")
+        # Tag futures with "(FUT)" so a full-width sparkline reads as a
+        # continuously-traded contract (change vs previous settlement), not a
+        # finished equity session.
+        name = d["name"]
+        if sym.upper().endswith("=F"):
+            name = f"{name} (FUT)"
         # Intraday time-axis sparkline (line grows through the session, with
         # an endpoint dot) when a timestamped series is available; otherwise
         # the stretched daily fallback.
         ss = d.get("spark_series")
         if ss is not None and len(ss) >= 2:
-            spark = _intraday_spark(ss, d.get("baseline", d["value"]), w=90, h=18)
+            # Continuous instruments (futures/FX/crypto) have no bounded cash
+            # session → draw the sparkline full-width (in_progress=False).
+            # Exchange-listed instruments grow through their session when open
+            # (market_open_now True), else render full width (closed session).
+            _ip = False if is_continuous_market(sym) else market_open_now(sym)
+            spark = _intraday_spark(ss, d.get("baseline", d["value"]), w=90, h=26,
+                                    in_progress=_ip)
         else:
             spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                               w=90, h=18, stretch=True)
+                               w=90, h=26, stretch=True)
         return (
             f'<td width="{cw}" style="vertical-align:top;padding:6px 10px;'
             f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
             f'<div style="font-size:9px;font-weight:700;letter-spacing:0.02em;'
-            f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{d["name"]}</div>'
-            f'<div style="margin-top:1px;font-size:15px;font-weight:700;color:{P["ink"]};'
+            f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{name}</div>'
+            f'<div style="margin-top:1px;font-size:12px;font-weight:700;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{val}</div>'
-            f'<div style="margin-top:2px;"><span style="font-size:10px;font-weight:700;color:{col};'
-            f'background:{bg};padding:1px 6px;border-radius:999px;font-variant-numeric:tabular-nums;'
+            f'<div style="margin-top:3px;"><span style="font-size:11px;font-weight:700;color:{col};'
+            f'background:{bg};padding:2px 7px;border-radius:999px;font-variant-numeric:tabular-nums;'
             f'white-space:nowrap;">{chg}</span></div>'
-            f'<div style="margin-top:3px;">{spark}</div></td>'
+            f'<div style="margin-top:5px;">{spark}</div></td>'
         )
 
-    # Row-break groups: each region starts on a new row. Crypto (just
-    # Bitcoin) is folded into Commodities so a single card never strands a
-    # near-empty row. Categories outside CATEGORY_ORDER become their own
-    # group (never dropped).
-    MERGE = {"Crypto": "Commodities"}
+    # Row-break groups: each region starts on a new row. Categories outside
+    # CATEGORY_ORDER become their own group (never dropped). MERGE folds a
+    # small category into another group's row (currently none).
+    MERGE: dict[str, str] = {}
     group_order, group_members = [], {}
     for cat in CATEGORY_ORDER:
         if cat in MERGE:
@@ -1392,7 +1424,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     if (m.actual_value_series is None or m.pnl_series is None
             or m.portfolio_history is None or m.pnl_eur is None):
         return {"available": False, "html": ""}
-    win = _perf_window(m, 30)
+    win = _perf_window(m, 30, ctx.benchmark_geo)
     if win is None:
         return {"available": False, "html": ""}
 
@@ -1497,7 +1529,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     # Since inception (cumulative). Total P&L % replaces the old unrealized line.
     ssi, lsi = [], []
-    lvl = _perf_level_series(m, dates)
+    lvl = _perf_level_series(m, dates, ctx.benchmark_geo)
     if lvl is not None:
         twror_si, total_pct, _unreal_pct, acwi_si = lvl
         if twror_si is not None:
@@ -2303,9 +2335,19 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
                 return _tax[k][1]
         return "\u2014"
 
-    # Portfolio (highlighted) row — % vs previous close, no chart.
-    _, port_inner = _perf_spark_cell(
-        port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")))
+    # Portfolio (highlighted) row. The portfolio has no single ticker, but its
+    # holdings trade intraday, so build a value-weighted synthetic intraday
+    # path (reusing the already-fetched holdings intraday) for a real 1D
+    # sparkline; fall back to the dashed placeholder when unavailable.
+    _pf_series = _portfolio_intraday_series(m, resolve=_resolve,
+                                            intraday_map=_snap_intraday, raw1d=_raw1d)
+    if _pf_series is not None and len(_pf_series) >= 2:
+        _, port_inner = _perf_spark_cell(
+            port_full.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
+            live=bool(port_full.get("1d_live")))
+    else:
+        _, port_inner = _perf_spark_cell(
+            port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")))
     portfolio = {"name": "Total Portfolio", "spark_inner": port_inner,
                  "returns": _returns_dict(port_full, is_portfolio=True)}
 
@@ -2433,7 +2475,8 @@ def _perf_intraday_map(tickers: list[str]) -> dict:
 
 
 def _intraday_spark(intra: "pd.Series", baseline: float,
-                    w: int = 84, h: int = 18) -> str:
+                    w: int = 84, h: int = 18,
+                    in_progress: Optional[bool] = None) -> str:
     """Intraday sparkline on a full-session time axis.
 
     Unlike the stretched ``_day_spark`` (which spreads N points across the
@@ -2443,7 +2486,12 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     as the session progresses. A completed session fills the full width. This
     makes "how far into the day we are" visible and doubles as a live vs
     closed cue. Two-tone (green above the previous close, red below), with a
-    dashed baseline; stretches to the cell width."""
+    dashed baseline; stretches to the cell width.
+
+    ``in_progress`` says whether the market is trading *now*: when the caller
+    knows this (from exchange hours) it should pass it explicitly so a closed
+    same-day session renders full width even if its last bar is recent. When
+    None, it is inferred from bar recency (FX/futures fallback)."""
     global _day_spark_uid
     ts = list(intra.index)
     vals = [float(x) for x in intra.values]
@@ -2451,19 +2499,19 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     if n < 2:
         return ""
     t0, t_last = ts[0], ts[-1]
-    # A completed session (its last bar has aged out — e.g. a US index in the
-    # European morning, or any market viewed after its close) fills the full
-    # width. Only the session trading *now* (a recent last bar) grows from the
-    # left, so early in that market's day the line covers just the elapsed
-    # portion. Recency is used (not "date == today") so an evening view of a
-    # closed same-day session correctly renders full width.
-    try:
-        _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
-               else t_last.tz_localize("UTC"))
-        _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
-        in_progress = _age_min <= 60
-    except Exception:  # noqa: BLE001
-        in_progress = False
+    # A completed session (e.g. a US index in the European morning, or any
+    # market viewed after its close) fills the full width. Only the session
+    # trading *now* grows from the left, so early in that market's day the
+    # line covers just the elapsed portion. Prefer the caller's exchange-hours
+    # signal; fall back to bar recency when it isn't provided.
+    if in_progress is None:
+        try:
+            _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
+                   else t_last.tz_localize("UTC"))
+            _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
+            in_progress = _age_min <= 60
+        except Exception:  # noqa: BLE001
+            in_progress = False
     if in_progress:
         # Session length from the open's UTC hour (yfinance returns intraday
         # timestamps in UTC): US cash opens ~13:30 UTC, Europe ~07:00 UTC.
@@ -2576,7 +2624,9 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
         else:
             baseline = float(intra.iloc[0])
         # Time-axis intraday: line fills only the elapsed part of the session.
-        spark = _intraday_spark(intra, baseline)
+        # ``live`` (from exchange hours) drives whether the session is still in
+        # progress, so a closed same-day session renders full width.
+        spark = _intraday_spark(intra, baseline, in_progress=live)
     else:
         # No intraday trades → a dashed placeholder line (prev-close
         # reference), so the cell keeps the same height and the pill stays
@@ -2597,6 +2647,79 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     inner = f'<div>{pill}{marker}</div><div style="margin-top:3px;">{spark}</div>'
     cell = f'<td width="96" align="center" style="padding:6px 8px;{bgc}">{inner}</td>'
     return cell, inner
+
+
+_PF_INTRA_KEY = "__PORTFOLIO_INTRADAY__"
+
+
+def _portfolio_intraday_series(m, resolve: Optional[dict] = None,
+                               intraday_map: Optional[dict] = None,
+                               raw1d: Optional[dict] = None):
+    """Value-weighted intraday level path for the whole portfolio, rebased to
+    100 at the previous close, so the Total Portfolio row can show a *real* 1D
+    sparkline: its holdings trade intraday even though the portfolio has no
+    single ticker.
+
+    Each holding's intraday series is rebased to its own previous close
+    (derived from its live 1D %, the same basis the per-row cells use), then
+    the % paths are value-weighted by ``weight_pct`` on a common (union) time
+    index. Callers that already fetched the holdings' intraday can pass
+    ``resolve``/``intraday_map``/``raw1d`` to avoid a second download; missing
+    inputs are computed from ``m``. Returns a pandas Series (level) or None
+    when no holding has a usable intraday series."""
+    df = getattr(m, "holdings_df", None)
+    if df is None or getattr(df, "empty", True):
+        return None
+    if not {"ticker", "weight_pct"}.issubset(set(getattr(df, "columns", []))):
+        return None
+    hp = getattr(m, "holding_performance", None)
+    if raw1d is None:
+        raw1d = {}
+        if hp is not None and not getattr(hp, "empty", True) and "ticker" in hp.columns:
+            for _, pr in hp.iterrows():
+                raw1d[str(pr.get("ticker", ""))] = pr.get("1d")
+    keys = [str(t) for t in df["ticker"].dropna().unique() if t]
+    if resolve is None:
+        from tarzan.data import price_cache as _pc
+        resolve = {k: (_pc.load_resolution(k) or k) for k in keys}
+    if intraday_map is None:
+        intraday_map = _perf_intraday_map(list({resolve.get(k, k) for k in keys}))
+    if not intraday_map:
+        return None
+    paths = []  # (weight, pct-path indexed by timestamp)
+    for tk, w in zip(df["ticker"], df["weight_pct"]):
+        if w is None:
+            continue
+        sym = resolve.get(str(tk), str(tk))
+        intra = intraday_map.get(sym)
+        if intra is None or len(intra) < 2:
+            continue
+        dv = raw1d.get(str(tk))
+        try:
+            last = float(intra.iloc[-1])
+            denom = (1.0 + float(dv) / 100.0) if dv is not None else None
+            base_i = last / denom if denom else float(intra.iloc[0])
+            if not base_i:
+                continue
+            p = (intra.astype(float) / base_i - 1.0) * 100.0
+            paths.append((float(w), p))
+        except Exception:  # noqa: BLE001
+            continue
+    if not paths:
+        return None
+    idx = None
+    for _, p in paths:
+        idx = p.index if idx is None else idx.union(p.index)
+    agg = None
+    wsum = 0.0
+    for w, p in paths:
+        pp = p.reindex(idx).ffill().bfill()
+        agg = pp * w if agg is None else agg + pp * w
+        wsum += w
+    if agg is None or wsum <= 0:
+        return None
+    port_pct = agg / wsum
+    return (1.0 + port_pct / 100.0) * 100.0
 
 
 def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
@@ -2884,10 +3007,18 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         extra = [k for k in keys if k not in preferred]
         return seen + extra
 
-    # Portfolio row (highlighted): 1D pill (no single intraday series for a
-    # portfolio, so the % vs previous close carries it — no chart).
-    _, port_inner = _perf_spark_cell(
-        pf.get("1d"), "", {}, live=bool(pf.get("1d_live")))
+    # Portfolio row (highlighted): a real 1D sparkline from a value-weighted
+    # synthetic intraday path over the holdings (the portfolio has no single
+    # ticker, but its holdings trade intraday); dashed placeholder when the
+    # intraday isn't available.
+    _pf_series = _portfolio_intraday_series(m)
+    if _pf_series is not None and len(_pf_series) >= 2:
+        _, port_inner = _perf_spark_cell(
+            pf.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
+            live=bool(pf.get("1d_live")))
+    else:
+        _, port_inner = _perf_spark_cell(
+            pf.get("1d"), "", {}, live=bool(pf.get("1d_live")))
     portfolio = {"name": portfolio_row["name"], "spark_inner": port_inner,
                  "returns": portfolio_row["returns"]}
 
