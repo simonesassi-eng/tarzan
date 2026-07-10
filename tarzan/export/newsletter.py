@@ -2467,8 +2467,8 @@ def _perf_intraday_map(tickers: list[str]) -> dict:
     if not uniq:
         return {}
     try:
-        from tarzan.data.market_quotes import _fetch_intraday
-        return _fetch_intraday(uniq)
+        from tarzan.data.market_quotes import _fetch_intraday_with_fallback
+        return _fetch_intraday_with_fallback(uniq)
     except Exception as e:  # noqa: BLE001
         logger.debug("performance intraday fetch failed: %s", e)
         return {}
