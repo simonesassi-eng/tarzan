@@ -166,3 +166,78 @@ def test_fetch_intraday_with_fallback_keys_on_original(monkeypatch):
     out = mq._fetch_intraday_with_fallback(["NTSG.MI"])
     assert "NTSG.MI" in out and "NTSG.DE" not in out
     assert len(out["NTSG.MI"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Closed-session % uses the official daily close, not the last intraday tick
+# ---------------------------------------------------------------------------
+def _daily(dates_values):
+    idx = pd.to_datetime([d for d, _ in dates_values])
+    return pd.DataFrame({"Close": [v for _, v in dates_values]}, index=idx)
+
+
+def test_broker_1d_closed_uses_official_close(monkeypatch):
+    # Intraday last tick is a lone high print (29.66 @ 17:19); the official
+    # 17:30 auction close is 29.415. With the session CLOSED, the % must use
+    # the official close → +0.81%, not the +1.64% the last tick would give.
+    intra = _intra([29.30, 29.66], day="2026-07-10", start="17:14")
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"NTSG.DE": intra} if "NTSG.DE" in symbols else {})
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
+                        lambda s: _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)]))
+    monkeypatch.setattr(mq, "market_open_now", lambda s: False)  # session closed
+    res = mq.broker_1d(["NTSG.MI"])
+    assert res["NTSG.MI"]["live"] is False
+    assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
+
+
+def test_broker_1d_live_uses_last_tick(monkeypatch):
+    # While the session is LIVE there is no official close yet, so the latest
+    # intraday tick is the correct "current" price → +1.64%.
+    intra = _intra([29.30, 29.66], day="2026-07-10", start="11:00")
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"NTSG.DE": intra} if "NTSG.DE" in symbols else {})
+    # No same-day daily bar yet (market still open); only the prior close.
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
+                        lambda s: _daily([("2026-07-09", 29.18)]))
+    monkeypatch.setattr(mq, "market_open_now", lambda s: True)  # session live
+    res = mq.broker_1d(["NTSG.MI"])
+    assert res["NTSG.MI"]["live"] is True
+    assert round(res["NTSG.MI"]["pct"], 2) == round((29.66 / 29.18 - 1) * 100, 2)  # +1.64%
+
+
+def test_broker_1d_closed_prefers_primary_listing_over_sibling(monkeypatch):
+    # .MI intraday empty → sparkline borrows Xetra; but once CLOSED the % must
+    # come from the PRIMARY (Milan) official close, not the Xetra twin.
+    # Milan closes 29.19 → 29.385 (+0.67%); Xetra closes 29.18 → 29.415 (+0.81%).
+    sib = _intra([29.30, 29.66])
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
+
+    def fake_hist(symbol):
+        return {"NTSG.MI": _daily([("2026-07-09", 29.19), ("2026-07-10", 29.385)]),
+                "NTSG.DE": _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)])}.get(symbol)
+
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
+    monkeypatch.setattr(mq, "market_open_now", lambda s: False)  # closed
+    res = mq.broker_1d(["NTSG.MI"])
+    assert res["NTSG.MI"]["live"] is False
+    assert round(res["NTSG.MI"]["pct"], 2) == round((29.385 / 29.19 - 1) * 100, 2)  # +0.67%
+
+
+def test_broker_1d_closed_falls_back_to_sibling_close(monkeypatch):
+    # Primary listing has no official close for the day (e.g. Milan daily not
+    # yet updated) → use the sibling's official close rather than nothing.
+    sib = _intra([29.30, 29.66])
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
+
+    def fake_hist(symbol):
+        # NTSG.MI: only the prior day (no 07-10 close). NTSG.DE: full.
+        return {"NTSG.MI": _daily([("2026-07-09", 29.19)]),
+                "NTSG.DE": _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)])}.get(symbol)
+
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
+    monkeypatch.setattr(mq, "market_open_now", lambda s: False)
+    res = mq.broker_1d(["NTSG.MI"])
+    assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%

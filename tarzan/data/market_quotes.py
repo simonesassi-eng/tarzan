@@ -200,6 +200,27 @@ def _has_intraday(ser) -> bool:
     return ser is not None and len(ser) >= 2
 
 
+def _official_and_prev(fetch_history, ticker: str, iday):
+    """From a ticker's daily history, return ``(official_close_on_iday,
+    previous_close_before_iday)`` as floats (or ``None`` each when missing).
+
+    ``official_close_on_iday`` is the exchange's settled daily close for the
+    session dated ``iday`` (it incorporates the closing auction). Best-effort:
+    returns ``(None, None)`` on any error."""
+    try:
+        hist = fetch_history(ticker)
+        if hist is None or not len(hist) or "Close" not in getattr(hist, "columns", []):
+            return None, None
+        dclose = hist["Close"].dropna()
+        same = dclose[[ts.date() == iday for ts in dclose.index]]
+        prior = dclose[[ts.date() < iday for ts in dclose.index]]
+        oc = float(same.iloc[-1]) if len(same) else None
+        pv = float(prior.iloc[-1]) if len(prior) else None
+        return oc, pv
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _sibling_symbols(ticker: str) -> list[str]:
     """Candidate sibling listings (same root, alternate EUR venue) for a
     ticker, in priority order. Empty for indices (^...), FX/futures (=X/=F),
@@ -380,6 +401,27 @@ def broker_1d(tickers: list[str]) -> dict:
                 is_live = False
         else:
             is_live = bool(mkt_open)
+
+        # --- Closed session: the authoritative 1D move is the instrument's
+        # OWN primary-listing official daily close (which includes the closing
+        # auction) vs its previous close — exactly what a broker shows for the
+        # held position, and immune to lone wide intraday prints (e.g. a 17:19
+        # tick vs the 17:30 auction). Prefer the primary listing ``tk``; only
+        # if it has no official close for the day fall back to the source
+        # (sibling) listing. This keeps the % on the venue the user holds,
+        # while the sibling is still used for the *live* intraday sparkline. ---
+        if not is_live:
+            for cand in (tk, src):
+                oc, pv = _official_and_prev(_fetch_history, cand, iday)
+                if oc is not None and pv:
+                    out[tk] = {"pct": (oc / pv - 1.0) * 100.0, "live": False}
+                    break
+            if tk in out:
+                continue
+
+        # --- Live session (or no official close available yet): the latest
+        # intraday tick vs the previous close from the SAME feed, so ``cur``
+        # and ``prev`` are currency-consistent. ---
         prev = None
         try:
             hist = _fetch_history(src)
