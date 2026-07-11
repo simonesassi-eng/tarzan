@@ -49,12 +49,14 @@ def setup_logging(output_dir: str) -> None:
     root.addHandler(fh)
 
 
-def _write_data_quality(output_dir: str) -> None:
-    """Write the per-run data-quality report and log its one-line summary.
+def _write_run_reports(output_dir: str) -> None:
+    """Write the per-run side reports (data-quality + rebalancing audit) and
+    log their summaries.
 
-    Best-effort: a diagnostic must never turn a good run into a failure.
+    Best-effort: a diagnostic/audit must never turn a good run into a failure.
     """
     from tarzan import data_quality as dq
+    from tarzan import audit
     try:
         logger.info(dq.summary_line())
         path = dq.write_report(output_dir)
@@ -62,6 +64,13 @@ def _write_data_quality(output_dir: str) -> None:
             logger.info("Data-quality report: %s", path)
     except Exception as e:  # noqa: BLE001
         logger.debug("Data-quality report step failed: %s", e)
+    try:
+        apath = audit.write_report(output_dir)
+        if apath:
+            logger.info("Rebalancing audit trail: %s (%d plan(s))",
+                        apath, len(audit.records()))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Rebalancing audit step failed: %s", e)
 
 
 def main(argv=None) -> int:
@@ -102,10 +111,11 @@ def main(argv=None) -> int:
         logger.debug(traceback.format_exc())
         return 1
     finally:
-        # Always write the per-run data-quality report — on success, on the
-        # no-value early exit, and on any failure — so the user can see what
-        # was skipped/coerced/failed regardless of how the run ended.
-        _write_data_quality(args.output)
+        # Always write the per-run side reports (data-quality + rebalancing
+        # audit) — on success, on the no-value early exit, and on any failure —
+        # so the user can see what was skipped/coerced/failed and why each
+        # rebalancing trade was suggested, regardless of how the run ended.
+        _write_run_reports(args.output)
 
 
 if __name__ == "__main__":

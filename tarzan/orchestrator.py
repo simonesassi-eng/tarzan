@@ -111,11 +111,14 @@ def run(
     from tarzan import config as _cfg
     from tarzan.data import geo_resolver as _geo
     from tarzan import data_quality as _dq
+    from tarzan import audit as _audit
     _cfg.reset_input_caches()
     _geo.reset_caches()
-    # Start a fresh per-run data-quality report so this run never shows a
-    # previous run's skips/fallbacks. The CLI writes it out after the run.
+    # Start a fresh per-run data-quality report and rebalancing audit trail so
+    # this run never shows a previous run's issues/plans. The CLI writes both
+    # out after the run.
     _dq.reset()
+    _audit.reset()
 
     config = load_config(config_source)
     logger.info("Config loaded (target tolerance=±%.1f%%)", config.rebalancing_target_tolerance_pctg)

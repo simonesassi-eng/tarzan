@@ -746,6 +746,20 @@ class MetricsEngine:
             {"label": "Buy & sell (full rebalance)", "no_sell": False,
              "suggestions": s_false, "verifications": v_false},
         ]
+
+        # Append both plans to the per-run rebalancing audit trail (inputs +
+        # outputs), so the WHY behind each suggested trade is durably
+        # recorded. Best-effort; never affects the plans or any number.
+        from tarzan import audit as _audit
+        for _label, _ns, _s, _v in (
+            ("Buy only (accumulate)", True, s_true, v_true),
+            ("Buy & sell (full rebalance)", False, s_false, v_false),
+        ):
+            _audit.record_rebalancing_plan(
+                _label, no_sell=_ns, total_value=ctx["total_value"],
+                lump_sum=lump, config=self.config, holdings=rebal_holdings,
+                suggestions=_s, verifications=_v,
+            )
         # Primary plan = the one matching the user's configured no_sell, kept
         # for back-compat (hero status banner, dashboard alert, etc.).
         if self.config.rebalancing_no_sell:
