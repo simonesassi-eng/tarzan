@@ -86,8 +86,25 @@ class TestParseNumber:
         # Regression: "1,5" must be 1.5, not 15.
         assert self._p("1,5") == pytest.approx(1.5)
 
-    def test_thousands_comma_grouping(self):
-        assert self._p("1,234") == pytest.approx(1234.0)
+    def test_single_comma_is_european_decimal(self):
+        # A single comma is read as the European decimal mark (Fineco source).
+        # Regression: "99,750" is a 99.75 bond clean price, NOT 99750; and
+        # "1,234" is 1.234, NOT 1234. Real numeric cells never reach this
+        # string path (pandas types them float64), so this only affects
+        # hand-edited European values, which decimal-first parses correctly.
+        assert self._p("99,750") == pytest.approx(99.75)
+        assert self._p("1,234") == pytest.approx(1.234)
+
+    def test_multi_comma_is_us_grouping(self):
+        # Multiple commas are unambiguous US grouping (EU uses dots to group).
+        assert self._p("1,234,567") == pytest.approx(1234567.0)
+
+    def test_single_dot_stays_decimal(self):
+        # A single dot is ALWAYS a decimal mark, never grouping: real ETF
+        # prices are genuinely 3-decimal (31.975), so this must not become
+        # 31975. Guards against a 1000x error in the opposite direction.
+        assert self._p("31.975") == pytest.approx(31.975)
+        assert self._p("1.234") == pytest.approx(1.234)
 
     def test_negative_european(self):
         assert self._p("-1.234,5") == pytest.approx(-1234.5)
@@ -105,3 +122,21 @@ class TestParseNumber:
     def test_empty_raises(self):
         with pytest.raises(ValueError):
             self._p("")
+
+    def test_non_finite_raises(self):
+        # A blank numeric cell reaches the parser as numpy/pandas NaN (a
+        # float); it must be rejected, not silently returned as an
+        # Order(quantity=nan) that poisons NAV/weights/XIRR to NaN.
+        import numpy as np
+        for bad in (np.float64("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValueError):
+                self._p(bad)
+
+    def test_safe_wrappers_treat_nan_as_missing(self):
+        # _parse_number_safe/_optional must map a NaN cell to None so the
+        # loader skips the row (required fields) or defaults it (fees -> 0.0).
+        import numpy as np
+        from tarzan.data.loader import _parse_number_safe, _parse_number_optional
+        assert _parse_number_safe(np.float64("nan"), "quantity", 0) is None
+        assert _parse_number_optional(np.float64("nan")) is None
+        assert (_parse_number_safe(np.float64("nan"), "fees_eur", 0) or 0.0) == 0.0

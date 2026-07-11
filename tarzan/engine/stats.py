@@ -116,11 +116,26 @@ def compute_ytd_return(series: pd.Series) -> Optional[float]:
         series = series.dropna()
     if series is None or series.empty:
         return None
-    ytd = series[series.index.year == series.index[-1].year]
-    if ytd.empty or len(ytd) < 2:
+    current_year = series.index[-1].year
+    prior = series[series.index.year < current_year]
+    ytd = series[series.index.year == current_year]
+    if ytd.empty:
         return None
-    start = float(ytd.iloc[0])
-    return (((float(ytd.iloc[-1]) / start) - 1) * 100) if start > 0 else None
+    # Anchor to the LAST close of the prior year when the series has it, not
+    # the first in-year observation: YTD is measured from Dec-31, so a book
+    # that rose in early January before its first current-year point (or after
+    # a January data gap) would otherwise report ~0% instead of the real move.
+    # Fall back to the first in-year point only when no prior-year data exists
+    # (mid-year inception) — then at least two in-year points are required.
+    if not prior.empty:
+        start = float(prior.iloc[-1])
+        end = float(ytd.iloc[-1])
+    else:
+        if len(ytd) < 2:
+            return None
+        start = float(ytd.iloc[0])
+        end = float(ytd.iloc[-1])
+    return (((end / start) - 1) * 100) if start > 0 else None
 
 
 # ======================================================================
@@ -270,8 +285,15 @@ def compute_sortino(daily_returns: pd.Series, annual_return: float) -> float:
 def compute_max_drawdown(series: pd.Series) -> float:
     if series.empty or len(series) < 2:
         return 0.0
-    cummax = series.cummax()
-    drawdown = (series - cummax) / cummax
+    # Guard the running-peak division: a leading zero/non-positive value makes
+    # cummax==0 and (series-cummax)/cummax a 0/0 NaN (or ±inf against a zero
+    # peak). Restrict to the strictly-positive tail so a synthetic/carry-flat
+    # NAV that starts at 0 still yields a real drawdown instead of NaN.
+    s = series[series > 0]
+    if len(s) < 2:
+        return 0.0
+    cummax = s.cummax()
+    drawdown = (s - cummax) / cummax
     return float(drawdown.min())
 
 
@@ -286,6 +308,11 @@ def compute_ulcer_index(series: pd.Series) -> float:
     positive percentage (e.g. 7.3 = 7.3%), comparable to volatility.
     """
     if series is None or series.empty or len(series) < 2:
+        return 0.0
+    # Same cummax==0 guard as compute_max_drawdown: a leading zero peak makes
+    # the percentage drawdown NaN/inf and poisons the RMS.
+    series = series[series > 0]
+    if len(series) < 2:
         return 0.0
     cummax = series.cummax()
     # Percentage drawdown at each point (≤ 0); square removes the sign so
@@ -402,6 +429,36 @@ def _safe_pct_change(old: float, new: float) -> float:
     if old <= 0 or new <= 0:
         return 0.0
     return (new - old) / old * 100
+
+
+def to_business_day_series(series: pd.Series) -> pd.Series:
+    """Resample a DENSE calendar-day series onto business days (Mon–Fri).
+
+    The order-derived portfolio NAV is built on ``freq="D"`` (every calendar
+    day, weekends carried flat), but the risk metrics annualize daily
+    volatility with ``sqrt(TRADING_DAYS)`` (252) — the trading-day convention.
+    Feeding it calendar-day returns injects ~2/7 exact-zero (weekend) returns,
+    understating volatility by ~sqrt(252/365) ≈ 0.83× and polluting the
+    VaR/CVaR quantiles with a spike at 0. Collapsing to business days first
+    puts the portfolio on the same trading-day basis as the (yfinance,
+    trading-day) benchmarks, so ``sqrt(252)`` is then correct and the
+    comparison is apples-to-apples.
+
+    Only meant for the calendar-day order NAV. A series that is *already*
+    trading-day (yfinance holdings/benchmarks) must NOT be passed here:
+    resampling it to "B" would insert NaN rows on exchange holidays and drop
+    the real returns around them. Every business day in the calendar-day input
+    has a (carried) value, so this never introduces NaN. Empty/short input is
+    returned unchanged.
+    """
+    if series is None or series.empty or len(series) < 2:
+        return series
+    s = series.copy()
+    idx = s.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+        s.index = idx
+    return s.resample("B").last().dropna()
 
 
 def _is_nan(value) -> bool:

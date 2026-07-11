@@ -171,6 +171,16 @@ def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     factor = [1.0] * n
     cum = 1.0
     splits = 0
+    # A real split/denomination boundary sits between two runs of *genuine*
+    # prices. A transient bad print (e.g. a lone 0.0001 tick) also produces a
+    # huge day-over-day ratio, but the median of the sessions on the low side
+    # then reflects the bad tick, not a new price level. Requiring both the
+    # before- and after-medians to be well clear of zero rejects a spurious
+    # split triggered by an aberrant near-zero print, which would otherwise
+    # back-adjust the entire earlier series and corrupt all multi-period
+    # returns for that instrument.
+    ref = float(pd.Series([v for v in vals if v > 0]).median()) if any(v > 0 for v in vals) else 0.0
+    min_level = ref * 1e-3  # 0.1% of the typical level
     for i in range(n - 2, -1, -1):
         prev = vals[i]
         r = (vals[i + 1] / prev) if prev else 1.0
@@ -178,8 +188,10 @@ def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
             before = pd.Series(vals[max(0, i - 9):i + 1]).median()
             after = pd.Series(vals[i + 1:i + 11]).median()
             expected = before * r if before else 0.0
-            # Persistent split: the new level holds near before×ratio.
-            if expected > 0 and after > 0 and abs(after - expected) / expected <= 0.35:
+            # Persistent split: the new level holds near before×ratio, AND
+            # both surrounding levels are real prices (not a near-zero tick).
+            if (expected > 0 and after > 0 and before > min_level and after > min_level
+                    and abs(after - expected) / expected <= 0.35):
                 cum *= r
                 splits += 1
         factor[i] = cum

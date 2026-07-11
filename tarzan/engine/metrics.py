@@ -103,14 +103,32 @@ class MetricsEngine:
         self._computers.append(fn)
 
     def compute_all(self) -> PortfolioMetrics:
-        """Run all computers and return a populated PortfolioMetrics."""
+        """Run all computers and return a populated PortfolioMetrics.
+
+        Each computer is isolated so one failure cannot abort the rest, but
+        the names of any that raise are recorded in ``ctx["_degraded"]`` and
+        surfaced on the result (``PortfolioMetrics.degraded_computers``). That
+        turns a silent zero/blank section (a crashed computer leaves its ctx
+        keys unset, and ``_build_result`` substitutes 0.0/{}/empty) into an
+        explicit signal a renderer can flag as "unavailable" rather than
+        presenting it as a real low-risk / zero result.
+        """
         ctx: dict = {}
+        degraded: list[str] = []
         for computer in self._computers:
+            name = getattr(computer, "__name__", str(computer))
             try:
                 computer(ctx)
             except Exception as e:
-                name = getattr(computer, "__name__", str(computer))
                 logger.error("Metric computer '%s' failed: %s", name, e)
+                degraded.append(name)
+        if degraded:
+            logger.warning(
+                "Report is DEGRADED — %d computer(s) failed: %s. "
+                "Affected sections fell back to defaults.",
+                len(degraded), ", ".join(degraded),
+            )
+        ctx["_degraded"] = degraded
         return self._build_result(ctx)
 
     # ------------------------------------------------------------------
@@ -330,6 +348,15 @@ class MetricsEngine:
                 ph = ph[~ph.index.duplicated(keep="last")]
             else:
                 ph = pd.Series(dtype=float)
+
+        # The daily series is a DENSE calendar-day NAV (freq="D", weekends
+        # carried flat). Risk metrics annualize with sqrt(252) (trading days),
+        # so collapse to business days here — otherwise weekend zero-returns
+        # understate volatility ~17% and pollute VaR/CVaR. This is the single
+        # series _risk / _performance_full read; XIRR/TWROR and the mountain
+        # chart read series.* directly and are unaffected.
+        from tarzan.engine.stats import to_business_day_series
+        ph = to_business_day_series(ph)
 
         ctx["portfolio_history"] = ph
         ctx["portfolio_history_full"] = ph
@@ -1113,6 +1140,7 @@ class MetricsEngine:
             external_flows=ctx.get("external_flows"),
             inception_date=ctx.get("inception_date"),
             allocation_timeline=ctx.get("allocation_timeline"),
+            degraded_computers=ctx.get("_degraded", []),
         )
 
 

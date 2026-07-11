@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import os
 from typing import Optional, Union
 
@@ -281,19 +282,36 @@ def _parse_number(val) -> float:
     *rightmost* '.' or ',' as the decimal separator and stripping the
     other as a grouping separator:
 
-        "1,234.56"  → 1234.56   (US)
-        "1.234,56"  → 1234.56   (European)
+        "1,234.56"  → 1234.56   (US: dot decimal, comma grouping)
+        "1.234,56"  → 1234.56   (European: comma decimal, dot grouping)
         "1234,56"   → 1234.56   (European, no grouping)
-        "1,5"       → 1.5       (European decimal — previously became 15)
+        "1,5"       → 1.5       (European decimal)
+        "99,750"    → 99.75     (European 3-decimal price — NOT 99750)
+        "1,234,567" → 1234567   (US grouping — unambiguous, multiple commas)
         "1234"      → 1234.0
 
-    A bare ',' or '.' used purely as a thousands separator (e.g. "1,234"
-    with no decimal part) is ambiguous; we resolve it the conventional
-    way — a single separator followed by exactly 3 digits is treated as
-    grouping, otherwise as a decimal mark.
+    A SINGLE comma with no dot is the ambiguous case ("1,234" could be US
+    1234 or European 1.234). Tarzan's upstream is Fineco (European), and —
+    critically — real numeric cells never reach this string path at all:
+    pandas types them as float64 and they take the ``isinstance`` fast path
+    above, while the config layer parses its own numbers with plain
+    ``float()``. Only a hand-edited quoted string lands here, so we read a
+    single comma as the European decimal mark. Multiple commas are
+    unambiguous US grouping (European grouping uses dots), so those are
+    stripped. NOTE: a single DOT is always kept as a decimal mark (real ETF
+    prices are genuinely 3-decimal, e.g. 31.975), so it is never treated as
+    grouping.
     """
     if isinstance(val, (int, float)):
-        return float(val)
+        # A blank numeric cell arrives here as numpy/pandas NaN (which is a
+        # float), and a bad computation can yield inf. Neither is a valid
+        # monetary/quantity value: reject it so the caller skips the row
+        # rather than silently building an Order(quantity=nan) that poisons
+        # NAV, weights and XIRR to NaN with no error surfaced.
+        f = float(val)
+        if not math.isfinite(f):
+            raise ValueError("non-finite")
+        return f
     s = str(val).strip()
     if not s:
         raise ValueError("empty")
@@ -311,9 +329,13 @@ def _parse_number(val) -> float:
         grp = "," if dec == "." else "."
         s = s.replace(grp, "").replace(dec, ".")
     elif has_comma:
-        # Only commas present. One comma + 3 trailing digits → grouping;
-        # otherwise treat the comma as a decimal mark.
-        if s.count(",") == 1 and len(s.split(",")[1]) == 3:
+        # Only commas present. Multiple commas are unambiguous US grouping
+        # (European grouping uses dots), so strip them. A single comma is the
+        # ambiguous case — read it as the European decimal mark, since the
+        # Fineco source is European and a comma-3-digit value like "99,750" is
+        # a 99.75 price far more often than ninety-nine thousand. (Real data
+        # never reaches here; see the docstring.)
+        if s.count(",") > 1:
             s = s.replace(",", "")
         else:
             s = s.replace(",", ".")
