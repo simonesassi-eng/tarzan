@@ -275,15 +275,6 @@ def test_local_search_is_deterministic():
     assert sig(a1) == sig(a2)
 
 
-def test_drift_penalty_sensitivity_retired():
-    """The LP-only drift-penalty sweep is retired and returns an empty list so
-    the Excel/newsletter tuning section hides itself."""
-    from tarzan.engine.rebalancer import compute_drift_penalty_sensitivity
-    holdings, cfg, lump = _geo_scenario()
-    tv = sum(h.current_value for h in holdings)
-    assert compute_drift_penalty_sensitivity(holdings, cfg, tv, lump_sum=lump) == []
-
-
 def test_tax_per_unit_uses_proceeds_gain_fraction():
     """CGT withheld per euro of PROCEEDS is rate * gp/(100+gp), not rate*gp/100.
 

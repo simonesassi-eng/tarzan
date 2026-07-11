@@ -47,19 +47,6 @@ from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _
 _ASSET_ORDER = list(_ORDER_WHATIF)
 # The what-if workbook also renders an explicit "Other" geo bucket at the end.
 _GEO_ORDER = list(_GEO_REG) + ["Other"]
-_RISK_ROWS = [
-    ("CAGR", "cagr", "perf", "%"),
-    ("Return 1Y", "1y", "perf", "%"),
-    ("Return 3Y", "3y", "perf", "%"),
-    ("Volatility (ann.)", "volatility", "risk", "%"),
-    ("Sharpe", "sharpe", "risk", ""),
-    ("Sortino", "sortino", "risk", ""),
-    ("Max Drawdown", "max_drawdown", "risk", "%"),
-    ("VaR 95% (daily)", "var_95", "risk", "%"),
-    ("CVaR 95% (daily)", "cvar_95", "risk", "%"),
-    ("Beta vs S&P 500", "beta", "risk", ""),
-    ("Alpha (ann.)", "alpha", "risk", "%"),
-]
 
 _PCOL0 = 3  # portfolios start at column C (A = ticker/category, B = description)
 
@@ -95,14 +82,6 @@ def _dev_color(delta, tol):
     if a <= 2 * tol:
         return _C["amber"]
     return _C["red"]
-
-
-def _risk_value(metrics, key, src, unit):
-    d = (metrics.performance if src == "perf" else metrics.risk) or {}
-    v = d.get(key)
-    if v is None or (isinstance(v, float) and v != v):
-        return "n/a"
-    return f"{v:.2f}{unit}"
 
 
 # ---------------------------------------------------------------------------

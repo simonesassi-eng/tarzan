@@ -13,7 +13,6 @@ import pytest
 from hypothesis import given, strategies as st
 
 from tarzan.data.bond_fetcher import (
-    bond_price_to_value,
     is_bond,
     looks_like_bond_from_orders,
     value_position,
@@ -28,11 +27,6 @@ class TestValuePosition:
     def test_bond_applies_per_100_nominal(self):
         # 10,000 nominal at a clean price of 99.5 → 9,950 EUR.
         assert value_position(10_000.0, 99.5, bond=True) == pytest.approx(9_950.0)
-
-    def test_bond_price_to_value_is_alias(self):
-        assert bond_price_to_value(103.99, 4_000.0) == pytest.approx(
-            value_position(4_000.0, 103.99, bond=True)
-        )
 
     def test_zero_quantity_is_zero(self):
         assert value_position(0.0, 123.0, bond=True) == 0.0

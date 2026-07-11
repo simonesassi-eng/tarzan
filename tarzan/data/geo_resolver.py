@@ -164,9 +164,6 @@ def _lookup_asset_geo(
             geo = _parse_geo_row(best_row)
             if geo:
                 return geo, f"index_geo_allocation (index: {best_name})"
-                geo = _parse_geo_row(row)
-                if geo:
-                    return geo, f"index_geo_allocation (index: {row_index})"
 
     return None
 

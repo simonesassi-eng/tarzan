@@ -13,9 +13,6 @@ from typing import Optional
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.chart import PieChart, BarChart, LineChart, Reference
-from openpyxl.chart.label import DataLabelList
-from openpyxl.chart.series import DataPoint, SeriesLabel
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -234,25 +231,6 @@ def _format_number(val, is_pct=False):
 
 
 # ── END STYLING ───────────────────────────────────────
-
-
-def _make_bar(title, sheet, cat_col, series_defs, start_row, end_row, width=18, height=12):
-    """Create a bulletproof bar chart. series_defs = [(col, label), ...]."""
-    chart = BarChart()
-    chart.type = "bar"
-    chart.title = title
-    chart.width = width
-    chart.height = height
-    chart.style = 10
-
-    cats = Reference(sheet, min_col=cat_col, min_row=start_row, max_row=end_row)
-    for col, label in series_defs:
-        vals = Reference(sheet, min_col=col, min_row=start_row, max_row=end_row)
-        chart.add_data(vals, titles_from_data=False)
-        chart.series[-1].tx = SeriesLabel(v=label)
-    chart.set_categories(cats)
-
-    return chart
 
 
 
@@ -603,7 +581,6 @@ def _write_dashboard(workbook, sheet, metrics: PortfolioMetrics, config: Investo
 
     # Clear column D (spacer) for all dashboard rows
     from openpyxl.cell.cell import MergedCell
-    from openpyxl.styles import PatternFill
     white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
     for clear_r in range(1, row + 1):
         dc = sheet.cell(row=clear_r, column=4)
@@ -624,7 +601,6 @@ def _write_area_header(ws, row, col_start, col_end, title):
     cell.alignment = px_align(h='left', v='center')
     cell.border = px_no_border()
     # Bottom border accent
-    from openpyxl.styles import Border, Side
     accent_border = Border(bottom=Side(style='medium', color=C['bg_header']))
     cell.border = accent_border
     for c in range(col_start + 1, col_end + 1):
@@ -712,73 +688,6 @@ def _write_holdings(workbook, sheet, metrics: PortfolioMetrics):
                              num_fmt=nf, font_color=font_color)
 
     _write_footer(sheet, row + 2, 1)
-
-
-
-def _build_sensitivity_notes(sensitivity: list[dict], configured_w: float) -> list[str]:
-    """Generate plain-language hints comparing the active drift-penalty
-    regime to the immediate alternatives.
-
-    The notes are designed to fit on one or two lines each so the user
-    can skim them. They quantify the trade-off ("paying €X more in
-    friction buys you Y pp less drift") rather than offering opinions.
-
-    Returns an empty list when no actionable comparison exists, e.g.
-    when there is only one regime in the sweep.
-    """
-    if not sensitivity or len(sensitivity) < 2:
-        return []
-
-    # Find the index of the active regime.
-    active_idx = None
-    for i, r in enumerate(sensitivity):
-        if float(r["weight_min"]) <= configured_w <= float(r["weight_max"]):
-            active_idx = i
-            break
-    if active_idx is None:
-        return []
-
-    from tarzan.export._format import eur_smart as _eur
-
-    notes: list[str] = []
-    active = sensitivity[active_idx]
-
-    def _delta_summary(other: dict, direction: str) -> Optional[str]:
-        a_friction = float(active["total_tax"]) + float(active["total_fee"])
-        o_friction = float(other["total_tax"]) + float(other["total_fee"])
-        d_friction = o_friction - a_friction
-        d_drift_pp = float(other["max_drift_pp"]) - float(active["max_drift_pp"])
-        d_actions = (other["n_buy"] + other["n_sell"]) - (active["n_buy"] + active["n_sell"])
-        # Range label of the candidate regime.
-        wmin = float(other["weight_min"])
-        wmax = float(other["weight_max"])
-        range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g}–{wmax:g}"
-        if direction == "down":
-            cost_word = "save" if d_friction < 0 else "spend"
-            drift_word = "loosen" if d_drift_pp > 0 else "tighten"
-            return (
-                f"\u2193 Lowering to {range_str}: "
-                f"{cost_word} {_eur(abs(d_friction))} in friction, "
-                f"{drift_word} drift by {abs(d_drift_pp):.2f} pp, "
-                f"{abs(d_actions):+d} actions."
-            ).replace("+-", "−")
-        else:
-            cost_word = "spend" if d_friction > 0 else "save"
-            drift_word = "tighten" if d_drift_pp < 0 else "loosen"
-            return (
-                f"\u2191 Raising to {range_str}: "
-                f"{cost_word} {_eur(abs(d_friction))} more in friction, "
-                f"{drift_word} drift by {abs(d_drift_pp):.2f} pp, "
-                f"{abs(d_actions):+d} actions."
-            ).replace("+-", "−")
-
-    if active_idx > 0:
-        prev = sensitivity[active_idx - 1]
-        notes.append(_delta_summary(prev, "down"))
-    if active_idx < len(sensitivity) - 1:
-        nxt = sensitivity[active_idx + 1]
-        notes.append(_delta_summary(nxt, "up"))
-    return [n for n in notes if n]
 
 
 def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: InvestorConfig):
@@ -1331,111 +1240,6 @@ def _write_allocations(workbook, sheet, metrics: PortfolioMetrics, config: Inves
         row += 1
 
     # =====================================================================
-    # DRIFT-PENALTY SENSITIVITY — show the user how the optimization
-    # changes as ``rebalancing_drift_penalty_weight`` varies, so they
-    # can pick the value that matches their preference (more trades
-    # vs. less leftover drift).
-    # =====================================================================
-    sensitivity = getattr(metrics, "rebalancing_sensitivity", None)
-    # Hide the sensitivity card when every regime produces zero
-    # trades — typical when the portfolio is already inside the
-    # tolerance band at every weight. Otherwise the section ships an
-    # empty diagnostic that wastes vertical space.
-    has_trades = bool(sensitivity) and any(
-        (r.get("n_buy", 0) + r.get("n_sell", 0)) > 0
-        for r in sensitivity
-    )
-    if sensitivity and has_trades:
-        from tarzan.export._format import eur_smart as _eur_compact
-        row += 2
-        _write_area_header(sheet, row, 1, 7, "DRIFT-PENALTY SENSITIVITY")
-        row += 1
-        configured_w = float(getattr(config, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
-        subcell_text = (
-            f"Each row is a regime — a range of weights producing the "
-            f"same plan. Active weight: {configured_w:g} (highlighted with \u25b6). "
-            f"Higher weights close more drift at the cost of more trades, "
-            f"taxes, and fees."
-        )
-        subcell = sheet.cell(row=row, column=1, value=subcell_text)
-        subcell.font = px_font(size=9, italic=True, color=C['text_sec'])
-        subcell.fill = px_fill(C['bg_page'])
-        subcell.border = px_no_border()
-        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
-        row += 2
-
-        sens_headers = [
-            "Weight range",
-            "Actions (B/S)",
-            "BUY total",
-            "SELL total",
-            "Tax + Fee",
-            "Max drift",
-            "Net change by class",
-        ]
-        for c, h in enumerate(sens_headers, 1):
-            _apply_header(sheet, row, c, h)
-        row += 1
-
-        def _net_by_class_str(d: dict, min_eur: float = 0.5) -> str:
-            """Render a class-net dict as ``Equ +€1.9k  ·  FI −€20.1k``.
-
-            Sorted by descending absolute volume; entries below
-            ``min_eur`` are dropped (numerical noise from the LP
-            solver). Sign comes from BUY − SELL: positive values mean
-            the class grows, negative shrinks.
-            """
-            items = sorted((d or {}).items(), key=lambda x: -abs(x[1]))
-            return "  \u00b7  ".join(
-                f"{ac} {_eur_compact(v, signed=True)}"
-                for ac, v in items
-                if abs(v) > min_eur
-            ) or "—"
-
-        for ti, regime in enumerate(sensitivity):
-            wmin = float(regime["weight_min"])
-            wmax = float(regime["weight_max"])
-            range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g} – {wmax:g}"
-            actions_str = f"{regime['n_buy']}B / {regime['n_sell']}S"
-            buy = float(regime["total_buy"])
-            sell = float(regime["total_sell"])
-            friction = float(regime["total_tax"]) + float(regime["total_fee"])
-            drift = float(regime["max_drift_pp"])
-            net_str = _net_by_class_str(regime.get("net_by_class") or {})
-
-            is_active = (wmin <= configured_w <= wmax)
-            label_color = C['text_pri'] if is_active else C['text_sec']
-            range_value = f"\u25b6 {range_str}" if is_active else range_str
-            _write_data_cell(sheet, row, 1, range_value, ti, bold=is_active,
-                             font_color=label_color)
-            _write_data_cell(sheet, row, 2, actions_str, ti, font_color=label_color)
-            _write_data_cell(sheet, row, 3, _eur_compact(buy), ti,
-                             font_color=label_color)
-            _write_data_cell(sheet, row, 4, _eur_compact(sell), ti,
-                             font_color=label_color)
-            _write_data_cell(sheet, row, 5, _eur_compact(friction), ti,
-                             font_color=label_color)
-            _write_data_cell(sheet, row, 6, drift, ti, is_number=True,
-                             num_fmt='0.00"%"', font_color=label_color)
-            _write_data_cell(sheet, row, 7, net_str, ti, font_color=label_color)
-            row += 1
-
-        # Dynamic insight: compare the active regime to one notch up
-        # and one notch down so the user sees what changing the weight
-        # would buy them.
-        notes = _build_sensitivity_notes(sensitivity, configured_w)
-        if notes:
-            row += 1
-            for note in notes:
-                ncell = sheet.cell(row=row, column=1, value=note)
-                ncell.font = px_font(size=10, italic=True, color=C['text_sec'])
-                ncell.fill = px_fill(C['bg_page'])
-                ncell.alignment = px_align(h='left', wrap=True)
-                ncell.border = px_no_border()
-                sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
-                row += 1
-
-    # =====================================================================
     # SOLVER INFO
     # =====================================================================
     row += 2
@@ -1766,7 +1570,6 @@ def _write_analysis(workbook, sheet, metrics: PortfolioMetrics):
     for c, h in enumerate(["Name", "ISIN", "Ticker", "Weight %", "Gain %", "Contribution"]):
         _apply_header(sheet, row, c + 1, h)
     row += 1
-    start_row = row
     contrib_rows = []
     for _, r in df.iterrows():
         contrib = r.get("weight_pct", 0) * r.get("gain_pct", 0) / 100
@@ -1780,10 +1583,6 @@ def _write_analysis(workbook, sheet, metrics: PortfolioMetrics):
         _write_data_cell(sheet, row, 5, r.get("gain_pct", 0), ti, is_number=True)
         _write_data_cell(sheet, row, 6, contrib, ti, is_number=True)
         row += 1
-
-    chart = _make_bar("Return Contribution by Holding", sheet,
-                      1, [(6, "Return Contribution")], start_row, row - 1, width=20, height=12)
-    # CHARTS DISABLED: sheet.add_chart(chart, "H3")
 
     row += 1
 

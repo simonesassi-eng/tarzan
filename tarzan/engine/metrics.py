@@ -711,12 +711,8 @@ class MetricsEngine:
         if self.config is None:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
-            ctx["rebalancing_sensitivity"] = None
             return
-        from tarzan.engine.rebalancer import (
-            compute_unified_rebalancing,
-            compute_drift_penalty_sensitivity,
-        )
+        from tarzan.engine.rebalancer import compute_unified_rebalancing
         lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
 
         # Always compute BOTH rebalancing variants so Excel and the
@@ -764,18 +760,6 @@ class MetricsEngine:
             ctx["rebalancing_suggestions"], ctx["rebalancing_verifications"] = s_true, v_true
         else:
             ctx["rebalancing_suggestions"], ctx["rebalancing_verifications"] = s_false, v_false
-
-        # Drift-penalty sensitivity sweep — surfaces the optimization
-        # turning points so the user can pick the weight that matches
-        # their preferences (more trades / less drift vs. fewer
-        # trades / more leftover drift). Cheap enough to always run.
-        try:
-            ctx["rebalancing_sensitivity"] = compute_drift_penalty_sensitivity(
-                rebal_holdings, self.config, ctx["total_value"], lump_sum=lump,
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("Drift-penalty sensitivity sweep failed: %s", exc)
-            ctx["rebalancing_sensitivity"] = None
 
     # ------------------------------------------------------------------
     # Benchmarks
@@ -1137,7 +1121,6 @@ class MetricsEngine:
             rebalancing_suggestions=ctx.get("rebalancing_suggestions"),
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
             rebalancing_plans=ctx.get("rebalancing_plans"),
-            rebalancing_sensitivity=ctx.get("rebalancing_sensitivity"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
             portfolio_history=ctx.get("portfolio_history"),
             benchmark_histories=ctx.get("benchmark_histories", {}),

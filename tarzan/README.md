@@ -281,11 +281,6 @@ All domain errors inherit from `TarzanError`:
 
 - `TarzanError` — base class
 - `DataIngestionError` — input data cannot be loaded or parsed
-- `DataEnrichmentError` — market data enrichment failed for a holding
-- `InsufficientDataError` — not enough data to compute a metric
-- `MetricCalculationError` — numerical error in a metric calculation
-- `ClassificationError` — instrument cannot be classified
-- `ConfigurationError` — invalid or missing configuration
 
 ## Testing
 

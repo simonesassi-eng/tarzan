@@ -184,7 +184,3 @@ def _alt_series(fin: Optional[pd.Series]):
     start = aq.index.min()
     spliced = pd.concat([fin.loc[fin.index < start], aq]).sort_index()
     return spliced, f"{_MF_FUND} {start:%Y}+/cash", start
-
-
-def reset_memo() -> None:
-    _returns_memo.clear()

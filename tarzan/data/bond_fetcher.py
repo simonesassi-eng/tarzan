@@ -93,18 +93,6 @@ def _extract_price(html: str) -> Optional[float]:
     return None
 
 
-def bond_price_to_value(price: float, quantity: float) -> float:
-    """Convert bond clean price (% of par) to EUR market value.
-
-    For European government bonds: value = quantity * price / 100
-    (quantity is the nominal amount, price is percentage of par).
-
-    Thin alias of :func:`value_position` with ``bond=True`` — kept for
-    readability at call sites that already know they hold a bond.
-    """
-    return value_position(quantity, price, bond=True)
-
-
 # ---------------------------------------------------------------------------
 # Shared position valuation + bond classification
 # ---------------------------------------------------------------------------

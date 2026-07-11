@@ -13,17 +13,6 @@ from typing import Optional
 import pandas as pd
 
 
-def _finite_or_none(value):
-    """Map a non-finite float (NaN/±Inf) to None, leaving everything else
-    untouched. NaN/Inf serialize to bare ``NaN``/``Infinity`` tokens that are
-    invalid JSON (rejected by strict parsers and by ``json.dumps(...,
-    allow_nan=False)``); a metric that is genuinely undefined should be
-    ``null``, not an unparseable token."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
-
-
 def _round_or_none(value, ndigits: int):
     """Round a float for output, collapsing non-finite values to None first
     so ``round(nan, 6)`` (which is still NaN) never reaches the JSON layer."""
@@ -91,10 +80,6 @@ class PortfolioMetrics:
     # Excel and the newsletter can show them side by side. Each entry:
     # {"label", "no_sell", "suggestions", "verifications"}.
     rebalancing_plans: Optional[list] = None
-    # Drift-penalty sensitivity sweep: list of regimes describing how
-    # the optimization changes as ``rebalancing_drift_penalty_weight``
-    # varies. Used by the Optimizer tab to surface tuning hints.
-    rebalancing_sensitivity: Optional[list] = None
     benchmark_comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
     portfolio_history: Optional[pd.Series] = None
     benchmark_histories: dict = field(default_factory=dict)

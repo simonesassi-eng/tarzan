@@ -65,21 +65,18 @@ def compute_cagr(series: pd.Series) -> float:
     return ((end / start) ** (1 / (days / DAYS_PER_YEAR)) - 1) * 100
 
 
-def compute_period_return(
-    series: pd.Series, days: int, strict: bool = True,
-) -> Optional[float]:
+def compute_period_return(series: pd.Series, days: int) -> Optional[float]:
     """Return the % change over the last ``days`` calendar days.
+
+    If the series does not actually cover ``days`` of history we return
+    ``None`` instead of silently falling back to the full available window.
+    This avoids misleading comparisons (e.g. a 2Y portfolio reporting "3Y"
+    returns that are actually 2Y returns next to a 3Y benchmark return).
 
     Args:
         series: Daily price series (datetime-indexed).
         days: Lookback window in calendar days. ``1`` is a special case
             that returns the last-trading-day change.
-        strict: When True (default), if the series does not actually
-            cover ``days`` of history we return ``None`` instead of
-            silently falling back to the full available window. This
-            avoids misleading comparisons (e.g. a 2Y portfolio reporting
-            "3Y" returns that are actually 2Y returns next to a 3Y
-            benchmark return).
 
     Returns:
         Percentage return over the period, or ``None`` if there is not
@@ -97,12 +94,11 @@ def compute_period_return(
     if days <= 1:
         start = float(series.iloc[-2])
         return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-    if strict:
-        # Series must cover the full requested window. We allow a small
-        # slack (~7 days) to absorb weekends/holidays at the edges.
-        actual_span_days = (series.index[-1] - series.index[0]).days
-        if actual_span_days < days - 7:
-            return None
+    # Series must cover the full requested window. We allow a small
+    # slack (~7 days) to absorb weekends/holidays at the edges.
+    actual_span_days = (series.index[-1] - series.index[0]).days
+    if actual_span_days < days - 7:
+        return None
     cutoff = series.index[-1] - pd.Timedelta(days=days)
     subset = series[series.index >= cutoff]
     if subset.empty or len(subset) < 2:

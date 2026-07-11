@@ -322,23 +322,6 @@ def benchmarks() -> dict[str, str]:
             result[name] = ticker
     return result
 
-def benchmark_details() -> dict[str, dict]:
-    """Get benchmark metadata from instrument_taxonomy.csv where is_benchmark=true."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark" not in df.columns:
-        return {}
-    match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
-    result = {}
-    for _, row in match.iterrows():
-        name = str(row.get("name", "")).strip()
-        if name:
-            result[name] = {
-                "name": name,
-                "description": str(row.get("description", "")).strip(),
-                "ticker": str(row.get("ticker", "")).strip(),
-            }
-    return result
-
 
 # --- Allocation defaults ---
 

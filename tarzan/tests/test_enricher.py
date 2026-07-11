@@ -131,7 +131,7 @@ from tarzan.data.enricher import (  # noqa: E402
 )
 
 
-def _cand(symbol, *, price=10.0, currency="EUR", name="", has_history=True):
+def _cand(symbol, *, price=10.0, currency="EUR", name=""):
     """Build a candidate carrying only the info needed for ranking."""
     return _Candidate(
         symbol=symbol,
@@ -139,7 +139,6 @@ def _cand(symbol, *, price=10.0, currency="EUR", name="", has_history=True):
         price=price,
         currency=currency,
         name=name,
-        has_history=has_history,
     )
 
 
