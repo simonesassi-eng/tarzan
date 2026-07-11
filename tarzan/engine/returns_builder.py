@@ -253,18 +253,25 @@ class QuantityTimeline:
         for d, isin, delta in events:
             running[isin] = running.get(isin, 0.0) + delta
             self._cum.setdefault(isin, []).append((d, running[isin]))
+        # Pre-extract the sorted event dates and running quantities per ISIN
+        # once, so ``qty_at`` (called O(days × isins) in the series build) does
+        # an O(log n) bisect instead of rebuilding the date list on every call.
+        self._dates: dict[str, list[datetime.date]] = {}
+        self._qtys: dict[str, list[float]] = {}
+        for isin, series in self._cum.items():
+            self._dates[isin] = [e[0] for e in series]
+            self._qtys[isin] = [e[1] for e in series]
 
     def isins(self) -> list[str]:
         return list(self._cum.keys())
 
     def qty_at(self, isin: str, d: datetime.date) -> float:
-        series = self._cum.get(isin)
-        if not series or d < series[0][0]:
+        dates = self._dates.get(isin)
+        if not dates or d < dates[0]:
             return 0.0
-        dates = [e[0] for e in series]
         # rightmost index whose date <= d
         i = bisect.bisect_right(dates, d) - 1
-        return series[i][1] if i >= 0 else 0.0
+        return self._qtys[isin][i] if i >= 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +279,27 @@ class QuantityTimeline:
 # ---------------------------------------------------------------------------
 
 def _price_at(price_history: pd.Series, d: datetime.date) -> Optional[float]:
-    """Last observed price at or before ``d`` in a tz-aware-safe way."""
+    """Last observed price at or before ``d`` in a tz-aware-safe way.
+
+    Uses ``searchsorted`` (binary search, O(log n)) on the sorted price index
+    rather than a full ``index <= threshold`` boolean scan (O(n)). This is the
+    per-(ISIN, day) hot path in the daily-series build — at O(days × isins)
+    calls, the linear scan dominated the run. The price history is always
+    date-sorted (yfinance history is sorted by the enricher; the synthetic
+    series is ``sort_index()``-ed), so the two are equivalent.
+    """
     if price_history is None or len(price_history) == 0:
         return None
-    idx_tz = getattr(price_history.index, "tz", None)
+    idx = price_history.index
+    idx_tz = getattr(idx, "tz", None)
     threshold = pd.Timestamp(d)
     if idx_tz is not None:
         threshold = threshold.tz_localize(idx_tz)
-    avail = price_history.loc[price_history.index <= threshold]
-    if avail.empty:
+    # Rightmost position whose index value is <= threshold.
+    pos = idx.searchsorted(threshold, side="right") - 1
+    if pos < 0:
         return None
-    return float(avail.iloc[-1])
+    return float(price_history.iloc[pos])
 
 
 def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Series]:
@@ -315,18 +332,33 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
 
 def _interp_synthetic(s: pd.Series, d: datetime.date) -> tuple[Optional[float], str]:
     """Linear interpolation between order price points, or carry-flat
-    when only one point / outside the range. Returns (price, source)."""
+    when only one point / outside the range. Returns (price, source).
+
+    Locates the bracketing points with ``searchsorted`` (O(log n)) instead of
+    two full boolean scans (``index <= ts`` / ``index >= ts``), since this runs
+    per-(ISIN, day) for synthetically-priced instruments. ``s`` is sorted and
+    de-duplicated by ``_build_synthetic_history`` (``sort_index`` + groupby),
+    so the binary search reproduces the old bracket exactly.
+    """
     ts = pd.Timestamp(d)
+    idx = s.index
     if len(s) == 1:
         return float(s.iloc[0]), "carry_flat"
-    if ts <= s.index[0]:
+    if ts <= idx[0]:
         return float(s.iloc[0]), "carry_flat"
-    if ts >= s.index[-1]:
+    if ts >= idx[-1]:
         return float(s.iloc[-1]), "carry_flat"
-    before = s.loc[s.index <= ts]
-    after = s.loc[s.index >= ts]
-    bd, bv = before.index[-1], float(before.iloc[-1])
-    ad, av = after.index[0], float(after.iloc[0])
+    # ``before`` = last point with index <= ts; ``after`` = first with >= ts.
+    b_pos = idx.searchsorted(ts, side="right") - 1
+    bd = idx[b_pos]
+    bv = float(s.iloc[b_pos])
+    if bd == ts:
+        # Exact hit: bracket collapses to the point itself (old code returned
+        # this via ad == bd → "synthetic").
+        return bv, "synthetic"
+    a_pos = idx.searchsorted(ts, side="left")
+    ad = idx[a_pos]
+    av = float(s.iloc[a_pos])
     if ad == bd:
         return bv, "synthetic"
     w = (ts - bd).days / (ad - bd).days
@@ -479,6 +511,19 @@ def build_order_derived_series(
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
 
+    # Per-build memo for the cum/ex closed-prefix set. It is a pure function
+    # of (timeline, date) and the timeline is immutable for this build, so we
+    # cache it by date — otherwise it is recomputed (a full per-ISIN timeline
+    # scan) on every calendar day of both value_on and the daily series.
+    _closed_cache: dict[datetime.date, set[str]] = {}
+
+    def closed_prefixes(d: datetime.date) -> set[str]:
+        cached = _closed_cache.get(d)
+        if cached is None:
+            cached = _closed_cum_ex_prefixes(timeline, d)
+            _closed_cache[d] = cached
+        return cached
+
     # Track which source priced each open ISIN at its latest valuation,
     # for the coverage/provenance disclosure.
     provenance: dict[str, list[str]] = {
@@ -517,7 +562,7 @@ def build_order_derived_series(
         its own carry-flat price would otherwise leave a spurious residual.
         """
         total = 0.0
-        closed = _closed_cum_ex_prefixes(timeline, d)
+        closed = closed_prefixes(d)
         for isin in timeline.isins():
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
@@ -583,7 +628,8 @@ def build_order_derived_series(
     # pass also yields the raw actual-value series (jumps kept in) for the
     # newsletter mountain chart.
     daily_series, actual_value_series = _build_daily_series(
-        timeline, resolver, external_flows, cf_dates, today
+        timeline, resolver, external_flows, cf_dates, today,
+        closed_prefixes=closed_prefixes,
     )
 
     # Trim the trailing carried-forward tail. The daily calendar runs to
@@ -791,6 +837,7 @@ def _build_daily_series(
     external_flows: dict[datetime.date, float],
     cf_dates: list[datetime.date],
     today: datetime.date,
+    closed_prefixes=None,
 ) -> tuple[pd.Series, pd.Series]:
     """Dense daily NAV index + raw actual-value series, first trade → today.
 
@@ -821,10 +868,14 @@ def _build_daily_series(
 
     days = pd.date_range(start=cf_dates[0], end=today, freq="D")
     isins = timeline.isins()
+    # Reuse the caller's date-memoized cum/ex prefix cache when provided (so
+    # the set is computed once per date across value_on AND the daily loop);
+    # fall back to the direct call for standalone/monkeypatched use.
+    _closed = closed_prefixes or (lambda d: _closed_cum_ex_prefixes(timeline, d))
 
     def raw_value(d: datetime.date) -> float:
         total = 0.0
-        closed = _closed_cum_ex_prefixes(timeline, d)
+        closed = _closed(d)
         for isin in isins:
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
