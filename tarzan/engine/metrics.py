@@ -884,6 +884,12 @@ class MetricsEngine:
         end-of-day close return, and any failure leaves the numbers
         untouched, so an offline run degrades cleanly to the close-based 1D.
         """
+        # Deterministic mode: skip the live intraday override entirely so the
+        # 1D stays on the reproducible end-of-day close (a live quote would
+        # differ run-to-run). The close-based 1D computed upstream is kept.
+        from tarzan import runtime
+        if runtime.is_deterministic():
+            return
         hp = ctx.get("holding_performance")
         if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
             return
