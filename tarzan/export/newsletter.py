@@ -1589,6 +1589,17 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     timeline = m.allocation_timeline or {}
     asset_series = timeline.get("asset")
 
+    # Physical capital per class (sum of the market value of holdings whose
+    # PRIMARY class is that class) — the denominator for the per-class
+    # leverage = notional exposure / physical capital. >1 means the class is
+    # partly synthetic (e.g. an efficient-core bond overlay).
+    inv_val = float(getattr(m, "invested_value", 0.0) or 0.0)
+    phys_by_class: dict[str, float] = {}
+    hdf = m.holdings_df
+    if hdf is not None and not hdf.empty and "asset_class" in hdf.columns:
+        for cls, grp in hdf.groupby("asset_class"):
+            phys_by_class[str(cls)] = float(grp["current_value"].sum())
+
     rows = []
     for klass in ASSET_CLASS_ORDER:
         if alloc_df.empty:
@@ -1602,6 +1613,9 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         sema = _semaphore(delta, tol)
         color = ASSET_COLORS.get(klass, PALETTE["accent"])
         spark_vals = _timeline_vals(asset_series, klass)
+        notional_eur = actual / 100.0 * inv_val
+        phys = phys_by_class.get(klass, 0.0)
+        leverage = (notional_eur / phys) if phys > 0 else None
         rows.append({
             "name": klass,
             "color": color,
@@ -1616,6 +1630,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "delta_color": _semaphore_color(sema),
             "bar_width": min(max(actual, 1), 100),
             "spark": _spark(spark_vals, target, color) if spark_vals else None,
+            "leverage": leverage,
         })
 
     # Cash buffer (EUR-based, appended after invested classes).
@@ -1768,7 +1783,8 @@ def _div_label(name: str, color: str, ticker: Optional[str] = None) -> str:
     return f'{sw}{_div_pin(ticker)}<span style="color:{P["ink"]};">{name}</span>'
 
 
-def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> str:
+def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
+               show_leverage: bool = False) -> str:
     """Unified diversification table (asset class / geography / by holding).
 
     One row per slice — current weight, target, drift and a 1-month trend
@@ -1777,12 +1793,32 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> st
     ``target``, ``spark_vals`` and ``color``. When ``base`` (the EUR value of
     100%) is given, the Now/Target cells also show the compact absolute
     amount inline (e.g. "26.5% · €10.3k") — same row height, no extra
-    columns, since the % is what drives width/alignment. Returns "" for an
-    empty ``rows``.
+    columns, since the % is what drives width/alignment.
+
+    ``show_leverage`` adds a "Lev" column = notional exposure / physical
+    capital in that class (row dict ``leverage``); used only for the asset-
+    class table, where >1.0 marks a partly-synthetic class (e.g. a bond
+    overlay). Returns "" for an empty ``rows``.
     """
     if not rows:
         return ""
     P = PALETTE
+
+    _bb = f'border-bottom:1px solid {P["border"]};'
+
+    def _lev_cell(lev) -> str:
+        if not show_leverage:
+            return ""
+        if lev is None:
+            txt = "\u2014"
+            col = P["subtle"]
+        else:
+            txt = f"{float(lev):.2f}\u00d7"
+            # Emphasise real leverage (>1.05×); ~1.0× stays muted.
+            col = P["ink"] if float(lev) > 1.05 else P["subtle"]
+        return (f'<td align="right" style="padding:5px 6px;{_bb}font-size:11px;'
+                f'font-weight:700;color:{col};white-space:nowrap;'
+                f'font-variant-numeric:tabular-nums;width:46px;">{txt}</td>')
 
     def _num_cell(pct_val: float, color: str) -> str:
         """A Now/Target value cell: the % (bold, right-aligned) and, when a
@@ -1817,6 +1853,46 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> st
     body = []
     for r in rows:
         bb = f'border-bottom:1px solid {P["border"]};'
+        # Total-portfolio summary row: highlighted, portfolio-level leverage
+        # (total notional / capital), total notional Now vs total Target.
+        if r.get("is_total"):
+            abg = P["accent_bg"]
+            now = float(r.get("now", 0.0) or 0.0)
+            tgt = float(r.get("target", 0.0) or 0.0)
+            drift = now - tgt
+            vals = r.get("spark_vals")
+            sp = _spark(vals, tgt, P["accent"], 70, 18) if vals else ""
+            # Same trend cell as the other rows: sparkline + ±pp badge inline.
+            if vals and len(vals) >= 2:
+                _pp = vals[-1] - vals[0]
+                _ar = "\u25b2" if _pp > 0.01 else ("\u25bc" if _pp < -0.01 else "\u2192")
+                _bt = f"{_ar}{_pp:+.1f}".replace("+0.0", "0.0")
+                _badge = (f'<span style="font-size:9px;font-weight:600;color:{P["accent"]};'
+                          f'white-space:nowrap;">{_bt}</span>')
+            else:
+                _badge = ""
+            sp = (f'<span style="display:inline-block;vertical-align:middle;">{sp}</span>'
+                  f'{_badge}') if (sp or _badge) else ""
+            lev = r.get("leverage")
+            lev_txt = f"{float(lev):.2f}\u00d7" if lev is not None else "\u2014"
+            lev_td = (f'<td align="right" style="padding:7px 6px;background:{abg};font-size:11px;'
+                      f'font-weight:700;color:{P["accent"]};font-variant-numeric:tabular-nums;'
+                      f'width:46px;">{lev_txt}</td>' if show_leverage else "")
+            body.append(
+                f'<tr>'
+                f'<td style="padding:7px 8px;background:{abg};font-size:12px;font-weight:700;'
+                f'color:{P["accent"]};">{r.get("label_html", "")}</td>'
+                f'{lev_td}'
+                f'<td align="right" style="padding:7px 8px;background:{abg};width:118px;">{_num_cell(now, P["accent"])}</td>'
+                f'<td align="right" style="padding:7px 8px;background:{abg};width:118px;">{_num_cell(tgt, P["accent"])}</td>'
+                f'<td align="right" style="padding:7px 8px;background:{abg};font-size:12px;'
+                f'font-weight:700;color:{P["accent"]};white-space:nowrap;font-variant-numeric:tabular-nums;'
+                f'width:74px;">{_signed_pp(drift)}</td>'
+                f'<td align="right" valign="middle" style="padding:7px 4px;background:{abg};'
+                f'width:100px;white-space:nowrap;">{sp}</td>'
+                f'</tr>'
+            )
+            continue
         # Cash (EUR-native) row: not a share of the invested base, so show
         # plain EUR amounts and a EUR drift, no trend.
         if r.get("eur_row"):
@@ -1824,6 +1900,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> st
             body.append(
                 f'<tr>'
                 f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
+                f'{_lev_cell(r.get("leverage"))}'
                 f'<td align="right" style="padding:5px 8px;{bb}width:118px;">{_eur_cell(r.get("now_eur", 0.0), P["muted"])}</td>'
                 f'<td align="right" style="padding:5px 8px;{bb}width:118px;">{_eur_cell(r.get("target_eur", 0.0), P["ink"])}</td>'
                 f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
@@ -1858,6 +1935,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> st
         body.append(
             f'<tr>'
             f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
+            f'{_lev_cell(r.get("leverage"))}'
             f'<td style="padding:5px 8px;{bb}width:118px;">{_num_cell(now, P["muted"])}</td>'
             f'<td style="padding:5px 8px;{bb}width:118px;">{_num_cell(tgt, P["ink"])}</td>'
             f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
@@ -1871,7 +1949,10 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None) -> st
         f'<tr>'
         f'<td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;'
         f'text-transform:uppercase;color:{P["subtle"]};">Name</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        + (f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
+           f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:46px;">Lev</td>'
+           if show_leverage else "")
+        + f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:118px;">Now</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:118px;">Target</td>'
@@ -2086,7 +2167,31 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             "target": r.get("target_left"),
             "spark_vals": _timeline_vals(asset_series, r["name"]),
             "color": r["color"],
+            "leverage": r.get("leverage"),
         })
+
+    # ── "Invested Portfolio" summary row (notional totals + leverage),
+    # placed BELOW the invested classes and ABOVE cash — cash is a separate
+    # accounting entity that does not participate in the invested base. ──
+    _cls_rows = [r for r in asset_rows if not r.get("eur_row")]
+    _cash_rows = [r for r in asset_rows if r.get("eur_row")]
+    if _cls_rows:
+        _tnow = sum(float(r.get("now") or 0.0) for r in _cls_rows)
+        _ttgt = sum(float(r.get("target") or 0.0) for r in _cls_rows)
+        _ttrend = None
+        if asset_series and len(asset_series) >= 2:
+            _ttrend = [sum(float(x) for x in b.values()) for b in asset_series]
+        total_row = {
+            "is_total": True,
+            "label_html": "\u2605 Invested Portfolio",
+            "now": _tnow,
+            "target": _ttgt,
+            "leverage": (_tnow / 100.0) if _tnow else None,
+            "spark_vals": _ttrend,
+            "color": P["accent"],
+        }
+        # Reorder: classes → Invested Portfolio total → cash.
+        asset_rows = _cls_rows + [total_row] + _cash_rows
 
     # ── Geography rows ──
     geo_rows = [{
@@ -2118,7 +2223,19 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     ]
     if asset_rows:
         html.append(sub("By asset class"))
-        html.append(_div_table(asset_rows, tol, base=invested_base))
+        html.append(_div_table(asset_rows, tol, base=invested_base, show_leverage=True))
+        # Notional note: when capital-efficient/leveraged funds push total
+        # exposure past 100% of capital, make the leverage explicit. Sum only
+        # the per-class rows (exclude the Total and cash rows).
+        _tot_notional = sum(float(r.get("now") or 0.0) for r in asset_rows
+                            if not r.get("is_total") and not r.get("eur_row"))
+        if _tot_notional > 100.6:
+            html.append(
+                f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
+                f'Total notional exposure <b>{_tot_notional:.0f}%</b> of invested '
+                f'capital — above 100% via capital-efficient/leveraged funds '
+                f'(e.g. efficient-core 90/60).</div>'
+            )
     if geo_rows:
         html.append(sub("By geography"))
         html.append(_div_table(geo_rows, tol, base=equity_base))

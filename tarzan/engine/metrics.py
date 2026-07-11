@@ -551,16 +551,37 @@ class MetricsEngine:
         invested_value = ctx.get("invested_value", 0.0)
         cash_class = AssetClass.CASH_EQUIVALENTS.value
 
-        # Invested allocation: exclude cash, percentages relative to
-        # invested_value (not total_value).
-        invested_df = df[df["asset_class"] != cash_class] if not df.empty else df
-        if not invested_df.empty and invested_value > 0:
-            by_class = (
-                invested_df.groupby("asset_class")["current_value"].sum().reset_index()
-            )
-            by_class["weight_pct"] = by_class["current_value"] / invested_value * 100
-            by_class = by_class[["asset_class", "weight_pct"]]
-            by_class.columns = ["category", "weight_pct"]
+        # Invested allocation as NOTIONAL exposure: each non-cash holding's
+        # value is distributed across its ``class_breakdown`` (which may sum
+        # to >100% for capital-efficient / leveraged funds — e.g. NTSG 90
+        # equity + 60 fixed income), so the class weights reflect the true
+        # economic exposure and can sum to more than 100% of invested capital.
+        bd_by_isin: dict[str, dict] = {}
+        for h in self.holdings:
+            if not h.isin:
+                continue
+            bd = h.class_breakdown
+            if not bd and h.asset_class:
+                bd = {h.asset_class: 100.0}
+            bd_by_isin[h.isin] = {
+                (k.value if hasattr(k, "value") else str(k)): v
+                for k, v in (bd or {}).items()
+            }
+        notional: dict[str, float] = {}
+        if not df.empty and invested_value > 0:
+            for _, row in df.iterrows():
+                if row.get("asset_class") == cash_class:
+                    continue
+                val = float(row.get("current_value", 0.0) or 0.0)
+                bd = bd_by_isin.get(row.get("isin")) or {row.get("asset_class"): 100.0}
+                for cls, pct in bd.items():
+                    if not cls or cls == cash_class:
+                        continue
+                    notional[cls] = notional.get(cls, 0.0) + val * (float(pct) / 100.0)
+            by_class = pd.DataFrame(
+                [{"category": k, "weight_pct": v / invested_value * 100.0}
+                 for k, v in notional.items()]
+            ).sort_values("weight_pct", ascending=False).reset_index(drop=True)
         else:
             by_class = pd.DataFrame(columns=["category", "weight_pct"])
 
@@ -1116,30 +1137,53 @@ def _format_geo_breakdown(h: Holding) -> str:
 # ======================================================================
 
 def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] = None) -> pd.DataFrame:
-    equity_df = df[df["asset_class"] == "Equities"]
-    if equity_df.empty:
+    """Geographic distribution of the equity sleeve.
+
+    Uses each holding's NOTIONAL equity exposure (``class_breakdown`` Equities
+    %), so a capital-efficient fund like NTSG (90% equity) contributes 90% of
+    its value — and a 60/40 multi-asset fund contributes its 60% equity leg —
+    consistent with the notional asset-class table and the timeline. Falls
+    back to 100% for a plain equity holding with no breakdown."""
+    if df.empty:
         return pd.DataFrame(columns=["category", "weight_pct"])
-    equity_total = equity_df["weight_pct"].sum()
     geo_lookup: dict[str, dict] = {}
+    eq_frac: dict[str, float] = {}
     if holdings:
         for h in holdings:
-            if h.geo_breakdown and h.ticker:
+            if not h.ticker:
+                continue
+            if h.geo_breakdown:
                 geo_lookup[h.ticker] = h.geo_breakdown
+            bd = h.class_breakdown or ({h.asset_class: 100.0} if h.asset_class else {})
+            for k, v in bd.items():
+                kv = k.value if hasattr(k, "value") else str(k)
+                if kv == "Equities":
+                    eq_frac[h.ticker] = float(v) / 100.0
     geo_weights: dict[str, float] = {}
-    for _, row in equity_df.iterrows():
+    eq_total = 0.0
+    for _, row in df.iterrows():
         ticker = row.get("ticker", "")
-        weight = row["weight_pct"]
+        weight = float(row.get("weight_pct", 0.0) or 0.0)
+        # Equity notional fraction of this holding: from class_breakdown, else
+        # 100% for a primary-equity holding, else 0.
+        frac = eq_frac.get(ticker)
+        if frac is None:
+            frac = 1.0 if row.get("asset_class") == "Equities" else 0.0
+        eq_weight = weight * frac
+        if eq_weight <= 0:
+            continue
+        eq_total += eq_weight
         breakdown = geo_lookup.get(ticker)
         if breakdown:
             total_bd = sum(breakdown.values())
             if total_bd > 0:
                 for geo, pct in breakdown.items():
                     geo_name = geo.value if hasattr(geo, "value") else str(geo)
-                    geo_weights[geo_name] = geo_weights.get(geo_name, 0) + weight * (pct / total_bd)
+                    geo_weights[geo_name] = geo_weights.get(geo_name, 0) + eq_weight * (pct / total_bd)
         else:
             geo_name = row.get("geography", "USA")
-            geo_weights[geo_name] = geo_weights.get(geo_name, 0) + weight
+            geo_weights[geo_name] = geo_weights.get(geo_name, 0) + eq_weight
     by_geo = pd.DataFrame([{"category": k, "weight_pct": v} for k, v in geo_weights.items()])
-    if equity_total > 0 and not by_geo.empty:
-        by_geo["weight_pct"] = by_geo["weight_pct"] / equity_total * 100
+    if eq_total > 0 and not by_geo.empty:
+        by_geo["weight_pct"] = by_geo["weight_pct"] / eq_total * 100
     return by_geo

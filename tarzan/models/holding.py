@@ -77,6 +77,12 @@ class Holding:
     gain_pct: Optional[float] = None
     asset_class: Optional[AssetClass] = None
     role: Optional[str] = None  # sub-category within the asset class (e.g. "Equity Factor", "Managed Futures")
+    # Notional asset-class exposure {AssetClass: pct of the position's market
+    # value}. For a plain fund this is {asset_class: 100}; for a capital-
+    # efficient / leveraged fund it can sum to >100 (e.g. NTSG 90 equity + 60
+    # fixed income = 150). Populated from the exp_* taxonomy columns, else
+    # derived from ``asset_class``. Drives the NOTIONAL asset-class allocation.
+    class_breakdown: Optional[dict[AssetClass, float]] = None
     geography: Optional[Geography] = None
     geo_breakdown: Optional[dict[Geography, float]] = None
     geo_source: Optional[str] = None
