@@ -42,10 +42,11 @@ _C = {
     "border": "CBD5E1",
 }
 
-_ASSET_ORDER = ["Equities", "Fixed Income", "Gold", "Commodities", "Crypto",
-                "Alternative", "Cash & Cash Equivalents"]
-_GEO_ORDER = ["USA", "Japan", "Eurozone EMU", "Dev ex-USA ex-EMU ex-JP",
-              "Emerging Markets", "Other"]
+from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
+
+_ASSET_ORDER = list(_ORDER_WHATIF)
+# The what-if workbook also renders an explicit "Other" geo bucket at the end.
+_GEO_ORDER = list(_GEO_REG) + ["Other"]
 _RISK_ROWS = [
     ("CAGR", "cagr", "perf", "%"),
     ("Return 1Y", "1y", "perf", "%"),

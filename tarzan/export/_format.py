@@ -53,16 +53,11 @@ GEO_COLORS: dict[str, str] = {
 
 # Display/iteration order for asset classes across both surfaces. A class not
 # listed here still renders — see asset_class_order() — so no holding is ever
-# silently dropped from a report.
-_ASSET_CLASS_BASE_ORDER: list[str] = [
-    "Equities",
-    "Fixed Income",
-    "Cash & Cash Equivalents",
-    "Gold",
-    "Commodities",
-    "Crypto",
-    "Alternative",
-]
+# silently dropped from a report. Sourced from the single taxonomy registry
+# (models.taxonomy) so every surface's orders live in one place.
+from tarzan.models.taxonomy import ORDER_BASE as _ORDER_BASE
+
+_ASSET_CLASS_BASE_ORDER: list[str] = list(_ORDER_BASE)
 
 
 def css(hex6: Optional[str], default: str = "#5B5BD6") -> str:
