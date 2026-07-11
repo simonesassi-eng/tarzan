@@ -6,10 +6,32 @@ It aggregates all computed data needed by the Reporting layer (Excel generator).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 import pandas as pd
+
+
+def _finite_or_none(value):
+    """Map a non-finite float (NaN/±Inf) to None, leaving everything else
+    untouched. NaN/Inf serialize to bare ``NaN``/``Infinity`` tokens that are
+    invalid JSON (rejected by strict parsers and by ``json.dumps(...,
+    allow_nan=False)``); a metric that is genuinely undefined should be
+    ``null``, not an unparseable token."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _round_or_none(value, ndigits: int):
+    """Round a float for output, collapsing non-finite values to None first
+    so ``round(nan, 6)`` (which is still NaN) never reaches the JSON layer."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return round(value, ndigits)
+    return value
 
 
 @dataclass
@@ -143,6 +165,12 @@ class PortfolioMetrics:
     # from the first order when an order list is present. None on the
     # holdings-only path (the header then falls back to config).
     inception_date: Optional[str] = None
+    # Names of metric computers that raised during compute_all (empty when
+    # every stage succeeded). A non-empty list means the corresponding
+    # sections (risk, allocations, returns, ...) fell back to defaults rather
+    # than real values, so a renderer can flag them as "unavailable" instead
+    # of presenting silent zeros/blanks as authoritative figures.
+    degraded_computers: list = field(default_factory=list)
     # Weekly allocation history over the last ~3 months (order path only).
     # Drives the per-category sparklines in the newsletter Diversification
     # section. Shape: {"dates": [date, ...],
@@ -156,21 +184,23 @@ class PortfolioMetrics:
 
         Useful for API responses, logging, or downstream pipeline consumption.
         """
+        # All floats are routed through _round_or_none so a non-finite metric
+        # (e.g. Sharpe when volatility==0, or any risk metric on an empty
+        # history) becomes JSON ``null`` instead of a bare NaN/Infinity token
+        # that breaks strict parsers and downstream databases.
         summary = {
-            "total_value_eur": round(self.total_value, 2),
-            "invested_value_eur": round(self.invested_value, 2),
-            "cash_value_eur": round(self.cash_value, 2),
-            "cash_target_eur": round(self.cash_target_eur, 2),
+            "total_value_eur": _round_or_none(self.total_value, 2),
+            "invested_value_eur": _round_or_none(self.invested_value, 2),
+            "cash_value_eur": _round_or_none(self.cash_value, 2),
+            "cash_target_eur": _round_or_none(self.cash_target_eur, 2),
             "performance": {
-                k: round(v, 6) if isinstance(v, float) else v
-                for k, v in self.performance.items()
+                k: _round_or_none(v, 6) for k, v in self.performance.items()
             },
             "risk": {
-                k: round(v, 6) if isinstance(v, float) else v
-                for k, v in self.risk.items()
+                k: _round_or_none(v, 6) for k, v in self.risk.items()
             },
-            "weighted_yield": round(self.weighted_yield, 6),
-            "avg_ter": round(self.avg_ter, 6),
+            "weighted_yield": _round_or_none(self.weighted_yield, 6),
+            "avg_ter": _round_or_none(self.avg_ter, 6),
             "num_holdings": len(self.holdings_df),
             "num_rebalancing_actions": (
                 len(self.rebalancing_suggestions) if self.rebalancing_suggestions else 0
@@ -179,13 +209,12 @@ class PortfolioMetrics:
         # Order-list returns: include only when computed (an order list
         # was supplied), so a holdings-only summary is unchanged.
         if self.xirr_pct is not None:
-            summary["xirr_pct"] = round(self.xirr_pct, 6)
+            summary["xirr_pct"] = _round_or_none(self.xirr_pct, 6)
         if self.twror_pct is not None:
-            summary["twror_pct"] = round(self.twror_pct, 6)
-            summary["twror_annualized_pct"] = (
-                round(self.twror_annualized_pct, 6)
-                if self.twror_annualized_pct is not None else None
+            summary["twror_pct"] = _round_or_none(self.twror_pct, 6)
+            summary["twror_annualized_pct"] = _round_or_none(
+                self.twror_annualized_pct, 6
             )
         if self.returns_coverage_pct is not None:
-            summary["returns_coverage_pct"] = round(self.returns_coverage_pct, 6)
+            summary["returns_coverage_pct"] = _round_or_none(self.returns_coverage_pct, 6)
         return summary

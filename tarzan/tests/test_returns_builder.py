@@ -486,6 +486,39 @@ class TestDailySeries:
         ret = ds.iloc[-1] / ds.iloc[0] - 1.0
         assert ret == pytest.approx(0.10, abs=0.01)
 
+    def test_transient_unpriced_day_does_not_collapse_nav(self, monkeypatch):
+        """A single interior day where the holding resolves to no price must
+        carry the NAV index flat, not pin it at zero for the rest of the
+        window (which would fabricate a -100% and poison every risk metric)."""
+        import tarzan.engine.returns_builder as rb
+
+        class _TL:
+            def isins(self):
+                return ["X"]
+            def qty_at(self, isin, d):
+                return 10.0
+
+        class _Res:
+            _px = {
+                datetime.date(2024, 1, 1): 100.0,
+                datetime.date(2024, 1, 2): 110.0,
+                datetime.date(2024, 1, 3): None,   # transient all-unpriced day
+                datetime.date(2024, 1, 4): 120.0,
+                datetime.date(2024, 1, 5): 130.0,
+            }
+            def price_on(self, isin, d):
+                return self._px.get(d, 100.0), "yfinance"
+            def is_bond(self, isin):
+                return False
+
+        monkeypatch.setattr(rb, "_closed_cum_ex_prefixes", lambda tl, d: set())
+        nav, actual = rb._build_daily_series(
+            _TL(), _Res(), {}, [datetime.date(2024, 1, 1)], datetime.date(2024, 1, 5))
+        vals = [round(v, 2) for v in nav.values]
+        # Flat on the unpriced day, then recovers — never a permanent zero.
+        assert vals == [1000.0, 1100.0, 1100.0, 1200.0, 1300.0]
+        assert all(v > 0 for v in nav.values)
+
 
 class TestIncomeInTwror:
     """GIPS total-return convention: coupons/dividends are income earned

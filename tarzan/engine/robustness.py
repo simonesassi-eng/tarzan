@@ -33,8 +33,12 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None) -> dict:
     """
     if nav is None or len(nav) < 30:
         return {}
-    daily = nav.pct_change().dropna()
-    if daily.empty:
+    # A zero/near-zero price surviving ffill produces a -100% then +inf daily
+    # return; left in, daily.std() becomes inf and poisons volatility/Sharpe/
+    # VaR/CVaR. Restrict to a strictly-positive NAV and finite returns.
+    nav = nav[nav > 0]
+    daily = nav.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if len(nav) < 30 or daily.empty:
         return {}
     ann_ret = compute_cagr(nav)                                   # percent
     ann_vol = float(daily.std()) * np.sqrt(TRADING_DAYS) * 100.0  # percent
@@ -98,7 +102,9 @@ def build_nav(holdings) -> pd.Series:
 def daily_returns(nav: pd.Series) -> pd.Series:
     if nav is None or len(nav) < 2:
         return pd.Series(dtype=float)
-    return nav.pct_change().dropna()
+    # Drop non-finite returns from a zero-price tick surviving ffill, so a
+    # single bad print does not blow up volatility / bootstrap paths.
+    return nav.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
 
 
 # ---------------------------------------------------------------------------
@@ -170,14 +176,35 @@ def stress_scenarios(nav: pd.Series, scenarios: dict | None = None) -> dict:
     out: dict[str, dict] = {}
     if nav is None or nav.empty:
         return {name: {"covered": False} for name in scenarios}
+    hist_start = nav.index.min()
+    hist_end = nav.index.max()
+    # Slack for a weekend/holiday between the window edge and the first/last
+    # available close, so a window whose start falls on a non-trading day is
+    # not spuriously flagged partial.
+    edge_slack = pd.Timedelta(days=5)
     for name, (start, end) in scenarios.items():
-        seg = nav.loc[(nav.index >= pd.Timestamp(start)) & (nav.index <= pd.Timestamp(end))]
+        start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+        seg = nav.loc[(nav.index >= start_ts) & (nav.index <= end_ts)]
         if len(seg) < 5:
             out[name] = {"covered": False}
             continue
+        # A segment can have plenty of rows yet still start mid-crisis when the
+        # portfolio's history begins after the window's start (or ends before
+        # its end). Anchoring the return/drawdown to the first AVAILABLE point
+        # then understates the crisis (e.g. entering mid-GFC reports ~-25%
+        # instead of the true ~-55% peak-to-trough). Report it as partial so
+        # the truncated figure is not presented as a full stress test.
+        partial = (hist_start > start_ts + edge_slack) or (hist_end < end_ts - edge_slack)
         ret = float(seg.iloc[-1] / seg.iloc[0] - 1.0)
         mdd = float(compute_max_drawdown(seg))
-        out[name] = {"covered": True, "return": ret * 100.0, "max_drawdown": mdd * 100.0}
+        out[name] = {
+            "covered": True,
+            "partial": partial,
+            "return": ret * 100.0,
+            "max_drawdown": mdd * 100.0,
+            "window_start": start_ts.strftime("%Y-%m-%d"),
+            "data_start": hist_start.strftime("%Y-%m-%d"),
+        }
     return out
 
 

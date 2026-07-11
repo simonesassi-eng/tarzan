@@ -282,3 +282,32 @@ def test_drift_penalty_sensitivity_retired():
     holdings, cfg, lump = _geo_scenario()
     tv = sum(h.current_value for h in holdings)
     assert compute_drift_penalty_sensitivity(holdings, cfg, tv, lump_sum=lump) == []
+
+
+def test_tax_per_unit_uses_proceeds_gain_fraction():
+    """CGT withheld per euro of PROCEEDS is rate * gp/(100+gp), not rate*gp/100.
+
+    A holding up 100% sold for 1000 EUR has 500 EUR of taxable gain inside the
+    proceeds, so at 26% the tax is 130 (frees 870) — the old gp/100 formula
+    charged 260 (freed 740), making the solver oversell to fund the same buys.
+    """
+    from tarzan.engine.rebalancer import _tax_per_unit_sold
+    from tarzan.models.investor_config import InvestorConfig
+
+    cfg = InvestorConfig()
+    cfg.rebalancing_capital_gains_tax_standard_pctg = 26.0
+    cfg.rebalancing_capital_gains_tax_government_pctg = 12.5
+    h = Holding(
+        isin="X", ticker="X", quantity=1.0, cost_basis_eur=500.0,
+        market_value_eur=1000.0, currency="EUR",
+        asset_class=AssetClass.EQUITIES, instrument_type="ETF",
+    )
+    h.gain_pct = 100.0  # up 100% vs cost
+    h.current_value = 1000.0
+    tax = _tax_per_unit_sold([h], cfg)
+    # 0.26 * (100 / 200) = 0.13
+    assert tax[0] == pytest.approx(0.13, abs=1e-9)
+
+    # A flat/losing position is never taxed.
+    h.gain_pct = 0.0
+    assert _tax_per_unit_sold([h], cfg)[0] == 0.0
