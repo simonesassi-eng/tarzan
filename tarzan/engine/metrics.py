@@ -1000,6 +1000,10 @@ class MetricsEngine:
 
         # ---- Instruments: each benchmark over its OWN full history ----
         instrument_rows = []
+        # Carry asset_class and role from the taxonomy so the newsletter can
+        # group the risk profile the same way as the Performance table.
+        from tarzan import config as _cfg_mod
+        _taxonomy = _cfg_mod.instrument_taxonomy()
         for name, ticker in BENCHMARKS.items():
             try:
                 bench = _fetch_benchmark_history(ticker)
@@ -1010,6 +1014,15 @@ class MetricsEngine:
                 continue
             bench = _norm(bench)
             metrics = _compute_single_benchmark_metrics(bench, ab_bench)
+            # Lookup by ticker (uppercased) in the taxonomy for class/role.
+            _meta = _taxonomy.get(ticker.upper().split(".")[0])
+            if not _meta:
+                _meta = _taxonomy.get(ticker.upper())
+            # _taxonomy returns (asset_class, role) tuples.
+            if isinstance(_meta, tuple) and len(_meta) >= 2:
+                _ac, _role = _meta[0], _meta[1]
+            else:
+                _ac, _role = "", ""
             instrument_rows.append({
                 "label": name,
                 "ticker": ticker,
@@ -1017,6 +1030,8 @@ class MetricsEngine:
                 "note": None,
                 "metrics": metrics,
                 "is_portfolio": False,
+                "asset_class": _ac,
+                "role": _role,
             })
 
         ctx["historical_risk"] = {
