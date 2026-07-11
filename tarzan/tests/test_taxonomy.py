@@ -1,9 +1,9 @@
 """Tests for the asset-class / geography order registry.
 
-These pin each named order variant to its HISTORICAL literal sequence, so an
-accidental reorder (which would shift rows in a filed report) fails the suite.
-They also confirm every consumer surface still exposes the same order it did
-before the registry consolidation.
+After unification, every surface shares ONE canonical asset-class order
+(user-approved "Cash last"). These tests pin that canonical order and assert
+each consumer surface exposes it, so an accidental reorder — which would
+shift rows in a filed report — fails the suite.
 """
 
 from __future__ import annotations
@@ -11,88 +11,68 @@ from __future__ import annotations
 from tarzan.models import taxonomy as tx
 
 
-# The historical literals, captured verbatim from the pre-registry code. Do
-# NOT "tidy" these — they are the contract. Changing one is a deliberate,
-# sign-off-gated layout change, not a refactor.
-_HIST_DASHBOARD = ["Equities", "Fixed Income", "Cash & Cash Equivalents",
-                   "Gold", "Commodities", "Crypto", "Alternative"]
-_HIST_NEWSLETTER = ["Equities", "Fixed Income", "Gold", "Cash & Cash Equivalents",
-                    "Commodities", "Crypto", "Alternative"]
-_HIST_PERF = ["Equities", "Fixed Income", "Commodities", "Gold",
+# The single canonical order (user-approved "Cash last"). Changing this is a
+# deliberate, sign-off-gated layout change for every report, not a refactor.
+_CANONICAL = ["Equities", "Fixed Income", "Gold", "Commodities", "Crypto",
               "Alternative", "Cash & Cash Equivalents"]
-_HIST_WHATIF = ["Equities", "Fixed Income", "Gold", "Commodities", "Crypto",
-                "Alternative", "Cash & Cash Equivalents"]
 _HIST_GEO = ["USA", "Japan", "Eurozone EMU", "Dev ex-USA ex-EMU ex-JP",
              "Emerging Markets"]
 
 
-class TestOrderVariantsPreserved:
-    def test_dashboard(self):
-        assert list(tx.ORDER_DASHBOARD) == _HIST_DASHBOARD
+class TestCanonicalOrder:
+    def test_canonical_is_cash_last_all_seven(self):
+        assert list(tx.CANONICAL_ORDER) == _CANONICAL
+        # All 7 classes present — Crypto is no longer missing anywhere.
+        assert set(tx.CANONICAL_ORDER) == set(tx.ASSET_CLASSES)
+        assert tx.CANONICAL_ORDER[-1] == "Cash & Cash Equivalents"
+        assert "Crypto" in tx.CANONICAL_ORDER
 
-    def test_newsletter(self):
-        assert list(tx.ORDER_NEWSLETTER) == _HIST_NEWSLETTER
-
-    def test_perf(self):
-        # Historically omits Crypto (appended via extras). Preserved as-is.
-        assert list(tx.ORDER_PERF) == _HIST_PERF
-        assert "Crypto" not in tx.ORDER_PERF
-
-    def test_whatif(self):
-        assert list(tx.ORDER_WHATIF) == _HIST_WHATIF
-
-    def test_base_matches_dashboard(self):
-        assert tx.ORDER_BASE == tx.ORDER_DASHBOARD
+    def test_all_variants_now_share_the_canonical_order(self):
+        # Unification: every named variant is the one canonical order.
+        for variant in (tx.ORDER_DASHBOARD, tx.ORDER_NEWSLETTER, tx.ORDER_PERF,
+                        tx.ORDER_WHATIF, tx.ORDER_BASE):
+            assert list(variant) == _CANONICAL
 
     def test_geo(self):
         assert list(tx.GEO_ORDER) == _HIST_GEO
 
-    def test_all_classes_membership(self):
-        # Every variant is a subset of the canonical class set (no typos),
-        # and the canonical set covers all classes any variant references.
-        for variant in (tx.ORDER_DASHBOARD, tx.ORDER_NEWSLETTER,
-                        tx.ORDER_WHATIF, tx.ORDER_BASE):
-            assert set(variant) == set(tx.ASSET_CLASSES)
-        assert set(tx.ORDER_PERF) <= set(tx.ASSET_CLASSES)
 
-
-class TestConsumersUnchanged:
-    """Each surface must still expose the exact order it had pre-registry."""
+class TestConsumersUnified:
+    """Every surface must now expose the one canonical order."""
 
     def test_metrics_dashboard_order(self):
-        # metrics builds class_order from ORDER_DASHBOARD; assert the source.
         from tarzan.models.taxonomy import ORDER_DASHBOARD
-        assert list(ORDER_DASHBOARD) == _HIST_DASHBOARD
+        assert list(ORDER_DASHBOARD) == _CANONICAL
 
     def test_format_base_order(self):
         from tarzan.export import _format
-        assert _format._ASSET_CLASS_BASE_ORDER == _HIST_DASHBOARD
+        assert _format._ASSET_CLASS_BASE_ORDER == _CANONICAL
 
     def test_newsletter_orders(self):
         from tarzan.export import newsletter as nl
-        assert nl._NEWSLETTER_CLASS_ORDER == _HIST_NEWSLETTER
-        assert nl._PERF_CLASS_ORDER == _HIST_PERF
+        assert nl._NEWSLETTER_CLASS_ORDER == _CANONICAL
+        assert nl._PERF_CLASS_ORDER == _CANONICAL
 
     def test_whatif_orders(self):
         from tarzan.export import whatif_excel as we
-        assert we._ASSET_ORDER == _HIST_WHATIF
+        assert we._ASSET_ORDER == _CANONICAL
         # The what-if geo order appends an explicit "Other" bucket.
         assert we._GEO_ORDER == _HIST_GEO + ["Other"]
 
 
 class TestOrderWithExtras:
     def test_no_present_returns_full_order(self):
-        assert tx.order_with_extras(tx.ORDER_PERF) == list(tx.ORDER_PERF)
+        assert tx.order_with_extras(tx.CANONICAL_ORDER) == list(tx.CANONICAL_ORDER)
 
     def test_filters_to_present(self):
-        got = tx.order_with_extras(tx.ORDER_DASHBOARD, present=["Gold", "Equities"])
+        got = tx.order_with_extras(tx.CANONICAL_ORDER, present=["Gold", "Equities"])
         assert got == ["Equities", "Gold"]  # in canonical order
 
     def test_unlisted_class_appended_alphabetically_not_dropped(self):
-        # A class absent from the variant (e.g. Crypto for PERF) is appended,
-        # never silently dropped from a report.
+        # A class absent from the canonical set (a future/unknown class) is
+        # appended, never silently dropped from a report.
         got = tx.order_with_extras(
-            tx.ORDER_PERF, present=["Equities", "Crypto", "Zebras"])
+            tx.CANONICAL_ORDER, present=["Equities", "Zebras", "Aardvark"])
         assert got[0] == "Equities"
-        assert set(got) == {"Equities", "Crypto", "Zebras"}
-        assert got[-2:] == ["Crypto", "Zebras"]  # extras alphabetical at end
+        assert set(got) == {"Equities", "Zebras", "Aardvark"}
+        assert got[-2:] == ["Aardvark", "Zebras"]  # extras alphabetical at end
