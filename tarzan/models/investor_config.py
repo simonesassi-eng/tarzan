@@ -28,9 +28,20 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_percentages(d: dict[str, float]) -> dict[str, float]:
-    """Normalize a dict of percentages so they sum to 100."""
+    """Normalize a dict of percentages so they sum to 100.
+
+    Guards two degenerate inputs that would otherwise produce absurd weights:
+      * any NEGATIVE percentage (a typo like Japan=-59) — a share of a sleeve
+        cannot be negative;
+      * a total at/near zero, where dividing by it explodes the weights
+        (e.g. {USA: 60, Japan: -59} sums to 1 → USA would become 6000%).
+    In either case we return the input unchanged and let the caller flag it,
+    rather than emit nonsense targets that drive wrong rebalancing trades.
+    """
+    if any(v < 0 for v in d.values()):
+        return d
     total = sum(d.values())
-    if total <= 0:
+    if total <= 1e-9:
         return d
     return {k: v * 100.0 / total for k, v in d.items()}
 
@@ -282,13 +293,36 @@ def _validate_sum_to_100(
 ) -> None:
     if not d:
         return
+    negatives = {k: v for k, v in d.items() if v < 0}
     total = sum(d.values())
+    if negatives:
+        # A within-sleeve share cannot be negative; do NOT normalize (that
+        # would explode the weights). Keep the raw values and flag loudly.
+        msg = (f"{name} contains negative target(s) {negatives} — a share of a "
+               "sleeve cannot be negative; targets kept un-normalized, please fix")
+        logger.warning(msg)
+        _dq_config_warning(msg, name)
+        return
     if abs(total - 100.0) > 0.01:
         logger.warning("%s sums to %.2f%%, expected 100%%", name, total)
+        _dq_config_warning(
+            f"{name} sums to {total:.2f}% (expected 100%)"
+            + (" — normalized to 100%" if normalize else ""),
+            name,
+        )
         if normalize:
             normalized = normalize_percentages(d)
             d.clear()
             d.update(normalized)
+
+
+def _dq_config_warning(message: str, context: str) -> None:
+    """Route a config-validation warning into the data-quality report."""
+    try:
+        from tarzan import data_quality as dq
+        dq.warning("config", message, context=context)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _note_target_total(d: dict[str, float], name: str) -> None:

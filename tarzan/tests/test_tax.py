@@ -57,6 +57,26 @@ class TestBasics:
         assert est.total_tax_eur == 0.0
         assert est.total_realized_loss_eur == pytest.approx(200.0)
 
+    def test_partial_position_sell_uses_average_cost(self):
+        """Golden case: two buy lots at different prices, then a PARTIAL sell.
+
+        Buy 100 @ €10 (net −1000) + 100 @ €15 (net −1500) → 200 units, cost
+        €2500, average cost €12.50/unit. Sell 100 @ €20 (net +2000):
+          realized gain = 2000 − 12.50×100 = €750
+          tax @ 26%      = €195.00
+        Verifies the average-cost slice on a partial disposal — the common
+        real case, previously untested — is neither FIFO nor full-basis.
+        """
+        orders = [
+            _o(OrderType.BUY, "IE00AAA", qty=100, net=-1000, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "IE00AAA", qty=100, net=-1500, d=(2025, 1, 2)),
+            _o(OrderType.SELL, "IE00AAA", qty=-100, net=2000, d=(2025, 2, 1)),
+        ]
+        est = estimate_realized_cgt(orders, {"IE00AAA": _etf("IE00AAA")}, 26, 12.5)
+        assert est.total_realized_gain_eur == pytest.approx(750.0)
+        assert est.total_tax_eur == pytest.approx(195.0)
+        assert est.tax_flows == [(datetime.date(2025, 2, 1), -195.0)]
+
 
 class TestGovernmentBond:
     def test_btp_uses_reduced_rate_by_name(self):

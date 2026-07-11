@@ -44,6 +44,7 @@ from tarzan.data.bond_fetcher import (
 )
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
+from tarzan import data_quality as dq
 
 logger = logging.getLogger(__name__)
 
@@ -626,6 +627,25 @@ def build_order_derived_series(
                 "TWROR/TWR: %s priced by %s (no full market history).",
                 isin, source.upper(),
             )
+            # 'excluded' means the instrument had NO price at all and dropped
+            # out of the valuation on some dates — a heavier caveat than a
+            # trend-only synthetic/carry-flat fill, so flag it as an ERROR.
+            sev = dq.ERROR if source == "excluded" else dq.WARNING
+            detail = {
+                "synthetic": "priced by SYNTHETIC interpolation (trend only, "
+                             "no real market history) — its return contribution is approximate",
+                "carry_flat": "priced CARRY-FLAT (single known price held flat, "
+                              "zero volatility contribution) — its return contribution is approximate",
+                "excluded": "had NO usable price and dropped out of the valuation "
+                            "on some dates — its market move is invisible to TWROR",
+            }[source]
+            dq.record(sev, "returns", f"{isin}: {detail}", context=isin)
+    if coverage_pct < 100.0:
+        dq.info(
+            "returns",
+            f"historical value series is {coverage_pct:.1f}% priced by real "
+            "market data; the remainder used the synthetic/carry-flat fallback ladder",
+        )
     # Deduplicate provenance lists.
     provenance = {k: sorted(set(v)) for k, v in provenance.items()}
 
