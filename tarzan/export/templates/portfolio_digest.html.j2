@@ -130,7 +130,7 @@
           {% if ai_summary %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Market context</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Market context</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
@@ -162,9 +162,8 @@
           {% if returns_snapshot.available %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">How each holding is moving</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};"><strong>1D</strong> is a live intraday sparkline (<span style="color:{{ palette.green }};font-weight:800;">●&nbsp;LIVE</span> when the market is open, <strong>PREV. DAY</strong> for the last completed session), grouped by asset class · role like the Performance table; instruments with no intraday trades show a dashed line + the % vs the previous close. Other per-instrument returns are the security's own market return over each window (a 5Y column shows the full 5 years even if you've held it less), colored by sign. Your <strong>Total Portfolio</strong> row is the consolidated history, capped to the youngest holding with ≥1Y of data — currently <strong>{{ returns_snapshot.history_label }}</strong> — so longer periods show "—"; its cells are colored by delta vs <strong>{{ returns_snapshot.benchmark_alpha_beta }}</strong> (<span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under).</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
+              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
               {{ returns_snapshot.table_html|safe }}
             </td>
           </tr>
@@ -177,8 +176,7 @@
              injected as safe HTML — same pattern as Markets. #}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ performance.kicker }}</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">{{ performance.title }}</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ performance.kicker }}</div>
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
               {{ performance.table_html|safe }}
             </td>
@@ -188,9 +186,7 @@
           {% if risk_profile.available %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ risk_profile.title }}</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">{{ risk_profile.subtitle }}</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ risk_profile.description }}</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ risk_profile.title }}</div>
               {% if risk_profile.portfolio_note %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
                 <tr>
@@ -209,6 +205,12 @@
                 {% for r in risk_profile.rows %}
                 {% set outer_last = loop.last %}
                 {% set row_bg = '#FFFFFF' if loop.index is odd else palette.card_alt %}
+                {% if r.group_header %}
+                {# Group separator row (asset class · role) — same style as Performance/Returns. #}
+                <tr>
+                  <td colspan="{{ risk_profile.columns|length + 1 }}" style="padding:8px 8px 4px;border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.02em;"><span style="display:inline-block;width:8px;height:8px;background:{{ r.group_color }};border-radius:2px;vertical-align:middle;margin-right:6px;"></span><span style="color:{{ r.group_color }};font-weight:800;text-transform:uppercase;">{{ r.group_header[0] }}</span>{% if r.group_header[1] %}&nbsp;&middot;&nbsp;{{ r.group_header[1] }}{% endif %}</td>
+                </tr>
+                {% endif %}
                 {% if r.is_portfolio %}
                 {# Portfolio row — highlighted, same style as Performance. #}
                 <tr>
@@ -233,7 +235,7 @@
 
               {# Legend — same content as the Excel Performance tab Legend #}
               {% if risk_profile.legend %}
-              <div style="margin-top:20px;font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
+              <div style="margin-top:20px;font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
               <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
                 {% for r in risk_profile.legend %}
@@ -259,9 +261,7 @@
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Return contribution</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Who moved the needle</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Each holding's share of the portfolio return — its weight × its own gain. Bars are scaled to the biggest mover.</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Return contribution</div>
 
               {% if return_contrib.winners %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
@@ -304,9 +304,7 @@
           {% if optimizer.available %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Optimizer</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Suggested actions</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Two plans toward your targets: accumulate (buy only) and full rebalance (buy &amp; sell).</div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Optimizer</div>
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">{{ plan.label }}</div>
               <div style="margin-top:2px;font-size:12px;color:{{ palette.muted }};">
@@ -316,26 +314,28 @@
                 net <span style="color:{{ plan.net_color }};font-weight:600;">{{ plan.net }}</span>
               </div>
               {% if plan.actions %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;font-size:12px;border-collapse:separate;border-spacing:0;">
+              {# Same table style as Diversification "By holding": card_alt
+                 container, light uppercase header, per-row border, ticker pin. #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;border-collapse:separate;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">
                 <tr>
-                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;width:60px;">Action</td>
-                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">Holding</td>
-                  <td style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:96px;">Asset</td>
-                  <td align="right" style="padding:8px 10px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;width:96px;border-top-right-radius:8px;">Amount</td>
+                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:56px;">Action</td>
+                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">Holding</td>
+                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:92px;">Asset</td>
+                  <td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:92px;">Amount</td>
                 </tr>
                 {% for a in plan.actions %}
                 <tr>
-                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;{% if loop.last %}border-bottom-left-radius:8px;{% endif %}">
-                    <span style="display:inline-block;padding:3px 8px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:10px;letter-spacing:0.04em;">{{ a.direction }}</span>
+                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;">
+                    <span style="display:inline-block;padding:2px 7px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:10px;letter-spacing:0.04em;">{{ a.direction }}</span>
                   </td>
-                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;color:{{ palette.ink }};">
-                    <div style="font-weight:600;line-height:1.3;">{{ a.name }}</div>
+                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;color:{{ palette.ink }};">
+                    <div style="font-size:12px;line-height:1.3;">{% if a.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ a.ticker }}</span>{% endif %}{{ a.name }}</div>
                     {% if a.reason %}
-                    <div style="margin-top:4px;font-size:10px;color:{{ palette.subtle }};line-height:1.45;">{{ a.reason }}</div>
+                    <div style="margin-top:3px;font-size:10px;color:{{ palette.subtle }};line-height:1.45;">{{ a.reason }}</div>
                     {% endif %}
                   </td>
-                  <td style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-size:11px;font-weight:600;color:{{ a.asset_color }};">{{ a.asset_class }}</td>
-                  <td align="right" style="padding:10px;background:{% if loop.index is odd %}#FFFFFF{% else %}{{ palette.card_alt }}{% endif %};{% if not loop.last %}border-bottom:1px solid {{ palette.border }};{% endif %}vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};{% if loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ a.amount }}</td>
+                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:11px;font-weight:600;color:{{ a.asset_color }};">{{ a.asset_class }}</td>
+                  <td align="right" style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
                 </tr>
                 {% endfor %}
               </table>
@@ -351,13 +351,7 @@
           {% if sensitivity.available %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Tuning</div>
-              <div style="margin-top:4px;font-size:18px;font-weight:700;color:{{ palette.ink }};">Drift-penalty sensitivity</div>
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};line-height:1.45;">
-                Each row is a regime — a range of weights producing the same plan. Your active weight is
-                <span style="color:{{ palette.ink }};font-weight:700;">{{ sensitivity.active_weight }}</span>
-                (highlighted with ▶). Higher weights close more drift at the cost of more trades, taxes, and fees.
-              </div>
+              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Tuning</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Weight</td>

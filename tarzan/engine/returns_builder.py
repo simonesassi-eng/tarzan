@@ -920,6 +920,42 @@ def build_allocation_timeline(
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
     cash_class = AssetClass.CASH_EQUIVALENTS.value
 
+    # Asset-class resolution for EVERY traded ISIN — including positions
+    # already sold/rotated out, which are absent from ``enriched_by_isin``.
+    # Without this they used to fall to a hard-coded "Alternative" default,
+    # inflating that class's history (e.g. sold BTPs showing up as
+    # Alternative). Resolution is network-free: enriched snapshot → curated
+    # taxonomy (by ISIN) → name/price heuristics (bonds, gold) → "Other".
+    from tarzan import config as _cfg
+    _taxonomy = _cfg.instrument_taxonomy()
+    _name_by_isin: dict[str, str] = {}
+    for o in orders:
+        if getattr(o, "isin", None) and o.isin not in _name_by_isin and getattr(o, "name", None):
+            _name_by_isin[o.isin] = o.name
+    _BOND_KW = ("btp", "bond", "treasury", "bund", "oat", "gilt", "govt",
+                "government", "bono", "obliga", "note", "schatz", "bobl",
+                "aggregate", "fixed income", "t-bill", "bill")
+
+    def _class_for(isin: str) -> str:
+        h = enriched_by_isin.get(isin)
+        if h and h.asset_class:
+            return h.asset_class.value
+        hit = _taxonomy.get(isin.upper()) or _taxonomy.get(isin.upper().split(".")[0])
+        if hit and hit[0]:
+            return hit[0]
+        nm = (_name_by_isin.get(isin, "") or "").lower()
+        if "gold" in nm:
+            return AssetClass.GOLD.value
+        # Bond keywords, or a coupon rate in the name (broker names bonds as
+        # "USA-31GE30 3,5%" / "EIB-23GE30 7,25%" — a "%" coupon that funds and
+        # equities never carry), classify as Fixed Income.
+        if any(k in nm for k in _BOND_KW) or "%" in nm:
+            return AssetClass.FIXED_INCOME.value
+        # Unknown: a neutral bucket that still counts toward the invested
+        # denominator but is never shown as its own class — so it dilutes
+        # proportionally rather than mislabelling a tracked class.
+        return "Other"
+
     # Cum/ex ISIN variants share a 9-char prefix. The prefix group is used
     # ONLY to (a) detect a fully rotated/closed position — a group whose held
     # quantity nets to ~0 contributes nothing, avoiding a spurious residual
@@ -986,6 +1022,10 @@ def build_allocation_timeline(
     # aggregates, so the asset/geo trend lines and the by-holding trends all
     # agree (and distinct prefix-sharing ETFs each keep their own line).
     holding_series: list[dict[str, float]] = []
+    # Parallel series expressing each holding as % of the INVESTED portfolio
+    # (not of its class) — the basis the per-holding-portfolio target table
+    # uses, so its "Now" column and this trend line share one scale.
+    holding_invested_series: list[dict[str, float]] = []
     for d in dates:
         iso_val = _per_isin_values(d)
         iso_ac: dict[str, str] = {}
@@ -994,7 +1034,7 @@ def build_allocation_timeline(
         eq_val = 0.0
         for isin, v in iso_val.items():
             h = enriched_by_isin.get(isin)
-            ac = h.asset_class.value if (h and h.asset_class) else AssetClass.ALTERNATIVE.value
+            ac = _class_for(isin)
             iso_ac[isin] = ac
             class_val[ac] = class_val.get(ac, 0.0) + v
             if ac == "Equities":
@@ -1018,6 +1058,12 @@ def build_allocation_timeline(
             for isin, v in iso_val.items()
             if class_val.get(iso_ac[isin], 0.0) > 0
         })
+        holding_invested_series.append({
+            isin: (v / invested * 100.0)
+            for isin, v in iso_val.items()
+            if invested > 0 and iso_ac[isin] != cash_class
+        })
 
     return {"dates": dates, "asset": asset_series, "geo": geo_series,
-            "holding": holding_series}
+            "holding": holding_series,
+            "holding_invested": holding_invested_series}
