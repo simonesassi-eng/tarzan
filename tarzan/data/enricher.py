@@ -37,6 +37,7 @@ import yfinance as yf
 from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.data import price_cache
 from tarzan import config as cfg
+from tarzan import data_quality as dq
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,12 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     # holding falls back to its last-known EUR anchor (which uses the order's
     # real recorded fx_rate), disclosed via data_source / coverage.
     logger.warning("No FX data for %s; conversion unavailable (holding valued from last-known EUR anchor)", currency)
+    dq.warning(
+        "enricher",
+        f"FX rate for {currency}→EUR unavailable (both pairs failed, no cache); "
+        "affected holdings valued from their last-known EUR anchor, not a live quote",
+        context=currency,
+    )
     return pd.Series(dtype=float)
 
 
@@ -655,6 +662,12 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
                     "%s: live fetch returned no data; newest close is %d day(s) "
                     "old (%s) — using a STALE close as the current price.",
                     symbol, age_days, last_ts.date(),
+                )
+                dq.warning(
+                    "market_data",
+                    f"live fetch returned no data; newest close is {age_days} day(s) "
+                    f"old ({last_ts.date()}) — using a STALE close as the current price",
+                    context=symbol,
                 )
         except Exception:  # noqa: BLE001 — never let a diagnostic break the fetch
             pass
@@ -1404,6 +1417,12 @@ def _try_terrapin_fallback(holding: Holding) -> None:
             if fx_unavailable:
                 holding.current_value = holding.market_value_eur
                 holding.data_source = "input_csv (FX unavailable)"
+                dq.warning(
+                    "enricher",
+                    f"bond {isin}: FX for {currency} unavailable — valued from "
+                    "the CSV/order EUR anchor, not a live quote",
+                    context=isin,
+                )
                 return
 
             value = value_position(holding.quantity, price_eur_per_100, bond=True)

@@ -123,6 +123,21 @@ class TestSharpe:
         assert not math.isnan(result)
         assert isinstance(result, float)
 
+    def test_sharpe_golden_value(self):
+        """Golden: Sharpe = (annual_return − RISK_FREE_RATE) / annual_vol,
+        pinned to the exact magnitude so a wrong risk-free rate or a broken
+        excess-return definition fails the suite (not just a NaN check).
+
+        With the live RFR (4%): (10 − 4) / 15 = 0.40.
+        """
+        from tarzan.engine.stats import RISK_FREE_RATE
+        result = compute_sharpe(annual_return=10.0, annual_volatility=15.0)
+        expected = (10.0 - RISK_FREE_RATE) / 15.0
+        assert result == pytest.approx(expected)
+        # Guard the RFR itself: if config drifts, this documents the assumption.
+        assert RISK_FREE_RATE == pytest.approx(4.0)
+        assert result == pytest.approx(0.40)
+
 
 class TestSortino:
     def test_sortino_all_positive_returns_nan(self):
@@ -135,6 +150,30 @@ class TestSortino:
         returns = pd.Series([0.01, -0.02, 0.03, -0.01, 0.02])
         result = compute_sortino(returns, annual_return=10.0)
         assert isinstance(result, float)
+        assert not math.isnan(result)
+
+    def test_sortino_golden_value(self):
+        """Golden: Sortino = (annual_return − RISK_FREE_RATE) / downside_dev,
+        where downside_dev is the annualized RMS shortfall below the daily
+        risk-free target (target semideviation, Sortino & Price 1994). Pin the
+        exact value so a wrong annualization factor or a switched-in
+        negative-only-std denominator is caught, not silently shipped.
+        """
+        import numpy as np
+        from tarzan.engine.stats import RISK_FREE_RATE, TRADING_DAYS
+
+        returns = pd.Series([0.01, -0.02, 0.03, -0.01, 0.02])
+        annual_return = 10.0
+        # Recompute the textbook denominator independently.
+        target_daily = RISK_FREE_RATE / 100.0 / TRADING_DAYS
+        shortfall = (returns - target_daily).clip(upper=0.0)
+        downside = float((shortfall ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS) * 100
+        expected = (annual_return - RISK_FREE_RATE) / downside
+
+        result = compute_sortino(returns, annual_return=annual_return)
+        assert result == pytest.approx(expected)
+        # Anchor the magnitude too (guards the whole formula, not just its shape).
+        assert result == pytest.approx(0.3744, abs=1e-3)
 
 
 class TestVaR:

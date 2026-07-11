@@ -113,6 +113,7 @@ class MetricsEngine:
         explicit signal a renderer can flag as "unavailable" rather than
         presenting it as a real low-risk / zero result.
         """
+        from tarzan import data_quality as dq
         ctx: dict = {}
         degraded: list[str] = []
         for computer in self._computers:
@@ -122,6 +123,12 @@ class MetricsEngine:
             except Exception as e:
                 logger.error("Metric computer '%s' failed: %s", name, e)
                 degraded.append(name)
+                dq.error(
+                    "metrics",
+                    f"computer '{name}' failed ({e}); its section fell back to "
+                    "defaults (blank/zero) and should NOT be read as a real result",
+                    context=name,
+                )
         if degraded:
             logger.warning(
                 "Report is DEGRADED — %d computer(s) failed: %s. "

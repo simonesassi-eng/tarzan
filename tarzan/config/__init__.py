@@ -21,7 +21,13 @@ from tarzan.models.holding import Geography
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "constants.yaml")
 _STATIC_PATH = os.path.join(os.path.dirname(__file__), "static.yaml")
+# Primary taxonomy location is CWD-relative (the CLI is run from the repo
+# root, like its --input_orders default). We also derive a repo-root-anchored
+# fallback so a run from another directory still finds the shipped taxonomy
+# instead of silently degrading benchmarks / beta reference / notional splits.
 _INDEXES_CSV_PATH = os.path.join("input", "instrument_taxonomy.csv")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_INDEXES_CSV_FALLBACK = os.path.join(_REPO_ROOT, "input", "instrument_taxonomy.csv")
 
 
 @lru_cache(maxsize=1)
@@ -38,15 +44,45 @@ def _load_static() -> dict:
 
 @lru_cache(maxsize=1)
 def _load_indexes_csv() -> pd.DataFrame:
-    """Load instrument_taxonomy.csv into a DataFrame."""
-    if not os.path.exists(_INDEXES_CSV_PATH):
+    """Load instrument_taxonomy.csv into a DataFrame.
+
+    Tries the CWD-relative path first, then the repo-root-anchored fallback.
+    A missing or unparseable taxonomy is NOT silent: it degrades benchmarks,
+    the beta reference and notional asset-class splits, so we record a
+    data-quality WARNING pointing at the resolved/attempted path.
+    """
+    path = (
+        _INDEXES_CSV_PATH if os.path.exists(_INDEXES_CSV_PATH)
+        else (_INDEXES_CSV_FALLBACK if os.path.exists(_INDEXES_CSV_FALLBACK) else None)
+    )
+    if path is None:
+        _warn_taxonomy(
+            f"instrument_taxonomy.csv not found (looked in "
+            f"'{_INDEXES_CSV_PATH}' and '{_INDEXES_CSV_FALLBACK}'); "
+            "benchmarks, beta reference and notional asset-class splits will "
+            "use built-in defaults"
+        )
         return pd.DataFrame()
     try:
-        df = pd.read_csv(_INDEXES_CSV_PATH)
+        df = pd.read_csv(path)
         df.columns = [c.strip().lower() for c in df.columns]
         return df
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        _warn_taxonomy(
+            f"instrument_taxonomy.csv at '{path}' could not be parsed ({e}); "
+            "benchmarks/beta/notional splits fall back to defaults"
+        )
         return pd.DataFrame()
+
+
+def _warn_taxonomy(message: str) -> None:
+    """Emit a taxonomy-degradation warning to the data-quality report,
+    tolerating the (rare) case where the report module is unavailable."""
+    try:
+        from tarzan import data_quality as dq
+        dq.warning("config", message, context="instrument_taxonomy.csv")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @lru_cache(maxsize=1)

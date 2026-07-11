@@ -105,6 +105,27 @@ class TestTwror:
         res = twror([(_d(2025, 1, 1), 1000.0)], {}, span_days=0, coverage_pct=82.5)
         assert res.coverage_pct == 82.5
 
+    def test_annualization_over_non_365_day_span(self):
+        """Golden: a +10% cumulative return over a 180-day span must be
+        annualized by compounding over the actual/365.25 day count, NOT left
+        equal to the cumulative figure and NOT linearly scaled.
+
+            annualized = 1.10 ** (365.25 / 180) − 1 ≈ 21.34%
+        (linear scaling would give ~20.29%, cumulative ~10%.)
+        This is the case the 365-day tests can't catch, since there
+        annualized == cumulative by construction.
+        """
+        from tarzan.engine.stats import DAYS_PER_YEAR
+        valuations = [(_d(2025, 1, 1), 1000.0), (_d(2025, 6, 30), 1100.0)]
+        flows = {_d(2025, 1, 1): 1000.0}
+        res = twror(valuations, flows, span_days=180)
+        expected = (1.10 ** (DAYS_PER_YEAR / 180) - 1.0) * 100.0
+        assert res.cumulative_pct == pytest.approx(10.0, abs=1e-6)
+        assert res.annualized_pct == pytest.approx(expected, abs=1e-4)
+        # Sanity: it must exceed the cumulative and the naive linear estimate.
+        assert res.annualized_pct > 21.0
+        assert res.annualized_pct != pytest.approx(10.0, abs=1.0)
+
 
 # ── Property-based ──────────────────────────────────────────────────────────
 

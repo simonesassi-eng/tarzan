@@ -16,11 +16,22 @@ from typing import Optional, Union
 
 import pandas as pd
 
+from tarzan import data_quality as dq
 from tarzan.models.order import Order, OrderType
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.exceptions import DataIngestionError
+from tarzan.validation import (
+    check_order_sign,
+    currency_is_known,
+    isin_format_error,
+    normalize_currency,
+    normalize_isin,
+)
 
 logger = logging.getLogger(__name__)
+
+# Data-quality report source tag for the order-list ingestion stage.
+_DQ_SOURCE = "order_load"
 
 # Minimal set the order list must carry for returns. The full schema has
 # more columns (trade_date, name, price_native, fx_rate, fees_eur,
@@ -108,32 +119,65 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Orde
 
 
 def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
-    """Parse one order-list row into an Order, or None to skip it."""
+    """Parse one order-list row into an Order, or None to skip it.
+
+    Validation policy (see ``tarzan.validation``): structural failures
+    (unknown type, invalid date, malformed/missing ISIN, unparseable required
+    number) SKIP the row; a wrong-sign quantity is NORMALIZED (not dropped);
+    an unknown currency is KEPT with an EUR fallback. Every skip/coercion is
+    recorded in the per-run data-quality report so the user can review it.
+    """
     otype = OrderType.from_raw(row.get("type"))
     if otype is None:
-        logger.warning("Order row %d: unknown type %r, skipping", idx, row.get("type"))
+        msg = f"row {idx}: unknown order type {row.get('type')!r} — skipped"
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=f"row {idx}")
         return None
 
     order_date = _parse_date_safe(row.get("date"))
     if order_date is None:
-        logger.warning("Order row %d: invalid date %r, skipping", idx, row.get("date"))
+        msg = f"row {idx}: invalid/missing date {row.get('date')!r} — skipped"
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=f"row {idx}")
         return None
     trade_date = _parse_date_safe(row.get("trade_date")) or order_date
 
-    isin = str(row.get("isin", "")).strip()
-    if not isin or isin.lower() == "nan":
-        logger.warning("Order row %d: missing ISIN, skipping", idx)
+    # ISIN — format-only validation (no mod-10; legit bond ISINs fail it).
+    isin = normalize_isin(row.get("isin"))
+    isin_err = isin_format_error(isin)
+    if isin_err:
+        msg = f"row {idx}: {isin_err} — skipped"
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=f"row {idx}")
         return None
 
     quantity = _parse_number_safe(row.get("quantity"), "quantity", idx)
     gross_eur = _parse_number_safe(row.get("gross_eur"), "gross_eur", idx)
     net_eur = _parse_number_safe(row.get("net_eur"), "net_eur", idx)
     if quantity is None or gross_eur is None or net_eur is None:
+        bad = [f for f, v in (("quantity", quantity), ("gross_eur", gross_eur),
+                              ("net_eur", net_eur)) if v is None]
+        msg = f"row {idx} ({isin}): unparseable/blank {', '.join(bad)} — skipped"
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=isin)
         return None
 
-    currency = str(row.get("currency", "EUR")).strip().upper() or "EUR"
-    if currency.lower() == "nan":
-        currency = "EUR"
+    # Sign/type consistency — normalize a clear mismatch rather than drop it.
+    sign = check_order_sign(otype, quantity)
+    if sign.message:
+        msg = f"row {idx} ({isin}): {sign.message}"
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=isin)
+    quantity = sign.quantity
+
+    # Currency — keep an unknown code but fall back to EUR and flag it.
+    currency = normalize_currency(row.get("currency"))
+    if not currency_is_known(currency):
+        msg = (f"row {idx} ({isin}): unrecognized currency {currency!r} — "
+               "kept as-is (verify; foreign holdings need a valid code to "
+               "value in EUR)")
+        logger.warning("Order %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=isin)
 
     return Order(
         date=order_date,

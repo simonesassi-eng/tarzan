@@ -49,11 +49,27 @@ def setup_logging(output_dir: str) -> None:
     root.addHandler(fh)
 
 
+def _write_data_quality(output_dir: str) -> None:
+    """Write the per-run data-quality report and log its one-line summary.
+
+    Best-effort: a diagnostic must never turn a good run into a failure.
+    """
+    from tarzan import data_quality as dq
+    try:
+        logger.info(dq.summary_line())
+        path = dq.write_report(output_dir)
+        if path:
+            logger.info("Data-quality report: %s", path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Data-quality report step failed: %s", e)
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     setup_logging(args.output)
     logger.info("Tarzan v3.0 starting...")
 
+    from tarzan import data_quality as dq
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
@@ -85,6 +101,11 @@ def main(argv=None) -> int:
         logger.error("Unexpected error: %s", e)
         logger.debug(traceback.format_exc())
         return 1
+    finally:
+        # Always write the per-run data-quality report — on success, on the
+        # no-value early exit, and on any failure — so the user can see what
+        # was skipped/coerced/failed regardless of how the run ended.
+        _write_data_quality(args.output)
 
 
 if __name__ == "__main__":
