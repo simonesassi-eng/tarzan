@@ -76,6 +76,27 @@ python -m tarzan.main \
 See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
 [`output/sample/`](../output/sample/) for a pre-generated Excel report.
 
+### Reproducible / as-of runs
+
+```bash
+# Value the portfolio as of a past date (pins the terminal valuation date
+# for XIRR/TWROR and the daily series):
+python -m tarzan.main --input_orders input/order_list.csv --as_of 2026-06-30
+
+# Fully deterministic: pin the clock AND stand down the live surfaces (skip
+# live intraday quotes and the AI summary):
+python -m tarzan.main --input_orders input/order_list.csv --deterministic --as_of 2026-06-30
+```
+
+`--deterministic` guarantees the computed **metrics** are reproducible — the
+same inputs + `--as_of` produce the same total value, XIRR, TWROR and risk
+figures — so a reported number can be reproduced offline (on a warm price
+cache) and the engine is golden-testable. Scope note: it does **not** promise
+a byte-identical *newsletter* — a residual row-ordering non-determinism
+remains (holdings that tie on weight can swap order, tracing to a set of open
+ISINs), so the HTML layout may differ slightly run-to-run even though every
+number is identical.
+
 ## Input
 
 ### Order list (required)

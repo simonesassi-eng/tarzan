@@ -34,6 +34,7 @@ from typing import Any, Optional
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from tarzan import runtime as _runtime
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.models.taxonomy import (
@@ -1893,8 +1894,14 @@ def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
     for v in (ctx.metrics.rebalancing_verifications or []):
         if v.get("kind") != kind:
             continue
+        # Sort by weight desc, with ticker as a STABLE tie-break: two holdings
+        # at the same weight would otherwise keep their input order, which
+        # traces back to a set() of open ISINs (hash-randomized per process) —
+        # making the rendered order vary run-to-run and breaking reproducibility.
         items = sorted(v.get("items", []) or [],
-                       key=lambda it: -float(it.get("actual_pct", 0.0)))
+                       key=lambda it: (-float(it.get("actual_pct", 0.0)),
+                                       str(it.get("ticker", "")),
+                                       str(it.get("category", ""))))
         for it in items:
             isin = it.get("ticker", "")
             tk = _clean_ticker(isin) or _display_ticker(isin) or ""
@@ -3522,6 +3529,16 @@ def build_context(
     Returns:
         A dict with all keys consumed by ``portfolio_digest.html.j2``.
     """
+    # Reset the per-render SVG clipPath id counters so a render's element ids
+    # depend only on how many charts it draws, not on how many newsletters the
+    # process rendered before it. Without this, two renders in one process
+    # emit different ids (dg1 vs dg2, ...), making the HTML non-reproducible —
+    # which defeats deterministic mode. Ids are internal references (visually
+    # invisible) and each render is a standalone document, so resetting is safe
+    # and never collides.
+    global _day_spark_uid, _dual_uid
+    _day_spark_uid = 0
+    _dual_uid = 0
     nctx = _NewsletterContext(
         metrics=metrics,
         config=config,
@@ -3553,7 +3570,9 @@ def build_context(
         "methodology": _build_methodology(nctx),
         "preheader": _build_preheader(nctx, hero),
         "footer": {
-            "generated_at": datetime.now().strftime("%d %b %Y, %H:%M"),
+            # Pinned stamp in deterministic mode so the header does not vary
+            # run-to-run (live now() otherwise).
+            "generated_at": _runtime.now_stamp("%d %b %Y, %H:%M"),
             "version": "v2.0",
         },
     }

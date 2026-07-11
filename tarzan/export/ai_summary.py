@@ -68,6 +68,12 @@ def generate_summary(metrics, config) -> Optional[str]:
     """
     if not is_enabled():
         return None
+    # Deterministic mode: the Gemini call is network-live and non-reproducible,
+    # so skip it and let the caller fall back to the rule-based Signals section.
+    from tarzan import runtime
+    if runtime.is_deterministic():
+        logger.info("Deterministic run: skipping the live AI summary.")
+        return None
     try:
         digest = build_digest(metrics, config)
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"

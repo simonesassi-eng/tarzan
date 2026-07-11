@@ -91,6 +91,8 @@ def run(
     config_filename: str = "",
     orders_filename: str = "",
     targets_per_holding_filename: str = "",
+    deterministic: bool = False,
+    as_of=None,
 ) -> tuple[PortfolioMetrics, InvestorConfig]:
     """Execute the full analysis pipeline (order-only).
 
@@ -112,6 +114,14 @@ def run(
     from tarzan.data import geo_resolver as _geo
     from tarzan import data_quality as _dq
     from tarzan import audit as _audit
+    from tarzan import runtime as _runtime
+    # Configure the run clock/determinism FIRST so every downstream default
+    # ``today`` and the live/AI gates see it. Default (both falsy) restores
+    # the pre-existing live behavior exactly.
+    if deterministic or as_of is not None:
+        _runtime.configure(deterministic=deterministic, as_of=as_of)
+    else:
+        _runtime.reset()
     _cfg.reset_input_caches()
     _geo.reset_caches()
     # Start a fresh per-run data-quality report and rebalancing audit trail so

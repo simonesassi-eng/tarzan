@@ -178,7 +178,12 @@ def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
             ccy_by_isin[o.isin] = o.currency
 
     holdings: list[Holding] = []
-    for isin in open_isins:
+    # Sort the open ISINs: ``_open_isins`` returns a set, whose iteration order
+    # is hash-randomized per process. Leaving it unsorted makes the derived
+    # holdings list — and everything downstream that preserves its order
+    # (Excel rows, newsletter sleeve tables, tie-broken sorts) — vary run to
+    # run, defeating reproducibility. A stable ISIN sort fixes it at the root.
+    for isin in sorted(open_isins):
         qty = qty_by_isin[isin]
         holdings.append(Holding(
             isin=isin,
@@ -504,7 +509,8 @@ def build_order_derived_series(
     # not the primary fix. An explicit ``today`` (historical/backtest
     # as-of valuation) is always respected verbatim.
     if today is None:
-        today = datetime.datetime.now().date()
+        from tarzan import runtime
+        today = runtime.today()
         last_trade_date = max((o.trade_date for o in orders), default=today)
         if last_trade_date > today:
             today = last_trade_date
@@ -977,7 +983,8 @@ def build_allocation_timeline(
     if not orders:
         return None
     if today is None:
-        today = datetime.datetime.now().date()
+        from tarzan import runtime
+        today = runtime.today()
 
     pos_dates = [o.trade_date for o in orders if o.is_position_change()]
     if not pos_dates:

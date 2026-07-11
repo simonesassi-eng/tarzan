@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import traceback
+from datetime import date as _dtdate
 
 from tarzan.exceptions import DataIngestionError, TarzanError
 
@@ -32,6 +33,18 @@ def parse_args(argv=None) -> argparse.Namespace:
              "to the order-derived snapshot.",
     )
     parser.add_argument("--output", default="output/")
+    parser.add_argument(
+        "--deterministic", action="store_true",
+        help="Reproducible run: pin the clock, skip live intraday quotes and "
+             "the AI summary, so the same inputs produce the same output "
+             "(golden-testable / offline-reproducible on a warm cache).",
+    )
+    parser.add_argument(
+        "--as_of", default=None, metavar="YYYY-MM-DD",
+        help="Value the portfolio as of this date instead of today (pins the "
+             "terminal valuation date for XIRR/TWROR and the daily series). "
+             "Implies a pinned clock.",
+    )
     return parser.parse_args(argv)
 
 
@@ -79,12 +92,26 @@ def main(argv=None) -> int:
     logger.info("Tarzan v3.0 starting...")
 
     from tarzan import data_quality as dq
+    # Parse the optional as-of date; an invalid value is a hard, actionable
+    # error (not a silent fallback to today, which would mislead).
+    as_of = None
+    if args.as_of:
+        try:
+            as_of = _dtdate.fromisoformat(args.as_of)
+        except ValueError:
+            logger.error("Invalid --as_of %r (expected YYYY-MM-DD)", args.as_of)
+            return 1
+    if args.deterministic or as_of is not None:
+        logger.info("Deterministic run%s (live quotes + AI summary skipped).",
+                    f" as of {as_of}" if as_of else "")
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
             config_source=args.input_config,
             orders_source=args.input_orders,
             targets_per_holding_source=args.input_targets_per_holding,
+            deterministic=args.deterministic,
+            as_of=as_of,
         )
         if metrics.total_value == 0:
             logger.error("No portfolio value computed. Check input data.")
