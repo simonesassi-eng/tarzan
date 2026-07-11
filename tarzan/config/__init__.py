@@ -87,6 +87,94 @@ def instrument_taxonomy() -> dict:
     return _taxonomy_lookup()
 
 
+# Notional asset-class exposure columns in instrument_taxonomy.csv → AssetClass value.
+_EXP_COLUMNS = {
+    "exp_equities": "Equities",
+    "exp_fixed_income": "Fixed Income",
+    "exp_gold": "Gold",
+    "exp_commodities": "Commodities",
+    "exp_alternative": "Alternative",
+    "exp_crypto": "Crypto",
+}
+
+# Roles / name fragments that signal a capital-efficient / leveraged / multi-
+# asset fund whose true exposure is NOT its single asset_class — used to warn
+# when such an instrument lacks explicit exp_* values.
+_NOTIONAL_ROLE_HINTS = ("efficient core", "multi-asset", "equity leveraged")
+_NOTIONAL_NAME_HINTS = ("leverage", "efficient core", "lifestrategy",
+                        "risk parity", "return stack", "90/60", "60/40",
+                        "multi-asset", "multi asset", "balanced")
+
+
+@lru_cache(maxsize=1)
+def class_exposure_lookup() -> dict:
+    """Explicit notional asset-class exposure overrides from the exp_* columns
+    of instrument_taxonomy.csv.
+
+    Returns a dict keyed by ISIN (uppercased) and bare ticker (suffix
+    stripped, uppercased) → ``{asset_class_value: pct}``. Only rows with at
+    least one non-empty exp_* value are included; everything else is derived
+    from the single ``asset_class`` at consumption time (see
+    ``class_breakdown_for``). Percentages may sum to >100 (leverage).
+    """
+    df = _load_indexes_csv()
+    if df.empty:
+        return {}
+    present = [c for c in _EXP_COLUMNS if c in df.columns]
+    if not present:
+        return {}
+    by_isin: dict[str, dict] = {}
+    by_ticker: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        breakdown: dict[str, float] = {}
+        for col in present:
+            raw = row.get(col)
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if not s or s.lower() == "nan":
+                continue
+            try:
+                v = float(s)
+            except (TypeError, ValueError):
+                continue
+            if v != 0.0:
+                breakdown[_EXP_COLUMNS[col]] = v
+        if not breakdown:
+            continue
+        isin = str(row.get("isin", "")).strip().upper()
+        if isin and isin.lower() != "nan":
+            by_isin.setdefault(isin, breakdown)
+        tk = str(row.get("ticker", "")).strip()
+        bare = tk.split(".")[0].upper() if tk else ""
+        if bare and bare.lower() != "nan":
+            by_ticker.setdefault(bare, breakdown)
+    merged = dict(by_ticker)
+    merged.update(by_isin)  # ISIN wins on collision
+    return merged
+
+
+def class_breakdown_for(isin: Optional[str], ticker: Optional[str],
+                        asset_class_value: Optional[str]) -> dict:
+    """Notional asset-class breakdown for one instrument.
+
+    Explicit exp_* override (by ISIN then bare ticker) when present, else a
+    derived ``{asset_class_value: 100.0}`` so every instrument — including any
+    added in the future — always has a valid breakdown with no manual work.
+    Returns ``{}`` only when there is neither an override nor an asset class.
+    """
+    lut = class_exposure_lookup()
+    for key in (
+        (isin or "").strip().upper(),
+        (ticker or "").split(".")[0].strip().upper(),
+    ):
+        if key and key in lut:
+            return dict(lut[key])
+    if asset_class_value and str(asset_class_value).strip():
+        return {str(asset_class_value).strip(): 100.0}
+    return {}
+
+
 def get(key: str, default=None):
     """Get a config value. Checks constants.yaml → static.yaml."""
     val = _load_raw().get(key)
@@ -108,6 +196,7 @@ def reset_input_caches() -> None:
     _load_static.cache_clear()
     _load_indexes_csv.cache_clear()
     _taxonomy_lookup.cache_clear()
+    class_exposure_lookup.cache_clear()
 
 
 # --- Risk & Performance ---

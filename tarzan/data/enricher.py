@@ -1443,7 +1443,48 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     # Multi-geography breakdown
     _apply_geo_breakdown(holding)
 
+    # Notional asset-class breakdown (exp_* override, else {asset_class:100}).
+    _apply_class_breakdown(holding)
+
     return holding
+
+
+def _apply_class_breakdown(holding: Holding) -> None:
+    """Set ``holding.class_breakdown`` (notional asset-class exposure).
+
+    Uses the explicit exp_* taxonomy override when present, otherwise derives
+    ``{asset_class: 100}``. Warns when a fund whose role/name signals leverage
+    or a multi-asset structure lacks an explicit override, so a future
+    capital-efficient instrument is flagged for an exp_* row rather than
+    silently counted as a single class."""
+    ac_val = holding.asset_class.value if holding.asset_class else None
+    holding.class_breakdown = {
+        AssetClass(k): v
+        for k, v in cfg.class_breakdown_for(holding.isin, holding.ticker, ac_val).items()
+        if _is_valid_asset_class(k)
+    }
+    # Nudge for likely-notional instruments missing an explicit override.
+    lut = cfg.class_exposure_lookup()
+    keyed = ((holding.isin or "").strip().upper() in lut or
+             (holding.ticker or "").split(".")[0].strip().upper() in lut)
+    if not keyed:
+        hint_src = f"{holding.role or ''} {holding.name or ''}".lower()
+        if (any(h in (holding.role or "").lower() for h in cfg._NOTIONAL_ROLE_HINTS)
+                or any(h in hint_src for h in cfg._NOTIONAL_NAME_HINTS)):
+            logger.warning(
+                "Instrument %s / %s looks capital-efficient/leveraged but has "
+                "no exp_* exposure in instrument_taxonomy.csv — it will be "
+                "counted as 100%% %s. Add exp_* columns to capture its notional "
+                "split.", holding.isin, holding.ticker, ac_val,
+            )
+
+
+def _is_valid_asset_class(value: str) -> bool:
+    try:
+        AssetClass(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _reclassify_by_name(holding: Holding) -> None:

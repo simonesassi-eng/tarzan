@@ -928,6 +928,7 @@ def build_allocation_timeline(
     # taxonomy (by ISIN) → name/price heuristics (bonds, gold) → "Other".
     from tarzan import config as _cfg
     _taxonomy = _cfg.instrument_taxonomy()
+    _exp_lut = _cfg.class_exposure_lookup()
     _name_by_isin: dict[str, str] = {}
     for o in orders:
         if getattr(o, "isin", None) and o.isin not in _name_by_isin and getattr(o, "name", None):
@@ -955,6 +956,20 @@ def build_allocation_timeline(
         # denominator but is never shown as its own class — so it dilutes
         # proportionally rather than mislabelling a tracked class.
         return "Other"
+
+    def _breakdown_for(isin: str) -> dict[str, float]:
+        """Notional asset-class exposure {class: pct} for an ISIN — the same
+        basis as the live snapshot's ``class_breakdown``. Explicit exp_*
+        override (enriched holding, else taxonomy by ISIN/bare ticker), else
+        100% of the single class from ``_class_for``. May sum to >100%."""
+        h = enriched_by_isin.get(isin)
+        if h is not None and getattr(h, "class_breakdown", None):
+            return {(k.value if hasattr(k, "value") else str(k)): v
+                    for k, v in h.class_breakdown.items()}
+        ov = _exp_lut.get(isin.upper()) or _exp_lut.get(isin.upper().split(".")[0])
+        if ov:
+            return dict(ov)
+        return {_class_for(isin): 100.0}
 
     # Cum/ex ISIN variants share a 9-char prefix. The prefix group is used
     # ONLY to (a) detect a fully rotated/closed position — a group whose held
@@ -1026,25 +1041,39 @@ def build_allocation_timeline(
     # (not of its class) — the basis the per-holding-portfolio target table
     # uses, so its "Now" column and this trend line share one scale.
     holding_invested_series: list[dict[str, float]] = []
+    eq_class = AssetClass.EQUITIES.value
     for d in dates:
         iso_val = _per_isin_values(d)
-        iso_ac: dict[str, str] = {}
-        class_val: dict[str, float] = {}
+        iso_ac: dict[str, str] = {}          # primary (dominant) class per ISIN
+        iso_eq: dict[str, float] = {}        # equity notional € per ISIN
+        class_val: dict[str, float] = {}     # NOTIONAL € per class
         geo_val: dict[str, float] = {}
-        eq_val = 0.0
+        # Invested CAPITAL (denominator): the actual money in non-cash
+        # positions — NOT the sum of notional class exposure (which can exceed
+        # it), so leveraged/efficient-core funds make the class weights sum to
+        # >100% rather than being normalised away.
+        invested = 0.0
         for isin, v in iso_val.items():
-            h = enriched_by_isin.get(isin)
-            ac = _class_for(isin)
-            iso_ac[isin] = ac
-            class_val[ac] = class_val.get(ac, 0.0) + v
-            if ac == "Equities":
-                eq_val += v
+            bd = _breakdown_for(isin)
+            prim = max(bd, key=bd.get) if bd else "Other"
+            iso_ac[isin] = prim
+            if prim == cash_class:
+                continue
+            invested += v
+            for cls, pct in bd.items():
+                if cls == cash_class:
+                    continue
+                class_val[cls] = class_val.get(cls, 0.0) + v * (float(pct) / 100.0)
+            eq_contrib = v * (float(bd.get(eq_class, 0.0)) / 100.0)
+            iso_eq[isin] = eq_contrib
+            if eq_contrib > 0:
+                h = enriched_by_isin.get(isin)
                 if h and h.geo_breakdown:
                     tot = sum(h.geo_breakdown.values()) or 1.0
                     for g, p in h.geo_breakdown.items():
                         gn = g.value if hasattr(g, "value") else str(g)
-                        geo_val[gn] = geo_val.get(gn, 0.0) + v * (p / tot)
-        invested = sum(val for k, val in class_val.items() if k != cash_class)
+                        geo_val[gn] = geo_val.get(gn, 0.0) + eq_contrib * (p / tot)
+        eq_val = sum(iso_eq.values())
         asset_series.append({
             k: (val / invested * 100.0)
             for k, val in class_val.items()
@@ -1053,6 +1082,8 @@ def build_allocation_timeline(
         geo_series.append({
             k: (val / eq_val * 100.0) for k, val in geo_val.items() if eq_val > 0
         })
+        # Per-holding weight as % of its dominant class's notional (kept for
+        # the equity/FI sleeve tables); and as % of invested capital.
         holding_series.append({
             isin: (v / class_val[iso_ac[isin]] * 100.0)
             for isin, v in iso_val.items()
