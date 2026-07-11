@@ -196,10 +196,8 @@ class MetricsEngine:
         if class_totals is not None:
             df["pct_of_class"] = (df["current_value"] / class_totals * 100).fillna(0.0)
 
-        class_order = {v: i for i, v in enumerate([
-            "Equities", "Fixed Income", "Cash & Cash Equivalents",
-            "Gold", "Commodities", "Crypto", "Alternative",
-        ])}
+        from tarzan.models.taxonomy import ORDER_DASHBOARD
+        class_order = {v: i for i, v in enumerate(ORDER_DASHBOARD)}
         if not df.empty:
             df["_sort"] = df["asset_class"].map(class_order).fillna(99)
             df = df.sort_values(

@@ -36,6 +36,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
+from tarzan.models.taxonomy import (
+    ORDER_NEWSLETTER as _ORDER_NEWSLETTER,
+    ORDER_PERF as _ORDER_PERF,
+)
 from tarzan.export._format import (
     ASSET_CLASS_BG,
     ASSET_CLASS_COLORS,
@@ -109,10 +113,7 @@ MARKET_REGION_COLORS = {
 # is reported as a separate accounting entity (no "% of portfolio" so
 # it does not appear to compete with invested classes). Any asset class
 # not listed here is appended (never silently dropped from the report).
-_NEWSLETTER_CLASS_ORDER = [
-    "Equities", "Fixed Income", "Gold", "Cash & Cash Equivalents",
-    "Commodities", "Crypto", "Alternative",
-]
+_NEWSLETTER_CLASS_ORDER = list(_ORDER_NEWSLETTER)
 _extra_classes = [c for c in ASSET_CLASS_COLORS if c not in _NEWSLETTER_CLASS_ORDER]
 ASSET_CLASS_ORDER = _NEWSLETTER_CLASS_ORDER + sorted(_extra_classes)
 
@@ -2403,10 +2404,7 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
 # sequence that reads growth-engine → diversifiers → defensive. Classes or
 # roles not listed here are appended (never dropped), so a new taxonomy
 # value still shows up.
-_PERF_CLASS_ORDER = [
-    "Equities", "Fixed Income", "Commodities", "Gold",
-    "Alternative", "Cash & Cash Equivalents",
-]
+_PERF_CLASS_ORDER = list(_ORDER_PERF)
 _PERF_ROLE_ORDER = {
     "Equities": ["Equity Broad", "Equity Factor", "Equity Leveraged",
                  "Efficient Core", "Multi-Asset"],
@@ -3139,10 +3137,9 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         ac = inst.get("asset_class") or "Other"
         role = inst.get("role") or "\u2014"
         _grouped.setdefault(ac, OrderedDict()).setdefault(role, []).append(inst)
-    _perf_cls_order = [
-        "Equities", "Fixed Income", "Commodities", "Gold",
-        "Alternative", "Cash & Cash Equivalents",
-    ]
+    # Same order as the Performance table (was a verbatim copy of
+    # _PERF_CLASS_ORDER — now shares the one registry-backed list).
+    _perf_cls_order = _PERF_CLASS_ORDER
     def _cls_sort(ac):
         return _perf_cls_order.index(ac) if ac in _perf_cls_order else 99
     for ac in sorted(_grouped.keys(), key=_cls_sort):
