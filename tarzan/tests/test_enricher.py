@@ -5,7 +5,38 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from tarzan.data.enricher import _normalize_minor_currency
+from tarzan.data.enricher import _as_fraction, _normalize_minor_currency
+
+
+class TestYieldFractionNormalization:
+    """yield_pct/ter are stored as FRACTIONS; the metrics layer ×100 them.
+    yfinance mixes fraction (yield=0.021) and percent (dividendYield=2.4)
+    conventions, so _as_fraction must normalize the percent ones."""
+
+    def test_fraction_field_unchanged(self):
+        assert _as_fraction(0.021) == pytest.approx(0.021)
+
+    def test_percent_field_divided_by_100(self):
+        # dividendYield=2.4 (percent) must become 0.024 so ×100 gives 2.4%.
+        assert _as_fraction(2.4) == pytest.approx(0.024)
+
+    def test_small_ter_fraction_unchanged(self):
+        assert _as_fraction(0.0007) == pytest.approx(0.0007)
+
+    def test_none_and_nonpositive_and_nan_map_to_none(self):
+        assert _as_fraction(None) is None
+        assert _as_fraction(0) is None
+        assert _as_fraction(-1.0) is None
+        assert _as_fraction(float("nan")) is None
+
+    def test_weighted_yield_no_longer_100x_inflated(self):
+        # 50/50 book: one fraction-field holding, one percent-field holding.
+        weights = [50.0, 50.0]
+        yields = [_as_fraction(0.021), _as_fraction(2.4)]
+        total_w = sum(weights)
+        wy = sum((y or 0.0) * w for y, w in zip(yields, weights)) / total_w * 100
+        # ~ (2.1% + 2.4%)/2 = 2.25%, not 121%.
+        assert wy == pytest.approx(2.25, abs=0.01)
 
 
 class TestNormalizeMinorCurrency:
@@ -49,6 +80,30 @@ class TestNormalizeMinorCurrency:
         rescaled, currency = _normalize_minor_currency(prices, "XYZ")
         assert currency == "XYZ"
         assert rescaled.iloc[0] == 42.0
+
+
+class TestConvertToEurFxFailure:
+    """A total FX failure must NOT value a non-EUR holding 1:1 as EUR."""
+
+    def test_no_fx_returns_empty_not_native_prices(self, monkeypatch):
+        import tarzan.data.enricher as enricher
+        # Simulate total FX failure (both pairs throttled, no cache).
+        monkeypatch.setattr(enricher, "_get_fx_series",
+                            lambda ccy: pd.Series(dtype=float))
+        prices = pd.Series(
+            [500.0, 510.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02"]),
+        )
+        out = enricher.convert_to_eur(prices, "USD")
+        # Empty → caller drops the (unconvertible) price and falls back to the
+        # last-known EUR anchor, rather than booking $500 as €500.
+        assert out.empty
+
+    def test_eur_passthrough_unaffected(self):
+        import tarzan.data.enricher as enricher
+        prices = pd.Series([100.0, 101.0])
+        out = enricher.convert_to_eur(prices, "EUR")
+        assert list(out) == [100.0, 101.0]
 
     def test_idempotent_on_major_after_rescale(self):
         prices = pd.Series([28450.0])

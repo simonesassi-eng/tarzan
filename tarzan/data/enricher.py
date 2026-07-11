@@ -199,8 +199,15 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     if cached is not None and not cached.empty:
         logger.debug("FX %s fetch failed; using cached history", currency)
         return cached
-    logger.warning("No FX data for %s, assuming rate=1.0 (flagged)", currency)
-    return pd.Series([1.0], index=[pd.Timestamp.now()])
+    # Total FX failure (both pairs throttled AND no disk cache). Return the
+    # EUR sentinel (empty series) rather than the old rate=1.0 fabrication:
+    # a 1.0 rate silently values a non-EUR holding 1:1 as EUR (e.g. $500 → €500,
+    # ~15-40% overstatement). An empty series tells convert_to_eur/_set_price_data
+    # that conversion is impossible, so no live EUR price is built and the
+    # holding falls back to its last-known EUR anchor (which uses the order's
+    # real recorded fx_rate), disclosed via data_source / coverage.
+    logger.warning("No FX data for %s; conversion unavailable (holding valued from last-known EUR anchor)", currency)
+    return pd.Series(dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +248,27 @@ def _normalize_minor_currency(
     return prices, currency
 
 
+def _as_fraction(value) -> Optional[float]:
+    """Normalize a yield/TER to a FRACTION (0.021 == 2.1%), tolerant of
+    yfinance's inconsistent fraction-vs-percent field conventions.
+
+    A genuine dividend yield or expense ratio expressed as a fraction is
+    always well below 1.0 (1.0 would be 100%). Any value >= 1.0 therefore
+    came from a percent-scaled field (e.g. dividendYield=2.4) and is divided
+    by 100. None/NaN/non-positive inputs return None so downstream .fillna(0)
+    treats them as absent. A value in (0, 1) is assumed already a fraction.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (v == v) or v <= 0.0:  # NaN or non-positive
+        return None
+    return v / 100.0 if v >= 1.0 else v
+
+
 def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
     """Convert a price series to EUR using the FX rate.
 
@@ -251,7 +279,13 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
         return prices
     fx = _get_fx_series(currency)
     if fx.empty:
-        return prices
+        # No FX rate available for a non-EUR currency: conversion is
+        # impossible. Return an empty series (not the native prices) so the
+        # caller does NOT mislabel native-currency prices as EUR — the
+        # holding then falls back to its last-known EUR anchor. (For EUR,
+        # _get_fx_series never reaches here — the currency=="EUR" guard above
+        # returns first.)
+        return pd.Series(dtype=float)
     combined = pd.DataFrame({"price": prices, "fx": fx})
     combined["fx"] = combined["fx"].ffill().bfill()
     return (combined["price"] * combined["fx"]).dropna()
@@ -605,6 +639,25 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
 
     merged = price_cache.merge_history(cached, fresh)
     result = merged if merged is not None and not merged.empty else fresh
+    # Staleness signal: if the tail fetch brought nothing fresh (throttle /
+    # persistent 429) the newest row may be days/weeks old, yet downstream
+    # uses result.iloc[-1] as "today's price". The module promises today's
+    # price is never served stale, so warn when the last close is older than
+    # the refresh tail — the figure is then a stale close, not a live quote.
+    if (fresh is None or fresh.empty) and result is not None and not result.empty:
+        try:
+            last_ts = pd.Timestamp(result.index.max())
+            if last_ts.tz is not None:
+                last_ts = last_ts.tz_convert("UTC").tz_localize(None)
+            age_days = (pd.Timestamp.now() - last_ts).days
+            if age_days > price_cache.REFRESH_TAIL_DAYS:
+                logger.warning(
+                    "%s: live fetch returned no data; newest close is %d day(s) "
+                    "old (%s) — using a STALE close as the current price.",
+                    symbol, age_days, last_ts.date(),
+                )
+        except Exception:  # noqa: BLE001 — never let a diagnostic break the fetch
+            pass
     # Back-adjust any unadjusted split/denomination jump (e.g. Yahoo's
     # CL2.MI) so multi-period returns are correct, and persist the cleaned
     # series so the disk cache self-heals on the next run.
@@ -1227,9 +1280,18 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                 / holding.cost_basis_eur * 100
             )
 
-        # Metadata
-        holding.ter = info.get("annualReportExpenseRatio") or info.get("expenseRatio")
-        holding.yield_pct = (
+        # Metadata. yield_pct and ter are stored as FRACTIONS (0.021 = 2.1%);
+        # the metrics layer multiplies by 100 to display a percentage. yfinance
+        # is inconsistent across these fields — 'yield'/'trailingAnnualDividendYield'
+        # /'annualReportExpenseRatio' are fractions (0.021) but 'dividendYield'
+        # and 'fiveYearAvgDividendYield' are percents (2.4) in modern versions —
+        # so a raw fallback chain mixes units and inflates weighted_yield ~100x.
+        # _as_fraction normalizes any percent-scaled value (>= 1.0, impossible
+        # for a real fraction yield/TER) back to a fraction.
+        holding.ter = _as_fraction(
+            info.get("annualReportExpenseRatio") or info.get("expenseRatio")
+        )
+        holding.yield_pct = _as_fraction(
             info.get("yield") or info.get("dividendYield")
             or info.get("trailingAnnualDividendYield") or info.get("fiveYearAvgDividendYield")
         )
@@ -1283,9 +1345,15 @@ def _set_price_data(
             price = float(scalar.iloc[0])
             if currency != "EUR":
                 fx = _get_fx_series(currency)
-                if not fx.empty:
+                if fx.empty:
+                    # No FX rate: cannot convert this native quote to EUR.
+                    # Leave current_price None so the caller's last-known EUR
+                    # anchor applies, rather than booking a native price as EUR.
+                    price = None
+                else:
                     price = price * float(fx.iloc[-1])
-            current_price = float(price)
+            if price is not None:
+                current_price = float(price)
 
     holding.current_price = current_price
 
@@ -1318,15 +1386,25 @@ def _try_terrapin_fallback(holding: Holding) -> None:
             # Convert the clean price to EUR per 100 nominal. The FX series
             # is EUR-per-native-unit, so a native price is multiplied by it.
             price_eur_per_100 = price_native
+            fx_unavailable = False
             if currency != "EUR":
                 fx = _get_fx_series(currency)
                 if not fx.empty:
                     price_eur_per_100 = price_native * float(fx.iloc[-1])
                 else:
+                    # No FX rate: a native clean price cannot be converted to
+                    # EUR. Do not book it 1:1 — fall back to the CSV/order EUR
+                    # anchor below instead of a mislabeled native value.
+                    fx_unavailable = True
                     logger.warning(
-                        "Bond %s: no FX for %s, Borsa price left unconverted (flagged)",
+                        "Bond %s: no FX for %s; using CSV EUR anchor (native price not converted)",
                         isin, currency,
                     )
+
+            if fx_unavailable:
+                holding.current_value = holding.market_value_eur
+                holding.data_source = "input_csv (FX unavailable)"
+                return
 
             value = value_position(holding.quantity, price_eur_per_100, bond=True)
 

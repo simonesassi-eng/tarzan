@@ -84,8 +84,16 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         series = pd.Series(dtype=float)
     else:
         prices = history["Close"]
-        currency = data.get("info", {}).get("currency", "USD")
-        series = _enr.convert_to_eur(prices, currency) if currency != "EUR" else prices
+        # Only FX-convert when yfinance actually reports a non-EUR currency.
+        # Defaulting a MISSING currency to "USD" (the old behavior) spuriously
+        # divided an already-EUR benchmark by USDEUR, corrupting its level,
+        # CAGR and the α/β reference series. A missing currency → leave the
+        # series as-is rather than guess a conversion.
+        currency = data.get("info", {}).get("currency")
+        if currency and currency != "EUR":
+            series = _enr.convert_to_eur(prices, currency)
+        else:
+            series = prices
 
     with _enr._net_lock:
         _enr._benchmark_memo[ticker] = series
