@@ -21,6 +21,7 @@ sparkline shades green above / red below).
 from __future__ import annotations
 
 import logging
+import time as _time
 from datetime import datetime, time as dtime
 from typing import Optional
 
@@ -171,6 +172,13 @@ MARKETS: list[tuple[str, str, str]] = [
 CATEGORY_ORDER = ["US", "Europe", "Asia", "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None
+_memo_at: float = 0.0  # monotonic timestamp the memo was filled
+# Live quotes go stale within a session. Memoizing forever means a
+# long-running process (a persistent worker / server, not the one-shot CLI)
+# serves the same quotes across the market close and into the next session.
+# A short TTL bounds that: within one CLI run every call is still served from
+# the memo, but a process that outlives the TTL re-fetches.
+_MEMO_TTL_SECONDS = 900  # 15 minutes (≈ yfinance intraday lag)
 
 
 # Intraday-only sibling fallback. When a EUR listing has no intraday feed
@@ -442,8 +450,8 @@ def broker_1d(tickers: list[str]) -> dict:
 def fetch_market_quotes(force: bool = False) -> list[dict]:
     """Fetch the curated market quotes (memoised per process). Best-effort:
     returns whatever could be fetched; never raises."""
-    global _memo
-    if _memo is not None and not force:
+    global _memo, _memo_at
+    if _memo is not None and not force and (_time.monotonic() - _memo_at) < _MEMO_TTL_SECONDS:
         return _memo
     try:
         from tarzan.data.enricher import _fetch_history
@@ -468,4 +476,5 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             continue
 
     _memo = out
+    _memo_at = _time.monotonic()
     return out

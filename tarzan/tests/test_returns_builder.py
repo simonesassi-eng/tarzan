@@ -157,6 +157,59 @@ class TestQuantityTimeline:
         assert tl.qty_at("AAA", datetime.date(2025, 7, 1)) == 150.0
         assert tl.qty_at("AAA", datetime.date(2025, 10, 1)) == 120.0
 
+    def test_qty_at_exact_event_date_boundaries(self):
+        # A query exactly on an event date must include that day's change.
+        orders = [
+            _o(OrderType.BUY, "AAA", qty=100.0, d=(2025, 1, 1)),
+            _o(OrderType.SELL, "AAA", qty=-30.0, d=(2025, 9, 1)),
+        ]
+        tl = QuantityTimeline(orders)
+        assert tl.qty_at("AAA", datetime.date(2025, 1, 1)) == 100.0
+        assert tl.qty_at("AAA", datetime.date(2025, 9, 1)) == 70.0
+        assert tl.qty_at("ZZZ", datetime.date(2025, 1, 1)) == 0.0  # unknown ISIN
+
+
+class TestPriceLookupBinarySearch:
+    """The searchsorted-based price lookups must match a naive linear scan
+    (the pre-optimization behavior) exactly, on and off the sample points."""
+
+    def _series(self):
+        idx = pd.to_datetime(["2025-01-01", "2025-01-10", "2025-02-01", "2025-03-15"])
+        return pd.Series([100.0, 110.0, 90.0, 130.0], index=idx)
+
+    def test_price_at_matches_linear_scan(self):
+        from tarzan.engine.returns_builder import _price_at
+        s = self._series()
+
+        def naive(series, d):
+            avail = series.loc[series.index <= pd.Timestamp(d)]
+            return None if avail.empty else float(avail.iloc[-1])
+
+        for d in [datetime.date(2024, 12, 31),   # before first
+                  datetime.date(2025, 1, 1),     # exact first
+                  datetime.date(2025, 1, 5),     # between
+                  datetime.date(2025, 2, 1),     # exact middle
+                  datetime.date(2025, 4, 1)]:    # after last
+            assert _price_at(s, d) == naive(s, d), d
+
+    def test_interp_synthetic_matches_linear_reference(self):
+        from tarzan.engine.returns_builder import _interp_synthetic
+        s = self._series()
+        # Midpoint between 2025-01-01 (100) and 2025-01-10 (110): 5 of 9 days.
+        price, src = _interp_synthetic(s, datetime.date(2025, 1, 6))
+        assert src == "synthetic"
+        assert price == pytest.approx(100.0 + (5.0 / 9.0) * 10.0)
+        # Exact sample point → the point's own value, tagged synthetic.
+        assert _interp_synthetic(s, datetime.date(2025, 2, 1)) == (90.0, "synthetic")
+        # Outside the range → carry-flat at the nearest end.
+        assert _interp_synthetic(s, datetime.date(2024, 1, 1)) == (100.0, "carry_flat")
+        assert _interp_synthetic(s, datetime.date(2026, 1, 1)) == (130.0, "carry_flat")
+
+    def test_interp_single_point_is_carry_flat(self):
+        from tarzan.engine.returns_builder import _interp_synthetic
+        s = pd.Series([42.0], index=pd.to_datetime(["2025-01-01"]))
+        assert _interp_synthetic(s, datetime.date(2025, 6, 1)) == (42.0, "carry_flat")
+
 
 def _enriched_with_history(isin, prices, start=(2025, 1, 1)):
     idx = pd.date_range(start=datetime.date(*start), periods=len(prices), freq="D")

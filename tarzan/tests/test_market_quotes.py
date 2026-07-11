@@ -241,3 +241,37 @@ def test_broker_1d_closed_falls_back_to_sibling_close(monkeypatch):
     monkeypatch.setattr(mq, "market_open_now", lambda s: False)
     res = mq.broker_1d(["NTSG.MI"])
     assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
+
+
+# ---------------------------------------------------------------------------
+# Memo TTL — a long-running process must not serve stale quotes forever
+# ---------------------------------------------------------------------------
+def test_memo_serves_within_ttl_and_refetches_after(monkeypatch):
+    mq._memo = None
+    mq._memo_at = 0.0
+    calls = {"n": 0}
+
+    def _fetch(symbol):
+        calls["n"] += 1
+        return _close([100.0, 101.0])
+
+    monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", _fetch)
+
+    # Drive a controllable clock.
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(mq._time, "monotonic", lambda: clock["t"])
+    try:
+        fetch_market_quotes()               # cold fill
+        after_first = calls["n"]
+        assert after_first > 0
+
+        fetch_market_quotes()               # within TTL → served from memo
+        assert calls["n"] == after_first
+
+        clock["t"] += mq._MEMO_TTL_SECONDS + 1   # advance past the TTL
+        fetch_market_quotes()               # expired → refetch
+        assert calls["n"] > after_first
+    finally:
+        mq._memo = None
+        mq._memo_at = 0.0
