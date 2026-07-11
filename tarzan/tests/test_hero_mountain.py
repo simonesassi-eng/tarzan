@@ -1,13 +1,12 @@
-"""Tests for the hero since-inception P&L/TWROR and the mountain chart.
+"""Tests for the hero since-inception P&L/TWROR.
 
 Network-free: they build the newsletter context from a hand-made
-PortfolioMetrics and assert the hero and sparkline contracts.
+PortfolioMetrics and assert the hero contract, plus a full-render smoke test.
 """
 
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from tarzan.export.newsletter import build_context, render_newsletter
 from tarzan.models.investor_config import InvestorConfig
@@ -96,37 +95,7 @@ class TestHeroSinceInception:
         assert hero["twror_pct"] is None
 
 
-class TestMountainChart:
-    def test_plots_actual_value_series(self):
-        spark = build_context(_metrics(with_order_returns=True), _config())["sparkline"]
-        assert spark["available"] is True
-        assert spark["is_mountain"] is True
-        # The chart window is the last 30 days (here all 5 points fit).
-        assert spark["label"] == "Last 30 days"
-        assert len(spark["bars"]) == 5
-        # Order path → a real-money PnL gain pill (€, net of contributions).
-        pill_text = " ".join(p["text"] for p in spark["pills"])
-        assert "PnL" in pill_text
-        assert "350" in pill_text  # +€350 gained over the window
-
-    def test_twr_pill_matches_returns_table_1m(self):
-        """The chart TWR pill must equal performance_full['1m'] so it agrees
-        with the 'Returns vs benchmarks' total-portfolio 1M cell."""
-        spark = build_context(_metrics(with_order_returns=True), _config())["sparkline"]
-        pill_text = " ".join(p["text"] for p in spark["pills"])
-        assert "TWROR" in pill_text
-        assert "+0.25%" in pill_text
-
-    def test_legacy_line_when_no_order_series(self):
-        m = _metrics(with_order_returns=False)
-        m.portfolio_history = pd.Series(
-            [100.0, 101.0, 102.0],
-            index=pd.date_range("2026-01-01", periods=3, freq="D"),
-        )
-        spark = build_context(m, _config())["sparkline"]
-        assert spark["is_mountain"] is False
-        assert spark["label"].startswith("Last ")
-
+class TestRender:
     def test_renders_without_crash(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         # Lean hero: the portfolio value band (scoreboard + mountain removed).
@@ -136,27 +105,3 @@ class TestMountainChart:
         assert "Total P&amp;L" in html
         assert "Unrealized P&amp;L" in html
         assert "TWROR" in html
-
-    def test_nan_values_do_not_crash(self):
-        """A cold cache / vendor outage can leave NaN valuations on some
-        days; the area chart must degrade, not raise (regression)."""
-        import numpy as np
-        m = _metrics(with_order_returns=True)
-        m.actual_value_series = pd.Series(
-            [4800.0, np.nan, 5100.0, np.nan, 6000.0],
-            index=pd.date_range("2025-12-29", periods=5, freq="W"),
-        )
-        spark = build_context(m, _config())["sparkline"]
-        # No NaN heights leak through.
-        assert all(isinstance(b["height"], int) for b in spark["bars"])
-
-    def test_all_nan_series_falls_back_flat(self):
-        import numpy as np
-        m = _metrics(with_order_returns=True)
-        m.actual_value_series = pd.Series(
-            [np.nan, np.nan, np.nan],
-            index=pd.date_range("2025-12-29", periods=3, freq="W"),
-        )
-        spark = build_context(m, _config())["sparkline"]
-        assert spark["available"] is False
-        assert all(isinstance(b["height"], int) for b in spark["bars"])

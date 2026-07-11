@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -99,10 +100,7 @@ def issues() -> list[Issue]:
 
 def counts() -> dict[str, int]:
     """Issue counts per severity, e.g. ``{"ERROR": 0, "WARNING": 3}``."""
-    out: dict[str, int] = {}
-    for i in _report.issues:
-        out[i.severity] = out.get(i.severity, 0) + 1
-    return out
+    return Counter(i.severity for i in _report.issues)
 
 
 def summary_line() -> str:
@@ -141,9 +139,7 @@ def render() -> str:
     )
     lines.append(f"SUMMARY: {summary}")
     # Per-category (source) counts for a quick "where" read.
-    by_source: dict[str, int] = {}
-    for i in all_issues:
-        by_source[i.source] = by_source.get(i.source, 0) + 1
+    by_source = Counter(i.source for i in all_issues)
     lines.append("BY SECTION: " + ", ".join(
         f"{src}={n}" for src, n in sorted(by_source.items())
     ))

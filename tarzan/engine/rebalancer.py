@@ -77,21 +77,6 @@ def compute_unified_rebalancing(
     return optimize_local_search(holdings, config, total_value, lump_sum=lump_sum)
 
 
-def compute_drift_penalty_sensitivity(
-    holdings: list[Holding],
-    config: InvestorConfig,
-    total_value: float,
-    lump_sum: Optional[float] = None,
-    weights: Optional[list[float]] = None,
-) -> list[dict]:
-    """Retired. The drift-penalty sweep was an artifact of the MILP objective
-    (it varied ``rebalancing_drift_penalty_weight``); the local search has no
-    such knob, so there is nothing meaningful to sweep. Returns an empty list,
-    which makes the Excel/newsletter "tuning" section hide itself.
-    """
-    return []
-
-
 # ---------------------------------------------------------------------------
 # Verification of a rebalancing plan (shared output contract)
 # ---------------------------------------------------------------------------

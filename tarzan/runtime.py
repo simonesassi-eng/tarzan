@@ -33,9 +33,6 @@ class RunContext:
     deterministic: bool = False
     # Pinned "today". When None, the live wall-clock date is used.
     as_of: Optional[datetime.date] = None
-    # Pinned wall-clock stamp string for report headers in deterministic mode
-    # (so "Generated ..." lines don't vary run-to-run). None → live now().
-    stamp: Optional[str] = None
 
 
 # Process-global, reset per run.
@@ -48,14 +45,13 @@ def reset() -> None:
     _ctx = RunContext()
 
 
-def configure(deterministic: bool = False, as_of: Optional[datetime.date] = None,
-              stamp: Optional[str] = None) -> None:
+def configure(deterministic: bool = False, as_of: Optional[datetime.date] = None) -> None:
     """Set the run context. ``as_of`` implies a pinned clock even if
     ``deterministic`` is False (an as-of valuation without silencing live
     quotes is a legitimate mode); ``deterministic`` additionally stands the
     live/AI surfaces down."""
     global _ctx
-    _ctx = RunContext(deterministic=deterministic, as_of=as_of, stamp=stamp)
+    _ctx = RunContext(deterministic=deterministic, as_of=as_of)
 
 
 def is_deterministic() -> bool:
@@ -77,11 +73,9 @@ def today() -> datetime.date:
 
 
 def now_stamp(fmt: str = "%d %b %Y, %H:%M") -> str:
-    """A wall-clock stamp for report headers. Pinned string in deterministic
-    mode (falls back to the as_of date at midnight if no explicit stamp was
-    given), else the live formatted now()."""
-    if _ctx.stamp is not None:
-        return _ctx.stamp
+    """A wall-clock stamp for report headers. In deterministic mode this is
+    the as_of date at midnight (so headers don't vary run-to-run); otherwise
+    the live formatted now()."""
     if _ctx.deterministic and _ctx.as_of is not None:
         return datetime.datetime(
             _ctx.as_of.year, _ctx.as_of.month, _ctx.as_of.day

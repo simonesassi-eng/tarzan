@@ -66,39 +66,6 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None) -> dict:
 # NAV construction
 # ---------------------------------------------------------------------------
 
-def build_nav(holdings) -> pd.Series:
-    """Aligned daily portfolio NAV = Σ (price_history_i × quantity_i).
-
-    Mirrors MetricsEngine's holdings path: concat, normalise to naive daily
-    index, forward-fill, and keep only days where every holding is priced.
-    """
-    series = []
-    for h in holdings:
-        ph = getattr(h, "price_history", None)
-        q = getattr(h, "quantity", 0) or 0
-        if ph is None or len(ph) == 0 or q <= 0:
-            continue
-        s = ph * q
-        s.name = getattr(h, "ticker", None)
-        span = int((ph.index[-1] - ph.index[0]).days)
-        series.append((span, s))
-    if not series:
-        return pd.Series(dtype=float)
-    # Exclude short-history holdings (<1y) so a single young instrument does
-    # not collapse the whole NAV window (mirrors MetricsEngine); fall back to
-    # the full set if that would leave nothing.
-    long_series = [s for span, s in series if span >= 365]
-    kept = long_series if long_series else [s for _, s in series]
-    df = pd.concat(kept, axis=1)
-    idx = df.index
-    df.index = (idx.tz_convert("UTC").tz_localize(None).normalize()
-                if getattr(idx, "tz", None) is not None else idx.normalize())
-    df = df[~df.index.duplicated(keep="last")].sort_index().ffill().dropna(how="any")
-    if df.empty:
-        return pd.Series(dtype=float)
-    return df.sum(axis=1)
-
-
 def daily_returns(nav: pd.Series) -> pd.Series:
     if nav is None or len(nav) < 2:
         return pd.Series(dtype=float)

@@ -7,7 +7,7 @@ table-based layout, inline CSS, no JavaScript, no external resources.
 
 The newsletter has the following structure:
     1. Header (brand + date + issue)
-    2. Hero (total value + chip + KPI grid + 30-day sparkline)
+    2. Hero (total value + chip + KPI grid)
     3. Smart insights (3 takeaways: action, risk, win)
     4. Movers this week (best & worst by 1W return)
     5. Allocation by asset class (with stacked bar + per-class rows)
@@ -28,7 +28,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -46,6 +46,7 @@ from tarzan.export._format import (
     ASSET_CLASS_COLORS,
     GEO_COLORS as _GEO_COLORS,
     css,
+    eur_smart as _eur_smart,
     short_instrument_name,
 )
 from tarzan.export import _charts
@@ -53,7 +54,6 @@ from tarzan.export import _charts
 # under their original names so every call-site here (and the public
 # ``market_snapshot`` symbol) is unchanged.
 from tarzan.export._perf_series import (  # noqa: F401  (re-exported)
-    _MARKETS_ORDER,
     _flow_list,
     _geo_benchmark_series,
     _norm_series,
@@ -133,16 +133,6 @@ def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> st
     if amount < 0:
         return f"−{formatted}"
     return formatted
-
-
-def _eur_smart(amount: Optional[float], signed: bool = False) -> str:
-    """Compact EUR formatter — see :func:`tarzan.export._format.eur_smart`.
-
-    Kept as a thin wrapper for backwards compatibility with the
-    several call sites in this module.
-    """
-    from tarzan.export._format import eur_smart as _impl
-    return _impl(amount, signed=signed)
 
 
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
@@ -774,214 +764,6 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "rebal_bg": rebal_bg,
         "rebal_n_actions": n_actions,
     }
-
-
-def _build_sparkline(ctx: _NewsletterContext, n_days: int = 30) -> dict:
-    """Build the hero chart: a 30-day mountain (area) view of the patrimony.
-
-    When the order path produced ``actual_value_series`` — the dense daily
-    euro worth of the whole portfolio with the deposit/withdrawal jumps
-    left in — the chart plots its **last 30 days** as a mountain so the
-    reader sees the recent real-wealth trajectory. Without an order list it
-    degrades to the legacy 30-day line on the consolidated holdings
-    history. Either way it carries a 30-day change pill and the vs-α/β
-    benchmark delta over the same window; the lifetime PnL/TWROR figures
-    live in the hero line above, not here.
-    """
-    m = ctx.metrics
-
-    actual = m.actual_value_series
-    is_mountain = actual is not None and len(actual) >= 2
-    if is_mountain:
-        window = actual.tail(n_days)
-    else:
-        history = m.portfolio_history
-        window = history.tail(n_days) if (history is not None and len(history) >= 2) else None
-
-    # Drop NaN/inf so the area chart never crashes on a data gap: a cold
-    # cache or a vendor outage (Yahoo 5xx) can leave NaN valuations on some
-    # days, and int(round(NaN)) would otherwise blow up the whole send.
-    if window is not None:
-        window = window.replace([float("inf"), float("-inf")], float("nan")).dropna()
-    if window is None or len(window) < 2:
-        return _flat_sparkline(m, n_days, is_mountain)
-
-    # Anchor the final point to the authoritative snapshot value so the
-    # chart ends exactly at the hero's "total value". The order-derived
-    # series can value a couple of hard-to-price bonds via carry-flat,
-    # which would otherwise leave the chart end a few hundred euros below
-    # the snapshot (which uses the Borsa Italiana today-price).
-    if is_mountain and m.total_value and m.total_value == m.total_value and m.total_value > 0:
-        window = window.copy()
-        window.iloc[-1] = float(m.total_value)
-
-    start_v, end_v = float(window.iloc[0]), float(window.iloc[-1])
-    vmin, vmax = float(window.min()), float(window.max())
-    rng = max(vmax - vmin, 1.0)
-
-    # Map values to bar heights between 6 and 44 px. The 6px floor keeps
-    # even the trough visible as a filled area rather than a gap. The
-    # NaN guard is belt-and-suspenders after the dropna above.
-    bars = []
-    for v in window.values:
-        fv = float(v)
-        h = 6 + (fv - vmin) / rng * 38 if fv == fv else 6
-        bars.append({"height": int(round(h))})
-
-    pills = _build_sparkline_pills(ctx, window, start_v, end_v)
-
-    # X-axis date labels: start, two interior points, end (evenly spaced),
-    # so the mountain reads as a dated trend rather than two endpoints.
-    idx = window.index
-    n = len(window)
-
-    def _axis_label(pos: int) -> str:
-        try:
-            return idx[pos].strftime("%b %d")
-        except (AttributeError, TypeError, IndexError):
-            return ""
-
-    axis_positions = sorted({0, n // 3, (2 * n) // 3, n - 1})
-    axis_labels = [_axis_label(p) for p in axis_positions]
-
-    return {
-        "available": True,
-        "label": f"Last {n_days} days",
-        "is_mountain": is_mountain,
-        "start_label": window.index[0].strftime("%b %d") if hasattr(window.index[0], "strftime") else "",
-        "end_label": window.index[-1].strftime("%b %d") if hasattr(window.index[-1], "strftime") else "",
-        "start_value": _eur_smart(start_v),
-        "end_value": _eur_smart(end_v),
-        "is_positive": end_v >= start_v,
-        "bars": bars,
-        "pills": pills,
-        "axis_labels": axis_labels,
-    }
-
-
-def _flat_sparkline(m: PortfolioMetrics, n_days: int, is_mountain: bool) -> dict:
-    """Render-safe placeholder when there is no usable series (no history,
-    or every value in the window was NaN). Keeps the section from crashing
-    the whole newsletter send."""
-    return {
-        "available": False,
-        "label": f"Last {n_days} days",
-        "is_mountain": is_mountain,
-        "start_label": "", "end_label": "",
-        "start_value": _eur_smart(m.total_value),
-        "end_value": _eur_smart(m.total_value),
-        "is_positive": True,
-        "bars": [{"height": 22} for _ in range(n_days)],
-        "pills": [],
-        "axis_labels": [],
-    }
-
-
-def _build_sparkline_pills(
-    ctx: _NewsletterContext,
-    window: pd.Series,
-    start_v: float,
-    end_v: float,
-) -> list[dict]:
-    """Build the chart's 30-day pills.
-
-    Order path: **PnL** — the real money gained over the window in euros,
-    net of any contributions made inside it (the delta of the cumulative
-    P&L series), NOT the raw value change which would also count deposits —
-    and **TWR %**, the portfolio's 1-month time-weighted return (from the
-    same ``performance_full`` source as the Returns tables so they agree),
-    plus the vs-α/β-benchmark delta. Holdings-only path: a single window
-    %-change pill plus the benchmark delta.
-    """
-    m = ctx.metrics
-
-    def _pill(text: str, value: Optional[float], *, neutral: bool = False) -> dict:
-        if neutral:
-            return {"text": text, "color": PALETTE["muted"], "bg": PALETTE["page"]}
-        positive = (value or 0.0) >= 0
-        return {
-            "text": text,
-            "color": PALETTE["green"] if positive else PALETTE["red"],
-            "bg": PALETTE["green_bg"] if positive else PALETTE["red_bg"],
-        }
-
-    total_pct = (end_v - start_v) / start_v * 100 if start_v > 0 else 0.0
-    if total_pct != total_pct:  # NaN guard
-        total_pct = 0.0
-    is_order_path = m.twror_pct is not None
-
-    # Real money gained over the window (net of contributions) = delta of
-    # the cumulative P&L series across the window. This is the actual gain,
-    # unlike the raw value change which also counts deposits made in-window.
-    pnl_gain_eur: Optional[float] = None
-    pnl_s = m.pnl_series
-    if is_order_path and pnl_s is not None and len(pnl_s) >= 2:
-        try:
-            pnl_w = pnl_s[pnl_s.index >= window.index[0]].dropna()
-        except TypeError:
-            pnl_w = pnl_s.dropna()
-        if len(pnl_w) >= 2:
-            cand = float(pnl_w.iloc[-1]) - float(pnl_w.iloc[0])
-            pnl_gain_eur = cand if cand == cand else None
-
-    # TWR over the window = the portfolio's 1-month time-weighted return,
-    # taken from the SAME source the Returns tables use (performance_full),
-    # so the chart pill and the "Returns vs benchmarks" total-portfolio 1M
-    # cell always agree (no off-by-a-few-days window mismatch).
-    perf_full = m.performance_full or {}
-    twr_raw = perf_full.get("1m")
-    twr_pct: Optional[float] = None
-    if is_order_path and twr_raw is not None:
-        try:
-            cand = float(twr_raw)
-            twr_pct = cand if cand == cand else None
-        except (TypeError, ValueError):
-            twr_pct = None
-
-    # α/β benchmark 1-month return, computed the same way as the table rows.
-    bench_pct: Optional[float] = None
-    bench_name = ctx.benchmark_alpha_beta or "S&P 500"
-    bench_hist = (m.benchmark_histories or {}).get(bench_name)
-    if bench_hist is not None and len(bench_hist) >= 2:
-        try:
-            from tarzan.engine.metrics import compute_period_return
-            cand = compute_period_return(bench_hist.dropna(), 30)
-            if cand is not None:
-                cand = float(cand)
-                bench_pct = cand if cand == cand else None
-        except Exception:  # noqa: BLE001 — pill is best-effort
-            bench_pct = None
-
-    if is_order_path:
-        pills: list[dict] = []
-        if pnl_gain_eur is not None:
-            pnl_pct_window = (pnl_gain_eur / start_v * 100) if start_v > 0 else None
-            pnl_txt = f"PnL {_eur_smart(pnl_gain_eur, signed=True)}"
-            if pnl_pct_window is not None:
-                pnl_txt += f" ({_pct(pnl_pct_window, signed=True)})"
-            pills.append(_pill(pnl_txt, pnl_gain_eur))
-        if twr_pct is not None:
-            pills.append(_pill(f"TWROR {_pct(twr_pct, signed=True)}", twr_pct))
-    else:
-        pills = [_pill(_pct(total_pct, signed=True), total_pct)]
-
-    if bench_pct is not None:
-        # Compare market-to-market when we have TWROR, else the total change.
-        ref = twr_pct if twr_pct is not None else total_pct
-        delta = ref - bench_pct
-        icon = "▲" if delta > 0.25 else ("▼" if delta < -0.25 else "●")
-        color = (PALETTE["green"] if delta > 0.25
-                 else PALETTE["red"] if delta < -0.25 else PALETTE["amber"])
-        bg = (PALETTE["green_bg"] if delta > 0.25
-              else PALETTE["red_bg"] if delta < -0.25 else PALETTE["amber_bg"])
-        # Make the basis explicit: the portfolio's TWROR vs the benchmark's
-        # same-period return (both time-weighted).
-        label = f"TWROR vs {bench_name}" if twr_pct is not None else f"vs {bench_name}"
-        pills.append({
-            "text": f"{label}: {icon} {_signed_pp(delta, decimals=2)} pp",
-            "color": color, "bg": bg,
-        })
-    return pills
 
 
 # ── Performance section (1D/7D/30D/since matrix + 30-day charts) ─────────────
@@ -3286,74 +3068,6 @@ def _build_risk_legend() -> list[dict]:
     return legend_rows
 
 
-def _build_sensitivity(ctx: _NewsletterContext) -> dict:
-    """Build the drift-penalty sensitivity card.
-
-    Mirrors the Excel "Drift-penalty sensitivity" table so the
-    newsletter reader has the same view of the optimization regimes
-    available with the current portfolio. The active regime is
-    highlighted, and dynamic notes compare it to its immediate
-    neighbours so the user can decide whether to tighten or loosen
-    ``rebalancing_drift_penalty_weight`` in the next run.
-    """
-    m = ctx.metrics
-    cfg = ctx.config
-    sensitivity = getattr(m, "rebalancing_sensitivity", None)
-    if not sensitivity:
-        return {"available": False}
-
-    # If every regime in the sweep produces zero trades, the
-    # sensitivity card has nothing useful to say — typical when the
-    # portfolio is already inside the tolerance band at every weight.
-    # Hide the section in that case so the email isn't bloated by an
-    # empty diagnostic.
-    has_trades = any(
-        (r.get("n_buy", 0) + r.get("n_sell", 0)) > 0
-        for r in sensitivity
-    )
-    if not has_trades:
-        return {"available": False}
-
-    configured_w = float(getattr(cfg, "rebalancing_drift_penalty_weight", 0.0) or 0.0)
-
-    def _net_by_class_str(d: dict, min_eur: float = 0.5) -> str:
-        items = sorted((d or {}).items(), key=lambda x: -abs(x[1]))
-        return "  \u00b7  ".join(
-            f"{ac} {_eur_smart(v, signed=True)}"
-            for ac, v in items
-            if abs(v) > min_eur
-        ) or "—"
-
-    rows = []
-    for r in sensitivity:
-        wmin = float(r["weight_min"])
-        wmax = float(r["weight_max"])
-        is_active = (wmin <= configured_w <= wmax)
-        range_str = f"{wmin:g}" if wmin == wmax else f"{wmin:g} – {wmax:g}"
-        rows.append({
-            "is_active": is_active,
-            "weight_range": range_str,
-            "actions": f"{r['n_buy']}B / {r['n_sell']}S",
-            "buy_total": _eur_smart(float(r["total_buy"])),
-            "sell_total": _eur_smart(float(r["total_sell"])),
-            "friction": _eur_smart(float(r["total_tax"]) + float(r["total_fee"])),
-            "max_drift": f"{float(r['max_drift_pp']):.2f}%",
-            "net_by_class": _net_by_class_str(r.get("net_by_class") or {}),
-        })
-
-    # Reuse the Excel helper for the dynamic notes so phrasing stays
-    # in lock-step between the two surfaces.
-    from tarzan.export.excel import _build_sensitivity_notes
-    notes = _build_sensitivity_notes(sensitivity, configured_w)
-
-    return {
-        "available": True,
-        "active_weight": f"{configured_w:g}",
-        "rows": rows,
-        "notes": notes,
-    }
-
-
 def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
     """Build one optimizer plan's render context (actions + totals) from a
     list of rebalancing suggestions."""
@@ -3552,7 +3266,6 @@ def build_context(
         "header": _build_header(nctx),
         "headline": _build_headline(nctx, hero),
         "hero": hero,
-        "sparkline": _build_sparkline(nctx),
         "performance30": _build_performance30(nctx),
         "ai_summary": ai_summary,
         "ai_summary_html": _colorize_pct(ai_summary) if ai_summary else None,
@@ -3564,7 +3277,6 @@ def build_context(
         "markets": _build_markets(nctx),
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
-        "sensitivity": _build_sensitivity(nctx),
         "return_contrib": _build_return_contrib(nctx),
         "tax_note": _build_tax_note(nctx),
         "methodology": _build_methodology(nctx),

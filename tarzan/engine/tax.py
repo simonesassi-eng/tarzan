@@ -109,6 +109,7 @@ def _classify(
         return False, True  # OICR gain = reddito di capitale, no offset
 
     # Bond (corporate/other) or single equity → redditi diversi.
+    from tarzan.engine.returns_builder import _order_bond_flag
     is_bondish = "bond" in it or _order_bond_flag(orders, isin)
     if is_bondish:
         return False, False
@@ -120,18 +121,6 @@ def _classify(
     # ETF-based, so default to capital income (the conservative choice —
     # it does not let losses wrongly shelter the gain).
     return False, True
-
-
-def _order_bond_flag(orders: list[Order], isin: str) -> bool:
-    """Bond detection from order prices alone (clean price ~50–150 on a
-    large nominal), for ISINs that never reached enrichment."""
-    from tarzan.data.bond_fetcher import looks_like_bond_from_orders
-    sub = [o for o in orders if o.isin == isin and o.price_native is not None]
-    if not sub:
-        return False
-    avg_price = sum(o.price_native for o in sub) / len(sub)
-    avg_qty = sum(abs(o.quantity) for o in sub) / len(sub)
-    return looks_like_bond_from_orders(avg_price, avg_qty)
 
 
 def _realizations(

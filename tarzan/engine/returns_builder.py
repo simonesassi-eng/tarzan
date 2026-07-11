@@ -197,11 +197,8 @@ def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
     return holdings
 
 
-def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
-    """Average-cost basis (EUR) of the *currently held* units per ISIN.
-
-    Walks the position-changing orders in date order keeping a running
-    ``(quantity, cost)`` pair per ISIN:
+def _apply_cost_order(qty: dict[str, float], cost: dict[str, float], o: Order) -> None:
+    """Advance the running average-cost ``(qty, cost)`` books by one order.
 
       * a buy / transfer-in adds the EUR it committed — the net cash paid
         including fees (``net_eur``), or the gross transferred value when
@@ -211,11 +208,30 @@ def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
         that remain;
       * coupons and dividends never touch cost basis (they are income, not
         a return of capital).
+    """
+    q = qty.get(o.isin, 0.0)
+    c = cost.get(o.isin, 0.0)
+    if o.quantity > 0:  # buy / transfer_in
+        committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
+        qty[o.isin] = q + o.quantity
+        cost[o.isin] = c + committed
+    elif o.quantity < 0:  # sell / transfer_out
+        sold = abs(o.quantity)
+        if q > _QTY_EPS:
+            avg = c / q
+            cost[o.isin] = max(c - avg * min(sold, q), 0.0)
+        qty[o.isin] = max(q - sold, 0.0)
 
-    The result is the acquisition cost of the units still open today — the
-    denominator the snapshot uses for per-holding unrealized P&L. Derived
-    purely from the order list, so the holdings-only and order-only paths
-    agree without needing a ``cost_basis_eur`` column in any CSV.
+
+def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
+    """Average-cost basis (EUR) of the *currently held* units per ISIN.
+
+    Walks the position-changing orders in date order (see
+    :func:`_apply_cost_order`). The result is the acquisition cost of the
+    units still open today — the denominator the snapshot uses for
+    per-holding unrealized P&L. Derived purely from the order list, so the
+    holdings-only and order-only paths agree without needing a
+    ``cost_basis_eur`` column in any CSV.
     """
     pos = sorted(
         (o for o in orders if o.is_position_change()),
@@ -224,18 +240,7 @@ def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
     qty: dict[str, float] = {}
     cost: dict[str, float] = {}
     for o in pos:
-        q = qty.get(o.isin, 0.0)
-        c = cost.get(o.isin, 0.0)
-        if o.quantity > 0:  # buy / transfer_in
-            committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
-            qty[o.isin] = q + o.quantity
-            cost[o.isin] = c + committed
-        elif o.quantity < 0:  # sell / transfer_out
-            sold = abs(o.quantity)
-            if q > _QTY_EPS:
-                avg = c / q
-                cost[o.isin] = max(c - avg * min(sold, q), 0.0)
-            qty[o.isin] = max(q - sold, 0.0)
+        _apply_cost_order(qty, cost, o)
     return cost
 
 
@@ -778,11 +783,11 @@ def _trim_carried_tail(s: pd.Series, max_trim: int = 10) -> pd.Series:
 def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
     """Daily total cost basis of the OPEN positions, reindexed onto ``index``.
 
-    Average-cost walk identical to ``cost_basis_by_isin`` (buys/transfers add
-    the committed EUR; sells remove cost at the running average), but it
-    records the running total after each trade date so the result is a step
-    function forward-filled across calendar days. Subtracting it from the
-    daily market value yields the unrealized P&L series.
+    Same average-cost walk as ``cost_basis_by_isin`` (see
+    :func:`_apply_cost_order`), but it records the running total after each
+    trade date so the result is a step function forward-filled across
+    calendar days. Subtracting it from the daily market value yields the
+    unrealized P&L series.
     """
     if index is None or len(index) == 0:
         return pd.Series(dtype=float)
@@ -794,18 +799,7 @@ def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
     cost: dict[str, float] = {}
     by_date: dict[pd.Timestamp, float] = {}
     for o in pos:
-        q = qty.get(o.isin, 0.0)
-        c = cost.get(o.isin, 0.0)
-        if o.quantity > 0:  # buy / transfer_in
-            committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
-            qty[o.isin] = q + o.quantity
-            cost[o.isin] = c + committed
-        elif o.quantity < 0:  # sell / transfer_out
-            sold = abs(o.quantity)
-            if q > _QTY_EPS:
-                avg = c / q
-                cost[o.isin] = max(c - avg * min(sold, q), 0.0)
-            qty[o.isin] = max(q - sold, 0.0)
+        _apply_cost_order(qty, cost, o)
         by_date[pd.Timestamp(o.trade_date)] = sum(cost.values())
     if not by_date:
         return pd.Series(0.0, index=index)

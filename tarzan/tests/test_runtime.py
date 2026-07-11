@@ -37,11 +37,6 @@ class TestRuntimeContext:
         # Pinned stamp derives from as_of (midnight), so headers don't vary.
         assert runtime.now_stamp("%Y-%m-%d") == "2026-06-30"
 
-    def test_explicit_stamp_wins(self):
-        runtime.configure(deterministic=True, as_of=datetime.date(2026, 6, 30),
-                          stamp="FIXED STAMP")
-        assert runtime.now_stamp() == "FIXED STAMP"
-
     def test_reset_restores_live(self):
         runtime.configure(deterministic=True, as_of=datetime.date(2020, 1, 1))
         runtime.reset()

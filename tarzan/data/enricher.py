@@ -354,7 +354,6 @@ def _fetch_ticker_data(ticker: str) -> dict:
 #   2. currency match to the expected/native currency (minor-unit aware)
 #   3. exchange-suffix priority (config-ordered, region-agnostic)
 #   4. alphabetical tiebreak (final determinism guarantee)
-#   4. alphabetical tiebreak (final determinism guarantee)
 #
 # No ISINs are hardcoded and no extra input file is needed — the criteria
 # are derived from OpenFIGI metadata + config, so this scales globally.
@@ -376,7 +375,6 @@ class _Candidate:
     price: float
     currency: str
     name: str
-    has_history: bool = True
     data: dict = field(default_factory=dict)
 
 
