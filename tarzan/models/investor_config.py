@@ -170,11 +170,15 @@ class InvestorConfig:
         # Warn on unknown keys
         _warn_unknown_keys(rows)
 
-        # Validate sums
-        _validate_sum_to_100(
+        # Validate sums. The invested asset-class targets are NOT normalized:
+        # with notional exposure (capital-efficient / leveraged funds) a target
+        # allocation can legitimately sum to more than 100% (e.g. a 90/60
+        # efficient-core sleeve), so we keep the raw values and only note the
+        # total. Equity-geography targets ARE a within-sleeve distribution, so
+        # they must still sum to 100% and are normalized.
+        _note_target_total(
             config.invested_allocation_targets_pctg,
             "invested_allocation_targets_pctg",
-            normalize=True,
         )
         _validate_sum_to_100(
             config.equity_geo_targets_pctg,
@@ -285,3 +289,17 @@ def _validate_sum_to_100(
             normalized = normalize_percentages(d)
             d.clear()
             d.update(normalized)
+
+
+def _note_target_total(d: dict[str, float], name: str) -> None:
+    """Log the total of a target set WITHOUT normalizing it.
+
+    Used for the invested asset-class targets, which may intentionally sum to
+    more than 100% under notional exposure (capital-efficient / leveraged
+    funds). The raw values are kept so "75% equities" stays 75%."""
+    if not d:
+        return
+    total = sum(d.values())
+    if abs(total - 100.0) > 0.01:
+        logger.info("%s sums to %.1f%% (kept as-is — notional target allowed "
+                    "to exceed 100%%)", name, total)

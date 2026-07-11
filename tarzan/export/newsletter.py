@@ -1602,13 +1602,15 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
 
     rows = []
     for klass in ASSET_CLASS_ORDER:
-        if alloc_df.empty:
-            continue
-        match = alloc_df[alloc_df["category"] == klass]
-        if match.empty:
-            continue
-        actual = float(match["weight_pct"].iloc[0])
+        match = (alloc_df[alloc_df["category"] == klass]
+                 if not alloc_df.empty else alloc_df)
+        has_holding = match is not None and not match.empty
         target = targets.get(klass)
+        # Show a class if it is held OR it carries a (non-zero) target, so a
+        # targeted-but-not-yet-held class appears as Now 0% vs its target.
+        if not has_holding and not (target and target > 0):
+            continue
+        actual = float(match["weight_pct"].iloc[0]) if has_holding else 0.0
         delta = actual - target if target is not None else None
         sema = _semaphore(delta, tol)
         color = ASSET_COLORS.get(klass, PALETTE["accent"])
@@ -1703,33 +1705,42 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
     timeline = m.allocation_timeline or {}
     geo_series = timeline.get("geo")
 
-    # Order regions consistently (descending by actual)
-    rows = []
+    # Actual equity-geo weights, plus any region that only has a target (so a
+    # targeted-but-absent region still shows as Now 0% vs its target).
+    actual_by_region: dict[str, float] = {}
     if not geo_df.empty:
-        sorted_geo = geo_df.sort_values("weight_pct", ascending=False)
-        for _, r in sorted_geo.iterrows():
-            region = r["category"]
-            actual = float(r["weight_pct"])
-            target = targets.get(region)
-            acwi_v = acwi.get(region)
-            delta_target = actual - target if target is not None else None
-            sema = _semaphore(delta_target, tol)
-            color = GEO_COLORS.get(region, PALETTE["accent"])
-            spark_vals = _timeline_vals(geo_series, region)
-            rows.append({
-                "name": region,
-                "color": color,
-                "actual_pct": _pct_smart(actual),
-                "actual_pct_raw": actual,
-                "target_pct": _pct_smart(target) if target is not None else "—",
-                "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
-                "delta": _signed_pp(delta_target) if delta_target is not None else "—",
-                "delta_color": _semaphore_color(sema),
-                "bar_width": min(max(actual, 1), 100),
-                "target_left": min(max(target or 0, 0), 100),
-                "acwi_left": min(max(acwi_v or 0, 0), 100),
-                "spark": _spark(spark_vals, target, color) if spark_vals else None,
-            })
+        for _, r in geo_df.iterrows():
+            actual_by_region[str(r["category"])] = float(r["weight_pct"])
+    regions = list(actual_by_region.keys())
+    for region in targets:
+        if region not in actual_by_region and (targets.get(region) or 0) > 0:
+            regions.append(region)
+    # Order by actual descending (target-only regions, actual 0, sort last).
+    regions.sort(key=lambda rg: -actual_by_region.get(rg, 0.0))
+
+    rows = []
+    for region in regions:
+        actual = actual_by_region.get(region, 0.0)
+        target = targets.get(region)
+        acwi_v = acwi.get(region)
+        delta_target = actual - target if target is not None else None
+        sema = _semaphore(delta_target, tol)
+        color = GEO_COLORS.get(region, PALETTE["accent"])
+        spark_vals = _timeline_vals(geo_series, region)
+        rows.append({
+            "name": region,
+            "color": color,
+            "actual_pct": _pct_smart(actual),
+            "actual_pct_raw": actual,
+            "target_pct": _pct_smart(target) if target is not None else "—",
+            "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
+            "delta": _signed_pp(delta_target) if delta_target is not None else "—",
+            "delta_color": _semaphore_color(sema),
+            "bar_width": min(max(actual, 1), 100),
+            "target_left": min(max(target or 0, 0), 100),
+            "acwi_left": min(max(acwi_v or 0, 0), 100),
+            "spark": _spark(spark_vals, target, color) if spark_vals else None,
+        })
 
     # Stacked equity bar
     stacked = [{"color": r["color"], "width": r["bar_width"]} for r in rows if r["bar_width"] > 0]
