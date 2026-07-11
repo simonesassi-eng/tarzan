@@ -838,7 +838,15 @@ def _build_daily_series(
     prev_v = raw[anchor_i][1]
     for d, v in raw[anchor_i + 1:]:
         flow = external_flows.get(d, 0.0)
-        if prev_v > 0:
+        # Only advance the flow-adjusted NAV on a day with a real positive
+        # value. A day where every held ISIN prices to 0/None (a transient
+        # pricing gap) or the book is briefly fully liquidated to cash would
+        # otherwise give r=(0-0)/prev_v-1=-1, and since prev_v is only
+        # refreshed when v>0, nav*=(1+r)=0 would pin the index at zero for the
+        # ENTIRE rest of the window — fabricating a permanent -100% that
+        # poisons volatility/Sharpe/VaR/drawdown/CAGR. Carry the index flat
+        # across such days instead (they contribute a 0% return, not -100%).
+        if prev_v > 0 and v > 0:
             r = (v - flow) / prev_v - 1.0
             nav *= (1.0 + r)
         index_dates.append(pd.Timestamp(d))

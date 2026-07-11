@@ -446,7 +446,14 @@ def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.nd
             continue
         instr = (h.instrument_type or "").lower()
         rate = cg_gov if "government bond" in instr else cg_std
-        tax[i] = rate * (gp / 100.0)
+        # Tax withheld per euro of SALE PROCEEDS (not per euro of cost). gp is
+        # the gain relative to cost, so a position up gp% has proceeds
+        # (100+gp) for every 100 of cost, of which gp is taxable gain. The
+        # taxable-gain fraction of proceeds is therefore gp/(100+gp), NOT
+        # gp/100. Using gp/100 overstates the tax on appreciated sells (e.g. a
+        # +100% holding: true 0.13 vs 0.26 at 26%), making the optimizer
+        # believe it must sell ~18% more to fund the same buys.
+        tax[i] = rate * (gp / (100.0 + gp))
     return tax
 
 
