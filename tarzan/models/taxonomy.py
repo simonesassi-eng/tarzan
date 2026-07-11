@@ -35,39 +35,29 @@ ASSET_CLASSES: tuple[str, ...] = (
     "Alternative",
 )
 
-# --- Named asset-class order variants (each preserved verbatim) -------------
-
-# Dashboard / engine holdings table (metrics._valuation): Cash sits with the
-# invested classes, right after Fixed Income.
-ORDER_DASHBOARD: tuple[str, ...] = (
-    "Equities", "Fixed Income", "Cash & Cash Equivalents",
-    "Gold", "Commodities", "Crypto", "Alternative",
-)
-
-# Newsletter allocation/holdings order: Gold before Cash.
-ORDER_NEWSLETTER: tuple[str, ...] = (
-    "Equities", "Fixed Income", "Gold", "Cash & Cash Equivalents",
-    "Commodities", "Crypto", "Alternative",
-)
-
-# Newsletter performance table order: Commodities before Gold.
-# NOTE: this variant historically omits "Crypto"; a crypto holding is
-# appended by the caller's extras logic. Preserved as-is (adding Crypto here
-# would visibly reorder a filed report — deferred, needs sign-off).
-ORDER_PERF: tuple[str, ...] = (
-    "Equities", "Fixed Income", "Commodities", "Gold",
-    "Alternative", "Cash & Cash Equivalents",
-)
-
-# What-if workbook order: Cash last.
-ORDER_WHATIF: tuple[str, ...] = (
+# --- Canonical asset-class display order ------------------------------------
+# ONE order used by every surface (user-approved "Cash last" convention):
+# invested classes first in a risk/theme progression, cash as the residual
+# settlement line at the bottom. All 7 classes are present, so no surface is
+# missing a class (the performance table previously omitted Crypto, sorting a
+# crypto holding to the end via the extras logic — it now sits in its natural
+# slot everywhere). Row order is identical across the Excel dashboard, the
+# newsletter (allocation / holdings / performance / historical-risk) and the
+# what-if workbook.
+CANONICAL_ORDER: tuple[str, ...] = (
     "Equities", "Fixed Income", "Gold", "Commodities", "Crypto",
     "Alternative", "Cash & Cash Equivalents",
 )
 
-# Base order used by export._format.asset_class_order() (was
-# _ASSET_CLASS_BASE_ORDER). Same sequence as the dashboard.
-ORDER_BASE: tuple[str, ...] = ORDER_DASHBOARD
+# All surfaces now share the one canonical order. The named aliases are kept
+# so call-sites read intentfully and a future re-divergence (should a surface
+# ever need its own order again) is a one-line change here, not a hunt across
+# modules.
+ORDER_DASHBOARD: tuple[str, ...] = CANONICAL_ORDER
+ORDER_NEWSLETTER: tuple[str, ...] = CANONICAL_ORDER
+ORDER_PERF: tuple[str, ...] = CANONICAL_ORDER
+ORDER_WHATIF: tuple[str, ...] = CANONICAL_ORDER
+ORDER_BASE: tuple[str, ...] = CANONICAL_ORDER
 
 # --- Geography order --------------------------------------------------------
 
