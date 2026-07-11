@@ -1670,7 +1670,26 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
             except Exception as e:
                 h = futures[future]
                 logger.error("Enrichment failed for %s: %s", h.ticker, e)
+                dq.error(
+                    "enricher",
+                    f"enrichment raised ({e}); holding kept UN-enriched (no live "
+                    "price/classification) — it may distort value, allocation and returns",
+                    context=(h.ticker or h.isin),
+                )
                 enriched.append(h)
+
+    # Surface holdings that came through with no usable market price — they
+    # fall back to their last-known/CSV EUR value, so their contribution is an
+    # anchor, not a live quote. (A NaN/None price was reseeded upstream; this
+    # flags the ones still carrying no real current_price.)
+    for h in enriched:
+        if not h.is_enriched():
+            dq.warning(
+                "enricher",
+                "no market price resolved; valued from its last-known/CSV EUR "
+                "anchor rather than a live quote",
+                context=(h.ticker or h.isin),
+            )
 
     # Compute weights
     total_value = sum(h.current_value for h in enriched if h.current_value)

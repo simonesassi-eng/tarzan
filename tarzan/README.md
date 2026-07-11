@@ -8,34 +8,50 @@ quickstart, see the [root README](../README.md).
 ```
 tarzan/
 ├── __init__.py                  # Package root, versioning
-├── main.py                      # CLI entry point
+├── main.py                      # CLI entry point (writes side reports)
 ├── orchestrator.py              # Pipeline: load → enrich → compute
-├── exceptions.py                # Domain exception hierarchy (TarzanError)
+├── exceptions.py                # Domain exception hierarchy (TarzanError).
+│                                #   NOTE: only DataIngestionError is currently
+│                                #   raised; other stages fail soft and record
+│                                #   into the data-quality report instead.
+├── data_quality.py              # Per-run data-quality report (output/data_quality.log)
+├── audit.py                     # Per-run rebalancing audit trail (output/rebalancing_audit.jsonl)
+├── validation.py                # Input-boundary validators (ISIN/currency/order sign)
 ├── config/
-│   ├── __init__.py              # Configuration loader (YAML → typed accessors)
+│   ├── __init__.py              # Configuration loader (YAML + taxonomy CSV → accessors)
 │   ├── constants.yaml           # Tunable parameters (risk-free rate, classification, ...)
 │   └── static.yaml              # Rarely-changed mappings (exchanges, FIGI, ...)
 ├── models/
 │   ├── holding.py               # Holding dataclass, AssetClass / Geography enums
+│   ├── order.py                 # Order dataclass + OrderType (the order-list row)
 │   ├── investor_config.py       # InvestorConfig with CSV deserialization
 │   └── portfolio.py             # PortfolioMetrics (output DTO)
 ├── data/
-│   ├── loader.py                # CSV / XLSX → list[Holding], config parsing
+│   ├── loader.py                # CSV / XLSX → list[Order], config parsing
 │   ├── enricher.py              # yfinance, FX, classification, backtest period
+│   ├── market_quotes.py         # Live quotes + broker-style 1D (Markets strip)
+│   ├── price_cache.py           # On-disk cache of immutable market data
 │   ├── geo_resolver.py          # Geographic allocation resolver
-│   ├── bond_fetcher.py          # Borsa Italiana bond fallback scraper
-│   └── cache.py                 # Local cache for enriched data
+│   ├── bond_fetcher.py          # Borsa Italiana bond fallback + bond value math
+│   └── proxy_data.py            # Proxy series for asset-class simulation
 ├── engine/
-│   ├── metrics.py               # MetricsEngine: performance, risk, allocations
-│   └── rebalancer.py            # Mixed-integer rebalancing optimizer
+│   ├── stats.py                 # Pure return/risk math (CAGR, Sharpe, XIRR, TWROR, ...)
+│   ├── metrics.py               # MetricsEngine: orchestrates all computers
+│   ├── returns_builder.py       # Order-derived value series + XIRR/TWROR
+│   ├── benchmarks.py            # Benchmark series + benchmark-relative metrics
+│   ├── rebalancer.py            # Local-search rebalancing optimizer
+│   ├── tax.py                   # Estimated Italian capital-gains tax
+│   ├── robustness.py            # Rolling / stress / bootstrap risk analysis
+│   └── synthetic.py             # Synthetic-history helpers
 ├── export/
-│   └── excel.py                 # 5-sheet Excel report generator
-└── tests/                       # Pytest suite
-    ├── conftest.py
-    ├── test_loader.py
-    ├── test_metrics.py
-    ├── test_enricher.py
-    └── test_rebalancer.py
+│   ├── excel.py                 # 5-sheet Excel dashboard
+│   ├── newsletter.py            # HTML email newsletter
+│   ├── _perf_series.py          # Pure performance/return series helpers (newsletter)
+│   ├── _charts.py               # Inline SVG chart builders
+│   ├── _format.py               # Shared formatting / palette helpers
+│   ├── ai_summary.py            # Optional Gemini narrative summary
+│   └── whatif_excel.py          # What-if scenario workbook
+└── tests/                       # Pytest suite (~20 modules, run: pytest tarzan/tests/)
 ```
 
 ## Installation

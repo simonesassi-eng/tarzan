@@ -74,15 +74,19 @@ Tarzan/
 ├── tarzan/                  # Python package
 │   ├── main.py              # CLI entry point
 │   ├── orchestrator.py      # Pipeline: load → enrich → compute
-│   ├── config/              # YAML-driven configuration
-│   ├── data/                # Loaders, enricher, geo resolver
-│   ├── engine/              # Metrics and rebalancer
-│   ├── export/              # Excel report generator
-│   ├── models/              # Holding, InvestorConfig, PortfolioMetrics
-│   └── tests/               # Pytest suite
+│   ├── data_quality.py      # Per-run data-quality report
+│   ├── audit.py             # Per-run rebalancing audit trail
+│   ├── validation.py        # Input-boundary validators
+│   ├── config/              # YAML + taxonomy-CSV configuration
+│   ├── data/                # Loader, enricher, market quotes, price cache, geo
+│   ├── engine/              # stats, metrics, returns, benchmarks, rebalancer, tax
+│   ├── export/              # Excel + HTML newsletter + charts + AI summary
+│   ├── models/              # Holding, Order, InvestorConfig, PortfolioMetrics
+│   └── tests/               # Pytest suite (~20 modules)
 ├── input/
 │   └── sample/              # Sample order list / targets CSVs (tracked)
-├── output/
+├── output/                  # Reports: Excel, newsletter HTML, data_quality.log,
+│   │                        #   rebalancing_audit.jsonl, analyzer.log
 │   └── sample/              # Pre-generated sample Excel report (tracked)
 └── requirements.txt
 ```
