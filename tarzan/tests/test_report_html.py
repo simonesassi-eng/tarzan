@@ -14,15 +14,31 @@ class TestUnifiedReport:
     def teardown_method(self):
         data_quality.reset()
 
-    def test_valid_html_with_both_sections(self):
+    def test_valid_html_with_all_sections(self):
         data_quality.reset()
-        html = report_html.render(generated_at="2026-07-12 10:00", metrics=None)
+        html = report_html.render(generated_at="2026-07-12 10:00", metrics=None,
+                                  log_text="hello log")
         assert html.startswith("<!doctype html>")
         assert "<html" in html and "</html>" in html
         assert "Run summary" in html and "Data quality" in html
-        assert "<script" not in html  # no JS / injection surface
-        # Audit content must NOT appear anymore.
-        assert "Rebalancing audit" not in html
+        assert "Full run log" in html          # the log is now IN the file
+        assert "<script" not in html           # no JS / injection surface
+        assert "Rebalancing audit" not in html  # audit dropped
+
+    def test_full_log_embedded_and_escaped(self):
+        data_quality.reset()
+        # A log line with HTML metacharacters must be escaped inside <pre>.
+        log = "2026-07-12 [INFO] tarzan: fetched <AAPL> & priced 100%\nline2"
+        html = report_html.render(generated_at="t", metrics=None, log_text=log)
+        assert "<pre class='log'>" in html
+        assert "fetched &lt;AAPL&gt; &amp; priced 100%" in html  # escaped
+        assert "<AAPL>" not in html                              # not raw
+        assert "2 lines" in html                                 # line count
+
+    def test_missing_log_shows_placeholder(self):
+        data_quality.reset()
+        html = report_html.render(generated_at="t", metrics=None, log_text=None)
+        assert "No log trace captured" in html
 
     def test_clean_run_reports_no_issues(self):
         data_quality.reset()

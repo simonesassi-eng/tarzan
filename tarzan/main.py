@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import os
 import sys
@@ -17,6 +18,11 @@ from datetime import date as _dtdate
 from tarzan.exceptions import DataIngestionError, TarzanError
 
 logger = logging.getLogger("tarzan")
+
+# In-memory capture of the full DEBUG log trace for the run. Instead of a
+# separate analyzer.log file, the whole trace is buffered here and embedded
+# into the single output/report.html, so one HTML file is the complete record.
+_LOG_STREAM = io.StringIO()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -52,25 +58,29 @@ def setup_logging(output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
+    # Live console output (as before).
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     root.addHandler(ch)
-    fh = logging.FileHandler(os.path.join(output_dir, "analyzer.log"), mode="w", encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    root.addHandler(fh)
+    # Full DEBUG trace captured in memory (no separate analyzer.log file) and
+    # embedded into the single report.html at the end of the run.
+    _LOG_STREAM.seek(0)
+    _LOG_STREAM.truncate(0)
+    mh = logging.StreamHandler(_LOG_STREAM)
+    mh.setLevel(logging.DEBUG)
+    mh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    root.addHandler(mh)
 
 
 def _write_run_reports(output_dir: str, metrics=None) -> None:
-    """Write the single unified, human-readable run report as
-    ``output/report.html`` — a run summary (headline figures) plus the
-    data-quality report.
+    """Write THE single run report — ``output/report.html`` — containing the
+    run summary (headline figures), the data-quality report, and the full
+    DEBUG log trace embedded inline.
 
-    The verbose ``analyzer.log`` stays separate (raw debug trace, rewritten
-    each run). Best-effort: a diagnostic must never turn a good run into a
-    failure. ``metrics`` may be None on an early-exit run (summary then shows
-    a placeholder).
+    This is the one and only log for a run: there is no separate analyzer.log.
+    Best-effort: a diagnostic must never turn a good run into a failure.
+    ``metrics`` may be None on an early-exit run (summary shows a placeholder).
     """
     from tarzan import data_quality as dq
     from tarzan import report_html
@@ -79,7 +89,8 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
         logger.info(dq.summary_line())
         stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
         path = report_html.write_report(output_dir, generated_at=stamp,
-                                        metrics=metrics)
+                                        metrics=metrics,
+                                        log_text=_LOG_STREAM.getvalue())
         if path:
             logger.info("Run report: %s (%d data-quality issue(s))",
                         path, len(dq.issues()))
