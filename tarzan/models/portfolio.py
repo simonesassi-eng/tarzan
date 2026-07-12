@@ -23,12 +23,24 @@ def _round_or_none(value, ndigits: int):
     return value
 
 
+# Bump when the PortfolioMetrics field contract changes in a way consumers
+# (Excel, newsletter, report, to_summary_dict) must be aware of — a renamed or
+# removed field, or a changed field meaning. Consumers can assert this to fail
+# loudly on a mismatch instead of silently reading a stale/renamed field.
+PORTFOLIO_METRICS_SCHEMA_VERSION = 1
+
+
 @dataclass
 class PortfolioMetrics:
     """Aggregated portfolio metrics produced by the Calculator.
 
     This is the canonical data transfer object between the Calculation
     and Reporting layers. All fields are populated by ``calculate_metrics()``.
+
+    Deliberately NOT frozen: it is a wide report cube built incrementally
+    (by MetricsEngine and, in tests, field-by-field), so immutability would
+    cost ergonomics for no real gain — production never mutates it after
+    construction. Contract stability is instead tracked via ``schema_version``.
 
     Attributes:
         total_value: Sum of all holding market values in EUR.
@@ -59,6 +71,9 @@ class PortfolioMetrics:
         holding_histories: Dict of ticker → {name, history: pd.Series}.
     """
 
+    # Field-contract version (see PORTFOLIO_METRICS_SCHEMA_VERSION). First
+    # field so it is obvious in reprs / serialization.
+    schema_version: int = PORTFOLIO_METRICS_SCHEMA_VERSION
     total_value: float = 0.0
     invested_value: float = 0.0
     cash_value: float = 0.0
@@ -174,6 +189,7 @@ class PortfolioMetrics:
         # history) becomes JSON ``null`` instead of a bare NaN/Infinity token
         # that breaks strict parsers and downstream databases.
         summary = {
+            "schema_version": self.schema_version,
             "total_value_eur": _round_or_none(self.total_value, 2),
             "invested_value_eur": _round_or_none(self.invested_value, 2),
             "cash_value_eur": _round_or_none(self.cash_value, 2),
