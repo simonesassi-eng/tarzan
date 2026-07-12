@@ -5,6 +5,13 @@
 structures, plus the launch-blocking work those structures must support
 (multi-tenancy, privacy, correctness guarantees).
 
+**Progress:** Track A (data-structure integrity: A1 order PK, A2 canonical
+instrument key, A3 order→taxonomy referential check, A5 metrics
+schema_version, A4-safe Holding guard, golden-master gate) is DONE and merged
+to main. Track A′ (contracts — below) is DONE on branch
+`feat/contracts-input-schema`. Tracks B (multi-tenancy) and C (privacy/GDPR)
+remain the launch gate.
+
 ---
 
 ## 0. TL;DR (read this first)
@@ -142,6 +149,33 @@ skipped):**
   launch** unless a Principal insists — the Phase-1 NaN/round guards already
   prevent the acute failure; sub-cent drift is a correctness-polish, not a
   launch blocker. Flag it as a fast-follow.
+
+### Track A′ — Contracts (input schema / validation / output DTO) — DONE
+
+The boundary half of the data work: with the *structures* sound, the
+*contracts around them* were still shaped for one expert user. Implemented:
+
+- **A′1 — Explicit, versioned input schema** (`tarzan/schema.py`): a
+  dependency-free declarative `FileSchema`/`ColumnSpec` for `order_list.csv`
+  and `targets_per_holding.csv` — one source of truth for the format, with a
+  `SCHEMA_VERSION` and self-documenting `to_markdown()`. The loader's required
+  columns now derive from it. (No pydantic on purpose — the CI newsletter
+  runner needs no extra install.)
+- **A′2 — Boundary validation with a strict gate** (`validate_columns`):
+  missing-required is always fatal with an actionable message; an unknown
+  column WARNS in the default *lenient* mode (recorded in the data-quality
+  report) and is REJECTED in `--strict` / `TARZAN_STRICT_INPUT=1`. Strict
+  rejections propagate (no silent degrade to "no orders"). Default OFF keeps
+  the automated newsletter and existing files unaffected — the multi-tenant
+  onboarding (Track B) should run strict.
+- **A′3 — Pinned external output DTO**: `to_summary_dict` is documented as the
+  narrow, versioned external surface (`SUMMARY_CONTRACT_KEYS` + optional
+  order-path keys), distinct from the wide internal cube, with a test pinning
+  the exact key set. This is the seam a future API/mobile client binds to.
+
+**Deferred within A′** (needs Track B or external consumers to be worth it):
+a formal OpenAPI/JSON-Schema contract at a web edge, and content-addressed
+input files. No value before there is an API.
 
 ### Track B — Multi-tenancy (launch-blocking for "friends/global")
 
