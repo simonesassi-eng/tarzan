@@ -201,6 +201,13 @@ def run(
     logger.info("Enriched %d/%d holdings (+%d rebalance seeds)",
                 enriched, len(holdings), len(seeds))
 
+    # Referential-integrity check (order → taxonomy dimension): flag held
+    # instruments that have no curated taxonomy row AND no explicit asset class
+    # (so they fell back to a default). A missing reference is otherwise
+    # silent — the instrument just shows up as "Alternative"/"Other" — which
+    # can quietly distort allocations. Surface it in the data-quality report.
+    _check_taxonomy_coverage(holdings)
+
     # Compute
     logger.info("Computing metrics...")
     engine = MetricsEngine(holdings, config, orders=orders, rebalance_seeds=seeds)
@@ -208,6 +215,50 @@ def run(
     logger.info("Total portfolio value: €%.2f", metrics.total_value)
 
     return metrics, config
+
+
+def _check_taxonomy_coverage(holdings) -> None:
+    """Referential-integrity check: held instruments with no taxonomy row.
+
+    The curated ``instrument_taxonomy.csv`` is the dimension that supplies an
+    instrument's asset class / role / geography / notional exposure. A held
+    ISIN absent from it is a dangling reference — the instrument silently
+    falls back to defaults (typically ``Alternative``), which can distort the
+    allocation without any error. We surface each such instrument as a
+    data-quality WARNING (best-effort; never fatal).
+    """
+    try:
+        from tarzan import config as _cfg, data_quality as _dq
+        from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+        taxonomy = _cfg.instrument_taxonomy()  # keys: uppercased ISIN + bare ticker
+        if not taxonomy:
+            _dq.warning(
+                "taxonomy",
+                "instrument_taxonomy.csv is empty/unavailable — every held "
+                "instrument used default classification (asset class / geography "
+                "/ exposure); allocations may be approximate.",
+                context="instrument_taxonomy.csv",
+            )
+            return
+        for h in holdings:
+            if getattr(h, "is_seeded_target", False):
+                continue  # seeds aren't part of the real snapshot
+            isin_k = normalize_isin(getattr(h, "isin", None))
+            tick_k = normalize_ticker(getattr(h, "ticker", None))
+            if (isin_k and isin_k in taxonomy) or (tick_k and tick_k in taxonomy):
+                continue
+            label = h.ticker or h.isin or "?"
+            ac = h.asset_class.value if getattr(h, "asset_class", None) else "Alternative"
+            _dq.warning(
+                "taxonomy",
+                f"{label} has no instrument_taxonomy.csv row — classified by "
+                f"fallback (asset class '{ac}'); add a taxonomy row to control "
+                "its asset class / geography / notional exposure.",
+                context=(h.isin or h.ticker),
+            )
+    except Exception as e:  # noqa: BLE001 — a diagnostic must never break the run
+        logger.debug("Taxonomy coverage check failed: %s", e)
 
 
 def _load_targets_or_empty(
