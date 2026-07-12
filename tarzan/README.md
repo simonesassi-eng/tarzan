@@ -14,8 +14,9 @@ tarzan/
 │                                #   NOTE: only DataIngestionError is currently
 │                                #   raised; other stages fail soft and record
 │                                #   into the data-quality report instead.
-├── data_quality.py              # Per-run data-quality report (output/data_quality.log)
-├── audit.py                     # Per-run rebalancing audit trail (output/rebalancing_audit.jsonl)
+├── data_quality.py              # Per-run data-quality collector (skips/coercions/fallbacks)
+├── audit.py                     # Per-run rebalancing audit collector (why each trade)
+├── report_html.py               # Renders both into one human-readable output/report.html
 ├── validation.py                # Input-boundary validators (ISIN/currency/order sign)
 ├── config/
 │   ├── __init__.py              # Configuration loader (YAML + taxonomy CSV → accessors)
