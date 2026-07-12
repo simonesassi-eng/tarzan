@@ -64,3 +64,57 @@ class TestOrderHelpers:
         o = _order(otype)
         assert o.is_cashflow() is is_cf
         assert o.is_position_change() is is_pos
+
+
+class TestOrderId:
+    def test_default_order_id_is_natural_key(self):
+        o = _order(OrderType.BUY, quantity=10, net_eur=-1000)
+        assert o.order_id == o.natural_key()
+        assert len(o.order_id) == 16  # sha1[:16]
+
+    def test_same_economic_event_same_natural_key(self):
+        a = _order(OrderType.BUY, quantity=10, net_eur=-1000)
+        b = _order(OrderType.BUY, quantity=10, net_eur=-1000)
+        assert a.natural_key() == b.natural_key()
+
+    def test_different_event_different_natural_key(self):
+        a = _order(OrderType.BUY, quantity=10, net_eur=-1000)
+        b = _order(OrderType.BUY, quantity=11, net_eur=-1100)
+        assert a.natural_key() != b.natural_key()
+
+
+class TestLoaderOrderIds:
+    def _csv(self, rows):
+        import io
+        head = "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate\n"
+        return io.BytesIO((head + "\n".join(rows)).encode())
+
+    def test_duplicate_rows_kept_but_ids_unique_and_flagged(self):
+        import datetime as _dt
+        from tarzan import data_quality as dq
+        from tarzan.data.loader import load_orders
+        dq.reset()
+        rows = [
+            "2025-01-01,buy,IE00B4L5Y983,10,1000,-1000,EUR,100,1.0",
+            "2025-01-01,buy,IE00B4L5Y983,10,1000,-1000,EUR,100,1.0",  # exact dup
+            "2025-02-01,sell,IE00B4L5Y983,-5,500,500,EUR,100,1.0",
+        ]
+        orders = load_orders(self._csv(rows), "dup.csv")
+        assert len(orders) == 3                       # NOT dropped
+        assert len({o.order_id for o in orders}) == 3  # ids unique
+        # exactly one data-quality warning about the duplicate
+        dups = [i for i in dq.issues() if "identical order rows" in i.message]
+        assert len(dups) == 1
+        assert dups[0].context == "IE00B4L5Y983"
+
+    def test_no_duplicates_no_warning(self):
+        from tarzan import data_quality as dq
+        from tarzan.data.loader import load_orders
+        dq.reset()
+        rows = [
+            "2025-01-01,buy,IE00B4L5Y983,10,1000,-1000,EUR,100,1.0",
+            "2025-02-01,sell,IE00B4L5Y983,-5,500,500,EUR,100,1.0",
+        ]
+        orders = load_orders(self._csv(rows), "clean.csv")
+        assert len(orders) == 2
+        assert not [i for i in dq.issues() if "identical order rows" in i.message]

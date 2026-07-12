@@ -114,8 +114,44 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Orde
 
     if skipped:
         logger.info("Skipped %d order row(s) with invalid/unknown data", skipped)
+
+    _assign_order_ids(orders)
     logger.info("Loaded %d orders from %s", len(orders), filename or str(source))
     return orders
+
+
+def _assign_order_ids(orders: list[Order]) -> None:
+    """Give every order a stable, unique ``order_id`` and surface duplicates.
+
+    The order ledger is append-only and two identical movements on the same
+    day CAN be legitimate, so we never drop rows. But an accidentally
+    duplicated input block (a user pasting the same rows twice) would silently
+    double-count every position and cash flow — so we detect repeated natural
+    keys, disambiguate the id with an ordinal (``<key>#2`` …), and emit ONE
+    data-quality WARNING per repeated key with its count, making the
+    duplication visible for the user to confirm or fix.
+    """
+    seen: dict[str, int] = {}
+    dup_counts: dict[str, int] = {}
+    dup_example: dict[str, Order] = {}
+    for o in orders:
+        nk = o.natural_key()
+        n = seen.get(nk, 0) + 1
+        seen[nk] = n
+        o.order_id = nk if n == 1 else f"{nk}#{n}"
+        if n == 2:
+            dup_example[nk] = o
+        if n >= 2:
+            dup_counts[nk] = n
+    for nk, n in dup_counts.items():
+        o = dup_example[nk]
+        msg = (f"{n} identical order rows for {o.isin} on {o.trade_date} "
+               f"({o.type.value}, qty {o.quantity:g}, net €{o.net_eur:,.2f}) — "
+               "kept all (identical trades can be legitimate); verify this is "
+               "not an accidentally duplicated input block, which would "
+               "double-count the position and cash flow.")
+        logger.warning("Order dedup: %s", msg)
+        dq.warning(_DQ_SOURCE, msg, context=o.isin)
 
 
 def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
