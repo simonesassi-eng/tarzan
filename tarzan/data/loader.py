@@ -244,15 +244,16 @@ def load_targets_per_holding(
         logger.warning("Per-holding targets file has no 'isin'/'ticker' column; ignoring.")
         return {}
 
+    from tarzan.models.instrument_key import instrument_key
     result: dict[str, dict] = {}
     for _, row in df.iterrows():
         isin = _clean_str(row.get("isin"))
         ticker = _clean_str(row.get("ticker"))
-        key = isin or ticker.upper()
-        if not key:
+        legacy_key = isin or ticker.upper()
+        if not legacy_key:
             continue
         nbns = str(row.get("no_buy_no_sell", "")).strip().lower()
-        result[key] = {
+        entry = {
             "isin": isin,
             "ticker": ticker,
             "name": _clean_str(row.get("name")),
@@ -261,7 +262,16 @@ def load_targets_per_holding(
             "target_portfolio": _parse_number_optional(row.get("target_portfolio")),
             "no_buy_no_sell": nbns in ("true", "1", "yes"),
         }
-    logger.info("Loaded per-holding targets for %d instrument(s)", len(result))
+        # Store under BOTH the legacy key (raw ISIN / uppercased ticker, for
+        # back-compat) and the canonical instrument_key, so callers can match
+        # via one canonical rule while existing lookups keep working.
+        result[legacy_key] = entry
+        canon = instrument_key(isin, ticker)
+        if canon and canon not in result:
+            result[canon] = entry
+    # Count distinct instruments, not dict keys (an entry may be under two).
+    n = len({id(v) for v in result.values()})
+    logger.info("Loaded per-holding targets for %d instrument(s)", n)
     return result
 
 
