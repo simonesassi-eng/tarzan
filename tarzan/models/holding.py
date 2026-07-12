@@ -8,6 +8,7 @@ Defines the core value objects used throughout the pipeline:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -101,6 +102,27 @@ class Holding:
     is_seeded_target: bool = False
     fetch_timestamp: Optional[datetime] = None
     price_history: Optional[pd.Series] = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        """Enforce the required-field integrity contract at construction.
+
+        The required (input) fields must be well-formed: an instrument must be
+        identifiable (ISIN or ticker present) and its numeric required fields
+        must be finite. NOTE: zero is allowed — ``quantity``/``cost``/``value``
+        are legitimately 0.0 for a rebalancer seed (a not-yet-held target) — so
+        we reject only NaN/Inf and a wholly-unidentifiable row, not zeros.
+        Raises ``ValueError`` so a malformed Holding can never enter the
+        pipeline silently.
+        """
+        if not (str(self.isin or "").strip() or str(self.ticker or "").strip()):
+            raise ValueError("Holding requires an ISIN or a ticker (both blank).")
+        for fld in ("quantity", "cost_basis_eur", "market_value_eur"):
+            v = getattr(self, fld)
+            if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                raise ValueError(
+                    f"Holding {self.isin or self.ticker}: {fld} must be a finite "
+                    f"number (got {v!r})."
+                )
 
     def is_enriched(self) -> bool:
         """Return True if this holding has been enriched with market data."""
