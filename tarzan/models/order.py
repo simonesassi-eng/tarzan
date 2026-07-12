@@ -14,7 +14,8 @@ produced by ``scripts/preprocess_orders.py``.
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -85,6 +86,29 @@ class Order:
     fees_eur: float
     net_eur: float                 # signed bank cash flow
     source: str = "fineco"
+    # Stable primary key for this ledger row. Defaults to the natural-key
+    # fingerprint (see ``natural_key``); the loader overrides it with an
+    # ordinal-disambiguated id so two genuinely-identical movements on the same
+    # day remain distinct rows. Never used to *merge* orders (the ledger is
+    # append-only and identical events are legitimate) — only to reference,
+    # dedup-detect, and audit a specific entry.
+    order_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.order_id:
+            self.order_id = self.natural_key()
+
+    def natural_key(self) -> str:
+        """A short, deterministic fingerprint of the fields that define the
+        economic event (date, instrument, type, quantity, cash). Two rows with
+        the same natural key describe the same movement — the signal the loader
+        uses to flag an accidentally duplicated input block."""
+        raw = "|".join(str(x) for x in (
+            self.trade_date, self.isin, self.type.value,
+            f"{self.quantity:.6f}", f"{self.net_eur:.2f}",
+            f"{self.gross_eur:.2f}", self.source,
+        ))
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
     def is_cashflow(self) -> bool:
         """True if this order moves cash on the bank account."""
