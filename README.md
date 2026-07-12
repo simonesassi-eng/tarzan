@@ -86,8 +86,8 @@ Tarzan/
 ├── input/
 │   └── sample/              # Sample order list / targets CSVs (tracked)
 ├── output/                  # Reports: Excel dashboard, newsletter HTML, and
-│   │                        #   report.html — the ONE run log: a color-coded
-│   │                        #   table (level·time·origin·message), opens in Chrome
+│   │                        #   report.html — the ONE run log: a top summary of
+│   │                        #   issues + how handled, then a lean log table
 │   └── sample/              # Pre-generated sample Excel report (tracked)
 └── requirements.txt
 ```

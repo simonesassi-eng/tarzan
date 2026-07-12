@@ -1,67 +1,92 @@
-"""Tests for the single color-coded HTML run log (report.html).
+"""Tests for the single HTML run report (report.html).
 
-report.html = one color-coded table of the whole run's log (level · time ·
-origin · message), one row per entry, colored by log level — no separate
-analyzer.log, no summary/audit sections.
+report.html = a top summary of real issues (Tarzan data-quality events + how
+handled, plus an explained note for yfinance probe chatter) followed by a
+lean log table (Tarzan records + any warning/error; third-party debug hidden).
 """
 
 from __future__ import annotations
 
-from tarzan import report_html
+from tarzan import data_quality, report_html
 
 
 def _rec(level, msg, time="10:00:00", origin="tarzan"):
     return {"level": level, "time": time, "origin": origin, "message": msg}
 
 
-class TestRunLogReport:
-    def test_valid_html_table_structure(self):
+class TestRunReport:
+    def teardown_method(self):
+        data_quality.reset()
+
+    def test_valid_html_with_sections(self):
+        data_quality.reset()
         html = report_html.render(generated_at="2026-07-12 10:00",
                                   log_records=[_rec("INFO", "hello")])
         assert html.startswith("<!doctype html>")
-        assert "<html" in html and "</html>" in html
-        assert "Tarzan — Run Log" in html
-        assert "<table class='log'>" in html
-        # Column headers present.
-        for col in ("Level", "Time", "Origin", "Message"):
-            assert f">{col}</th>" in html
-        assert "<script" not in html  # no JS / injection surface
+        assert "Tarzan — Run Report" in html
+        assert "Issues &amp; how they were handled" in html
+        assert "Run log" in html
+        assert "<script" not in html
 
-    def test_rows_colored_by_level(self):
-        recs = [_rec("INFO", "ok"), _rec("WARNING", "careful"),
-                _rec("ERROR", "boom"), _rec("DEBUG", "detail")]
+    def test_clean_run_says_no_issues(self):
+        data_quality.reset()
+        html = report_html.render(generated_at="t", log_records=[])
+        assert "No data-quality issues" in html
+
+    def test_data_quality_issues_with_handling_shown(self):
+        data_quality.reset()
+        data_quality.warning(
+            "enricher",
+            "FX for ZAR unavailable — valued from the CSV/order EUR anchor",
+            context="XS2105803527")
+        html = report_html.render(generated_at="t", log_records=[])
+        assert "FX for ZAR unavailable" in html          # what + how handled
+        assert "valued from the CSV/order EUR anchor" in html
+        assert "XS2105803527" in html                    # context column
+        assert "enricher" in html
+
+    def test_third_party_probe_note_explains_yfinance(self):
+        data_quality.reset()
+        recs = [
+            _rec("ERROR", "$NTSG.MI: possibly delisted", origin="yfinance"),
+            _rec("ERROR", "$NTSG.DE: possibly delisted", origin="yfinance"),
+        ]
         html = report_html.render(generated_at="t", log_records=recs)
-        assert "color:#D28004" in html   # WARNING amber
-        assert "color:#DC2626" in html   # ERROR red
-        assert "color:#579FA8" in html   # DEBUG teal
-        assert "color:#1E293B" in html   # INFO ink
+        assert "yfinance emitted 2 expected ticker-probe" in html
+        assert "not</b> Tarzan errors" in html or "not" in html
 
-    def test_message_and_fields_escaped(self):
+    def test_log_filters_third_party_debug(self):
+        data_quality.reset()
+        recs = [
+            _rec("DEBUG", "tarzan internal detail", origin="tarzan.engine"),
+            _rec("DEBUG", "yfinance chatter", origin="yfinance"),
+            _rec("DEBUG", "peewee sql", origin="peewee"),
+            _rec("WARNING", "a real warning", origin="yfinance"),
+            _rec("INFO", "tarzan info", origin="tarzan"),
+        ]
+        html = report_html.render(generated_at="t", log_records=recs)
+        # Kept: tarzan.* (any level) + WARNING/ERROR from anywhere.
+        assert "tarzan internal detail" in html          # tarzan DEBUG kept
+        assert "a real warning" in html                  # yfinance WARNING kept
+        assert "tarzan info" in html
+        # Dropped: third-party DEBUG/INFO.
+        assert "yfinance chatter" not in html
+        assert "peewee sql" not in html
+        assert "3 of 5 log entries shown" in html
+
+    def test_message_escaped(self):
+        data_quality.reset()
         recs = [_rec("INFO", "fetched <AAPL> & priced 100%", origin="tarzan.data")]
         html = report_html.render(generated_at="t", log_records=recs)
-        assert "fetched &lt;AAPL&gt; &amp; priced 100%" in html  # escaped
-        assert "<AAPL>" not in html                              # not raw
-        assert "tarzan.data" in html                             # origin column
-
-    def test_summary_chips_count_by_level(self):
-        recs = [_rec("INFO", "a"), _rec("INFO", "b"), _rec("WARNING", "c")]
-        html = report_html.render(generated_at="t", log_records=recs)
-        assert "2 INFO" in html and "1 WARNING" in html
-        assert "3 entries" in html
-
-    def test_empty_log_renders_cleanly(self):
-        html = report_html.render(generated_at="t", log_records=[])
-        assert "0 entries" in html
-        assert "no log entries" in html
-        assert "<table class='log'>" in html  # table still present, no rows
+        assert "fetched &lt;AAPL&gt; &amp; priced 100%" in html
+        assert "<AAPL>" not in html
 
     def test_write_report_creates_file(self, tmp_path):
-        path = report_html.write_report(str(tmp_path), generated_at="2026-07-12 10:00",
+        data_quality.reset()
+        path = report_html.write_report(str(tmp_path), generated_at="t",
                                         log_records=[_rec("INFO", "x")])
         assert path is not None
-        content = (tmp_path / "report.html").read_text()
-        assert content.startswith("<!doctype html>")
-        assert "Tarzan — Run Log" in content
+        assert (tmp_path / "report.html").read_text().startswith("<!doctype html>")
 
     def test_write_never_raises_on_bad_dir(self):
         assert report_html.write_report("/nonexistent/\0/bad", generated_at="t") is None
