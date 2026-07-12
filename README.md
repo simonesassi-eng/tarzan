@@ -85,8 +85,9 @@ Tarzan/
 │   └── tests/               # Pytest suite (~20 modules)
 ├── input/
 │   └── sample/              # Sample order list / targets CSVs (tracked)
-├── output/                  # Reports: Excel, newsletter HTML, data_quality.log,
-│   │                        #   rebalancing_audit.jsonl, analyzer.log
+├── output/                  # Reports: Excel dashboard, newsletter HTML,
+│   │                        #   report.html (unified data-quality + rebalancing
+│   │                        #   audit, human-readable), analyzer.log (debug)
 │   └── sample/              # Pre-generated sample Excel report (tracked)
 └── requirements.txt
 ```

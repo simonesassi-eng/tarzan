@@ -63,27 +63,27 @@ def setup_logging(output_dir: str) -> None:
 
 
 def _write_run_reports(output_dir: str) -> None:
-    """Write the per-run side reports (data-quality + rebalancing audit) and
-    log their summaries.
+    """Write the single unified, human-readable run report (data-quality +
+    rebalancing audit) as ``output/report.html``.
 
-    Best-effort: a diagnostic/audit must never turn a good run into a failure.
+    The verbose ``analyzer.log`` stays separate (raw debug trace, rewritten
+    each run). Best-effort: a diagnostic/audit must never turn a good run into
+    a failure.
     """
     from tarzan import data_quality as dq
     from tarzan import audit
+    from tarzan import report_html
+    from tarzan import runtime
     try:
         logger.info(dq.summary_line())
-        path = dq.write_report(output_dir)
+        stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
+        path = report_html.write_report(output_dir, generated_at=stamp)
         if path:
-            logger.info("Data-quality report: %s", path)
+            logger.info("Run report: %s (%d data-quality issue(s), %d "
+                        "rebalancing plan(s))",
+                        path, len(dq.issues()), len(audit.records()))
     except Exception as e:  # noqa: BLE001
-        logger.debug("Data-quality report step failed: %s", e)
-    try:
-        apath = audit.write_report(output_dir)
-        if apath:
-            logger.info("Rebalancing audit trail: %s (%d plan(s))",
-                        apath, len(audit.records()))
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Rebalancing audit step failed: %s", e)
+        logger.debug("Run report step failed: %s", e)
 
 
 def main(argv=None) -> int:
