@@ -8,7 +8,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import logging
 import os
 import sys
@@ -19,10 +18,36 @@ from tarzan.exceptions import DataIngestionError, TarzanError
 
 logger = logging.getLogger("tarzan")
 
-# In-memory capture of the full DEBUG log trace for the run. Instead of a
-# separate analyzer.log file, the whole trace is buffered here and embedded
-# into the single output/report.html, so one HTML file is the complete record.
-_LOG_STREAM = io.StringIO()
+
+class _RecordCaptureHandler(logging.Handler):
+    """Capture each log record's structured fields (level, time, logger,
+    message) for the run, so the single report.html can render them as a
+    color-coded table (like the reference DetailedRunLog). No file is written;
+    this replaces analyzer.log entirely."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[dict] = []
+        # A Formatter owns asctime formatting (Handler does not); use one to
+        # turn each record's created-time into an HH:MM:SS string.
+        self._fmt = logging.Formatter(datefmt="%H:%M:%S")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.records.append({
+                "level": record.levelname,
+                "time": self._fmt.formatTime(record, "%H:%M:%S"),
+                "origin": record.name,
+                "message": record.getMessage(),
+            })
+        except Exception:  # noqa: BLE001 — logging must never break the run
+            pass
+
+
+# Process-global capture handler, (re)installed by setup_logging each run.
+# The whole run's log is captured here (no separate analyzer.log file) and
+# rendered as the color-coded table in the single output/report.html.
+_LOG_CAPTURE = _RecordCaptureHandler()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -63,24 +88,19 @@ def setup_logging(output_dir: str) -> None:
     ch.setLevel(logging.INFO)
     ch.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     root.addHandler(ch)
-    # Full DEBUG trace captured in memory (no separate analyzer.log file) and
-    # embedded into the single report.html at the end of the run.
-    _LOG_STREAM.seek(0)
-    _LOG_STREAM.truncate(0)
-    mh = logging.StreamHandler(_LOG_STREAM)
-    mh.setLevel(logging.DEBUG)
-    mh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    root.addHandler(mh)
+    # Full DEBUG trace captured as structured records (no separate
+    # analyzer.log file) and rendered as the color-coded table in report.html.
+    _LOG_CAPTURE.records.clear()
+    if _LOG_CAPTURE not in root.handlers:
+        root.addHandler(_LOG_CAPTURE)
 
 
 def _write_run_reports(output_dir: str, metrics=None) -> None:
-    """Write THE single run report — ``output/report.html`` — containing the
-    run summary (headline figures), the data-quality report, and the full
-    DEBUG log trace embedded inline.
+    """Write THE single run report — ``output/report.html`` — a color-coded
+    table of the whole run's log (one row per entry, colored by level).
 
     This is the one and only log for a run: there is no separate analyzer.log.
     Best-effort: a diagnostic must never turn a good run into a failure.
-    ``metrics`` may be None on an early-exit run (summary shows a placeholder).
     """
     from tarzan import data_quality as dq
     from tarzan import report_html
@@ -89,8 +109,7 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
         logger.info(dq.summary_line())
         stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
         path = report_html.write_report(output_dir, generated_at=stamp,
-                                        metrics=metrics,
-                                        log_text=_LOG_STREAM.getvalue())
+                                        log_records=_LOG_CAPTURE.records)
         if path:
             logger.info("Run report: %s (%d data-quality issue(s))",
                         path, len(dq.issues()))
