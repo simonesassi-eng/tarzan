@@ -27,17 +27,22 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     """Attach per-holding rebalancing targets in place.
 
     ``targets`` is keyed by ISIN (when present) or uppercased ticker, as
-    produced by ``load_targets_per_holding``. Each holding is matched by its
-    ISIN first, then by its (uppercased) ticker — so ticker-only target rows
-    still attach. A holding with no matching target is left untouched.
+    produced by ``load_targets_per_holding``. Matching uses the canonical
+    ``instrument_key`` (ISIN, else ``TICKER:<symbol>``) with a fallback to the
+    legacy raw-ISIN / uppercased-ticker keys, so existing target files keep
+    matching identically while new lookups go through one rule. A holding with
+    no matching target is left untouched.
     """
     if not targets:
         return
+    from tarzan.models.instrument_key import instrument_key, normalize_ticker
     matched = 0
     for h in holdings:
-        t = targets.get(h.isin)
-        if t is None and h.ticker:
-            t = targets.get(h.ticker.strip().upper())
+        # Canonical key first (built the same way for holding and target row),
+        # then the historical raw-ISIN / uppercased-bare-ticker fallbacks.
+        t = (targets.get(instrument_key(h.isin, h.ticker))
+             or targets.get(h.isin)
+             or (targets.get(normalize_ticker(h.ticker)) if h.ticker else None))
         if not t:
             continue
         if t.get("target_equities") is not None:
@@ -61,11 +66,19 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     (quantity 0) to be enriched alongside the rest.
     """
     from tarzan.models.holding import Holding
+    from tarzan.models.instrument_key import instrument_key
 
-    held_isins = {h.isin for h in holdings if h.isin}
-    held_tickers = {(h.ticker or "").strip().upper() for h in holdings if h.ticker}
+    # The targets dict now stores each entry under BOTH a legacy and a
+    # canonical key, so iterate UNIQUE entries (by identity) to avoid
+    # double-seeding the same instrument.
+    held_keys = {instrument_key(h.isin, h.ticker) for h in holdings}
+    held_keys.discard("")
+    seen: set[int] = set()
     seeded = []
     for row in targets.values():
+        if id(row) in seen:
+            continue
+        seen.add(id(row))
         tpf = row.get("target_portfolio")
         if tpf is None or tpf <= 0:
             continue
@@ -73,7 +86,7 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
         r_ticker = (row.get("ticker") or "").strip()
         if not r_isin and not r_ticker:
             continue
-        if (r_isin and r_isin in held_isins) or (r_ticker and r_ticker.upper() in held_tickers):
+        if instrument_key(r_isin, r_ticker) in held_keys:
             continue  # already held
         seeded.append(Holding(
             isin=r_isin, ticker=r_ticker, quantity=0.0,
