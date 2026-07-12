@@ -164,15 +164,32 @@ table.grid{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 4px;}
   color:#1E293B;font-variant-numeric:tabular-nums;margin-top:2px;}
 .degraded{color:#D97706;font-size:13px;font-weight:600;margin:8px 0 0;}
 details{margin:8px 0;} summary{cursor:pointer;color:#5B5BD6;font-size:13px;font-weight:600;}
+pre.log{background:#0F172A;color:#E2E8F0;font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:11.5px;line-height:1.45;padding:12px 14px;border-radius:8px;overflow-x:auto;
+  white-space:pre-wrap;word-break:break-word;max-height:520px;overflow-y:auto;margin:8px 0;}
 footer{color:#94A3B8;font-size:12px;margin-top:32px;border-top:1px solid #EEF2FF;padding-top:8px;}
 """
 
 
-def render(generated_at: str, metrics: Any = None) -> str:
+def _full_log_html(log_text: Optional[str]) -> str:
+    """The complete DEBUG trace, embedded inline in a collapsible block. This
+    is what used to be the separate analyzer.log — now part of the one file."""
+    if not log_text:
+        return '<p class="muted">No log trace captured for this run.</p>'
+    return (
+        "<details><summary>Show full run log "
+        f"({log_text.count(chr(10)) + 1} lines)</summary>"
+        f"<pre class='log'>{_esc(log_text)}</pre></details>"
+    )
+
+
+def render(generated_at: str, metrics: Any = None,
+           log_text: Optional[str] = None) -> str:
     """Render the whole unified report as a single HTML string.
 
-    ``metrics`` is the run's PortfolioMetrics (for the summary tiles); None is
-    tolerated (summary shows a muted placeholder).
+    ``metrics`` is the run's PortfolioMetrics (for the summary tiles) and
+    ``log_text`` is the full captured DEBUG trace (embedded inline). Both are
+    optional; None renders a muted placeholder.
     """
     dq_summary = data_quality.summary_line()
     return (
@@ -181,27 +198,30 @@ def render(generated_at: str, metrics: Any = None) -> str:
         "<title>Tarzan — Run Report</title>"
         f"<style>{_CSS}</style></head><body>"
         "<h1>Tarzan — Run Report</h1>"
-        f"<p class='sub'>Generated {_esc(generated_at)}. Human-readable summary of "
-        "this run — the headline figures and anything that was skipped or "
-        "estimated. (Full debug trace: <code>analyzer.log</code>.)</p>"
+        f"<p class='sub'>Generated {_esc(generated_at)}. The complete record of "
+        "this run — headline figures, anything skipped or estimated, and the "
+        "full log trace — in one file.</p>"
         "<h2>Run summary</h2>"
         f"{_run_summary_html(metrics)}"
         "<h2>Data quality</h2>"
         f"<p class='sub'>{_esc(dq_summary)}</p>"
         f"{_data_quality_html()}"
+        "<h2>Full run log</h2>"
+        f"{_full_log_html(log_text)}"
         "<footer>Tarzan run report · this file is regenerated every run.</footer>"
         "</body></html>"
     )
 
 
 def write_report(output_dir: str, generated_at: str, metrics: Any = None,
+                 log_text: Optional[str] = None,
                  filename: str = "report.html") -> Optional[str]:
     """Write the unified HTML report. Best-effort — returns None on I/O error."""
     try:
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(render(generated_at, metrics))
+            f.write(render(generated_at, metrics, log_text))
         return path
     except Exception as e:  # noqa: BLE001
         logger.debug("Unified report write failed: %s", e)

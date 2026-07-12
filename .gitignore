@@ -46,6 +46,7 @@ input/fineco_raw/
 input/*.bak.*
 build.log
 analyzer.log
+output/report.html
 
 # Personal inputs are NEVER committed — even to a private repo. The
 # automation pulls them from the configured Google Drive folder via
