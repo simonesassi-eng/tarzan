@@ -62,26 +62,27 @@ def setup_logging(output_dir: str) -> None:
     root.addHandler(fh)
 
 
-def _write_run_reports(output_dir: str) -> None:
-    """Write the single unified, human-readable run report (data-quality +
-    rebalancing audit) as ``output/report.html``.
+def _write_run_reports(output_dir: str, metrics=None) -> None:
+    """Write the single unified, human-readable run report as
+    ``output/report.html`` — a run summary (headline figures) plus the
+    data-quality report.
 
     The verbose ``analyzer.log`` stays separate (raw debug trace, rewritten
-    each run). Best-effort: a diagnostic/audit must never turn a good run into
-    a failure.
+    each run). Best-effort: a diagnostic must never turn a good run into a
+    failure. ``metrics`` may be None on an early-exit run (summary then shows
+    a placeholder).
     """
     from tarzan import data_quality as dq
-    from tarzan import audit
     from tarzan import report_html
     from tarzan import runtime
     try:
         logger.info(dq.summary_line())
         stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
-        path = report_html.write_report(output_dir, generated_at=stamp)
+        path = report_html.write_report(output_dir, generated_at=stamp,
+                                        metrics=metrics)
         if path:
-            logger.info("Run report: %s (%d data-quality issue(s), %d "
-                        "rebalancing plan(s))",
-                        path, len(dq.issues()), len(audit.records()))
+            logger.info("Run report: %s (%d data-quality issue(s))",
+                        path, len(dq.issues()))
     except Exception as e:  # noqa: BLE001
         logger.debug("Run report step failed: %s", e)
 
@@ -104,6 +105,7 @@ def main(argv=None) -> int:
     if args.deterministic or as_of is not None:
         logger.info("Deterministic run%s (live quotes + AI summary skipped).",
                     f" as of {as_of}" if as_of else "")
+    metrics = None
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
@@ -138,11 +140,11 @@ def main(argv=None) -> int:
         logger.debug(traceback.format_exc())
         return 1
     finally:
-        # Always write the per-run side reports (data-quality + rebalancing
-        # audit) — on success, on the no-value early exit, and on any failure —
-        # so the user can see what was skipped/coerced/failed and why each
-        # rebalancing trade was suggested, regardless of how the run ended.
-        _write_run_reports(args.output)
+        # Always write the unified run report (run summary + data quality) —
+        # on success, on the no-value early exit, and on any failure — so the
+        # user always has one readable record of what the run produced and
+        # what it skipped, regardless of how the run ended.
+        _write_run_reports(args.output, metrics=metrics)
 
 
 if __name__ == "__main__":
