@@ -16,6 +16,7 @@ from tarzan.data.loader import (
 )
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.engine.metrics import MetricsEngine
+from tarzan.exceptions import DataIngestionError
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ def run(
     targets_per_holding_filename: str = "",
     deterministic: bool = False,
     as_of=None,
+    strict: bool = False,
 ) -> tuple[PortfolioMetrics, InvestorConfig]:
     """Execute the full analysis pipeline (order-only).
 
@@ -150,9 +152,16 @@ def run(
     orders = None
     if orders_source is not None:
         try:
-            orders = load_orders(orders_source, orders_filename) or None
+            orders = load_orders(orders_source, orders_filename, strict=strict) or None
             if orders:
                 logger.info("Loaded %d orders", len(orders))
+        except DataIngestionError:
+            # In strict mode a schema violation must surface as an actionable
+            # rejection, not silently degrade to "no orders" (empty report).
+            if strict:
+                raise
+            logger.warning("Order list rejected by schema; treating as no orders.")
+            orders = None
         except Exception as e:
             logger.warning("Order list unreadable (%s).", e)
             orders = None

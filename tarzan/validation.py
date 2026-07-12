@@ -153,3 +153,50 @@ def check_order_sign(otype: OrderType, quantity: float) -> SignCheck:
                      "sign corrected to negative"),
         )
     return SignCheck(quantity=quantity)
+
+
+# ---------------------------------------------------------------------------
+# Column-level schema validation (file boundary)
+# ---------------------------------------------------------------------------
+
+def validate_columns(present_columns, schema, *, strict: bool = False):
+    """Validate a file's columns against its declared ``FileSchema``.
+
+    Returns ``(fatal_error_or_None, warnings_list)``:
+
+      * A **missing required column** is always a fatal error (the file cannot
+        be used) — returned as a message string; the caller raises.
+      * An **unknown column** (not a canonical name or accepted alias) is a
+        WARNING in the default *lenient* mode (tolerated, e.g. Fineco adds an
+        extra column), but a fatal error in ``strict`` mode — the posture a
+        multi-tenant product wants, so a user's mis-formatted file is rejected
+        with an actionable message rather than silently half-read.
+
+    Pure: it only inspects column names; it never mutates and never raises.
+    The loader decides what to do with the result (raise vs record+continue).
+    """
+    present = {str(c).strip().lower() for c in present_columns}
+    known = schema.known_columns()
+
+    missing = sorted(schema.required_columns() - present)
+    fatal = None
+    if missing:
+        fatal = (f"{schema.file}: missing required column(s): "
+                 f"{', '.join(missing)}. Expected columns — see the "
+                 f"{schema.file} schema (v{schema.version}).")
+
+    warnings = []
+    unknown = sorted(present - known)
+    if unknown:
+        msg = (f"{schema.file}: unrecognized column(s): {', '.join(unknown)} "
+               "(ignored)." if not strict else
+               f"{schema.file}: unrecognized column(s): {', '.join(unknown)} "
+               "— rejected in strict mode.")
+        if strict:
+            # In strict mode an unknown column is fatal; surface it as the
+            # error (missing-required still takes precedence if both apply).
+            fatal = fatal or msg
+        else:
+            warnings.append(msg)
+
+    return fatal, warnings

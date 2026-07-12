@@ -29,6 +29,23 @@ def _round_or_none(value, ndigits: int):
 # loudly on a mismatch instead of silently reading a stale/renamed field.
 PORTFOLIO_METRICS_SCHEMA_VERSION = 1
 
+# The stable EXTERNAL output contract: the keys ``to_summary_dict`` always
+# emits, regardless of run mode. This is the narrow, versioned surface any
+# external consumer (API, mobile app, downstream pipeline) should depend on —
+# NOT the ~50-field internal cube. Additional keys (xirr_pct, twror_pct,
+# twror_annualized_pct, returns_coverage_pct) appear only on the order path and
+# are documented as optional. A test pins this set so a field rename/removal is
+# caught before it breaks a consumer.
+SUMMARY_CONTRACT_KEYS = frozenset({
+    "schema_version",
+    "total_value_eur", "invested_value_eur", "cash_value_eur", "cash_target_eur",
+    "performance", "risk", "weighted_yield", "avg_ter",
+    "num_holdings", "num_rebalancing_actions",
+})
+SUMMARY_CONTRACT_OPTIONAL_KEYS = frozenset({
+    "xirr_pct", "twror_pct", "twror_annualized_pct", "returns_coverage_pct",
+})
+
 
 @dataclass
 class PortfolioMetrics:
@@ -180,9 +197,15 @@ class PortfolioMetrics:
     allocation_timeline: Optional[dict] = None
 
     def to_summary_dict(self) -> dict:
-        """Serialize key metrics to a JSON-compatible dictionary.
+        """Serialize key metrics to a JSON-compatible dictionary — the stable,
+        versioned EXTERNAL output contract.
 
-        Useful for API responses, logging, or downstream pipeline consumption.
+        This is the narrow surface external consumers (API/app/pipeline) should
+        depend on, distinct from the wide internal cube. It always emits
+        :data:`SUMMARY_CONTRACT_KEYS`; the order-path figures in
+        :data:`SUMMARY_CONTRACT_OPTIONAL_KEYS` appear only when computed.
+        Every float is finite-or-null (valid strict JSON). ``schema_version``
+        lets consumers detect a contract change.
         """
         # All floats are routed through _round_or_none so a non-finite metric
         # (e.g. Sharpe when volatility==0, or any risk metric on an empty

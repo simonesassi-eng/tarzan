@@ -76,6 +76,13 @@ def parse_args(argv=None) -> argparse.Namespace:
              "terminal valuation date for XIRR/TWROR and the daily series). "
              "Implies a pinned clock.",
     )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Strict input validation: reject an order list with unrecognized "
+             "columns (with an actionable error) instead of tolerating them. "
+             "Default off keeps the lenient behavior. Also settable via "
+             "TARZAN_STRICT_INPUT=1.",
+    )
     return parser.parse_args(argv)
 
 
@@ -135,6 +142,9 @@ def main(argv=None) -> int:
     if args.deterministic or as_of is not None:
         logger.info("Deterministic run%s (live quotes + AI summary skipped).",
                     f" as of {as_of}" if as_of else "")
+    strict = args.strict or os.environ.get("TARZAN_STRICT_INPUT", "").strip() in ("1", "true", "yes")
+    if strict:
+        logger.info("Strict input validation ON (unrecognized columns rejected).")
     metrics = None
     try:
         from tarzan.orchestrator import run
@@ -144,6 +154,7 @@ def main(argv=None) -> int:
             targets_per_holding_source=args.input_targets_per_holding,
             deterministic=args.deterministic,
             as_of=as_of,
+            strict=strict,
         )
         if metrics.total_value == 0:
             logger.error("No portfolio value computed. Check input data.")
