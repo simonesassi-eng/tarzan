@@ -1,12 +1,12 @@
 """Unified, human-readable run report (single self-contained HTML file).
 
-Merges the two per-run side reports into ONE Chrome-openable file
-(``output/report.html``):
+One Chrome-openable file per run (``output/report.html``) describing THIS
+Tarzan run:
 
+  * Run summary — headline figures (total / invested / cash value, XIRR,
+    TWROR, coverage %, holdings count, generated timestamp);
   * Data quality — everything the run skipped, coerced, or fell back on
-    (from :mod:`tarzan.data_quality`);
-  * Rebalancing audit — why each suggested trade was proposed, as readable
-    prose (from :mod:`tarzan.audit`), not JSON.
+    (from :mod:`tarzan.data_quality`).
 
 The verbose ``analyzer.log`` stays separate (it is the raw debug trace).
 Best-effort, like the collectors it reads: rendering/writing must never raise
@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import html
 import logging
+import math
 import os
-from typing import Optional
+from typing import Any, Optional
 
-from tarzan import audit, data_quality
+from tarzan import data_quality
 
 logger = logging.getLogger(__name__)
 
@@ -85,90 +86,56 @@ def _issue_cells(it) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rebalancing-audit section (readable prose)
+# Run-summary section (headline figures for THIS run)
 # ---------------------------------------------------------------------------
 
-def _audit_html() -> str:
-    records = audit.records()
-    if not records:
-        return '<p class="muted">No rebalancing plans were produced this run.</p>'
-    blocks = []
-    for rec in records:
-        blocks.append(_audit_plan_html(rec))
-    return "".join(blocks)
+def _pct(v) -> str:
+    try:
+        f = float(v)
+        return "—" if not math.isfinite(f) else f"{f:,.2f}%"
+    except (TypeError, ValueError):
+        return "—"
 
 
-def _audit_plan_html(rec: dict) -> str:
-    cfg = rec.get("config", {}) or {}
-    actions = rec.get("actions", []) or []
-    holdings = rec.get("holdings", []) or []
-    verifs = rec.get("verifications", []) or []
+def _run_summary_html(metrics: Any) -> str:
+    if metrics is None:
+        return '<p class="muted">No metrics available for this run.</p>'
+    m = metrics
 
-    # Config line, in prose.
-    cfg_bits = [
-        f"tolerance ±{cfg.get('target_tolerance_pctg')}%",
-        f"lump sum {_eur(cfg.get('lump_sum_eur'))}",
-        f"cash buffer {_eur(cfg.get('cash_buffer_eur'))}",
+    def g(attr, default=None):
+        return getattr(m, attr, default)
+
+    n_holdings = 0
+    try:
+        hdf = g("holdings_df")
+        n_holdings = 0 if hdf is None else len(hdf)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # (label, value) tiles. Order-path fields (XIRR/TWROR/coverage) show "—"
+    # on a holdings-only run where they are None.
+    tiles = [
+        ("Total value", _eur(g("total_value"))),
+        ("Invested", _eur(g("invested_value"))),
+        ("Cash", _eur(g("cash_value"))),
+        ("Holdings", str(n_holdings)),
+        ("XIRR (money-weighted, ann.)", _pct(g("xirr_pct")) if g("xirr_pct") is not None else "—"),
+        ("TWROR (time-weighted, cum.)", _pct(g("twror_pct")) if g("twror_pct") is not None else "—"),
+        ("Real-data coverage", _pct(g("returns_coverage_pct")) if g("returns_coverage_pct") is not None else "—"),
     ]
-    if cfg.get("cgt_standard_pctg"):
-        cfg_bits.append(f"CGT {cfg.get('cgt_standard_pctg')}%/{cfg.get('cgt_government_pctg')}% gov")
-    if cfg.get("fee_buy_eur") or cfg.get("fee_sell_eur"):
-        cfg_bits.append(f"fees {_eur(cfg.get('fee_buy_eur'))} buy / {_eur(cfg.get('fee_sell_eur'))} sell")
-
-    # Actions as readable lines.
-    if actions:
-        act_rows = "".join(
-            f"<tr><td>{_esc(a.get('direction','').upper())}</td>"
-            f"<td>{_esc(a.get('name') or a.get('ticker'))}</td>"
-            f'<td class="num">{_eur(a.get("amount_eur"))}</td>'
-            f"<td>{_esc(a.get('reason'))}</td></tr>"
-            for a in actions
-        )
-        actions_html = (
-            '<table class="grid"><thead><tr><th>Action</th><th>Instrument</th>'
-            "<th>Amount</th><th>Why</th></tr></thead><tbody>"
-            + act_rows + "</tbody></table>"
-        )
-    else:
-        actions_html = '<p class="ok">Already balanced — no trades suggested.</p>'
-
-    # Post-trade verification per ambit.
-    if verifs:
-        vrows = "".join(
-            f"<tr><td>{_esc(v.get('check'))}</td>"
-            f"<td>{_esc(v.get('status'))}</td>"
-            f'<td class="ctx">{_esc(v.get("detail"))}</td></tr>'
-            for v in verifs
-        )
-        verif_html = (
-            '<details><summary>Post-trade check ({} ambit(s))</summary>'
-            '<table class="grid"><thead><tr><th>Ambit</th><th>Status</th>'
-            "<th>Detail</th></tr></thead><tbody>{}</tbody></table></details>"
-        ).format(len(verifs), vrows)
-    else:
-        verif_html = ""
-
-    # Inputs the solver saw (collapsed by default — it's the long part).
-    hrows = "".join(
-        f"<tr><td>{_esc(h.get('ticker') or h.get('isin'))}</td>"
-        f"<td>{_esc(h.get('asset_class'))}</td>"
-        f'<td class="num">{_eur(h.get("value_eur"))}</td>'
-        f'<td class="num">{_esc(h.get("target_portfolio"))}</td></tr>'
-        for h in holdings
+    # Surface degraded computers (a section computed on defaults, not real data).
+    degraded = g("degraded_computers") or []
+    tiles_html = "".join(
+        f'<div class="tile"><div class="tk">{_esc(label)}</div>'
+        f'<div class="tv">{_esc(value)}</div></div>'
+        for label, value in tiles
     )
-    holdings_html = (
-        '<details><summary>Inputs the optimizer saw ({} holding(s), '
-        "total {})</summary>"
-        '<table class="grid"><thead><tr><th>Instrument</th><th>Class</th>'
-        "<th>Value</th><th>Target %</th></tr></thead><tbody>{}</tbody>"
-        "</table></details>"
-    ).format(len(holdings), _eur(rec.get("total_value_eur")), hrows)
-
-    return (
-        f'<div class="plan"><h3>{_esc(rec.get("plan"))}</h3>'
-        f'<p class="cfg">{_esc(" · ".join(cfg_bits))}</p>'
-        f"{actions_html}{verif_html}{holdings_html}</div>"
-    )
+    warn = ""
+    if degraded:
+        warn = (f'<p class="degraded">⚠ {len(degraded)} metric section(s) fell '
+                f"back to defaults (not real results): {_esc(', '.join(degraded))}."
+                "</p>")
+    return f'<div class="tiles">{tiles_html}</div>{warn}'
 
 
 # ---------------------------------------------------------------------------
@@ -190,16 +157,23 @@ table.grid{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0 4px;}
   font-variant-numeric:tabular-nums;white-space:nowrap;}
 .src{font-weight:700;background:#FCFCFF;} .sev{font-weight:700;} .ctx{color:#64748B;}
 .ok{color:#15803D;font-weight:600;} .muted{color:#94A3B8;}
-.plan{border:1px solid #E5E7EF;border-radius:10px;padding:12px 16px;margin:12px 0;
-  background:#FCFCFF;} .cfg{color:#64748B;font-size:12px;margin:0 0 8px;}
+.tiles{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;}
+.tile{flex:1 1 150px;border:1px solid #E5E7EF;border-radius:10px;padding:10px 14px;
+  background:#FCFCFF;} .tk{color:#64748B;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.02em;} .tv{font-size:18px;font-weight:700;
+  color:#1E293B;font-variant-numeric:tabular-nums;margin-top:2px;}
+.degraded{color:#D97706;font-size:13px;font-weight:600;margin:8px 0 0;}
 details{margin:8px 0;} summary{cursor:pointer;color:#5B5BD6;font-size:13px;font-weight:600;}
 footer{color:#94A3B8;font-size:12px;margin-top:32px;border-top:1px solid #EEF2FF;padding-top:8px;}
 """
 
 
-def render(generated_at: str) -> str:
-    """Render the whole unified report as a single HTML string."""
-    dq_counts = data_quality.counts()
+def render(generated_at: str, metrics: Any = None) -> str:
+    """Render the whole unified report as a single HTML string.
+
+    ``metrics`` is the run's PortfolioMetrics (for the summary tiles); None is
+    tolerated (summary shows a muted placeholder).
+    """
     dq_summary = data_quality.summary_line()
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -208,26 +182,26 @@ def render(generated_at: str) -> str:
         f"<style>{_CSS}</style></head><body>"
         "<h1>Tarzan — Run Report</h1>"
         f"<p class='sub'>Generated {_esc(generated_at)}. Human-readable summary of "
-        "this run — what was skipped or estimated, and why each rebalancing "
-        "trade was suggested. (Full debug trace: <code>analyzer.log</code>.)</p>"
+        "this run — the headline figures and anything that was skipped or "
+        "estimated. (Full debug trace: <code>analyzer.log</code>.)</p>"
+        "<h2>Run summary</h2>"
+        f"{_run_summary_html(metrics)}"
         "<h2>Data quality</h2>"
         f"<p class='sub'>{_esc(dq_summary)}</p>"
         f"{_data_quality_html()}"
-        "<h2>Rebalancing audit</h2>"
-        f"{_audit_html()}"
         "<footer>Tarzan run report · this file is regenerated every run.</footer>"
         "</body></html>"
     )
 
 
-def write_report(output_dir: str, generated_at: str,
+def write_report(output_dir: str, generated_at: str, metrics: Any = None,
                  filename: str = "report.html") -> Optional[str]:
     """Write the unified HTML report. Best-effort — returns None on I/O error."""
     try:
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(render(generated_at))
+            f.write(render(generated_at, metrics))
         return path
     except Exception as e:  # noqa: BLE001
         logger.debug("Unified report write failed: %s", e)

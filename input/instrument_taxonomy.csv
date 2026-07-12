@@ -13,11 +13,11 @@ WisdomTree Eurozone Efficient Core,NTSZ.DE,IE000OV4XWA3,etf,Equities,Efficient C
 Vanguard FTSE All-World,VWRL.MI,,etf,Equities,Equity Broad,TRUE,,,62.15,10.12,7.85,6.1,13.78,,,,,,,Large and mid-cap stocks across developed and emerging markets.,2/21/26
 iShares MSCI ACWI,ISAC.MI,,etf,Equities,Equity Broad,TRUE,TRUE,TRUE,63.85,10.27,7.39,5.05,13.44,,,,,,,Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 iShares Core MSCI World,SWDA.MI,,etf,Equities,Equity Broad,,,,72.5,0,8.5,5.7,13.3,,,,,,,Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
-Nasdaq 100,^NDX,,index,Equities,Equity Broad,TRUE,,,100,0,0,0,0,,,,,,,Top 100 non-financial companies on Nasdaq.,2/21/26
-S&P 500,^GSPC,,index,Equities,Equity Broad,TRUE,,,100,0,0,0,0,,,,,,,500 leading large-cap US companies.,2/21/26
-CAC 40,^FCHI,,index,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,French stock market (40 largest stocks).,2/22/26
-DAX 40,^GDAXI,,index,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,40 major German blue-chip companies.,2/22/26
-FTSE MIB,FTSEMIB.MI,,etf,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,Italian stock market.,2/22/26
+iShares Nasdaq 100 UCITS ETF,CNDX.L,,etf,Equities,Equity Broad,TRUE,,,100,0,0,0,0,,,,,,,Nasdaq 100 (top 100 non-financial Nasdaq companies) via iShares UCITS ETF (Acc).,7/12/26
+iShares Core S&P 500 UCITS ETF,CSPX.L,,etf,Equities,Equity Broad,TRUE,,,100,0,0,0,0,,,,,,,S&P 500 (500 leading large-cap US companies) via iShares Core UCITS ETF (Acc).,7/12/26
+Amundi CAC 40 UCITS ETF,CACC.PA,,etf,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,French large-cap (CAC 40) via Amundi UCITS ETF (Acc).,7/12/26
+iShares Core DAX UCITS ETF,EXS1.DE,,etf,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,German blue-chip (DAX 40) via iShares Core UCITS ETF (Acc).,7/12/26
+iShares FTSE MIB UCITS ETF,CSMIB.MI,,etf,Equities,Equity Broad,,,,0,0,100,0,0,,,,,,,Italian large-cap (FTSE MIB) via iShares UCITS ETF (Acc).,7/12/26
 SPDR MSCI ACWI IMI,IMIE.MI,IE00B3YLTY66,etf,Equities,Equity Broad,,,,63.5,10.2,7.4,5.4,13.5,,,,,,,All Country World Investable Market Index (incl. small caps).,7/9/26
 Xtrackers MSCI World ex USA,EXUS.MI,IE0006WW1TQ4,etf,Equities,Equity Broad,,,,0,0,29.63,20.75,49.62,,,,,,,Developed markets outside the US.,6/15/26
 Russell 1000,^RUI,,index,Equities,Equity Broad,,,,100,0,0,0,0,,,,,,,1000 largest US companies.,2/21/26
@@ -40,8 +40,8 @@ Avantis Pacific Equity,AVPE.DE,IE000T62NEO6,etf,Equities,Equity Factor,TRUE,,,0,
 Invesco MSCI World Equal Weight,MWEQ.L,,etf,Equities,Equity Factor,,,,42.07,0.8,16.45,12.88,27.8,,,,,,,Equal-weighted developed-market global equity.,6/15/26
 iShares Edge MSCI World Minimum Volatility,MVOL.L,,etf,Equities,Equity Factor,,,,66.64,0,8.35,10.24,14.77,,,,,,,Developed-market stocks with lower volatility characteristics.,6/15/26
 iShares MSCI World Small Cap,WSML.L,,etf,Equities,Equity Factor,,,,62.46,0,6,11.98,19.56,,,,,,,Small-cap stocks across developed market countries.,6/15/26
-Russell 2000,^RUT,,index,Equities,Equity Factor,,,,100,0,0,0,0,,,,,,,2000 small-cap US companies.,2/21/26
-S&P 500 Equal Weight,^SPXEW,,index,Equities,Equity Factor,,,,100,0,0,0,0,,,,,,,S&P 500 constituents with equal weighting.,2/22/26
+SPDR Russell 2000 US Small Cap UCITS ETF,R2US.L,,etf,Equities,Equity Factor,,,,100,0,0,0,0,,,,,,,US small-cap (Russell 2000) via SPDR UCITS ETF.,7/12/26
+Xtrackers S&P 500 Equal Weight UCITS ETF,XDEW.L,,etf,Equities,Equity Factor,,,,100,0,0,0,0,,,,,,,S&P 500 constituents equally weighted via Xtrackers UCITS ETF.,7/12/26
 iShares Edge MSCI USA Minimum Volatility,MVUS.MI,IE00B8FHGS14,etf,Equities,Equity Factor,,,,100,0,0,0,0,,,,,,,US large/mid-cap stocks with lower volatility (MSCI USA Min Vol).,7/9/26
 Xtrackers MSCI World Value,XDEV.MI,IE00BL25JM42,etf,Equities,Equity Factor,,,,51.29,0,16.05,18.57,14.09,,,,,,,MSCI World Value factor.,7/8/26
 Xtrackers MSCI World Quality,XDEQ.MI,IE00BL25JL35,etf,Equities,Equity Factor,,,,73.38,0,8.89,3.21,14.52,,,,,,,MSCI World Sector Neutral Quality factor.,7/8/26
