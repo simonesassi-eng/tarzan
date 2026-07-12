@@ -33,12 +33,11 @@ logger = logging.getLogger(__name__)
 # Data-quality report source tag for the order-list ingestion stage.
 _DQ_SOURCE = "order_load"
 
-# Minimal set the order list must carry for returns. The full schema has
-# more columns (trade_date, name, price_native, fx_rate, fees_eur,
-# source); those are optional and default when absent.
-ORDER_REQUIRED_COLUMNS = frozenset({
-    "date", "type", "isin", "quantity", "gross_eur", "net_eur",
-})
+# Minimal set the order list must carry for returns. Derived from the single
+# declarative schema (tarzan.schema.ORDER_LIST_SCHEMA) so there is ONE source
+# of truth for the format; kept as a module constant for back-compat.
+from tarzan.schema import ORDER_LIST_SCHEMA as _ORDER_SCHEMA
+ORDER_REQUIRED_COLUMNS = frozenset(_ORDER_SCHEMA.required_columns())
 
 
 def load_config(source: Optional[Union[str, io.BytesIO]] = None) -> InvestorConfig:
@@ -68,12 +67,14 @@ def load_config(source: Optional[Union[str, io.BytesIO]] = None) -> InvestorConf
     return InvestorConfig.from_dict(rows)
 
 
-def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Order]:
+def load_orders(source: Union[str, io.BytesIO], filename: str = "",
+                strict: bool = False) -> list[Order]:
     """Load and validate the order list into typed Order objects.
 
     Reuses ``_read_source`` (path/.csv/.xlsx/BytesIO), lowercases columns,
-    validates the canonical schema, and skips malformed or unknown-type
-    rows with a warning rather than failing the whole load.
+    validates them against the declared :data:`tarzan.schema.ORDER_LIST_SCHEMA`,
+    and skips malformed or unknown-type rows with a warning rather than
+    failing the whole load.
 
     A missing file path returns ``[]`` (not an exception) so the
     orchestrator can log and exit gracefully.
@@ -81,6 +82,11 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Orde
     Args:
         source: File path (str) or BytesIO buffer.
         filename: Original filename (needed for BytesIO extension detection).
+        strict: When True, an unrecognized column is a hard error (the posture
+            a multi-tenant product wants — reject a mis-formatted file with an
+            actionable message). Default False keeps the historical lenient
+            behavior (unknown columns tolerated with a warning), so the
+            automated newsletter and existing files are unaffected.
 
     Returns:
         List of validated Order objects (possibly empty).
@@ -93,11 +99,17 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "") -> list[Orde
     df = _read_source(source, filename)
     df.columns = [c.strip().lower() for c in df.columns]
 
-    missing = ORDER_REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        raise DataIngestionError(
-            f"Order list missing required columns: {', '.join(sorted(missing))}"
-        )
+    # Validate columns against the explicit, versioned schema. Missing required
+    # columns are always fatal; unknown columns warn (lenient) or reject
+    # (strict). Warnings go to the per-run data-quality report.
+    from tarzan.schema import ORDER_LIST_SCHEMA
+    from tarzan.validation import validate_columns
+    fatal, col_warnings = validate_columns(df.columns, ORDER_LIST_SCHEMA, strict=strict)
+    for w in col_warnings:
+        logger.warning(w)
+        dq.warning(_DQ_SOURCE, w)
+    if fatal:
+        raise DataIngestionError(fatal)
 
     orders: list[Order] = []
     skipped = 0
