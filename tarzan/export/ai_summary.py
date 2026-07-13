@@ -208,7 +208,12 @@ def build_divergence_digest(metrics, config,
         # the rest is selection/allocation.
         "risk_vs_selection": _risk_vs_selection(gap_si, realized_beta),
         "beta_trend": trend,
-        "allocation_drift": _top_drift(metrics),
+        # NOTE: allocation-vs-target drift is deliberately NOT included. It is a
+        # different concept from the benchmark gap (it lives in the optimizer
+        # section), and feeding it here made the model suggest incoherent
+        # "rebalance to target to close the gap" advice (e.g. buy more bonds,
+        # which lowers beta and widens the lag). The gap is explained by
+        # beta + selection, full stop.
         "contributors": _contributors(metrics),
     }
     return _clean(digest)
@@ -303,24 +308,6 @@ def _risk_vs_selection(si_gap: Optional[dict], beta: Optional[float]) -> Optiona
             "selection_contribution_pp": selection_part}
 
 
-def _top_drift(m, k: int = 3) -> list[dict]:
-    """The k largest absolute allocation drifts vs target (asset-class + geo)."""
-    gd = getattr(m, "goal_deltas", None)
-    try:
-        if gd is None or gd.empty:
-            return []
-        sub = gd.dropna(subset=["delta_pct"]).copy()
-        sub["absd"] = sub["delta_pct"].abs()
-        sub = sub.sort_values("absd", ascending=False).head(k)
-        return [_clean({"bucket": r.get("category"),
-                        "actual_pct": _num(r.get("actual_pct")),
-                        "target_pct": _num(r.get("target_pct")),
-                        "drift_pp": _num(r.get("delta_pct"))})
-                for _, r in sub.iterrows()]
-    except Exception:  # noqa: BLE001
-        return []
-
-
 def _contributors(m, k: int = 3) -> dict:
     """Top contributors / detractors to the portfolio's own return: the
     weight × gain product per holding (a first-order return-contribution proxy
@@ -334,8 +321,13 @@ def _contributors(m, k: int = 3) -> dict:
             return {}
         d["contrib_pp"] = d["weight_pct"] * d["gain_pct"] / 100.0
 
+        # Shorten names the same way the newsletter tables do, so the note
+        # reads "Xtrackers S&P 500 5C" not the full "... Swap UCITS ETF 5C -
+        # EUR Hedged" legal name.
+        from tarzan.export._format import short_instrument_name
+
         def _row(r):
-            return _clean({"name": (r.get("name") or r.get("ticker")),
+            return _clean({"name": short_instrument_name(r.get("name") or r.get("ticker") or ""),
                            "class": r.get("asset_class"),
                            "weight_pct": _num(r.get("weight_pct")),
                            "gain_pct": _num(r.get("gain_pct")),
@@ -424,35 +416,34 @@ def _fallback_divergence_note(d: dict) -> str:
             t = top[0]
             drag += f", while {t.get('name')} led the gains ({_pp(t.get('contrib_pp'))})"
         bits.append(drag + ".")
-    # Recommendation: tie it to CLOSING (or accepting) the benchmark gap, not
-    # to an abstract "risk profile". When lower risk is the main cause of a lag,
-    # the honest takeaway is the trade-off itself; only invoke a rebalance when
-    # a drift plausibly moves the gap.
+    # Takeaway: about the benchmark GAP and the risk trade-off behind it —
+    # deliberately NOT an allocation-drift rebalance suggestion. Drift-to-target
+    # is a separate concern (it's in the optimizer section) and mixing it in
+    # produces incoherent advice: e.g. "buy more bonds to close the gap" is
+    # backwards, since more fixed income LOWERS beta and WIDENS the lag in a
+    # rising market. The honest point is the trade-off itself.
     rvs = d.get("risk_vs_selection")
     beta = rvs.get("beta") if rvs else None
-    drift = d.get("allocation_drift") or []
+    sel = rvs.get("selection_contribution_pp") if rvs else None
     if si and beta is not None and beta < 1 and si["gap_pp"] < 0:
-        # Behind mainly because of low beta → name the lever + the trade-off.
-        lever = ""
-        if drift:
-            big = drift[0]
-            if (big.get("drift_pp") or 0) < 0:  # under target on something
-                lever = (f" The clearest lever is your {big.get('bucket')} sleeve, "
-                         f"{_pp(abs(big.get('drift_pp') or 0))} under target — "
-                         f"topping it up moves you toward the benchmark's mix.")
+        pick_note = ""
+        if sel is not None:
+            pick_note = (
+                f" Your fund picks {'added' if sel >= 0 else 'cost'} {_pp(abs(sel))} on top, "
+                f"so {'they are not the problem' if sel >= 0 else 'they widened it slightly'} — "
+                f"the lag is about risk level, not stock-picking.")
         bits.append(
-            f"So the takeaway is a trade-off, not a mistake: closing the gap to {bench} "
-            f"means taking on more market risk, which also means bigger drawdowns when "
-            f"markets fall. If matching {bench} matters more to you than a smoother ride, "
-            f"raise your equity/high-beta exposure; if not, this lag is the expected cost "
-            f"of a defensive portfolio.{lever}")
-    elif drift:
-        big = drift[0]
-        direction = "over" if (big.get("drift_pp") or 0) >= 0 else "under"
+            f"The takeaway is a trade-off, not a mistake: with a beta below 1 this lag is the "
+            f"expected cost of a calmer, lower-risk portfolio, and the only way to close it is "
+            f"to take on more market risk — which also means bigger drawdowns when markets "
+            f"fall.{pick_note} Whether that is worth doing depends on whether tracking {bench} "
+            f"matters more to you than a smoother ride.")
+    elif si and beta is not None and beta > 1 and si["gap_pp"] < 0:
+        # Behind DESPITE more market risk → the lag is selection, not risk.
         bits.append(
-            f"Your largest allocation drift is {big.get('bucket')}, {direction} target by "
-            f"{_pp(abs(big.get('drift_pp') or 0))}; rebalancing it is the most direct lever "
-            f"on the gap to {bench}.")
+            f"Since you carry more market risk than {bench} yet still trail it, this gap is "
+            f"about your specific holdings, not your risk level — worth reviewing which "
+            f"positions are dragging rather than adding leverage.")
     return " ".join(b for b in bits if b and b != ".")
 
 
@@ -505,13 +496,18 @@ def _divergence_system_prompt(language: str) -> str:
         "the gap should narrow if that mix holds; when 'diverging', say the "
         "opposite. Never claim a trend when the two betas are equal or one is "
         "missing.\n"
-        "4. Finish with ONE recommendation COHERENT WITH THE GAP ANALYSIS — "
-        "about closing (or consciously accepting) the gap to the benchmark, NOT "
-        "a vague 'risk profile'. If a low beta is the main cause, frame the real "
-        "trade-off: matching the benchmark means more market risk and bigger "
-        "drawdowns, so the choice depends on whether tracking the index or a "
-        "smoother ride matters more; if an allocation drift is the lever, say how "
-        "rebalancing it moves the gap.\n"
+        "4. Finish with ONE takeaway about the GAP and the risk trade-off "
+        "behind it. If a beta below 1 is the main cause, say plainly that the "
+        "lag is the expected cost of a lower-risk portfolio and the only way to "
+        "close it is to take on more market risk (and bigger drawdowns), so it "
+        "is a choice about whether tracking the benchmark matters more than a "
+        "smoother ride — NOT a mistake to fix. If instead beta is above 1 and "
+        "the portfolio still trails, say the gap is about the specific holdings, "
+        "not the risk level. DO NOT recommend rebalancing toward allocation "
+        "targets or buying a specific asset class (e.g. more bonds/fixed "
+        "income) to 'close the gap' — that is a different topic and is usually "
+        "BACKWARDS (more fixed income lowers beta and WIDENS the lag in a rising "
+        "market). Say nothing about allocation-vs-target drift here.\n"
         "RULES: every claim carries a number from the JSON; write percentage "
         "changes with an explicit + or - sign and gaps in 'pp'; quote beta to two "
         "decimals; never invent figures beyond the JSON; no preamble, no "
