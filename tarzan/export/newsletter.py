@@ -3330,6 +3330,15 @@ def render_newsletter(
         except Exception:
             benchmark_geo = "MSCI ACWI"
 
+    # Resolve the optional AI market-context summary when not explicitly passed,
+    # so every caller (CLI + email) renders the SAME newsletter. generate_summary
+    # is fully self-guarding: it returns None when no GEMINI_API_KEY is set, in a
+    # deterministic run, or on any error — it never raises and never blocks the
+    # render. Pass ai_summary="" to force the block off even when a key exists.
+    if ai_summary is None:
+        from tarzan.export.ai_summary import generate_summary
+        ai_summary = generate_summary(metrics, config)
+
     template_dir = os.path.join(os.path.dirname(__file__), "templates")
     env = Environment(
         loader=FileSystemLoader(template_dir),
@@ -3355,8 +3364,10 @@ def generate_newsletter(
 ) -> str:
     """Render the newsletter and write it to disk.
 
-    The output filename uses the same timestamp pattern as the Excel report:
-    ``portfolio_digest_<YYYYMMDD_HHMM>.html``.
+    Writes ``portfolio_digest_<YYYYMMDD_HHMM>.html`` into ``output_dir``. The
+    rendering goes through :func:`render_newsletter`, so a CLI run and an
+    emailed send produce the same HTML (benchmark names and the optional AI
+    market-context summary are resolved there).
 
     Args:
         metrics: Computed portfolio metrics.

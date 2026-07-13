@@ -140,3 +140,27 @@ def test_render_without_ai_has_no_market_context():
     html = render_newsletter(_metrics(), _config(), ai_summary=None)
     assert "Market context" not in html
     assert "worth your attention" not in html
+
+
+def test_render_auto_resolves_ai_summary_when_none(monkeypatch):
+    # ai_summary=None means "resolve it" (same contract as the benchmark names):
+    # render_newsletter must call generate_summary itself, so the CLI and the
+    # emailed newsletter render identically without the caller wiring the AI.
+    monkeypatch.setattr(
+        "tarzan.export.ai_summary.generate_summary",
+        lambda m, c: "Auto-resolved market note for the render path.",
+    )
+    html = render_newsletter(_metrics(), _config())  # ai_summary defaults to None
+    assert "Market context" in html
+    assert "Auto-resolved market note" in html
+
+
+def test_render_empty_string_forces_block_off(monkeypatch):
+    # Escape hatch: "" is falsy but not None, so it must NOT trigger auto-resolve
+    # (guards a caller that explicitly wants no market-context block).
+    monkeypatch.setattr(
+        "tarzan.export.ai_summary.generate_summary",
+        lambda m, c: (_ for _ in ()).throw(AssertionError("must not auto-resolve on empty string")),
+    )
+    html = render_newsletter(_metrics(), _config(), ai_summary="")
+    assert "Market context" not in html

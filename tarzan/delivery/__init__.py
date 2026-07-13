@@ -229,35 +229,19 @@ def run_and_send() -> int:
         return 1
 
     # 2. Render newsletter HTML.
-    # The α/β and geo benchmark names are read from configuration
-    # (instrument_taxonomy.csv: is_benchmark_alpha_beta / is_benchmark_geo)
-    # rather than hardcoded, so the labels and the cells they color match the
-    # benchmark the engine actually computed against.
-    from tarzan import config as tarzan_config
-
-    benchmark_alpha_beta = tarzan_config.benchmark_beta_name()
-    benchmark_geo = tarzan_config.benchmark_geo_allocation()
-    logger.info("Benchmarks — α/β: %s | geo: %s", benchmark_alpha_beta, benchmark_geo)
-
-    # Optional AI portfolio summary (free Gemini tier). Best-effort: when no
-    # GEMINI_API_KEY is set, or the call fails, this returns None and the
-    # newsletter simply omits the market-context block.
-    from tarzan.export.ai_summary import generate_summary, is_enabled as _ai_on
-    ai_summary = None
-    if _ai_on():
-        logger.info("Generating AI portfolio summary...")
-        ai_summary = generate_summary(metrics, config)
-        logger.info("AI summary %s", "generated" if ai_summary else "unavailable (no market-context block)")
-    else:
-        logger.info("AI summary disabled (no GEMINI_API_KEY) — no market-context block.")
+    # render_newsletter is the single render path (CLI + email produce the same
+    # HTML): it resolves the α/β and geo benchmark names from configuration, and
+    # the optional AI market-context summary, internally when not passed. Leaving
+    # them as their defaults here keeps this and the CLI byte-identical.
+    from tarzan.export.ai_summary import is_enabled as _ai_on
+    logger.info("AI summary %s.",
+                "enabled (market-context block resolved at render)"
+                if _ai_on() else "disabled (no GEMINI_API_KEY / deterministic)")
 
     html = render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=issue_number,
-        benchmark_alpha_beta=benchmark_alpha_beta,
-        benchmark_geo=benchmark_geo,
-        ai_summary=ai_summary,
     )
 
     subject = build_subject(metrics, subject_prefix, trigger_label)
