@@ -1,27 +1,22 @@
 """Tests for the shared export formatting taxonomy (colors, ordering,
-benchmark labels) — the single source of truth consumed by both the
-Excel dashboard and the HTML newsletter."""
+benchmark labels) — the single source of truth (``_format``) the HTML
+newsletter binds to."""
 
 from __future__ import annotations
 
 from tarzan.export import _format
-from tarzan.export import excel as xl
 from tarzan.export import newsletter as nl
 
 
 class TestColorTaxonomySingleSource:
-    def test_excel_uses_shared_asset_colors(self):
-        # Excel binds its ASSET_COLORS to the shared taxonomy object.
-        assert xl.ASSET_COLORS is _format.ASSET_CLASS_COLORS
-
-    def test_newsletter_matches_excel_per_class(self):
-        # For every asset class, Excel (bare hex) and the newsletter
-        # (#-prefixed) must resolve to the SAME color — this is the
+    def test_newsletter_matches_shared_format_per_class(self):
+        # For every asset class, the newsletter (#-prefixed) must resolve to
+        # the SAME color as the shared _format source (bare hex) — this is the
         # regression that previously diverged for Crypto/Alternative.
         for klass, bare in _format.ASSET_CLASS_COLORS.items():
             assert nl.ASSET_COLORS[klass] == _format.css(bare)
 
-    def test_newsletter_matches_excel_per_region(self):
+    def test_newsletter_matches_shared_format_per_region(self):
         for region, bare in _format.GEO_COLORS.items():
             assert nl.GEO_COLORS[region] == _format.css(bare)
 

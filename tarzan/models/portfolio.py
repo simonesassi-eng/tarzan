@@ -1,7 +1,7 @@
 """Portfolio-level metrics container.
 
 PortfolioMetrics is the single output object produced by the Calculator layer.
-It aggregates all computed data needed by the Reporting layer (Excel generator).
+It aggregates all computed data needed by the Reporting layer (the newsletter).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def _round_or_none(value, ndigits: int):
 
 
 # Bump when the PortfolioMetrics field contract changes in a way consumers
-# (Excel, newsletter, report, to_summary_dict) must be aware of — a renamed or
+# (newsletter, report, to_summary_dict) must be aware of — a renamed or
 # removed field, or a changed field meaning. Consumers can assert this to fail
 # loudly on a mismatch instead of silently reading a stale/renamed field.
 PORTFOLIO_METRICS_SCHEMA_VERSION = 1

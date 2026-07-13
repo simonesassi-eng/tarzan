@@ -3,7 +3,7 @@
 **Portfolio analysis for investors who swing smart.**
 
 Tarzan is a production-grade portfolio analyzer with live market data
-enrichment, instrument classification, and a 5-sheet Excel report for
+enrichment, instrument classification, and an HTML email newsletter for
 multi-asset portfolios.
 
 ---
@@ -37,7 +37,7 @@ python -m tarzan.main \
     --output       output/
 ```
 
-Each run's artifacts (Excel dashboard + `report.html`) are written to a
+Each run's artifacts (the newsletter HTML + `report.html`) are written to a
 per-date folder under `output/<YYYY-MM-DD>/`.
 
 ## Input format
@@ -80,14 +80,14 @@ Tarzan/
 │   ├── config/              # YAML + taxonomy-CSV configuration
 │   ├── data/                # Loader, enricher, market quotes, price cache, geo
 │   ├── engine/              # stats, metrics, returns, benchmarks, rebalancer, tax
-│   ├── export/              # Excel + HTML newsletter + charts + AI summary
+│   ├── export/              # HTML newsletter + charts + AI summary
 │   ├── models/              # Holding, Order, InvestorConfig, PortfolioMetrics
 │   └── tests/               # Pytest suite (~20 modules)
 ├── input/                   # Your order_list.csv / targets.csv (git-ignored)
 ├── output/                  # Per-run artifacts under output/<YYYY-MM-DD>/:
-│                            #   Excel dashboard, newsletter HTML, and
-│                            #   report.html — the ONE run log (summary of
-│                            #   issues + how handled, then a lean log table)
+│                            #   the newsletter HTML and report.html — the ONE
+│                            #   run log (summary of issues + how handled,
+│                            #   then a lean log table)
 └── requirements.txt
 ```
 
@@ -96,7 +96,7 @@ Tarzan/
 - Python 3.12
 - pandas, numpy, scipy (mixed-integer optimization)
 - yfinance (market data)
-- openpyxl (Excel export)
+- jinja2 (newsletter templating)
 
 ## Development
 

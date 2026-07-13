@@ -67,7 +67,7 @@ from tarzan.export._perf_series import (  # noqa: F401  (re-exported)
 logger = logging.getLogger(__name__)
 
 
-# ── Palette (mirrors tarzan.export.excel.C / ASSET_COLORS / GEO_COLORS) ───────
+# ── Palette (asset/geo colors bind to the shared tarzan.export._format source) ─
 
 PALETTE = {
     "accent": "#5B5BD6",
