@@ -182,40 +182,74 @@ def build_divergence_digest(metrics, config,
     gap_si = _gap(full, auth["port_si"], None)
 
     risk = metrics.risk or {}
-    # Use the SAME beta the newsletter's Risk-profile table shows
-    # (historical_risk portfolio row) so the reader never sees two different
-    # betas for "my portfolio". Fall back to m.risk["beta"] (order-derived NAV,
-    # since-inception) only when the backtest produced none.
-    beta = _portfolio_beta(metrics)
     alpha = _num(risk.get("alpha"))
+    # Two DISTINCT, precisely-defined betas, both from the engine's one
+    # _compute_beta_alpha primitive against the same benchmark (cfg
+    # .benchmark_beta) — so they form a truthful, apples-to-apples trend:
+    #   * realized: regression of the REAL order-derived NAV over the actual
+    #     holding period (m.risk["beta"]). Since it is measured on the very
+    #     returns being attributed, it — not the current-mix beta — is the
+    #     correct multiplier for the since-inception gap decomposition.
+    #   * current: today's weights held constant (historical_risk portfolio
+    #     row) — the beta the Risk-profile table displays, so the note's
+    #     "current beta" equals the table by construction.
+    trend = _beta_trend(metrics)
+    realized_beta = trend["realized_beta"] if trend else _num(risk.get("beta"))
 
     digest: dict[str, Any] = {
         "benchmark": bench or "the benchmark",
         "window_30d": gap_30d,
         "since_inception": gap_si,
-        "capm": _clean({"beta": beta, "alpha_pct": alpha,
+        "capm": _clean({"realized_beta": realized_beta, "alpha_pct": alpha,
                         "volatility_pct": _num(risk.get("volatility"))}),
-        # CAPM-implied "expected" gap from taking beta≠1 market risk, on the
-        # since-inception benchmark return: (beta − 1) × benchmark. What's left
-        # of the actual gap after that is selection/allocation.
-        "risk_vs_selection": _risk_vs_selection(gap_si, beta),
+        # The gap decomposition uses the REALIZED beta (measured on the actual
+        # NAV over the period): (realized_beta − 1) × benchmark is the part of
+        # the gap that is the mathematical consequence of the risk level;
+        # the rest is selection/allocation.
+        "risk_vs_selection": _risk_vs_selection(gap_si, realized_beta),
+        "beta_trend": trend,
         "allocation_drift": _top_drift(metrics),
         "contributors": _contributors(metrics),
     }
     return _clean(digest)
 
 
-def _portfolio_beta(m) -> Optional[float]:
-    """The portfolio beta the newsletter's Risk-profile table displays
-    (``historical_risk`` portfolio row), so the divergence note and the table
-    show ONE beta. Falls back to ``m.risk['beta']`` when the historical
-    backtest produced none."""
+def _current_beta(m) -> Optional[float]:
+    """The 'current' portfolio beta = today's weights held constant, i.e. the
+    ``historical_risk`` portfolio-row beta the Risk-profile table displays.
+    This is what the note calls the *current* beta, so the two agree."""
     hr = getattr(m, "historical_risk", None) or {}
     port = hr.get("portfolio") or {}
-    b = _num((port.get("metrics") or {}).get("beta"))
-    if b is not None:
-        return b
-    return _num((getattr(m, "risk", None) or {}).get("beta"))
+    return _num((port.get("metrics") or {}).get("beta"))
+
+
+def _beta_trend(m) -> Optional[dict]:
+    """Both portfolio betas + the direction between them, for the note.
+
+    realized = beta of the ACTUAL order-derived NAV over the holding period
+    (``m.risk['beta']``); current = beta of today's weights held constant
+    (``historical_risk`` portfolio row). Both come from the engine's single
+    ``_compute_beta_alpha`` against the same benchmark, so comparing them is
+    apples-to-apples. 'direction' says whether the CURRENT mix tracks the
+    benchmark MORE closely than the realized history did — i.e. whether the
+    portfolio is set up to CONVERGE toward the benchmark going forward
+    (|current − 1| < |realized − 1|)."""
+    realized = _num((getattr(m, "risk", None) or {}).get("beta"))
+    current = _current_beta(m)
+    if realized is None and current is None:
+        return None
+    direction = None
+    if realized is not None and current is not None:
+        dr, dc = abs(realized - 1.0), abs(current - 1.0)
+        if abs(dc - dr) < 0.02:
+            direction = "stable"
+        else:
+            direction = "converging" if dc < dr else "diverging"
+    return _clean({
+        "realized_beta": realized,          # actual NAV over the period
+        "current_beta": current,            # today's weights (= Risk table)
+        "direction": direction,             # converging | diverging | stable
+    })
 
 
 def _bench_period(m, bench_name: Optional[str], period: str):
@@ -331,23 +365,42 @@ def _fallback_divergence_note(d: dict) -> str:
             f"{_sp(si['benchmark_pct'])} — you {verb} it by {_pp(si['gap_pp'])}.")
     rvs = d.get("risk_vs_selection")
     if rvs:
-        b = rvs["beta"]
+        b = rvs["beta"]                     # realized beta (actual NAV)
         pct = abs(b - 1) * 100
         mkt = rvs["market_risk_contribution_pp"]
         sel = rvs["selection_contribution_pp"]
         if b < 1:
             # Defensive: less market risk → expected to lag a rising benchmark.
             bits.append(
-                f"Most of that gap is by design, not bad luck: your beta of {b:.2f} means "
-                f"your portfolio only moves about {b*100:.0f}% as much as {bench}, so in a "
-                f"rising market you were always going to lag it. That lower risk explains "
-                f"{_pp(mkt)} of the gap; the remaining {_pp(sel)} is what your specific "
-                f"fund picks and weights {'added on top' if sel >= 0 else 'cost you'}.")
+                f"Most of that gap is by design, not bad luck: your realized beta of {b:.2f} "
+                f"(how much your portfolio actually moved relative to {bench} over the period) "
+                f"means it swung only about {b*100:.0f}% as much, so in a rising market you "
+                f"were always going to lag it. That lower risk explains {_pp(mkt)} of the gap; "
+                f"the remaining {_pp(sel)} is what your specific fund picks and weights "
+                f"{'added on top' if sel >= 0 else 'cost you'}.")
         else:
             bits.append(
-                f"Your beta of {b:.2f} means your portfolio swings about {pct:.0f}% MORE than "
-                f"{bench}, which {'helped' if mkt >= 0 else 'hurt'} by {_pp(mkt)}; the "
+                f"Your realized beta of {b:.2f} (how much your portfolio actually moved "
+                f"relative to {bench} over the period) means it swung about {pct:.0f}% MORE "
+                f"than {bench}, which {'helped' if mkt >= 0 else 'hurt'} by {_pp(mkt)}; the "
                 f"remaining {_pp(sel)} is down to your specific fund picks and weights.")
+
+    # Forward-looking beta trend: realized vs today's-weights ("current") beta.
+    trend = d.get("beta_trend") or {}
+    rb, cb, direction = trend.get("realized_beta"), trend.get("current_beta"), trend.get("direction")
+    if rb is not None and cb is not None and direction and abs(cb - rb) >= 0.02:
+        if direction == "converging":
+            bits.append(
+                f"Looking forward, your current mix carries more market risk than your history "
+                f"did — beta has risen from {rb:.2f} (realized) to {cb:.2f} (current, today's "
+                f"weights) — so the portfolio is now set up to track {bench} more closely than "
+                f"it has, and the gap should narrow if that mix holds.")
+        else:  # diverging
+            bits.append(
+                f"Looking forward, your current mix sits further from the benchmark's risk "
+                f"level than your history did — beta has moved from {rb:.2f} (realized) to "
+                f"{cb:.2f} (current, today's weights) — so it is set up to track {bench} "
+                f"less closely going forward, and the gap may widen if that mix holds.")
     if w30:
         verb = "ahead of" if w30["gap_pp"] >= 0 else "behind"
         bits.append(
@@ -421,40 +474,50 @@ def _divergence_system_prompt(language: str) -> str:
         "portfolio is or is not tracking its benchmark. You are given a JSON "
         "digest with two windows (last 30 days and since inception), each with "
         "the portfolio's cumulative return, the benchmark's, and the gap in "
-        "percentage points; a CAPM split (beta, and how much of the "
-        "since-inception gap comes from taking more/less market risk vs from "
-        "selection/allocation); allocation drift vs target; and the holdings "
-        "that contributed most and least to return.\n"
-        "WRITE a tight, quantitative explanation (4-6 sentences, ~120 words, "
+        "percentage points; a CAPM split ('capm.realized_beta' and how much of "
+        "the since-inception gap comes from taking more/less market risk vs from "
+        "selection/allocation in 'risk_vs_selection'); a 'beta_trend' with "
+        "realized_beta, current_beta and a direction; allocation drift vs "
+        "target; and the holdings that contributed most and least to return.\n"
+        "WRITE a tight, quantitative explanation (5-7 sentences, ~140 words, "
         "one flowing paragraph) that a NON-EXPERT can follow — briefly say what "
         "a term means the first time you use it:\n"
         "1. State the since-inception gap and the 30-day gap with their exact "
         "figures, and say whether the divergence is widening or narrowing.\n"
         "2. Attribute the gap using the CAPM split, and EXPLAIN it in plain "
-        "words. Beta is how much the portfolio moves relative to the benchmark "
-        "(beta 0.7 = moves ~70% as much; beta 1 = in lock-step). A beta below 1 "
-        "means LESS market risk, so in a RISING market the portfolio is expected "
-        "to lag — that is the 'market_risk_contribution_pp': the part of the gap "
-        "that is simply the mathematical consequence of the chosen risk level, "
-        "NOT bad fund-picking. The 'selection_contribution_pp' is what the "
-        "specific funds and weights added or cost ON TOP of that. Make this "
-        "cause-and-effect explicit (e.g. 'because you took ~30% less market risk, "
-        "you were always going to trail a rising benchmark — that explains X of "
-        "the gap; the remaining Y is down to your actual picks'). Name the "
-        "biggest drag and the top contributor with their figures.\n"
-        "3. Finish with ONE recommendation that is COHERENT WITH THE GAP "
-        "ANALYSIS — it must be about closing (or consciously accepting) the gap "
-        "to the benchmark, NOT about a vague 'risk profile'. If a low beta is the "
-        "main cause, frame it as the real trade-off: matching the benchmark means "
-        "taking more market risk and bigger drawdowns, so the choice depends on "
-        "whether tracking the index or a smoother ride matters more; if a specific "
-        "allocation drift is the lever, say how rebalancing it moves the gap.\n"
+        "words. STATE THE REALIZED BETA VALUE explicitly (from "
+        "'risk_vs_selection.beta' / 'beta_trend.realized_beta') and define it: "
+        "the realized (performed) beta is how much the portfolio ACTUALLY moved "
+        "relative to the benchmark over the period (beta 0.7 = moved ~70% as "
+        "much; 1 = in lock-step). A beta below 1 means LESS market risk, so in a "
+        "RISING market the portfolio is expected to lag — that is "
+        "'market_risk_contribution_pp': the part of the gap that is simply the "
+        "mathematical consequence of the chosen risk level, NOT bad fund-picking. "
+        "'selection_contribution_pp' is what the specific funds/weights added or "
+        "cost ON TOP. Make the cause-and-effect explicit. Name the biggest drag "
+        "and the top contributor with their figures.\n"
+        "3. Add a FORWARD-LOOKING line from 'beta_trend' ONLY IF both "
+        "realized_beta and current_beta are present and they differ: give BOTH "
+        "values (label them realized vs current — current = today's holdings' "
+        "beta) and, when direction is 'converging' (current beta closer to 1 "
+        "than realized), say the portfolio now carries more market risk than it "
+        "did on average, so it is set up to track the benchmark MORE closely and "
+        "the gap should narrow if that mix holds; when 'diverging', say the "
+        "opposite. Never claim a trend when the two betas are equal or one is "
+        "missing.\n"
+        "4. Finish with ONE recommendation COHERENT WITH THE GAP ANALYSIS — "
+        "about closing (or consciously accepting) the gap to the benchmark, NOT "
+        "a vague 'risk profile'. If a low beta is the main cause, frame the real "
+        "trade-off: matching the benchmark means more market risk and bigger "
+        "drawdowns, so the choice depends on whether tracking the index or a "
+        "smoother ride matters more; if an allocation drift is the lever, say how "
+        "rebalancing it moves the gap.\n"
         "RULES: every claim carries a number from the JSON; write percentage "
-        "changes with an explicit + or - sign and gaps in 'pp'; never invent "
-        "figures beyond the JSON; no preamble, no salutation, no markdown, no "
-        "headings, no bullet points; do not restate the whole JSON. This is "
-        "analysis and portfolio-construction insight, NOT a solicitation. "
-        f"Write in {language}."
+        "changes with an explicit + or - sign and gaps in 'pp'; quote beta to two "
+        "decimals; never invent figures beyond the JSON; no preamble, no "
+        "salutation, no markdown, no headings, no bullet points; do not restate "
+        "the whole JSON. This is analysis and portfolio-construction insight, NOT "
+        f"a solicitation. Write in {language}."
     )
 
 
