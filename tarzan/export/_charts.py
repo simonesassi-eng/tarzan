@@ -62,14 +62,20 @@ def fmt_pct_tick(v: float) -> str:
 
 
 def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
-                      date_fmt="%b %d", month_ticks=False) -> str:
+                      date_fmt="%b %d", month_ticks=False, min_day_ticks=0) -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
     labels stay legible at ~half width. ``series``: list of
-    ``{values, color, dash?}``. ``date_fmt`` sets the first/last x-axis tick
-    format (``%b %d`` for a short window). ``month_ticks=True`` instead labels
-    the axis at each month boundary (thinned to stay legible), so a
-    multi-month/since-inception span is granular — the year is shown when it
-    changes and on the first tick."""
+    ``{values, color, dash?}``. ``date_fmt`` sets the x-axis tick format.
+
+    X-axis density:
+      * ``month_ticks=True`` — label EVERY month boundary (year shown when it
+        changes / on the first tick), each with a faint vertical gridline.
+      * ``min_day_ticks=N`` — place at least N evenly-spaced day labels
+        (``date_fmt``), each with a faint vertical gridline. Use for the
+        short (30-day) window.
+      * neither — just first/last labels (legacy).
+    Vertical gridlines are drawn light (BORDER) so they read as a grid without
+    competing with the data lines."""
     ml, mr, mt, mb = 30, 8, 10, 20
     pw, ph = w - ml - mr, h - mt - mb
     allv = [v for s in series for v in s["values"]]
@@ -97,34 +103,44 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     if include_zero and vmin < 0 < vmax:
         y0 = Y(0.0)
         out.append(f'<line x1="{ml}" y1="{y0:.1f}" x2="{ml + pw}" y2="{y0:.1f}" stroke="{MUTED}" stroke-width="1" stroke-dasharray="2,3"/>')
+
+    # ── X-axis ticks + light vertical gridlines ──
+    def _vgrid(k: int) -> None:
+        x = X(k)
+        out.append(f'<line x1="{x:.1f}" y1="{mt}" x2="{x:.1f}" y2="{mt + ph}" '
+                   f'stroke="{BORDER}" stroke-width="1"/>')
+
+    def _xlabel(k: int, text: str) -> None:
+        x = X(k)
+        anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
+        out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" '
+                   f'fill="{SUBTLE}">{text}</text>')
+
     if month_ticks and n > 1:
-        # One tick per month boundary (first sample whose month differs from
-        # the previous). Thin to a max count so half-width panels don't crowd;
-        # show the year on the first tick and whenever it changes.
         ts = [pd.Timestamp(d) for d in dates]
+        # One tick at each month boundary — ALL of them (labelled + gridline).
         month_idx = [0] + [i for i in range(1, n)
                            if (ts[i].year, ts[i].month) != (ts[i - 1].year, ts[i - 1].month)]
-        max_ticks = 6
-        if len(month_idx) > max_ticks:
-            step = -(-len(month_idx) // max_ticks)  # ceil
-            month_idx = month_idx[::step]
-        if month_idx[-1] != n - 1 and (n - 1 - month_idx[-1]) > max(1, n // (max_ticks * 3)):
-            month_idx.append(n - 1)  # anchor the end so "today" is labeled
+        # Do NOT append a separate end anchor: the last month boundary already
+        # labels the current month, and adding n-1 would repeat it ("Jul Jul").
+        # Every month gets exactly one tick at its first in-window day.
         prev_year = None
         for j, k in enumerate(month_idx):
-            x = X(k)
-            anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
+            _vgrid(k)
             t = ts[k]
             label = t.strftime("%b %y") if (prev_year != t.year or j == 0) else t.strftime("%b")
             prev_year = t.year
-            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
-                       f'{label}</text>')
+            _xlabel(k, label)
+    elif min_day_ticks and n > 1:
+        # At least ``min_day_ticks`` evenly-spaced day ticks (labelled + grid).
+        count = min(min_day_ticks, n)
+        idxs = sorted({round(i * (n - 1) / (count - 1)) for i in range(count)})
+        for k in idxs:
+            _vgrid(k)
+            _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
     else:
         for k in sorted({0, n - 1}):
-            x = X(k)
-            anc = "start" if k == 0 else "end"
-            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
-                       f'{pd.Timestamp(dates[k]).strftime(date_fmt)}</text>')
+            _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)

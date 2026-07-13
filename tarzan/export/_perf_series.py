@@ -307,3 +307,52 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         "pnl_pct": total_pct,
         "acwi": acwi_si,
     }
+
+
+def _rolling_ann_vol(level: "pd.Series", window: int) -> "pd.Series":
+    """Rolling annualized volatility (%) of a price/level series: stdev of
+    daily returns over ``window`` trading days × √(trading days/year) × 100.
+    NaN for the leading days that lack a full window."""
+    from tarzan.engine.stats import TRADING_DAYS
+    ret = level.pct_change()
+    return ret.rolling(window, min_periods=max(2, window // 2)).std() * (TRADING_DAYS ** 0.5) * 100.0
+
+
+def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
+                     n_days: Optional[int] = None, vol_window: int = 21,
+                     max_points: int = 180) -> Optional[dict]:
+    """Rolling annualized volatility of the portfolio NAV vs the geo benchmark,
+    on a common daily index. The twin of ``_perf_window`` / ``_perf_full_series``
+    for the "You vs the market" box's second (risk) row.
+
+    ``n_days=None`` → the whole inception→today span (downsampled to
+    ``max_points``); ``n_days=30`` → the trailing window (with ``vol_window``
+    days of lead-in so the first plotted point already has a full window).
+    Returns ``{dates, port, acwi}`` (% lists; either line may be None), or None
+    when unavailable."""
+    nav_full = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
+    if nav_full is None or len(nav_full) < vol_window + 1:
+        return None
+    acwi_raw = _geo_benchmark_series(m, geo_name)
+    acwi_full = _norm_series(acwi_raw) if acwi_raw is not None else None
+
+    port_vol_full = _rolling_ann_vol(nav_full, vol_window)
+    # Choose the display index (same convention as the return charts).
+    if n_days is None:
+        idx = nav_full.index
+        if len(idx) > max_points:
+            pos = sorted({int(round(i * (len(idx) - 1) / (max_points - 1)))
+                          for i in range(max_points)})
+            idx = idx[pos]
+    else:
+        cutoff = nav_full.index[-1] - pd.Timedelta(days=n_days)
+        idx = nav_full.index[nav_full.index >= cutoff]
+        if len(idx) < 2:
+            return None
+
+    port = list(port_vol_full.reindex(idx, method="ffill").bfill().values.astype(float))
+    acwi = None
+    if acwi_full is not None and len(acwi_full) >= vol_window + 1:
+        acwi_vol_full = _rolling_ann_vol(acwi_full, vol_window)
+        acwi = list(acwi_vol_full.reindex(idx, method="ffill").bfill().values.astype(float))
+    return {"dates": list(idx), "port": port, "acwi": acwi}
