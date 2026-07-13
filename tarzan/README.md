@@ -65,17 +65,17 @@ pip install -r requirements.txt
 
 ```bash
 # Minimal run (uses defaults for input_config and output)
-python -m tarzan.main --input_orders input/sample/sample_order_list.csv
+python -m tarzan.main --input_orders input/order_list.csv
 
 # Full CLI
 python -m tarzan.main \
-    --input_orders input/sample/sample_order_list.csv \
-    --input_config input/sample/sample_targets.csv \
-    --output       output/sample/
+    --input_orders input/order_list.csv \
+    --input_config input/targets.csv \
+    --output       output/
 ```
 
-See [`input/sample/`](../input/sample/) for ready-to-use sample CSVs and
-[`output/sample/`](../output/sample/) for a pre-generated Excel report.
+Provide your own `order_list.csv` (see the Input section above); each run's
+artifacts land in `output/<YYYY-MM-DD>/`.
 
 ### Reproducible / as-of runs
 
