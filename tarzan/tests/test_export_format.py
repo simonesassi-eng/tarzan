@@ -57,6 +57,11 @@ class TestColorizePct:
         assert colors.get("-4.53pp") == PALETTE["red"]
         assert colors.get("+0.92pp") == PALETTE["green"]
 
+    def test_colors_spelled_out_percentage_points(self):
+        # The AI sometimes writes "percentage points" instead of "pp".
+        spans = self._spans("costing -4.53 percentage points of the gap")
+        assert any("percentage point" in t for _, t in spans)
+
     def test_bare_beta_not_coloured(self):
         # A bare number like a beta "0.69" must stay neutral (no unit).
         assert self._spans("beta of 0.69") == []
@@ -123,7 +128,10 @@ class TestRiskProfileBenchmarkLabels:
         labels = [r["label"] for r in profile["rows"]]
         assert labels[0] == "Your portfolio"
         assert profile["rows"][0]["is_portfolio"] is True
-        assert "MSCI World" in labels and "FTSE All-World" in labels
+        # Display labels go through short_instrument_name (which normalizes the
+        # hyphen: "FTSE All-World" → "FTSE All World"); tag-matching still uses
+        # the raw configured name.
+        assert "MSCI World" in labels and "FTSE All World" in labels
         # 10 metric columns now (Ulcer added), with α/β carrying the marker.
         col_labels = [c["label"] for c in profile["columns"]]
         assert col_labels[0] == "CAGR" and len(profile["columns"]) == 10
