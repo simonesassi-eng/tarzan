@@ -25,7 +25,7 @@ import logging
 import os
 from typing import Optional
 
-from tarzan import data_quality
+from tarzan.runtime import data_quality
 
 logger = logging.getLogger(__name__)
 

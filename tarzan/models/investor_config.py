@@ -319,7 +319,7 @@ def _validate_sum_to_100(
 def _dq_config_warning(message: str, context: str) -> None:
     """Route a config-validation warning into the data-quality report."""
     try:
-        from tarzan import data_quality as dq
+        from tarzan.runtime import data_quality as dq
         dq.warning("config", message, context=context)
     except Exception:  # noqa: BLE001
         pass

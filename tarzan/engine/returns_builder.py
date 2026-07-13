@@ -44,7 +44,7 @@ from tarzan.data.bond_fetcher import (
 )
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
-from tarzan import data_quality as dq
+from tarzan.runtime import data_quality as dq
 
 logger = logging.getLogger(__name__)
 

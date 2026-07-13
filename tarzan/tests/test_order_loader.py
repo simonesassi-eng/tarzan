@@ -7,7 +7,7 @@ import io
 import pytest
 
 from tarzan.data.loader import load_orders
-from tarzan.exceptions import DataIngestionError
+from tarzan.contracts.exceptions import DataIngestionError
 from tarzan.models.order import OrderType
 
 _HEADER = (

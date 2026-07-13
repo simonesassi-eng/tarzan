@@ -8,7 +8,7 @@ instrument as a data-quality WARNING instead of leaving it silent.
 
 from __future__ import annotations
 
-from tarzan import data_quality as dq
+from tarzan.runtime import data_quality as dq
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.orchestrator import _check_taxonomy_coverage
 

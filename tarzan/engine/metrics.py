@@ -113,7 +113,7 @@ class MetricsEngine:
         explicit signal a renderer can flag as "unavailable" rather than
         presenting it as a real low-risk / zero result.
         """
-        from tarzan import data_quality as dq
+        from tarzan.runtime import data_quality as dq
         ctx: dict = {}
         degraded: list[str] = []
         for computer in self._computers:
@@ -744,7 +744,7 @@ class MetricsEngine:
         # Append both plans to the per-run rebalancing audit trail (inputs +
         # outputs), so the WHY behind each suggested trade is durably
         # recorded. Best-effort; never affects the plans or any number.
-        from tarzan import audit as _audit
+        from tarzan.runtime import audit as _audit
         for _label, _ns, _s, _v in (
             ("Buy only (accumulate)", True, s_true, v_true),
             ("Buy & sell (full rebalance)", False, s_false, v_false),

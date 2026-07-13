@@ -10,16 +10,21 @@ tarzan/
 ├── __init__.py                  # Package root, versioning
 ├── main.py                      # CLI entry point (writes side reports)
 ├── orchestrator.py              # Pipeline: load → enrich → compute
-├── delivery.py                  # Newsletter service: resolve inputs → run → render → email
-├── drive_loader.py              # Download input CSVs from a private Google Drive folder
-├── exceptions.py                # Domain exception hierarchy (TarzanError).
-│                                #   NOTE: only DataIngestionError is currently
-│                                #   raised; other stages fail soft and record
-│                                #   into the data-quality report instead.
-├── data_quality.py              # Per-run data-quality collector (skips/coercions/fallbacks)
-├── audit.py                     # Per-run rebalancing audit collector (why each trade)
-├── report_html.py               # The single run report: issues+handling summary + lean log → output/report.html
-├── validation.py                # Input-boundary validators (ISIN/currency/order sign)
+├── contracts/                   # Input/output boundary contracts
+│   ├── schema.py                #   Declarative, versioned input-file schema
+│   ├── validation.py            #   Input-boundary validators (ISIN/currency/order sign)
+│   └── exceptions.py            #   Domain exception hierarchy (TarzanError).
+│                                #     NOTE: only DataIngestionError is currently
+│                                #     raised; other stages fail soft into the
+│                                #     data-quality report instead.
+├── runtime/                     # Per-run cross-cutting state (all reset each run)
+│   ├── __init__.py              #   RunContext: the clock + determinism switch
+│   ├── data_quality.py          #   Per-run data-quality collector (skips/coercions/fallbacks)
+│   ├── audit.py                 #   Per-run rebalancing audit collector (why each trade)
+│   └── report_html.py           #   The single run report → output/report.html
+├── delivery/                    # Run + render + dispatch the newsletter
+│   ├── __init__.py              #   Newsletter service: resolve inputs → run → render → email
+│   └── drive_loader.py          #   Download input CSVs from a private Google Drive folder
 ├── config/
 │   ├── __init__.py              # Configuration loader (YAML + taxonomy CSV → accessors)
 │   ├── constants.yaml           # Tunable parameters (risk-free rate, classification, ...)

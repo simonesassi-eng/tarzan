@@ -16,11 +16,11 @@ from typing import Optional, Union
 
 import pandas as pd
 
-from tarzan import data_quality as dq
+from tarzan.runtime import data_quality as dq
 from tarzan.models.order import Order, OrderType
 from tarzan.models.investor_config import InvestorConfig
-from tarzan.exceptions import DataIngestionError
-from tarzan.validation import (
+from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.contracts.validation import (
     check_order_sign,
     currency_is_known,
     isin_format_error,
@@ -34,9 +34,9 @@ logger = logging.getLogger(__name__)
 _DQ_SOURCE = "order_load"
 
 # Minimal set the order list must carry for returns. Derived from the single
-# declarative schema (tarzan.schema.ORDER_LIST_SCHEMA) so there is ONE source
+# declarative schema (tarzan.contracts.schema.ORDER_LIST_SCHEMA) so there is ONE source
 # of truth for the format; kept as a module constant for back-compat.
-from tarzan.schema import ORDER_LIST_SCHEMA as _ORDER_SCHEMA
+from tarzan.contracts.schema import ORDER_LIST_SCHEMA as _ORDER_SCHEMA
 ORDER_REQUIRED_COLUMNS = frozenset(_ORDER_SCHEMA.required_columns())
 
 
@@ -72,7 +72,7 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "",
     """Load and validate the order list into typed Order objects.
 
     Reuses ``_read_source`` (path/.csv/.xlsx/BytesIO), lowercases columns,
-    validates them against the declared :data:`tarzan.schema.ORDER_LIST_SCHEMA`,
+    validates them against the declared :data:`tarzan.contracts.schema.ORDER_LIST_SCHEMA`,
     and skips malformed or unknown-type rows with a warning rather than
     failing the whole load.
 
@@ -102,8 +102,8 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "",
     # Validate columns against the explicit, versioned schema. Missing required
     # columns are always fatal; unknown columns warn (lenient) or reject
     # (strict). Warnings go to the per-run data-quality report.
-    from tarzan.schema import ORDER_LIST_SCHEMA
-    from tarzan.validation import validate_columns
+    from tarzan.contracts.schema import ORDER_LIST_SCHEMA
+    from tarzan.contracts.validation import validate_columns
     fatal, col_warnings = validate_columns(df.columns, ORDER_LIST_SCHEMA, strict=strict)
     for w in col_warnings:
         logger.warning(w)
@@ -169,7 +169,7 @@ def _assign_order_ids(orders: list[Order]) -> None:
 def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
     """Parse one order-list row into an Order, or None to skip it.
 
-    Validation policy (see ``tarzan.validation``): structural failures
+    Validation policy (see ``tarzan.contracts.validation``): structural failures
     (unknown type, invalid date, malformed/missing ISIN, unparseable required
     number) SKIP the row; a wrong-sign quantity is NORMALIZED (not dropped);
     an unknown currency is KEPT with an EUR fallback. Every skip/coercion is

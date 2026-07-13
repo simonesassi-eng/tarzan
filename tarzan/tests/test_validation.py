@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from tarzan import data_quality as dq
+from tarzan.runtime import data_quality as dq
 from tarzan.models.order import OrderType
-from tarzan.validation import (
+from tarzan.contracts.validation import (
     check_order_sign,
     currency_is_known,
     isin_format_error,

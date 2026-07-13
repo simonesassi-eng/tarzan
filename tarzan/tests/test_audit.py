@@ -6,7 +6,7 @@ import json
 
 import pandas as pd
 
-from tarzan import audit
+from tarzan.runtime import audit
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.investor_config import InvestorConfig
 

@@ -14,7 +14,7 @@ import sys
 import traceback
 from datetime import date as _dtdate
 
-from tarzan.exceptions import DataIngestionError, TarzanError
+from tarzan.contracts.exceptions import DataIngestionError, TarzanError
 
 logger = logging.getLogger("tarzan")
 
@@ -127,8 +127,8 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
     This is the one and only log for a run: there is no separate analyzer.log.
     Best-effort: a diagnostic must never turn a good run into a failure.
     """
-    from tarzan import data_quality as dq
-    from tarzan import report_html
+    from tarzan.runtime import data_quality as dq
+    from tarzan.runtime import report_html
     from tarzan import runtime
     try:
         logger.info(dq.summary_line())
@@ -145,7 +145,7 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
 def main(argv=None) -> int:
     args = parse_args(argv)
 
-    from tarzan import data_quality as dq
+    from tarzan.runtime import data_quality as dq
     # Parse the optional as-of date FIRST (before logging is set up) — it is a
     # hard, actionable error if malformed, and it also names the output folder.
     as_of = None
