@@ -1,8 +1,9 @@
-"""Shared formatting helpers for export surfaces (Excel, newsletter).
+"""Shared formatting helpers for the newsletter export surface.
 
-Kept tiny on purpose: only utilities that need consistent rendering
-between the spreadsheet and the email so end users see the same
-notation everywhere.
+Kept tiny on purpose: the color taxonomy, name shortening and number
+formatting the email relies on, in one place so the rules stay consistent.
+(Historically these were shared with an Excel dashboard, since removed; the
+palette is still stored as bare 6-hex — ``css()`` prefixes it for HTML.)
 """
 
 from __future__ import annotations
@@ -16,11 +17,9 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Color taxonomy — single source of truth for asset-class / geography colors
 # ---------------------------------------------------------------------------
-# Both the Excel dashboard and the HTML newsletter must color the same asset
-# class / region identically. Previously each surface kept its own copy and
-# they had drifted (Crypto and Alternative rendered different colors in Excel
-# vs the email). Define the palette once here, as bare 6-hex codes (the form
-# openpyxl wants); use css()/css_map() for the "#RRGGBB" form the email needs.
+# The newsletter must color every asset class / region consistently. Define
+# the palette once here as bare 6-hex codes; use css()/css_map() for the
+# "#RRGGBB" form the email needs.
 
 ASSET_CLASS_COLORS: dict[str, str] = {
     "Equities": "1D4ED8",

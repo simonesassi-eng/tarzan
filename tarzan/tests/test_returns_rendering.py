@@ -1,14 +1,9 @@
-"""Render tests: XIRR/TWROR appear in Excel + newsletter only when set."""
+"""Render tests: XIRR/TWROR appear in the newsletter only when set."""
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pandas as pd
-import pytest
 
-from tarzan.export.excel import generate_excel
 from tarzan.export.newsletter import build_context, render_newsletter
 from tarzan.models.portfolio import PortfolioMetrics
 
@@ -72,15 +67,6 @@ class TestNewsletterReturns:
         assert "How your money moved" in html_on
         assert "Annualized — TWROR" in html_on
         assert "TWROR" in html_on
-
-
-class TestExcelReturns:
-    def test_excel_renders_both_ways(self):
-        for with_returns in (False, True):
-            m = _minimal_metrics(with_returns)
-            with tempfile.TemporaryDirectory() as d:
-                path = generate_excel(m, [], _config(), d)
-                assert os.path.exists(path)
 
 
 def _config():

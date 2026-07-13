@@ -190,10 +190,11 @@ def main(argv=None) -> int:
             logger.error("No portfolio value computed. Check input data.")
             return 1
 
-        # Generate Excel (keep legacy export)
-        from tarzan.export.excel import generate_excel
-        output_path = generate_excel(metrics, [], config, output_dir)
-        logger.info("Dashboard saved to: %s", output_path)
+        # Render the newsletter — Tarzan's primary artifact. (Benchmark names
+        # are resolved from config inside generate_newsletter when omitted.)
+        from tarzan.export.newsletter import generate_newsletter
+        output_path = generate_newsletter(metrics, config, output_dir)
+        logger.info("Newsletter saved to: %s", output_path)
         logger.info("Completed successfully.")
         return 0
 

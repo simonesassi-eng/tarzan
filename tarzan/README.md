@@ -47,13 +47,12 @@ tarzan/
 │   ├── robustness.py            # Rolling / stress / bootstrap risk analysis
 │   └── synthetic.py             # Synthetic-history helpers
 ├── export/
-│   ├── excel.py                 # 5-sheet Excel dashboard
-│   ├── newsletter.py            # HTML email newsletter
+│   ├── newsletter.py            # HTML email newsletter (the primary artifact)
 │   ├── _perf_series.py          # Pure performance/return series helpers (newsletter)
 │   ├── _charts.py               # Inline SVG chart builders
 │   ├── _format.py               # Shared formatting / palette helpers
 │   ├── ai_summary.py            # Optional Gemini narrative summary
-│   └── whatif_excel.py          # What-if scenario workbook
+│   └── whatif_excel.py          # What-if scenario workbook (scripts/whatif.py only)
 └── tests/                       # Pytest suite (~20 modules, run: pytest tarzan/tests/)
 ```
 
@@ -258,25 +257,23 @@ Foreign-currency bonds (e.g. ZAR/USD) are converted to EUR via the order
 
 ## Output
 
-Excel file `portfolio_dashboard_[YYYYMMDD_HHMM].xlsx` with 5 sheets:
+The HTML email newsletter `portfolio_digest_[YYYYMMDD_HHMM].html` — Tarzan's
+primary artifact, a single 600px-wide inbox-optimised page. Sections:
 
-1. **Dashboard** — Hero KPIs (Total / Invested / Cash values, Total Gain, RTD),
-   invested allocation vs target (with cash buffer as an EUR row), geography
-   breakdown, top 5 holdings, rebalancing alert.
-2. **Optimizer** — Banner with traffic-light status, rebalancing actions
-   (buy / sell / amount / % of portfolio / reason), consolidated allocation
-   deviations grouped by type (invested asset classes incl. cash buffer in
-   EUR, equity geography, per-holding equity and fixed income targets),
-   and solver parameters.
-3. **Holdings** — Full enriched table (ticker, ISIN, asset class, quantity,
-   prices, values, % of portfolio, % of invested, % of asset class, gain,
-   geography, data source).
-4. **Performance** — Unified period returns + risk table (1D…5Y, CAGR,
-   Volatility, Sharpe, Sortino, Max DD, VaR 95%, CVaR 95%, Alpha, Beta) for
-   portfolio, holdings and benchmarks, plus a legend with investor-friendly
-   descriptions and rating thresholds.
-5. **Return Contribution** — Per-holding contribution to total return,
-   breakdowns by asset class and by equity geography.
+1. **Hero** — Total / Invested / Cash values, Total Gain, unrealized P&L.
+2. **Performance** — period returns + risk (1D…5Y, CAGR, Volatility, Sharpe,
+   Sortino, Max DD, VaR/CVaR 95%, Alpha, Beta), XIRR/TWROR when an order list
+   is supplied, and the money-moved charts.
+3. **Allocation** — by asset class and equity geography, vs target, with the
+   rebalancing status banner.
+4. **Holdings** — enriched table grouped by asset class.
+5. **Market context** — optional AI narrative summary (Gemini free tier).
+
+Each run also writes `report.html` — the run log (data-quality summary + a
+lean color-coded log table). Both land under `output/<YYYY-MM-DD>/`.
+
+The what-if scenario tool (`scripts/whatif.py`) can additionally emit an Excel
+workbook via `--excel`; that is the only remaining spreadsheet surface.
 
 ## Exception hierarchy
 
