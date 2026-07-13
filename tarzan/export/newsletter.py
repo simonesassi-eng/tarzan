@@ -1128,12 +1128,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     parts = []
     if s30 or ssi:
-        left = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
-                + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
-        # Full-range x-axis reads better with month/year labels than day-level.
-        right = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
-                 + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, date_fmt="%b %Y")
-                 + _charts.legend(lsi, 9)) if ssi else ""
+        # LEFT = since inception (the fuller story); RIGHT = last 30 days. The
+        # since-inception axis shows month ticks across the whole span; the
+        # 30-day axis shows day-level ticks.
+        left = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
+                + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, month_ticks=True)
+                + _charts.legend(lsi, 9)) if ssi else ""
+        right = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
+                 + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
         charts_tbl = (
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;"><tr>'
             f'<td width="50%" valign="top" style="padding-right:8px;">{left}</td>'
@@ -1166,8 +1168,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
             f'text-transform:uppercase;">You vs the market</div>'
             f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">Your return paths vs '
-            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong> — last 30 days (rebased) and '
-            f'since inception (cumulative).</div>{charts_tbl}{divergence_html}'
+            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong> — since inception (cumulative) and '
+            f'the last 30 days (rebased).</div>{charts_tbl}{divergence_html}'
         )
         # Wrapped in the same card shell as the matrix above so the section
         # reads consistently with the rest of the newsletter.

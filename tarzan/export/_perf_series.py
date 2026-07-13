@@ -132,6 +132,33 @@ def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
     return (float(s.iloc[-1]) / base - 1.0) * 100.0 if base > 0 else None
 
 
+def _rebase_benchmark(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":
+    """Rebase a benchmark price series to 0% over the window spanned by ``idx``,
+    anchored on the benchmark's OWN first real observation within the window.
+
+    Crucially the anchor is NOT a price carried forward from *before* the
+    window: the portfolio's date index can start on a non-trading day (e.g. a
+    Saturday), and a plain ``reindex(idx, ffill)`` then takes a stale
+    pre-window price as the denominator — overstating the benchmark's move and
+    disagreeing with the Performance section's period return (which anchors on
+    the benchmark's first in-window trading day). Anchoring here on
+    ``benchmark[index >= idx[0]].iloc[0]`` makes the chart and the section
+    agree. Returns a %-list aligned to ``idx``, or None when unavailable."""
+    a = _norm_series(araw)
+    if a is None or len(a) < 2:
+        return None
+    in_win = a[a.index >= idx[0]]
+    if len(in_win) < 2 or not float(in_win.iloc[0]):
+        return None
+    anchor = float(in_win.iloc[0])
+    aligned = a.reindex(idx).ffill()
+    # Leading dates before the first in-window observation → hold at the anchor
+    # (line starts at 0%) rather than showing a stale pre-window level.
+    lead = aligned.index < in_win.index[0]
+    aligned = aligned.mask(lead, anchor).bfill()
+    return list(((aligned / anchor - 1.0) * 100.0).values.astype(float))
+
+
 def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.Series | None":
     """Price history of the geographic benchmark (the taxonomy row flagged
     ``is_benchmark_geo=TRUE``, e.g. iShares MSCI ACWI) from
@@ -167,10 +194,11 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 
     acwi = None
     acwi_raw = _geo_benchmark_series(m, geo_name)
-    if acwi_raw is not None and len(acwi_raw) >= 2:
-        a = _norm_series(acwi_raw).reindex(idx, method="ffill").bfill()
-        if float(a.iloc[0]):
-            acwi = list(((a / a.iloc[0] - 1.0) * 100.0).values.astype(float))
+    if acwi_raw is not None:
+        # Anchor on the benchmark's own first in-window observation (not a
+        # stale price ffill'd from before the window), so this matches the
+        # Performance section's period return.
+        acwi = _rebase_benchmark(acwi_raw, idx)
 
     pnl_pct = None
     if m.pnl_series is not None:
@@ -220,16 +248,14 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
     if m.unrealized_series is not None:
         ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
         unreal_pct = list((ur / (av - ur).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
-    # MSCI ACWI since inception: anchor the benchmark at the portfolio's
-    # inception value (same basis as twror_si) and sample the window.
+    # MSCI ACWI since inception: anchor on the benchmark's first observation
+    # at/after inception (its own real price, not one stale-filled from before
+    # the portfolio's start), then sample the window — same anchoring rule as
+    # the 30-day chart and the Performance section.
     acwi_si = None
     acwi_raw = _geo_benchmark_series(m, geo_name)
-    if acwi_raw is not None and len(acwi_raw) >= 2 and len(nav_full):
-        a_full = _norm_series(acwi_raw)
-        a_at_inception = a_full.reindex(nav_full.index, method="ffill").bfill()
-        if len(a_at_inception) and float(a_at_inception.iloc[0]):
-            acwi_full = (a_full / float(a_at_inception.iloc[0]) - 1.0) * 100.0
-            acwi_si = list(acwi_full.reindex(idx, method="ffill").bfill().values.astype(float))
+    if acwi_raw is not None and len(nav_full):
+        acwi_si = _rebase_benchmark(acwi_raw, idx)
     return twror_si, total_pct, unreal_pct, acwi_si
 
 
