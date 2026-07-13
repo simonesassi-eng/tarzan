@@ -65,8 +65,30 @@ class TestNewsletterReturns:
         # renders only when the order-derived returns and daily series exist.
         assert "How your money moved" not in html_off
         assert "How your money moved" in html_on
-        assert "Annualized — TWROR" in html_on
+        assert "Annualized: TWROR" in html_on
         assert "TWROR" in html_on
+
+    def test_no_decorative_em_dash_in_prose(self):
+        # "—" is allowed ONLY as the standalone missing-data placeholder in its
+        # own table cell. A connective em-dash inside prose (subtitles, captions,
+        # footers, the AI note) is the taste-skill anti-slop tell and must not
+        # come back (e.g. "Annualized — TWROR"). We scan the RENDERED HTML but
+        # require the dash's neighbours to be in the SAME text run (no HTML tag
+        # between them) — so a "—" placeholder cell sitting next to a table
+        # label (always separated by </td><td>) is correctly ignored.
+        import re
+        import html as _html
+        # Unescape first so entity names (&ldquo;/&rdquo; around a quoted "—"
+        # placeholder) become punctuation, not letters, and don't look like a
+        # word next to the dash.
+        html_out = _html.unescape(render_newsletter(_minimal_metrics(True), _config()))
+        # A connective em-dash in prose has a WORD immediately before and after
+        # it within the SAME text run (no HTML tag between) — e.g.
+        # "capital — above". The standalone "—" placeholder cell is separated
+        # from any label by </td><td> tags, so ``[^<>]`` never spans it, and a
+        # quoted "—" has curly quotes (non-letters) on both sides.
+        offenders = re.findall(r"[A-Za-z)][^<>]{0,2}—[^<>]{0,2}[A-Za-z(]", html_out)
+        assert not offenders, f"connective em-dashes in prose: {offenders[:8]}"
 
 
 def _config():

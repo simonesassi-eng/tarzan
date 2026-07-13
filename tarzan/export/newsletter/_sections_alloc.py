@@ -1072,7 +1072,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             html.append(
                 f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
                 f'Total notional exposure <b>{_tot_notional:.0f}%</b> of invested '
-                f'capital — above 100% via capital-efficient/leveraged funds '
+                f'capital: above 100% via capital-efficient/leveraged funds '
                 f'(e.g. efficient-core 90/60).</div>'
             )
     if geo_rows:
