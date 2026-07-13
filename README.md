@@ -30,15 +30,15 @@ multi-asset portfolios.
 # 1. Install
 pip install -r requirements.txt
 
-# 2. Run the sample portfolio
+# 2. Run — point it at your order list (see Input format below)
 python -m tarzan.main \
-    --input_orders input/sample/sample_order_list.csv \
-    --input_config input/sample/sample_targets.csv \
-    --output       output/sample/
+    --input_orders input/order_list.csv \
+    --input_config input/targets.csv \
+    --output       output/
 ```
 
-A ready-made report built from the sample data lives in
-[`output/sample/portfolio_dashboard_sample.xlsx`](output/sample/).
+Each run's artifacts (Excel dashboard + `report.html`) are written to a
+per-date folder under `output/<YYYY-MM-DD>/`.
 
 ## Input format
 
@@ -83,12 +83,11 @@ Tarzan/
 │   ├── export/              # Excel + HTML newsletter + charts + AI summary
 │   ├── models/              # Holding, Order, InvestorConfig, PortfolioMetrics
 │   └── tests/               # Pytest suite (~20 modules)
-├── input/
-│   └── sample/              # Sample order list / targets CSVs (tracked)
-├── output/                  # Reports: Excel dashboard, newsletter HTML, and
-│   │                        #   report.html — the ONE run log: a top summary of
-│   │                        #   issues + how handled, then a lean log table
-│   └── sample/              # Pre-generated sample Excel report (tracked)
+├── input/                   # Your order_list.csv / targets.csv (git-ignored)
+├── output/                  # Per-run artifacts under output/<YYYY-MM-DD>/:
+│                            #   Excel dashboard, newsletter HTML, and
+│                            #   report.html — the ONE run log (summary of
+│                            #   issues + how handled, then a lean log table)
 └── requirements.txt
 ```
 
