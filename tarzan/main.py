@@ -86,6 +86,24 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _dated_output_dir(base: str, as_of=None) -> str:
+    """Return ``base/<YYYY-MM-DD>`` so each run's artifacts are grouped by date
+    instead of piling up in one flat directory.
+
+    The date is the pinned ``as_of`` when given (so an as-of/deterministic run
+    is reproducible into a stable folder), else today's date. Idempotent: if
+    ``base`` already ends in a YYYY-MM-DD segment (a caller that pre-namespaced,
+    or a re-run), it is returned unchanged so we never nest date/date.
+    """
+    import datetime as _dt
+    import re as _re
+    base = base.rstrip("/") or "output"
+    if _re.search(r"\d{4}-\d{2}-\d{2}$", os.path.basename(base)):
+        return base
+    day = (as_of or _dt.date.today()).strftime("%Y-%m-%d")
+    return os.path.join(base, day)
+
+
 def setup_logging(output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
     root = logging.getLogger()
@@ -126,19 +144,31 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    setup_logging(args.output)
-    logger.info("Tarzan v3.0 starting...")
 
     from tarzan import data_quality as dq
-    # Parse the optional as-of date; an invalid value is a hard, actionable
-    # error (not a silent fallback to today, which would mislead).
+    # Parse the optional as-of date FIRST (before logging is set up) — it is a
+    # hard, actionable error if malformed, and it also names the output folder.
     as_of = None
     if args.as_of:
         try:
             as_of = _dtdate.fromisoformat(args.as_of)
         except ValueError:
+            # Logging isn't configured yet here; set up on the base dir so the
+            # error is still captured in a report.
+            setup_logging(args.output)
             logger.error("Invalid --as_of %r (expected YYYY-MM-DD)", args.as_of)
             return 1
+
+    # Organize outputs per run date: everything for a run lands in
+    # output/<YYYY-MM-DD>/ (the as-of date when pinned, else today), so runs
+    # don't pile up in one flat directory. If --output already ends in a
+    # date-looking folder it's used as-is (idempotent for re-runs / callers
+    # that pre-namespace).
+    output_dir = _dated_output_dir(args.output, as_of)
+    setup_logging(output_dir)
+    logger.info("Tarzan v3.0 starting...")
+    logger.info("Output directory: %s", output_dir)
+
     if args.deterministic or as_of is not None:
         logger.info("Deterministic run%s (live quotes + AI summary skipped).",
                     f" as of {as_of}" if as_of else "")
@@ -162,7 +192,7 @@ def main(argv=None) -> int:
 
         # Generate Excel (keep legacy export)
         from tarzan.export.excel import generate_excel
-        output_path = generate_excel(metrics, [], config, args.output)
+        output_path = generate_excel(metrics, [], config, output_dir)
         logger.info("Dashboard saved to: %s", output_path)
         logger.info("Completed successfully.")
         return 0
@@ -185,7 +215,7 @@ def main(argv=None) -> int:
         # on success, on the no-value early exit, and on any failure — so the
         # user always has one readable record of what the run produced and
         # what it skipped, regardless of how the run ended.
-        _write_run_reports(args.output, metrics=metrics)
+        _write_run_reports(output_dir, metrics=metrics)
 
 
 if __name__ == "__main__":
