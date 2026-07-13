@@ -231,3 +231,38 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
             acwi_full = (a_full / float(a_at_inception.iloc[0]) - 1.0) * 100.0
             acwi_si = list(acwi_full.reindex(idx, method="ffill").bfill().values.astype(float))
     return twror_si, total_pct, unreal_pct, acwi_si
+
+
+def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
+                      max_points: int = 180) -> Optional[dict]:
+    """The since-inception trajectory over the WHOLE date range (not the last
+    30 days): cumulative TWROR (%), Total P&L (%) and MSCI ACWI (%) from
+    inception to today, on a common daily index that is evenly downsampled to
+    ``max_points`` so a multi-year series stays a light SVG. Reuses
+    ``_perf_level_series`` for the cumulative math. None when unavailable.
+
+    Keys mirror ``_perf_window`` so the chart builder is symmetric:
+    ``{dates, twror, pnl_pct, acwi}`` (any line may be None)."""
+    if m.portfolio_history is None or m.actual_value_series is None:
+        return None
+    nav_full = _norm_series(m.portfolio_history)
+    if len(nav_full) < 2:
+        return None
+    idx = nav_full.index
+    # Evenly downsample to <= max_points, always keeping the first and last
+    # point (inception and today) so the endpoints are exact.
+    if len(idx) > max_points:
+        pos = sorted(set(
+            [int(round(i * (len(idx) - 1) / (max_points - 1))) for i in range(max_points)]
+        ))
+        idx = idx[pos]
+    lvl = _perf_level_series(m, list(idx), geo_name)
+    if lvl is None:
+        return None
+    twror_si, total_pct, _unreal_pct, acwi_si = lvl
+    return {
+        "dates": list(idx),
+        "twror": twror_si,
+        "pnl_pct": total_pct,
+        "acwi": acwi_si,
+    }

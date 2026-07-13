@@ -95,6 +95,270 @@ def generate_summary(metrics, config) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark-divergence note (charts section) — quantitative, always present
+# ---------------------------------------------------------------------------
+
+def divergence_note(metrics, config, benchmark_geo: Optional[str] = None) -> Optional[str]:
+    """Explain WHY the portfolio is (or isn't) tracking its benchmark, over
+    both the last-30-days and the since-inception windows shown in the two
+    "You vs the market" charts.
+
+    Unlike :func:`generate_summary` this is quantitative and ALWAYS returns a
+    note when the divergence digest can be built: an LLM writes the prose when
+    available, otherwise a deterministic rule-based note is computed from the
+    same figures (so a golden/offline/no-key run still gets real quantitative
+    insight). Returns None only when there is no benchmark to compare against.
+    """
+    digest = build_divergence_digest(metrics, config, benchmark_geo)
+    if digest is None:
+        return None
+
+    # Deterministic mode or no key → the rule-based note (no network).
+    from tarzan import runtime
+    if runtime.is_deterministic() or not is_enabled():
+        return _fallback_divergence_note(digest)
+
+    try:
+        language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
+        system = _divergence_system_prompt(language)
+        user = _divergence_user_prompt(digest)
+        # No Google-Search grounding here: this is a numbers-driven attribution
+        # of the investor's own figures, not a macro-news note.
+        text = _call_gemini(system, user, use_search=False)
+        note = _sanitize(text) if text else None
+        # Never leave the section blank: fall back to the quant note if the
+        # model returned nothing usable.
+        return note or _fallback_divergence_note(digest)
+    except Exception as e:  # noqa: BLE001 — best-effort, never fatal
+        logger.warning("Divergence note unavailable (%s); using rule-based note.", e)
+        return _fallback_divergence_note(digest)
+
+
+def build_divergence_digest(metrics, config,
+                            benchmark_geo: Optional[str] = None) -> Optional[dict]:
+    """Compact, JSON-serialisable inputs for the divergence note.
+
+    Both chart windows' portfolio-vs-benchmark gaps (TWROR − ACWI), the CAPM
+    decomposition (beta/alpha → how much of the gap is *taking more/less
+    market risk* vs *selection*), allocation drift vs target, and the holdings
+    that drove the gap. Pure function, no I/O. None when there is no benchmark
+    series to compare against."""
+    from tarzan.export._perf_series import _perf_window, _perf_full_series
+
+    bench = benchmark_geo or _bench_name(metrics)
+    win30 = _perf_window(metrics, 30, bench)
+    full = _perf_full_series(metrics, bench)
+    # Need a benchmark line in at least one window to say anything.
+    have30 = bool(win30 and win30.get("acwi") and win30.get("twror"))
+    havesi = bool(full and full.get("acwi") and full.get("twror"))
+    if not (have30 or havesi):
+        return None
+
+    def _gap(w):
+        # Endpoint TWROR − ACWI over the window (both cumulative from its start).
+        if not (w and w.get("twror") and w.get("acwi")):
+            return None
+        p, b = _num(w["twror"][-1]), _num(w["acwi"][-1])
+        if p is None or b is None:
+            return None
+        return {"portfolio_pct": p, "benchmark_pct": b, "gap_pp": round(p - b, 2)}
+
+    risk = metrics.risk or {}
+    beta = _num(risk.get("beta"))
+    alpha = _num(risk.get("alpha"))
+
+    digest: dict[str, Any] = {
+        "benchmark": bench or "the benchmark",
+        "window_30d": _gap(win30),
+        "since_inception": _gap(full),
+        "capm": _clean({"beta": beta, "alpha_pct": alpha,
+                        "volatility_pct": _num(risk.get("volatility"))}),
+        # CAPM-implied "expected" gap from taking beta≠1 market risk, on the
+        # since-inception benchmark return: (beta − 1) × benchmark. What's left
+        # of the actual gap after that is selection/allocation.
+        "risk_vs_selection": _risk_vs_selection(_gap(full), beta),
+        "allocation_drift": _top_drift(metrics),
+        "contributors": _contributors(metrics),
+    }
+    return _clean(digest)
+
+
+def _bench_name(m) -> Optional[str]:
+    """The configured geo benchmark name (key into benchmark_histories)."""
+    bh = getattr(m, "benchmark_histories", None)
+    if isinstance(bh, dict) and bh:
+        return next(iter(bh))
+    return None
+
+
+def _risk_vs_selection(si_gap: Optional[dict], beta: Optional[float]) -> Optional[dict]:
+    """Split the since-inception gap into a market-risk part (beta≠1 on the
+    benchmark's return) and a residual selection/allocation part."""
+    if not si_gap or beta is None:
+        return None
+    bench = si_gap["benchmark_pct"]
+    risk_part = round((beta - 1.0) * bench, 2)          # expected from beta≠1
+    selection_part = round(si_gap["gap_pp"] - risk_part, 2)  # the rest
+    return {"beta": beta,
+            "market_risk_contribution_pp": risk_part,
+            "selection_contribution_pp": selection_part}
+
+
+def _top_drift(m, k: int = 3) -> list[dict]:
+    """The k largest absolute allocation drifts vs target (asset-class + geo)."""
+    gd = getattr(m, "goal_deltas", None)
+    try:
+        if gd is None or gd.empty:
+            return []
+        sub = gd.dropna(subset=["delta_pct"]).copy()
+        sub["absd"] = sub["delta_pct"].abs()
+        sub = sub.sort_values("absd", ascending=False).head(k)
+        return [_clean({"bucket": r.get("category"),
+                        "actual_pct": _num(r.get("actual_pct")),
+                        "target_pct": _num(r.get("target_pct")),
+                        "drift_pp": _num(r.get("delta_pct"))})
+                for _, r in sub.iterrows()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _contributors(m, k: int = 3) -> dict:
+    """Top contributors / detractors to the portfolio's own return: the
+    weight × gain product per holding (a first-order return-contribution proxy
+    from the snapshot, no extra computation)."""
+    df = getattr(m, "holdings_df", None)
+    try:
+        if df is None or df.empty or "gain_pct" not in df or "weight_pct" not in df:
+            return {}
+        d = df.dropna(subset=["gain_pct", "weight_pct"]).copy()
+        if d.empty:
+            return {}
+        d["contrib_pp"] = d["weight_pct"] * d["gain_pct"] / 100.0
+
+        def _row(r):
+            return _clean({"name": (r.get("name") or r.get("ticker")),
+                           "class": r.get("asset_class"),
+                           "weight_pct": _num(r.get("weight_pct")),
+                           "gain_pct": _num(r.get("gain_pct")),
+                           "contrib_pp": _num(r.get("contrib_pp"))})
+
+        top = [_row(r) for _, r in d.sort_values("contrib_pp", ascending=False).head(k).iterrows()]
+        bottom = [_row(r) for _, r in d.sort_values("contrib_pp", ascending=True).head(k).iterrows()]
+        return {"top": top, "bottom": bottom}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _fallback_divergence_note(d: dict) -> str:
+    """A deterministic, quantitative note built from the divergence digest —
+    used when the LLM is unavailable (no key / deterministic / error). Same
+    figures the model would be given, so the section is never trivial and
+    never blank."""
+    bench = d.get("benchmark", "the benchmark")
+    bits: list[str] = []
+
+    si = d.get("since_inception")
+    w30 = d.get("window_30d")
+    if si:
+        verb = "beat" if si["gap_pp"] >= 0 else "trailed"
+        bits.append(
+            f"Since inception you returned {_sp(si['portfolio_pct'])} vs {bench} "
+            f"{_sp(si['benchmark_pct'])} — you {verb} it by {_pp(si['gap_pp'])}.")
+    rvs = d.get("risk_vs_selection")
+    if rvs:
+        b = rvs["beta"]
+        stance = ("more" if b > 1 else "less") if b != 1 else "the same"
+        bits.append(
+            f"Your beta of {b:.2f} means you carry {abs(b - 1) * 100:.0f}% {stance} "
+            f"market risk than {bench}; that risk stance alone accounts for "
+            f"{_pp(rvs['market_risk_contribution_pp'])} of the gap, leaving "
+            f"{_pp(rvs['selection_contribution_pp'])} from selection and allocation.")
+    if w30:
+        verb = "ahead of" if w30["gap_pp"] >= 0 else "behind"
+        bits.append(
+            f"Over the last 30 days you are {verb} {bench} by "
+            f"{_pp(abs(w30['gap_pp']))} ({_sp(w30['portfolio_pct'])} vs "
+            f"{_sp(w30['benchmark_pct'])}).")
+    contrib = d.get("contributors") or {}
+    bottom = (contrib.get("bottom") or [])
+    top = (contrib.get("top") or [])
+    if bottom:
+        w = bottom[0]
+        # Only frame it as a "drag" when the worst contributor actually detracts.
+        if (_num(w.get("contrib_pp")) or 0) < 0:
+            drag = (f"The biggest drag is {w.get('name')} ({_sp(w.get('gain_pct'))} on a "
+                    f"{_num(w.get('weight_pct'))}% weight, {_pp(w.get('contrib_pp'))} of return)")
+        else:
+            drag = (f"Every holding is in the black; {w.get('name')} added the least "
+                    f"({_pp(w.get('contrib_pp'))})")
+        # Name the top contributor only when it's a different holding.
+        if top and top[0].get("name") != w.get("name"):
+            t = top[0]
+            drag += f", while {t.get('name')} led the gains ({_pp(t.get('contrib_pp'))})"
+        bits.append(drag + ".")
+    drift = d.get("allocation_drift") or []
+    if drift:
+        big = drift[0]
+        direction = "over" if (big.get("drift_pp") or 0) >= 0 else "under"
+        rec = (f"Rebalancing your {big.get('bucket')} weight (currently "
+               f"{direction} target by {_pp(abs(big.get('drift_pp') or 0))}) would "
+               f"move your risk profile back toward {bench}.")
+        bits.append(rec)
+    return " ".join(b for b in bits if b and b != ".")
+
+
+def _sp(v) -> str:
+    """Signed percent, 1 dp (e.g. +14.5%)."""
+    n = _num(v)
+    return "n/a" if n is None else f"{n:+.1f}%"
+
+
+def _pp(v) -> str:
+    """Signed percentage points, 1 dp (e.g. -3.2pp)."""
+    n = _num(v)
+    return "n/a" if n is None else f"{n:+.1f}pp"
+
+
+def _divergence_system_prompt(language: str) -> str:
+    return (
+        "You are a portfolio analyst explaining to a retail investor WHY their "
+        "portfolio is or is not tracking its benchmark. You are given a JSON "
+        "digest with two windows (last 30 days and since inception), each with "
+        "the portfolio's cumulative return, the benchmark's, and the gap in "
+        "percentage points; a CAPM split (beta, and how much of the "
+        "since-inception gap comes from taking more/less market risk vs from "
+        "selection/allocation); allocation drift vs target; and the holdings "
+        "that contributed most and least to return.\n"
+        "WRITE a tight, quantitative explanation (4-6 sentences, ~110 words, "
+        "one flowing paragraph):\n"
+        "1. State the since-inception gap and the 30-day gap with their exact "
+        "figures, and say whether divergence is widening or narrowing.\n"
+        "2. Attribute the gap: use the beta / market-risk vs selection split to "
+        "say how much is 'you simply took more/less market risk' vs 'your "
+        "picks and weights'. Name the specific holdings or sleeves driving it, "
+        "with their contribution figures.\n"
+        "3. Finish with ONE concrete, non-trivial recommendation tied to the "
+        "numbers (e.g. a specific over/underweight to rebalance, or a "
+        "concentration/beta observation) — actionable, not generic.\n"
+        "RULES: every claim carries a number from the JSON; write percentage "
+        "changes with an explicit + or - sign and gaps in 'pp'; never invent "
+        "figures beyond the JSON; no preamble, no salutation, no markdown, no "
+        "headings, no bullet points; do not restate the whole JSON. This is "
+        "analysis and portfolio-construction insight, NOT a solicitation — "
+        "phrase the recommendation as an observation about their own "
+        f"allocation. Write in {language}."
+    )
+
+
+def _divergence_user_prompt(digest: dict) -> str:
+    return (
+        "Here is the divergence digest as JSON:\n\n"
+        + json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
+        + "\n\nWrite the divergence explanation now."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Digest: compact, comprehensive snapshot of the whole metrics dataset
 # ---------------------------------------------------------------------------
 

@@ -61,10 +61,12 @@ def fmt_pct_tick(v: float) -> str:
     return f"{txt}%"
 
 
-def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9) -> str:
+def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
+                      date_fmt="%b %d") -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
     labels stay legible at ~half width. ``series``: list of
-    ``{values, color, dash?}``."""
+    ``{values, color, dash?}``. ``date_fmt`` sets the first/last x-axis tick
+    format (``%b %d`` for a short window, ``%b %Y`` for a multi-year span)."""
     ml, mr, mt, mb = 30, 8, 10, 20
     pw, ph = w - ml - mr, h - mt - mb
     allv = [v for s in series for v in s["values"]]
@@ -96,7 +98,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9) -> s
         x = X(k)
         anc = "start" if k == 0 else "end"
         out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
-                   f'{pd.Timestamp(dates[k]).strftime("%b %d")}</text>')
+                   f'{pd.Timestamp(dates[k]).strftime(date_fmt)}</text>')
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)

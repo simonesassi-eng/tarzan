@@ -57,6 +57,7 @@ from tarzan.export._perf_series import (  # noqa: F401  (re-exported)
     _flow_list,
     _geo_benchmark_series,
     _norm_series,
+    _perf_full_series,
     _perf_level_series,
     _perf_window,
     _window_money_pnl,
@@ -1108,39 +1109,65 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         s30.append({"values": win["acwi"], "color": BENCH, "dash": True})
         l30.append((f'MSCI ACWI {_pct(win["acwi"][-1], signed=True)}', BENCH, True))
 
-    # Since inception (cumulative). Total P&L % replaces the old unrealized line.
+    # Since inception (cumulative), over the WHOLE inception→today range — its
+    # own x-axis, not the last-30-days window. Total P&L % replaces the old
+    # unrealized line.
     ssi, lsi = [], []
-    lvl = _perf_level_series(m, dates, ctx.benchmark_geo)
-    if lvl is not None:
-        twror_si, total_pct, _unreal_pct, acwi_si = lvl
-        if twror_si is not None:
-            ssi.append({"values": twror_si, "color": GREEN})
-            lsi.append((f'TWROR {_pct(twror_si[-1], signed=True)}', GREEN, False))
-        if total_pct is not None:
-            ssi.append({"values": total_pct, "color": PNL})
-            lsi.append((f'Total P&L % {_pct(total_pct[-1], signed=True)}', PNL, False))
-        if acwi_si is not None:
-            ssi.append({"values": acwi_si, "color": BENCH, "dash": True})
-            lsi.append((f'MSCI ACWI {_pct(acwi_si[-1], signed=True)}', BENCH, True))
+    full = _perf_full_series(m, ctx.benchmark_geo)
+    si_dates = full["dates"] if full else dates
+    if full is not None:
+        if full["twror"] is not None:
+            ssi.append({"values": full["twror"], "color": GREEN})
+            lsi.append((f'TWROR {_pct(full["twror"][-1], signed=True)}', GREEN, False))
+        if full["pnl_pct"] is not None:
+            ssi.append({"values": full["pnl_pct"], "color": PNL})
+            lsi.append((f'Total P&L % {_pct(full["pnl_pct"][-1], signed=True)}', PNL, False))
+        if full["acwi"] is not None:
+            ssi.append({"values": full["acwi"], "color": BENCH, "dash": True})
+            lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, True))
 
     parts = []
     if s30 or ssi:
         left = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
                 + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
+        # Full-range x-axis reads better with month/year labels than day-level.
         right = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
-                 + _charts.chart_pct_compact(ssi, dates, include_zero=False) + _charts.legend(lsi, 9)) if ssi else ""
+                 + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, date_fmt="%b %Y")
+                 + _charts.legend(lsi, 9)) if ssi else ""
         charts_tbl = (
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;"><tr>'
             f'<td width="50%" valign="top" style="padding-right:8px;">{left}</td>'
             f'<td width="50%" valign="top" style="padding-left:8px;border-left:1px solid {P["border"]};">{right}</td>'
             f'</tr></table>'
         )
+        # Quantitative "why are we diverging?" note, encapsulated in this card
+        # right under the two charts. AI writes the prose when available; a
+        # deterministic rule-based note (same figures) is used otherwise, so
+        # the block is always present and never trivial.
+        divergence_html = ""
+        try:
+            from tarzan.export.ai_summary import divergence_note
+            note = divergence_note(m, ctx.config, ctx.benchmark_geo)
+            if note:
+                divergence_html = (
+                    f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid {P["border"]};">'
+                    f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
+                    f'text-transform:uppercase;">Why you’re diverging</div>'
+                    f'<div style="margin-top:6px;font-size:13px;color:{P["ink"]};line-height:1.55;">'
+                    f'{_colorize_pct(note)}</div>'
+                    f'<div style="margin-top:8px;font-size:10px;color:{P["subtle"]};">'
+                    f'✨ Quantitative attribution vs {ctx.benchmark_geo} · '
+                    f'informational, not financial advice</div></div>'
+                )
+        except Exception as e:  # noqa: BLE001 — never break the newsletter
+            logger.debug("Divergence note skipped: %s", e)
+
         inner = (
             f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
             f'text-transform:uppercase;">You vs the market</div>'
             f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">Your return paths vs '
             f'<strong style="color:{P["ink"]};">MSCI ACWI</strong> — last 30 days (rebased) and '
-            f'since inception (cumulative).</div>{charts_tbl}'
+            f'since inception (cumulative).</div>{charts_tbl}{divergence_html}'
         )
         # Wrapped in the same card shell as the matrix above so the section
         # reads consistently with the rest of the newsletter.

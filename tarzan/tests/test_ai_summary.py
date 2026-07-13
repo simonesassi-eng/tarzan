@@ -164,3 +164,108 @@ def test_render_empty_string_forces_block_off(monkeypatch):
     )
     html = render_newsletter(_metrics(), _config(), ai_summary="")
     assert "Market context" not in html
+
+
+# ── Benchmark-divergence note (charts section) ───────────────────────────────
+
+def _divergence_metrics() -> PortfolioMetrics:
+    """A 2-year portfolio that TRAILS its benchmark, with a beta>1 and a clear
+    laggard holding — so the divergence digest has something to attribute."""
+    import numpy as np
+    idx = pd.date_range("2024-07-01", "2026-07-01", freq="B")
+    nav = pd.Series(np.linspace(100, 138, len(idx)), index=idx)    # port +38%
+    acwi = pd.Series(np.linspace(200, 288, len(idx)), index=idx)   # bench +44%
+    pnl = pd.Series(np.linspace(0, 4500, len(idx)), index=idx)
+    hold = pd.DataFrame([
+        {"isin": "US0000000001", "ticker": "USA", "name": "USA ETF",
+         "asset_class": "Equities", "weight_pct": 45.0, "gain_pct": 30.0,
+         "current_value": 6525.0, "cost_basis_eur": 5000.0},
+        {"isin": "EM0000000001", "ticker": "EM", "name": "EM ETF",
+         "asset_class": "Equities", "weight_pct": 12.0, "gain_pct": -8.0,
+         "current_value": 1740.0, "cost_basis_eur": 1900.0},
+    ])
+    gd = pd.DataFrame([
+        {"type": "geography_equity", "category": "USA",
+         "actual_pct": 58.0, "target_pct": 50.0, "delta_pct": 8.0},
+        {"type": "geography_equity", "category": "Emerging Markets",
+         "actual_pct": 8.0, "target_pct": 12.0, "delta_pct": -4.0},
+    ])
+    m = PortfolioMetrics(total_value=14500.0, invested_value=13500.0,
+                         cash_value=1000.0, holdings_df=hold)
+    m.actual_value_series = pd.Series(np.linspace(10000, 14500, len(idx)), index=idx)
+    m.portfolio_history = nav
+    m.pnl_series = pnl
+    m.unrealized_series = pnl
+    # Lifetime fields the Performance section (which hosts the note) needs to
+    # render at all.
+    m.pnl_eur = 4500.0
+    m.pnl_pct = 45.0
+    m.twror_pct = 38.0
+    m.twror_annualized_pct = 17.0
+    m.xirr_pct = 16.0
+    m.benchmark_histories = {"iShares MSCI ACWI": acwi}
+    m.goal_deltas = gd
+    m.risk = {"beta": 1.15, "alpha": -2.1, "volatility": 16.0}
+    return m
+
+
+def test_divergence_digest_has_both_windows_and_capm_split():
+    d = ai_summary.build_divergence_digest(_divergence_metrics(), _config())
+    assert d is not None
+    # Both chart windows carry a portfolio/benchmark/gap.
+    assert d["since_inception"]["gap_pp"] == -6.0          # 38 − 44
+    assert "gap_pp" in d["window_30d"]
+    # CAPM split: (beta−1)×benchmark market-risk part, rest is selection.
+    rvs = d["risk_vs_selection"]
+    assert round(rvs["market_risk_contribution_pp"], 1) == round((1.15 - 1) * 44.0, 1)
+    assert round(rvs["market_risk_contribution_pp"] + rvs["selection_contribution_pp"], 1) == -6.0
+
+
+def test_divergence_digest_none_without_benchmark():
+    m = _divergence_metrics()
+    m.benchmark_histories = {}          # nothing to compare against
+    assert ai_summary.build_divergence_digest(m, _config()) is None
+
+
+def test_divergence_fallback_is_quantitative_when_ai_off():
+    # AI disabled by the autouse fixture → deterministic rule-based note.
+    note = ai_summary.divergence_note(_divergence_metrics(), _config())
+    assert note is not None
+    assert "-6.0pp" in note                      # the since-inception gap
+    assert "beta" in note.lower()                # the CAPM attribution
+    assert "EM ETF" in note                      # the laggard, correctly identified
+    assert "USA" in note                         # the rebalancing recommendation
+    # Not trivial: several quantitative clauses.
+    assert note.count("pp") >= 3
+
+
+def test_divergence_note_embedded_in_charts_section():
+    from tarzan.export.newsletter import render_newsletter
+    html = render_newsletter(_divergence_metrics(), _config(),
+                             benchmark_geo="iShares MSCI ACWI")
+    assert "Why you" in html and "diverging" in html
+    # The since-inception chart spans the full range → year labels present.
+    assert "2024" in html and "2026" in html
+
+
+def test_divergence_note_uses_ai_prose_when_available(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
+    monkeypatch.setattr(
+        "tarzan.export.ai_summary._call_gemini",
+        lambda system, user, use_search=True: "You trail ACWI by -6.0pp; beta 1.15 explains +6.6pp.",
+    )
+    note = ai_summary.divergence_note(_divergence_metrics(), _config())
+    assert "beta 1.15 explains" in note          # the mocked model prose, not the fallback
+
+
+def test_divergence_note_falls_back_when_ai_returns_nothing(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
+    monkeypatch.setattr(
+        "tarzan.export.ai_summary._call_gemini",
+        lambda system, user, use_search=True: None,   # model gave nothing usable
+    )
+    note = ai_summary.divergence_note(_divergence_metrics(), _config())
+    # Never blank: the quant fallback fills in.
+    assert note and "-6.0pp" in note
