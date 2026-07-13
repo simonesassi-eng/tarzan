@@ -15,6 +15,9 @@ The folder must contain at least:
     - targets.csv
 
 Optionally: targets_per_holding.csv. Anything else in the folder is ignored.
+
+Used by :mod:`tarzan.delivery` (the newsletter service); the CI workflow
+reaches it through the ``scripts/send_newsletter.py`` shim.
 """
 
 from __future__ import annotations
