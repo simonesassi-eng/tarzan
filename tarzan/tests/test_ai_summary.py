@@ -248,7 +248,8 @@ def test_divergence_note_states_both_betas_and_trend():
     note = ai_summary.divergence_note(m, _config())
     assert "1.20" in note                      # realized beta, stated
     assert "1.40" in note                      # current beta, in the trend line
-    assert "realized" in note.lower() and "current" in note.lower()
+    assert "realized" in note.lower()          # trend line labels realized
+    assert "diverging" in note.lower()         # 1.40 further from 1 than 1.20
 
 
 def test_divergence_digest_none_without_benchmark():
@@ -285,11 +286,20 @@ def test_divergence_fallback_low_beta_frames_tradeoff():
                          "portfolio": {"is_portfolio": True,
                                        "metrics": {"beta": 0.80}}}
     note = ai_summary.divergence_note(m, _config())
-    assert "trade-off" in note.lower()
     assert "more market risk" in note.lower()
+    assert "not a fix" in note.lower()
     # No allocation-rebalance advice.
     assert "fixed income" not in note.lower()
     assert "rebalanc" not in note.lower()
+
+
+def test_divergence_note_is_terse():
+    # The whole point of this rewrite: short and data-first, no parentheticals.
+    note = ai_summary.divergence_note(_divergence_metrics(), _config())
+    assert "(" not in note and ")" not in note          # no parenthetical asides
+    assert len(note) <= 700                              # far tighter than the old ~1450
+    # Still carries the key data points.
+    assert "-6.0pp" in note and "beta" in note.lower()
 
 
 def test_divergence_note_embedded_in_charts_section():

@@ -345,105 +345,60 @@ def _fallback_divergence_note(d: dict) -> str:
     used when the LLM is unavailable (no key / deterministic / error). Same
     figures the model would be given, so the section is never trivial and
     never blank."""
+    # Terse, data-first. One short clause per fact, no explanatory
+    # parentheticals — the reader wants the numbers, not the lecture.
     bench = d.get("benchmark", "the benchmark")
     bits: list[str] = []
 
     si = d.get("since_inception")
     w30 = d.get("window_30d")
     if si:
-        verb = "beat" if si["gap_pp"] >= 0 else "trailed"
+        verb = "ahead" if si["gap_pp"] >= 0 else "behind"
         bits.append(
-            f"Since inception you returned {_sp(si['portfolio_pct'])} vs {bench} "
-            f"{_sp(si['benchmark_pct'])} — you {verb} it by {_pp(si['gap_pp'])}.")
+            f"Since inception {_sp(si['portfolio_pct'])} vs {bench} "
+            f"{_sp(si['benchmark_pct'])}: {verb} {_pp(si['gap_pp'])}.")
+    if w30:
+        bits.append(f"Last 30 days {_sp(w30['portfolio_pct'])} vs {_sp(w30['benchmark_pct'])}, "
+                    f"{_pp(w30['gap_pp'])}.")
+
     rvs = d.get("risk_vs_selection")
     if rvs:
-        b = rvs["beta"]                     # realized beta (actual NAV)
-        pct = abs(b - 1) * 100
+        b = rvs["beta"]
         mkt = rvs["market_risk_contribution_pp"]
         sel = rvs["selection_contribution_pp"]
-        if b < 1:
-            # Defensive: less market risk → expected to lag a rising benchmark.
-            bits.append(
-                f"Most of that gap is by design, not bad luck: your realized beta of {b:.2f} "
-                f"(how much your portfolio actually moved relative to {bench} over the period) "
-                f"means it swung only about {b*100:.0f}% as much, so in a rising market you "
-                f"were always going to lag it. That lower risk explains {_pp(mkt)} of the gap; "
-                f"the remaining {_pp(sel)} is what your specific fund picks and weights "
-                f"{'added on top' if sel >= 0 else 'cost you'}.")
-        else:
-            bits.append(
-                f"Your realized beta of {b:.2f} (how much your portfolio actually moved "
-                f"relative to {bench} over the period) means it swung about {pct:.0f}% MORE "
-                f"than {bench}, which {'helped' if mkt >= 0 else 'hurt'} by {_pp(mkt)}; the "
-                f"remaining {_pp(sel)} is down to your specific fund picks and weights.")
+        bits.append(
+            f"Realized beta {b:.2f}: risk level accounts for {_pp(mkt)}, "
+            f"your picks {_pp(sel)}.")
 
-    # Forward-looking beta trend: realized vs today's-weights ("current") beta.
     trend = d.get("beta_trend") or {}
     rb, cb, direction = trend.get("realized_beta"), trend.get("current_beta"), trend.get("direction")
     if rb is not None and cb is not None and direction and abs(cb - rb) >= 0.02:
-        if direction == "converging":
-            bits.append(
-                f"Looking forward, your current mix carries more market risk than your history "
-                f"did — beta has risen from {rb:.2f} (realized) to {cb:.2f} (current, today's "
-                f"weights) — so the portfolio is now set up to track {bench} more closely than "
-                f"it has, and the gap should narrow if that mix holds.")
-        else:  # diverging
-            bits.append(
-                f"Looking forward, your current mix sits further from the benchmark's risk "
-                f"level than your history did — beta has moved from {rb:.2f} (realized) to "
-                f"{cb:.2f} (current, today's weights) — so it is set up to track {bench} "
-                f"less closely going forward, and the gap may widen if that mix holds.")
-    if w30:
-        verb = "ahead of" if w30["gap_pp"] >= 0 else "behind"
-        bits.append(
-            f"Over the last 30 days you are {verb} {bench} by "
-            f"{_pp(abs(w30['gap_pp']))} ({_sp(w30['portfolio_pct'])} vs "
-            f"{_sp(w30['benchmark_pct'])}).")
+        tail = ("should narrow if it holds" if direction == "converging"
+                else "may widen if it holds")
+        bits.append(f"Beta now {cb:.2f} vs {rb:.2f} realized — {direction}, gap {tail}.")
+
     contrib = d.get("contributors") or {}
     bottom = (contrib.get("bottom") or [])
     top = (contrib.get("top") or [])
     if bottom:
         w = bottom[0]
-        # Only frame it as a "drag" when the worst contributor actually detracts.
         if (_num(w.get("contrib_pp")) or 0) < 0:
-            drag = (f"The biggest drag is {w.get('name')} ({_sp(w.get('gain_pct'))} on a "
-                    f"{_num(w.get('weight_pct'))}% weight, {_pp(w.get('contrib_pp'))} of return)")
+            drag = f"Biggest drag {w.get('name')} {_pp(w.get('contrib_pp'))}"
         else:
-            drag = (f"Every holding is in the black; {w.get('name')} added the least "
-                    f"({_pp(w.get('contrib_pp'))})")
-        # Name the top contributor only when it's a different holding.
+            drag = f"Smallest gain {w.get('name')} {_pp(w.get('contrib_pp'))}"
         if top and top[0].get("name") != w.get("name"):
-            t = top[0]
-            drag += f", while {t.get('name')} led the gains ({_pp(t.get('contrib_pp'))})"
+            drag += f"; top {top[0].get('name')} {_pp(top[0].get('contrib_pp'))}"
         bits.append(drag + ".")
-    # Takeaway: about the benchmark GAP and the risk trade-off behind it —
-    # deliberately NOT an allocation-drift rebalance suggestion. Drift-to-target
-    # is a separate concern (it's in the optimizer section) and mixing it in
-    # produces incoherent advice: e.g. "buy more bonds to close the gap" is
-    # backwards, since more fixed income LOWERS beta and WIDENS the lag in a
-    # rising market. The honest point is the trade-off itself.
-    rvs = d.get("risk_vs_selection")
+
+    # Takeaway: the risk trade-off, one line — NOT an allocation-drift rebalance
+    # (buying bonds to "close the gap" is backwards; it lowers beta).
     beta = rvs.get("beta") if rvs else None
-    sel = rvs.get("selection_contribution_pp") if rvs else None
     if si and beta is not None and beta < 1 and si["gap_pp"] < 0:
-        pick_note = ""
-        if sel is not None:
-            pick_note = (
-                f" Your fund picks {'added' if sel >= 0 else 'cost'} {_pp(abs(sel))} on top, "
-                f"so {'they are not the problem' if sel >= 0 else 'they widened it slightly'} — "
-                f"the lag is about risk level, not stock-picking.")
-        bits.append(
-            f"The takeaway is a trade-off, not a mistake: with a beta below 1 this lag is the "
-            f"expected cost of a calmer, lower-risk portfolio, and the only way to close it is "
-            f"to take on more market risk — which also means bigger drawdowns when markets "
-            f"fall.{pick_note} Whether that is worth doing depends on whether tracking {bench} "
-            f"matters more to you than a smoother ride.")
+        bits.append(f"The lag is the cost of lower risk; closing it means more market risk "
+                    f"and bigger drawdowns — a choice, not a fix.")
     elif si and beta is not None and beta > 1 and si["gap_pp"] < 0:
-        # Behind DESPITE more market risk → the lag is selection, not risk.
-        bits.append(
-            f"Since you carry more market risk than {bench} yet still trail it, this gap is "
-            f"about your specific holdings, not your risk level — worth reviewing which "
-            f"positions are dragging rather than adding leverage.")
+        bits.append(f"You take more risk than {bench} yet trail it, so the gap is the "
+                    f"holdings, not the risk level.")
     return " ".join(b for b in bits if b and b != ".")
 
 
@@ -461,61 +416,36 @@ def _pp(v) -> str:
 
 def _divergence_system_prompt(language: str) -> str:
     return (
-        "You are a portfolio analyst explaining to a retail investor WHY their "
-        "portfolio is or is not tracking its benchmark. You are given a JSON "
-        "digest with two windows (last 30 days and since inception), each with "
-        "the portfolio's cumulative return, the benchmark's, and the gap in "
-        "percentage points; a CAPM split ('capm.realized_beta' and how much of "
-        "the since-inception gap comes from taking more/less market risk vs from "
-        "selection/allocation in 'risk_vs_selection'); a 'beta_trend' with "
-        "realized_beta, current_beta and a direction; allocation drift vs "
-        "target; and the holdings that contributed most and least to return.\n"
-        "WRITE a tight, quantitative explanation (5-7 sentences, ~140 words, "
-        "one flowing paragraph) that a NON-EXPERT can follow — briefly say what "
-        "a term means the first time you use it:\n"
-        "1. State the since-inception gap and the 30-day gap with their exact "
-        "figures, and say whether the divergence is widening or narrowing.\n"
-        "2. Attribute the gap using the CAPM split, and EXPLAIN it in plain "
-        "words. STATE THE REALIZED BETA VALUE explicitly (from "
-        "'risk_vs_selection.beta' / 'beta_trend.realized_beta') and define it: "
-        "the realized (performed) beta is how much the portfolio ACTUALLY moved "
-        "relative to the benchmark over the period (beta 0.7 = moved ~70% as "
-        "much; 1 = in lock-step). A beta below 1 means LESS market risk, so in a "
-        "RISING market the portfolio is expected to lag — that is "
-        "'market_risk_contribution_pp': the part of the gap that is simply the "
-        "mathematical consequence of the chosen risk level, NOT bad fund-picking. "
-        "'selection_contribution_pp' is what the specific funds/weights added or "
-        "cost ON TOP. Make the cause-and-effect explicit. Name the biggest drag "
-        "and the top contributor with their figures.\n"
-        "3. Add a FORWARD-LOOKING line from 'beta_trend' ONLY IF both "
-        "realized_beta and current_beta are present and they differ: give BOTH "
-        "values (label them realized vs current — current = today's holdings' "
-        "beta) and, when direction is 'converging' (current beta closer to 1 "
-        "than realized), say the portfolio now carries more market risk than it "
-        "did on average, so it is set up to track the benchmark MORE closely and "
-        "the gap should narrow if that mix holds; when 'diverging', say the "
-        "opposite. Never claim a trend when the two betas are equal or one is "
-        "missing.\n"
-        "4. Finish with ONE takeaway about the GAP and the risk trade-off "
-        "behind it. If a beta below 1 is the main cause, say plainly that the "
-        "lag is the expected cost of a lower-risk portfolio and the only way to "
-        "close it is to take on more market risk (and bigger drawdowns), so it "
-        "is a choice about whether tracking the benchmark matters more than a "
-        "smoother ride — NOT a mistake to fix. If instead beta is above 1 and "
-        "the portfolio still trails, say the gap is about the specific holdings, "
-        "not the risk level. DO NOT recommend rebalancing toward allocation "
-        "targets or buying a specific asset class (e.g. more bonds/fixed "
-        "income) to 'close the gap' — that is a different topic and is usually "
-        "BACKWARDS (more fixed income lowers beta and WIDENS the lag in a rising "
-        "market). Say nothing about allocation-vs-target drift here.\n"
-        "RULES: every claim carries a number from the JSON; write percentage "
-        "changes with an explicit + or - sign; ALWAYS write gaps/contributions "
-        "with the 'pp' abbreviation (e.g. '-4.53pp'), never spelled out as "
-        "'percentage points'; quote beta to two "
-        "decimals; never invent figures beyond the JSON; no preamble, no "
-        "salutation, no markdown, no headings, no bullet points; do not restate "
-        "the whole JSON. This is analysis and portfolio-construction insight, NOT "
-        f"a solicitation. Write in {language}."
+        "You explain WHY a portfolio is or isn't tracking its benchmark, from a "
+        "JSON digest: two windows (30-day and since-inception) with the "
+        "portfolio return, benchmark return and gap in pp; a CAPM split "
+        "('risk_vs_selection': realized beta, market_risk_contribution_pp, "
+        "selection_contribution_pp); a 'beta_trend' (realized_beta, "
+        "current_beta, direction); and top/bottom return contributors.\n"
+        "WRITE A VERY TERSE, DATA-FIRST note: AT MOST 6 short sentences, ~70 "
+        "words total, one line per fact, no more than 60 words of prose beyond "
+        "the numbers. Lead every sentence with the figure. NO parentheses, NO "
+        "brackets, NO em-dash asides, NO defining terms, NO hedging words "
+        "('essentially', 'roughly'). Cover, one crisp sentence each and only if "
+        "present:\n"
+        "1. Since-inception: portfolio vs benchmark and the gap in pp; say if "
+        "widening or narrowing.\n"
+        "2. 30-day: portfolio vs benchmark and the gap in pp.\n"
+        "3. Attribution: state the realized beta value, then "
+        "'risk level explains Xpp, picks Ypp'.\n"
+        "4. Beta trend, ONLY if realized_beta and current_beta differ: "
+        "'beta now C vs R realized — converging/diverging'.\n"
+        "5. Biggest drag and top contributor with their pp figures.\n"
+        "6. ONE takeaway: if beta<1, the lag is the cost of lower risk and "
+        "closing it means more market risk — a choice, not a fix; if beta>1 and "
+        "still trailing, the gap is the holdings, not the risk. NEVER suggest "
+        "rebalancing toward allocation targets or buying an asset class to close "
+        "the gap (backwards: more bonds lowers beta and widens the lag).\n"
+        "RULES: every claim carries a JSON number; signed % with + or -; gaps "
+        "and contributions as 'pp' (e.g. -4.53pp), never 'percentage points'; "
+        "beta to two decimals; invent nothing; no preamble, salutation, "
+        "markdown, headings or bullets. Analysis, not a solicitation. "
+        f"Write in {language}."
     )
 
 
