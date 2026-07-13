@@ -182,7 +182,11 @@ def build_divergence_digest(metrics, config,
     gap_si = _gap(full, auth["port_si"], None)
 
     risk = metrics.risk or {}
-    beta = _num(risk.get("beta"))
+    # Use the SAME beta the newsletter's Risk-profile table shows
+    # (historical_risk portfolio row) so the reader never sees two different
+    # betas for "my portfolio". Fall back to m.risk["beta"] (order-derived NAV,
+    # since-inception) only when the backtest produced none.
+    beta = _portfolio_beta(metrics)
     alpha = _num(risk.get("alpha"))
 
     digest: dict[str, Any] = {
@@ -199,6 +203,19 @@ def build_divergence_digest(metrics, config,
         "contributors": _contributors(metrics),
     }
     return _clean(digest)
+
+
+def _portfolio_beta(m) -> Optional[float]:
+    """The portfolio beta the newsletter's Risk-profile table displays
+    (``historical_risk`` portfolio row), so the divergence note and the table
+    show ONE beta. Falls back to ``m.risk['beta']`` when the historical
+    backtest produced none."""
+    hr = getattr(m, "historical_risk", None) or {}
+    port = hr.get("portfolio") or {}
+    b = _num((port.get("metrics") or {}).get("beta"))
+    if b is not None:
+        return b
+    return _num((getattr(m, "risk", None) or {}).get("beta"))
 
 
 def _bench_period(m, bench_name: Optional[str], period: str):
@@ -221,11 +238,22 @@ def _bench_period(m, bench_name: Optional[str], period: str):
 
 
 def _bench_name(m) -> Optional[str]:
-    """The configured geo benchmark name (key into benchmark_histories)."""
+    """The configured GEO benchmark name (the one the 'You vs the market' chart
+    compares against), resolved from config — NOT just the first key in
+    benchmark_histories (that dict is unordered and its first entry is often an
+    unrelated commodities benchmark). Falls back to the first history key only
+    if config lookup fails and one exists."""
     bh = getattr(m, "benchmark_histories", None)
-    if isinstance(bh, dict) and bh:
-        return next(iter(bh))
-    return None
+    if not (isinstance(bh, dict) and bh):
+        return None
+    try:
+        from tarzan import config as _cfg
+        geo = _cfg.benchmark_geo_allocation()
+        if geo and geo in bh:
+            return geo
+    except Exception:  # noqa: BLE001 — config unavailable → best-effort fallback
+        pass
+    return next(iter(bh))
 
 
 def _risk_vs_selection(si_gap: Optional[dict], beta: Optional[float]) -> Optional[dict]:
@@ -304,12 +332,22 @@ def _fallback_divergence_note(d: dict) -> str:
     rvs = d.get("risk_vs_selection")
     if rvs:
         b = rvs["beta"]
-        stance = ("more" if b > 1 else "less") if b != 1 else "the same"
-        bits.append(
-            f"Your beta of {b:.2f} means you carry {abs(b - 1) * 100:.0f}% {stance} "
-            f"market risk than {bench}; that risk stance alone accounts for "
-            f"{_pp(rvs['market_risk_contribution_pp'])} of the gap, leaving "
-            f"{_pp(rvs['selection_contribution_pp'])} from selection and allocation.")
+        pct = abs(b - 1) * 100
+        mkt = rvs["market_risk_contribution_pp"]
+        sel = rvs["selection_contribution_pp"]
+        if b < 1:
+            # Defensive: less market risk → expected to lag a rising benchmark.
+            bits.append(
+                f"Most of that gap is by design, not bad luck: your beta of {b:.2f} means "
+                f"your portfolio only moves about {b*100:.0f}% as much as {bench}, so in a "
+                f"rising market you were always going to lag it. That lower risk explains "
+                f"{_pp(mkt)} of the gap; the remaining {_pp(sel)} is what your specific "
+                f"fund picks and weights {'added on top' if sel >= 0 else 'cost you'}.")
+        else:
+            bits.append(
+                f"Your beta of {b:.2f} means your portfolio swings about {pct:.0f}% MORE than "
+                f"{bench}, which {'helped' if mkt >= 0 else 'hurt'} by {_pp(mkt)}; the "
+                f"remaining {_pp(sel)} is down to your specific fund picks and weights.")
     if w30:
         verb = "ahead of" if w30["gap_pp"] >= 0 else "behind"
         bits.append(
@@ -333,14 +371,35 @@ def _fallback_divergence_note(d: dict) -> str:
             t = top[0]
             drag += f", while {t.get('name')} led the gains ({_pp(t.get('contrib_pp'))})"
         bits.append(drag + ".")
+    # Recommendation: tie it to CLOSING (or accepting) the benchmark gap, not
+    # to an abstract "risk profile". When lower risk is the main cause of a lag,
+    # the honest takeaway is the trade-off itself; only invoke a rebalance when
+    # a drift plausibly moves the gap.
+    rvs = d.get("risk_vs_selection")
+    beta = rvs.get("beta") if rvs else None
     drift = d.get("allocation_drift") or []
-    if drift:
+    if si and beta is not None and beta < 1 and si["gap_pp"] < 0:
+        # Behind mainly because of low beta → name the lever + the trade-off.
+        lever = ""
+        if drift:
+            big = drift[0]
+            if (big.get("drift_pp") or 0) < 0:  # under target on something
+                lever = (f" The clearest lever is your {big.get('bucket')} sleeve, "
+                         f"{_pp(abs(big.get('drift_pp') or 0))} under target — "
+                         f"topping it up moves you toward the benchmark's mix.")
+        bits.append(
+            f"So the takeaway is a trade-off, not a mistake: closing the gap to {bench} "
+            f"means taking on more market risk, which also means bigger drawdowns when "
+            f"markets fall. If matching {bench} matters more to you than a smoother ride, "
+            f"raise your equity/high-beta exposure; if not, this lag is the expected cost "
+            f"of a defensive portfolio.{lever}")
+    elif drift:
         big = drift[0]
         direction = "over" if (big.get("drift_pp") or 0) >= 0 else "under"
-        rec = (f"Rebalancing your {big.get('bucket')} weight (currently "
-               f"{direction} target by {_pp(abs(big.get('drift_pp') or 0))}) would "
-               f"move your risk profile back toward {bench}.")
-        bits.append(rec)
+        bits.append(
+            f"Your largest allocation drift is {big.get('bucket')}, {direction} target by "
+            f"{_pp(abs(big.get('drift_pp') or 0))}; rebalancing it is the most direct lever "
+            f"on the gap to {bench}.")
     return " ".join(b for b in bits if b and b != ".")
 
 
@@ -366,24 +425,36 @@ def _divergence_system_prompt(language: str) -> str:
         "since-inception gap comes from taking more/less market risk vs from "
         "selection/allocation); allocation drift vs target; and the holdings "
         "that contributed most and least to return.\n"
-        "WRITE a tight, quantitative explanation (4-6 sentences, ~110 words, "
-        "one flowing paragraph):\n"
+        "WRITE a tight, quantitative explanation (4-6 sentences, ~120 words, "
+        "one flowing paragraph) that a NON-EXPERT can follow — briefly say what "
+        "a term means the first time you use it:\n"
         "1. State the since-inception gap and the 30-day gap with their exact "
-        "figures, and say whether divergence is widening or narrowing.\n"
-        "2. Attribute the gap: use the beta / market-risk vs selection split to "
-        "say how much is 'you simply took more/less market risk' vs 'your "
-        "picks and weights'. Name the specific holdings or sleeves driving it, "
-        "with their contribution figures.\n"
-        "3. Finish with ONE concrete, non-trivial recommendation tied to the "
-        "numbers (e.g. a specific over/underweight to rebalance, or a "
-        "concentration/beta observation) — actionable, not generic.\n"
+        "figures, and say whether the divergence is widening or narrowing.\n"
+        "2. Attribute the gap using the CAPM split, and EXPLAIN it in plain "
+        "words. Beta is how much the portfolio moves relative to the benchmark "
+        "(beta 0.7 = moves ~70% as much; beta 1 = in lock-step). A beta below 1 "
+        "means LESS market risk, so in a RISING market the portfolio is expected "
+        "to lag — that is the 'market_risk_contribution_pp': the part of the gap "
+        "that is simply the mathematical consequence of the chosen risk level, "
+        "NOT bad fund-picking. The 'selection_contribution_pp' is what the "
+        "specific funds and weights added or cost ON TOP of that. Make this "
+        "cause-and-effect explicit (e.g. 'because you took ~30% less market risk, "
+        "you were always going to trail a rising benchmark — that explains X of "
+        "the gap; the remaining Y is down to your actual picks'). Name the "
+        "biggest drag and the top contributor with their figures.\n"
+        "3. Finish with ONE recommendation that is COHERENT WITH THE GAP "
+        "ANALYSIS — it must be about closing (or consciously accepting) the gap "
+        "to the benchmark, NOT about a vague 'risk profile'. If a low beta is the "
+        "main cause, frame it as the real trade-off: matching the benchmark means "
+        "taking more market risk and bigger drawdowns, so the choice depends on "
+        "whether tracking the index or a smoother ride matters more; if a specific "
+        "allocation drift is the lever, say how rebalancing it moves the gap.\n"
         "RULES: every claim carries a number from the JSON; write percentage "
         "changes with an explicit + or - sign and gaps in 'pp'; never invent "
         "figures beyond the JSON; no preamble, no salutation, no markdown, no "
         "headings, no bullet points; do not restate the whole JSON. This is "
-        "analysis and portfolio-construction insight, NOT a solicitation — "
-        "phrase the recommendation as an observation about their own "
-        f"allocation. Write in {language}."
+        "analysis and portfolio-construction insight, NOT a solicitation. "
+        f"Write in {language}."
     )
 
 

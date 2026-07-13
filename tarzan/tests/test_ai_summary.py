@@ -205,7 +205,15 @@ def _divergence_metrics() -> PortfolioMetrics:
     m.xirr_pct = 16.0
     m.benchmark_histories = {"iShares MSCI ACWI": acwi}
     m.goal_deltas = gd
-    m.risk = {"beta": 1.15, "alpha": -2.1, "volatility": 16.0}
+    # m.risk carries a DIFFERENT beta than the Risk-profile table on purpose:
+    # the note must use the table's beta (historical_risk) so the reader sees
+    # one beta everywhere.
+    m.risk = {"beta": 1.40, "alpha": -2.1, "volatility": 16.0}
+    m.historical_risk = {
+        "available": True,
+        "portfolio": {"is_portfolio": True, "label": "Your portfolio",
+                      "metrics": {"beta": 1.15, "alpha": -2.1}},
+    }
     return m
 
 
@@ -215,10 +223,21 @@ def test_divergence_digest_has_both_windows_and_capm_split():
     # Both chart windows carry a portfolio/benchmark/gap.
     assert d["since_inception"]["gap_pp"] == -6.0          # 38 − 44
     assert "gap_pp" in d["window_30d"]
-    # CAPM split: (beta−1)×benchmark market-risk part, rest is selection.
+    # CAPM split uses the RISK-TABLE beta (1.15 from historical_risk), NOT
+    # m.risk's 1.40 — so the note and the table show one beta.
     rvs = d["risk_vs_selection"]
+    assert rvs["beta"] == 1.15
     assert round(rvs["market_risk_contribution_pp"], 1) == round((1.15 - 1) * 44.0, 1)
     assert round(rvs["market_risk_contribution_pp"] + rvs["selection_contribution_pp"], 1) == -6.0
+
+
+def test_divergence_note_uses_risk_table_beta():
+    # The beta quoted in the note must equal historical_risk's portfolio beta
+    # (what the Risk table shows), never m.risk's separate value.
+    m = _divergence_metrics()
+    assert ai_summary._portfolio_beta(m) == 1.15
+    note = ai_summary.divergence_note(m, _config())
+    assert "1.15" in note and "1.40" not in note
 
 
 def test_divergence_digest_none_without_benchmark():
@@ -234,9 +253,12 @@ def test_divergence_fallback_is_quantitative_when_ai_off():
     assert "-6.0pp" in note                      # the since-inception gap
     assert "beta" in note.lower()                # the CAPM attribution
     assert "EM ETF" in note                      # the laggard, correctly identified
-    assert "USA" in note                         # the rebalancing recommendation
     # Not trivial: several quantitative clauses.
     assert note.count("pp") >= 3
+    # The recommendation must be about the benchmark GAP, not a vague "risk
+    # profile" (the incoherence we removed).
+    assert "risk profile" not in note.lower()
+    assert "gap to" in note.lower()
 
 
 def test_divergence_note_embedded_in_charts_section():
