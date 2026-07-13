@@ -1317,6 +1317,31 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     return holding, info
 
 
+def _clip_to_as_of(prices: pd.Series) -> pd.Series:
+    """Drop price observations strictly AFTER the pinned ``as_of`` date, so an
+    as-of / deterministic run values the snapshot at the as-of price rather than
+    the latest fetched close. Point-in-time correctness: without this, the
+    holdings snapshot (current_price → current_value → total_value) would peek at
+    prices after the reporting date. No-op in live mode (as_of is None).
+
+    Guarded so a normal live run is completely unaffected."""
+    try:
+        from tarzan import runtime
+        as_of = runtime.as_of()
+    except Exception:  # noqa: BLE001 — never let this break enrichment
+        as_of = None
+    if as_of is None or prices is None or len(prices) == 0:
+        return prices
+    try:
+        cutoff = pd.Timestamp(as_of)
+        idx = prices.index
+        if getattr(idx, "tz", None) is not None:
+            cutoff = cutoff.tz_localize(idx.tz)
+        return prices[prices.index <= cutoff]
+    except Exception:  # noqa: BLE001 — malformed index → leave as-is
+        return prices
+
+
 def _set_price_data(
     holding: Holding, history: pd.DataFrame, info: dict, currency: str
 ) -> None:
@@ -1340,6 +1365,7 @@ def _set_price_data(
             prices = convert_to_eur(prices, currency)
         prices = prices.dropna()
         prices = prices[prices > 0]
+        prices = _clip_to_as_of(prices)
         if len(prices) > 0:
             holding.price_history = prices
             current_price = float(prices.iloc[-1])
