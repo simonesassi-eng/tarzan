@@ -2775,7 +2775,10 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             bare = raw_ticker.split(".")[0].upper() if raw_ticker else ""
             asset_class, role = taxonomy.get(bare, (None, None))
             benchmark_rows.append({
-                "name": name,
+                # Display name goes through the SAME shortener as the holding
+                # rows so "iShares Nasdaq 100 UCITS ETF" reads like the rest of
+                # the table (tag-matching above uses the raw name, not this).
+                "name": short_instrument_name(name),
                 "ticker": _display_ticker(r.get("ticker")),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
@@ -3262,9 +3265,11 @@ def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _colorize_pct(text: str) -> str:
-    """HTML-escape ``text`` and wrap signed percentages (e.g. +0.81%, -1.2%)
-    in green/red spans, so the market-context note shows moves in colour.
-    Unsigned percentages (yield levels like 4.38%) are left neutral."""
+    """HTML-escape ``text`` and wrap signed percentages AND percentage-point
+    figures (e.g. +0.81%, -1.2%, +0.92pp, -4.53pp) in green/red spans, so both
+    the market-context note (uses %) and the divergence note (uses pp) show
+    moves in colour. Unsigned percentages (yield levels like 4.38%) are left
+    neutral."""
     import html as _html
     import re as _re
     if not text:
@@ -3277,7 +3282,8 @@ def _colorize_pct(text: str) -> str:
         col = PALETTE["red"] if neg else PALETTE["green"]
         return f'<span style="color:{col};font-weight:700;">{tok}</span>'
 
-    return _re.sub(r"[+\-\u2212]\d+(?:[.,]\d+)?\s?%", _wrap, esc)
+    # Signed number followed by % or pp (bare beta like "0.69" stays neutral).
+    return _re.sub(r"[+\-\u2212]\d+(?:[.,]\d+)?\s?(?:%|pp)", _wrap, esc)
 
 
 def build_context(

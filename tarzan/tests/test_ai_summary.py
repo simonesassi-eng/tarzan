@@ -259,17 +259,37 @@ def test_divergence_digest_none_without_benchmark():
 
 def test_divergence_fallback_is_quantitative_when_ai_off():
     # AI disabled by the autouse fixture → deterministic rule-based note.
+    # Fixture beta is 1.20 (>1) and trails → the "gap is about holdings, not
+    # risk level" takeaway.
     note = ai_summary.divergence_note(_divergence_metrics(), _config())
     assert note is not None
     assert "-6.0pp" in note                      # the since-inception gap
     assert "beta" in note.lower()                # the CAPM attribution
-    assert "EM ETF" in note                      # the laggard, correctly identified
+    assert "EM" in note                          # the laggard, named (short_instrument_name → "EM")
     # Not trivial: several quantitative clauses.
     assert note.count("pp") >= 3
-    # The recommendation must be about the benchmark GAP, not a vague "risk
-    # profile" (the incoherence we removed).
+    # The takeaway must NOT be a vague "risk profile" line, and must NOT tell
+    # the reader to rebalance toward allocation targets to close the gap
+    # (the incoherent, often-backwards advice we removed).
     assert "risk profile" not in note.lower()
-    assert "gap to" in note.lower()
+    assert "target" not in note.lower()
+    assert "rebalanc" not in note.lower()
+
+
+def test_divergence_fallback_low_beta_frames_tradeoff():
+    # A defensive (beta<1) portfolio that trails → the takeaway is the honest
+    # risk trade-off, never a "buy more of X to close the gap" suggestion.
+    m = _divergence_metrics()
+    m.risk = {"beta": 0.70, "alpha": 0.5, "volatility": 10.0}
+    m.historical_risk = {"available": True,
+                         "portfolio": {"is_portfolio": True,
+                                       "metrics": {"beta": 0.80}}}
+    note = ai_summary.divergence_note(m, _config())
+    assert "trade-off" in note.lower()
+    assert "more market risk" in note.lower()
+    # No allocation-rebalance advice.
+    assert "fixed income" not in note.lower()
+    assert "rebalanc" not in note.lower()
 
 
 def test_divergence_note_embedded_in_charts_section():

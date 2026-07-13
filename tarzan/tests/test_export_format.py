@@ -37,6 +37,31 @@ class TestCssHelper:
         assert _format.css(None).startswith("#")
 
 
+class TestColorizePct:
+    """_colorize_pct colours signed % AND signed pp (divergence note uses pp)."""
+
+    def _spans(self, text):
+        import re
+        from tarzan.export.newsletter import _colorize_pct
+        return re.findall(r'color:(#[0-9A-Fa-f]+)[^>]*>([^<]+)</span>',
+                          _colorize_pct(text))
+
+    def test_colors_percent_and_pp(self):
+        spans = self._spans("gap -4.53pp, picks +0.92pp, day +0.5% vs -0.8%")
+        toks = [t for _, t in spans]
+        assert any("pp" in t for t in toks)   # pp figures coloured
+        assert any("%" in t for t in toks)    # % figures coloured
+        # sign drives colour (PALETTE holds "#RRGGBB" directly)
+        from tarzan.export.newsletter import PALETTE
+        colors = {t.strip(): c for c, t in spans}
+        assert colors.get("-4.53pp") == PALETTE["red"]
+        assert colors.get("+0.92pp") == PALETTE["green"]
+
+    def test_bare_beta_not_coloured(self):
+        # A bare number like a beta "0.69" must stay neutral (no unit).
+        assert self._spans("beta of 0.69") == []
+
+
 class TestAssetClassOrder:
     def test_base_order_returned_without_arg(self):
         order = _format.asset_class_order()
