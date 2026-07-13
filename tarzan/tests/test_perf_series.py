@@ -191,3 +191,43 @@ def test_contract_chart_twror_line_endpoint_matches_engine(_contract_metrics):
         # The 30-day TWROR chart line's endpoint equals the authoritative 1m.
         assert abs(win["twror"][-1] - pf["1m"]) < 0.05
 
+
+
+def test_perf_vol_series_full_and_window():
+    from tarzan.export._perf_series import _perf_vol_series
+    idx = pd.date_range("2024-07-01", "2026-07-01", freq="B")
+    m = PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 1.0}]))
+    # A wobbly ramp so volatility is strictly positive.
+    m.portfolio_history = pd.Series(
+        np.linspace(100, 140, len(idx)) * (1 + 0.01 * np.sin(np.arange(len(idx)) / 5)), index=idx)
+    m.benchmark_histories = {"ACWI": pd.Series(
+        np.linspace(200, 260, len(idx)) * (1 + 0.02 * np.sin(np.arange(len(idx)) / 4)), index=idx)}
+
+    full = _perf_vol_series(m, "ACWI", n_days=None)
+    assert full and full["port"] and full["acwi"]
+    assert full["dates"][0].date() == idx[0].date()   # spans inception
+    assert len(full["dates"]) <= 180                   # downsampled
+    assert all(v >= 0 for v in full["port"])           # vol is non-negative
+
+    w30 = _perf_vol_series(m, "ACWI", n_days=30)
+    assert w30 and w30["port"]
+    # Bigger benchmark wobble → higher benchmark vol than portfolio.
+    assert full["acwi"][-1] > full["port"][-1]
+
+
+def test_chart_grid_density():
+    # Left (month) grid labels every month; right (30d) grid gives >=12 ticks.
+    import re
+    from tarzan.export._charts import chart_pct_compact
+    long_idx = pd.date_range("2025-11-15", "2026-07-13", freq="D")
+    svg_l = chart_pct_compact([{"values": list(range(len(long_idx))), "color": "#000"}],
+                              list(long_idx), include_zero=False, month_ticks=True)
+    months = re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', svg_l)
+    assert len(months) >= 8                            # ~9 months labelled
+
+    short_idx = pd.date_range("2026-06-13", periods=23, freq="D")
+    svg_r = chart_pct_compact([{"values": list(range(23)), "color": "#000"}],
+                              list(short_idx), include_zero=True, min_day_ticks=12)
+    days = re.findall(r'>([A-Z][a-z]{2} \d{2})<', svg_r)
+    assert len(days) >= 12

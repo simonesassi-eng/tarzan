@@ -59,6 +59,7 @@ from tarzan.export._perf_series import (  # noqa: F401  (re-exported)
     _norm_series,
     _perf_full_series,
     _perf_level_series,
+    _perf_vol_series,
     _perf_window,
     _window_money_pnl,
     _window_twror,
@@ -1154,21 +1155,58 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi.append({"values": full["acwi"], "color": BENCH, "dash": True})
             lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, True))
 
+    # ── Volatility row (You vs the market, second row): rolling 21-day
+    #    annualized volatility over the same two windows. Grey dashed = the
+    #    benchmark, so the reader sees whether they run calmer or bumpier.
+    VOL = "#B45309"  # amber-brown, distinct from the return lines
+    vol_full = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
+    vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
+
+    def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks) -> str:
+        series, leg = [], []
+        if vs and vs.get("port"):
+            series.append({"values": vs["port"], "color": VOL})
+            leg.append((f'You {_pct(vs["port"][-1], signed=False)}', VOL, False))
+        if vs and vs.get("acwi"):
+            series.append({"values": vs["acwi"], "color": BENCH, "dash": True})
+            leg.append((f'MSCI ACWI {_pct(vs["acwi"][-1], signed=False)}', BENCH, True))
+        if not series:
+            return ""
+        return (_charts.chart_pct_compact(series, dates_, include_zero=False,
+                                          month_ticks=month_ticks, min_day_ticks=min_day_ticks)
+                + _charts.legend(leg, 9))
+
     parts = []
     if s30 or ssi:
-        # LEFT = since inception (the fuller story); RIGHT = last 30 days. The
-        # since-inception axis shows month ticks across the whole span; the
-        # 30-day axis shows day-level ticks.
-        left = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
-                + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, month_ticks=True)
-                + _charts.legend(lsi, 9)) if ssi else ""
-        right = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
-                 + _charts.chart_pct_compact(s30, dates, include_zero=True) + _charts.legend(l30, 9)) if s30 else ""
+        # LEFT column = since inception (month grid); RIGHT column = last 30
+        # days (>=12 day grid). Row 1 = cumulative return, row 2 = rolling
+        # annualized volatility — each return chart sits above its vol twin.
+        left_ret = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
+                    + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, month_ticks=True)
+                    + _charts.legend(lsi, 9)) if ssi else ""
+        right_ret = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
+                     + _charts.chart_pct_compact(s30, dates, include_zero=True, min_day_ticks=12)
+                     + _charts.legend(l30, 9)) if s30 else ""
+        left_vol = _vol_panel(vol_full, vol_full["dates"] if vol_full else si_dates,
+                              month_ticks=True, min_day_ticks=0)
+        right_vol = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
+                               month_ticks=False, min_day_ticks=12)
+        if left_vol:
+            left_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· ann., rolling 21d</span>") + left_vol
+        if right_vol:
+            right_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· ann., rolling 21d</span>") + right_vol
+
+        def _row(l, r):
+            return (f'<tr>'
+                    f'<td width="50%" valign="top" style="padding:0 8px 0 0;">{l}</td>'
+                    f'<td width="50%" valign="top" style="padding:0 0 0 8px;border-left:1px solid {P["border"]};">{r}</td>'
+                    f'</tr>')
+        vol_row = (f'<tr><td colspan="2" style="padding-top:12px;border-top:1px solid {P["border"]};"></td></tr>'
+                   + _row(left_vol, right_vol)) if (left_vol or right_vol) else ""
         charts_tbl = (
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;"><tr>'
-            f'<td width="50%" valign="top" style="padding-right:8px;">{left}</td>'
-            f'<td width="50%" valign="top" style="padding-left:8px;border-left:1px solid {P["border"]};">{right}</td>'
-            f'</tr></table>'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">'
+            + _row(left_ret, right_ret) + vol_row +
+            '</table>'
         )
         # Quantitative "why are we diverging?" note, encapsulated in this card
         # right under the two charts. AI writes the prose when available; a
