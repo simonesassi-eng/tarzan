@@ -52,7 +52,10 @@ tarzan/
 │   ├── robustness.py            # Rolling / stress / bootstrap risk analysis
 │   └── synthetic.py             # Synthetic-history helpers
 ├── export/
-│   ├── newsletter.py            # HTML email newsletter (the primary artifact)
+│   ├── newsletter/              # HTML email newsletter (the primary artifact):
+│   │                            #   __init__ (orchestrator + public API),
+│   │                            #   _constants, _format, _charts,
+│   │                            #   _sections_alloc, _sections_perf
 │   ├── _perf_series.py          # Pure performance/return series helpers (newsletter)
 │   ├── _charts.py               # Inline SVG chart builders
 │   ├── _format.py               # Shared formatting / palette helpers
