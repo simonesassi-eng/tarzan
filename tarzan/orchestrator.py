@@ -72,8 +72,36 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     # The targets dict now stores each entry under BOTH a legacy and a
     # canonical key, so iterate UNIQUE entries (by identity) to avoid
     # double-seeding the same instrument.
-    held_keys = {instrument_key(h.isin, h.ticker) for h in holdings}
+    #
+    # A target must be recognised as "already held" if it matches a holding by
+    # ISIN, ticker, OR name — not only the canonical instrument_key. Otherwise a
+    # fund whose order carries only an ISIN (holding key = ISIN) but whose target
+    # row carries only a ticker (target key = TICKER:...) is seeded as a phantom
+    # buy-new AND left target-less as a real holding, so the SAME fund shows up
+    # twice: once "buy to N%" and once "exit to 0%". Matching on any identifier
+    # collapses them back to one instrument. (See _apply_per_holding_targets,
+    # which should have attached the target; this is the safety net.)
+    def _norm(s) -> str:
+        return str(s or "").strip().upper()
+
+    def _bare(t) -> str:
+        return _norm(t).split(".")[0]  # NTSG.DE → NTSG
+
+    held_keys: set[str] = set()
+    held_isins: set[str] = set()
+    held_tickers: set[str] = set()
+    held_names: set[str] = set()
+    for h in holdings:
+        held_keys.add(instrument_key(h.isin, h.ticker))
+        if h.isin:
+            held_isins.add(_norm(h.isin))
+        if h.ticker:
+            held_tickers.add(_norm(h.ticker))
+            held_tickers.add(_bare(h.ticker))
+        if h.name:
+            held_names.add(_norm(h.name))
     held_keys.discard("")
+
     seen: set[int] = set()
     seeded = []
     for row in targets.values():
@@ -85,10 +113,26 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
             continue
         r_isin = (row.get("isin") or "").strip()
         r_ticker = (row.get("ticker") or "").strip()
+        r_name = (row.get("name") or "").strip()
         if not r_isin and not r_ticker:
             continue
-        if instrument_key(r_isin, r_ticker) in held_keys:
-            continue  # already held
+        # Name match tolerates the common short-name convention: a target row's
+        # name is often a prefix of the holding's full legal name ("WisdomTree
+        # Global Efficient Core" vs "...UCITS ETF USD Acc"). Match when either
+        # name starts with the other (min 8 chars, so short tokens don't collide).
+        rn = _norm(r_name)
+        name_hit = bool(rn) and len(rn) >= 8 and any(
+            hn.startswith(rn) or rn.startswith(hn) for hn in held_names
+        )
+        # Held by canonical key, ISIN, (bare or full) ticker, or name → skip.
+        already_held = (
+            instrument_key(r_isin, r_ticker) in held_keys
+            or (r_isin and _norm(r_isin) in held_isins)
+            or (r_ticker and (_norm(r_ticker) in held_tickers or _bare(r_ticker) in held_tickers))
+            or name_hit
+        )
+        if already_held:
+            continue  # already held — don't seed a phantom duplicate
         seeded.append(Holding(
             isin=r_isin, ticker=r_ticker, quantity=0.0,
             cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",

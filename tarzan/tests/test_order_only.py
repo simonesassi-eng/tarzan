@@ -188,6 +188,42 @@ def test_seed_missing_targets_only_creates_not_held():
     assert s.target_portfolio == pytest.approx(40.0)
 
 
+def test_seed_skips_held_fund_matched_by_ticker_or_name():
+    # Regression (the "NTSG" bug): the order carries only an ISIN (so the
+    # holding's ticker defaults to the ISIN), while the target row carries only
+    # a ticker for the SAME fund. The canonical instrument_key differs, but the
+    # fund is clearly held — it must NOT be seeded as a phantom buy-new, or it
+    # shows up twice (once "exit to 0%", once "buy to N%").
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00077IIPQ8", qty=341.0, net=-10000.0),
+    ])
+    # Order had no ticker → holding.ticker is the ISIN; give it a name too.
+    holdings[0].ticker = "IE00077IIPQ8"
+    holdings[0].name = "WisdomTree Global Efficient Core UCITS ETF USD Acc"
+    targets = {
+        # Ticker-keyed target for the same fund (no ISIN) — the mismatch case.
+        "NTSG.DE": {"isin": "", "ticker": "NTSG.DE",
+                    "name": "WisdomTree Global Efficient Core",
+                    "target_portfolio": 35.0, "no_buy_no_sell": False},
+    }
+    seeded = orchestrator._seed_missing_targets(holdings, targets)
+    assert seeded == [], "held fund must not be seeded as a phantom buy-new"
+
+
+def test_seed_matches_held_by_bare_ticker():
+    # A target ticker "NTSG.DE" must match a holding whose ticker is the bare
+    # "NTSG" (exchange suffix stripped), and vice-versa — no phantom.
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00077IIPQ8", qty=10.0, net=-1000.0),
+    ])
+    holdings[0].ticker = "NTSG"  # bare, no exchange suffix
+    targets = {
+        "NTSG.DE": {"isin": "", "ticker": "NTSG.DE", "name": "WT Efficient Core",
+                    "target_portfolio": 35.0, "no_buy_no_sell": False},
+    }
+    assert orchestrator._seed_missing_targets(holdings, targets) == []
+
+
 def test_per_holding_only_objective_uses_portfolio_targets():
     import numpy as np
     from tarzan.engine.rebalancer import _ObjectiveModel
