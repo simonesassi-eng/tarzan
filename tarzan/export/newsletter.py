@@ -2998,7 +2998,9 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             first = True
             for inst in insts:
                 rows.append({
-                    "label": inst.get("label", ""),
+                    # Shorten the display label like every other table (tags
+                    # still match on the raw label below).
+                    "label": short_instrument_name(inst.get("label", "")),
                     "ticker": _display_ticker(inst.get("ticker")),
                     "span_label": inst.get("span_label", "\u2014"),
                     "tags": _tags_for(inst.get("label", "")),
@@ -3282,8 +3284,11 @@ def _colorize_pct(text: str) -> str:
         col = PALETTE["red"] if neg else PALETTE["green"]
         return f'<span style="color:{col};font-weight:700;">{tok}</span>'
 
-    # Signed number followed by % or pp (bare beta like "0.69" stays neutral).
-    return _re.sub(r"[+\-\u2212]\d+(?:[.,]\d+)?\s?(?:%|pp)", _wrap, esc)
+    # Signed number followed by %, pp, or "percentage point(s)" (bare beta like
+    # "0.69" stays neutral). The model sometimes spells out "percentage points"
+    # instead of "pp", so match both.
+    return _re.sub(
+        r"[+\-\u2212]\d+(?:[.,]\d+)?\s?(?:%|pp|percentage points?)", _wrap, esc)
 
 
 def build_context(
