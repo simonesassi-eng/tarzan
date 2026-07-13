@@ -154,14 +154,32 @@ def build_divergence_digest(metrics, config,
     if not (have30 or havesi):
         return None
 
-    def _gap(w):
-        # Endpoint TWROR − ACWI over the window (both cumulative from its start).
+    # Prefer the engine's AUTHORITATIVE figures for the stated numbers so the
+    # note quotes the same portfolio/benchmark returns the tables and charts
+    # show; fall back to the (canonically-anchored) chart line endpoints only
+    # when an authoritative field is unavailable.
+    pf = metrics.performance_full or {}
+    auth = {
+        "port_30d": _num(pf.get("1m")),
+        "bench_30d": _num(_bench_period(metrics, bench, "1m")),
+        "port_si": _num(getattr(metrics, "twror_pct", None)),
+        # No single authoritative "benchmark since inception" scalar exists;
+        # the canonically-anchored line endpoint is the source for that leg.
+    }
+
+    def _gap(w, port_auth=None, bench_auth=None):
+        # TWROR − benchmark over the window. Use authoritative scalars when
+        # given, else the chart line endpoints (both anchored the same way).
         if not (w and w.get("twror") and w.get("acwi")):
             return None
-        p, b = _num(w["twror"][-1]), _num(w["acwi"][-1])
+        p = port_auth if port_auth is not None else _num(w["twror"][-1])
+        b = bench_auth if bench_auth is not None else _num(w["acwi"][-1])
         if p is None or b is None:
             return None
         return {"portfolio_pct": p, "benchmark_pct": b, "gap_pp": round(p - b, 2)}
+
+    gap_30d = _gap(win30, auth["port_30d"], auth["bench_30d"])
+    gap_si = _gap(full, auth["port_si"], None)
 
     risk = metrics.risk or {}
     beta = _num(risk.get("beta"))
@@ -169,18 +187,37 @@ def build_divergence_digest(metrics, config,
 
     digest: dict[str, Any] = {
         "benchmark": bench or "the benchmark",
-        "window_30d": _gap(win30),
-        "since_inception": _gap(full),
+        "window_30d": gap_30d,
+        "since_inception": gap_si,
         "capm": _clean({"beta": beta, "alpha_pct": alpha,
                         "volatility_pct": _num(risk.get("volatility"))}),
         # CAPM-implied "expected" gap from taking beta≠1 market risk, on the
         # since-inception benchmark return: (beta − 1) × benchmark. What's left
         # of the actual gap after that is selection/allocation.
-        "risk_vs_selection": _risk_vs_selection(_gap(full), beta),
+        "risk_vs_selection": _risk_vs_selection(gap_si, beta),
         "allocation_drift": _top_drift(metrics),
         "contributors": _contributors(metrics),
     }
     return _clean(digest)
+
+
+def _bench_period(m, bench_name: Optional[str], period: str):
+    """Authoritative period return (e.g. '1m') for a benchmark, from the
+    engine's ``holding_performance`` — the single source the Returns tables and
+    chart legends read. None when unavailable."""
+    if not bench_name:
+        return None
+    hp = getattr(m, "holding_performance", None)
+    if hp is None or getattr(hp, "empty", True):
+        return None
+    if "name" not in hp.columns or period not in hp.columns:
+        return None
+    want = bench_name.strip().lower()
+    match = hp[hp["name"].astype(str).str.strip().str.lower() == want]
+    if match.empty:
+        return None
+    val = match.iloc[0].get(period)
+    return None if (val is None or (isinstance(val, float) and val != val)) else float(val)
 
 
 def _bench_name(m) -> Optional[str]:
@@ -535,17 +572,24 @@ def _movers(m) -> dict:
 
 
 def _benchmarks(m) -> list[dict]:
-    bc = getattr(m, "benchmark_comparison", None)
+    # Read benchmark period returns + risk from holding_performance — the SAME
+    # source the visible Returns/Performance tables and the chart legends use —
+    # so the AI note quotes figures that match the tables. (Previously this read
+    # benchmark_comparison, whose period returns are computed over a different
+    # window (clip-to-portfolio-span vs the tables' 5y cap) and could disagree
+    # for the identical benchmark.)
+    hp = getattr(m, "holding_performance", None)
     rows: list[dict] = []
     try:
-        if bc is None or bc.empty:
+        if hp is None or hp.empty or "type" not in hp.columns:
             return []
-        keep = [c for c in ("benchmark", "1m", "3m", "ytd", "1y", "cagr", "beta", "alpha")
-                if c in bc.columns]
-        for _, r in bc.iterrows():
-            row = {}
+        bench = hp[hp["type"].astype(str).str.contains("enchmark", case=False, na=False)]
+        keep = ("1m", "3m", "ytd", "1y", "cagr", "beta", "alpha")
+        for _, r in bench.iterrows():
+            row = {"benchmark": r.get("name") or r.get("ticker")}
             for c in keep:
-                row[c] = r.get(c) if c == "benchmark" else _num(r.get(c))
+                if c in bench.columns:
+                    row[c] = _num(r.get(c))
             rows.append(_clean(row))
     except Exception:  # noqa: BLE001
         return []

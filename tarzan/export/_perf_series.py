@@ -120,30 +120,39 @@ def _flow_list(external_flows, start, end, threshold: float = 500.0):
 
 def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
     """Window TWROR (%) from the flow-adjusted NAV index over the last
-    ``days`` calendar days (mirrors :func:`_window_money_pnl`'s as-of logic)."""
+    ``days`` calendar days.
+
+    Delegates to the engine's ``compute_period_return`` so this matches the
+    authoritative ``performance_full`` figures exactly — the matrix cell and
+    the chart line then tell one story. (Previously this anchored on the last
+    point *before* the window while ``compute_period_return`` anchors on the
+    first point *inside* it, producing the 30-day TWROR split.)"""
     if nav is None:
         return None
+    from tarzan.engine.stats import compute_period_return
     s = nav.replace([float("inf"), float("-inf")], float("nan")).dropna()
     if len(s) < 2:
         return None
-    cutoff = s.index[-1] - pd.Timedelta(days=days)
-    prior = s[s.index <= cutoff]
-    base = float(prior.iloc[-1]) if len(prior) else float(s.iloc[0])
-    return (float(s.iloc[-1]) / base - 1.0) * 100.0 if base > 0 else None
+    return compute_period_return(s, days)
 
 
-def _rebase_benchmark(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":
-    """Rebase a benchmark price series to 0% over the window spanned by ``idx``,
-    anchored on the benchmark's OWN first real observation within the window.
+def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":
+    """Rebase ANY price/level series to 0% over the window spanned by ``idx``,
+    anchored on the series' OWN first real observation within the window.
 
-    Crucially the anchor is NOT a price carried forward from *before* the
-    window: the portfolio's date index can start on a non-trading day (e.g. a
+    This is the ONE canonical rule for turning a level series into a
+    cumulative-%-over-window chart line, used for both the portfolio NAV line
+    and every benchmark line — so a chart line's endpoint equals a plain
+    period return computed the same way (``compute_period_return``: anchor on
+    the first observation at/after the window start).
+
+    Crucially the anchor is NOT a value carried forward from *before* the
+    window: the target ``idx`` can start on a non-trading day (e.g. a
     Saturday), and a plain ``reindex(idx, ffill)`` then takes a stale
-    pre-window price as the denominator — overstating the benchmark's move and
-    disagreeing with the Performance section's period return (which anchors on
-    the benchmark's first in-window trading day). Anchoring here on
-    ``benchmark[index >= idx[0]].iloc[0]`` makes the chart and the section
-    agree. Returns a %-list aligned to ``idx``, or None when unavailable."""
+    pre-window value as the denominator — overstating the move and disagreeing
+    with the Performance section's period return. Anchoring on
+    ``series[index >= idx[0]].iloc[0]`` makes the chart and the section agree.
+    Returns a %-list aligned to ``idx``, or None when unavailable."""
     a = _norm_series(araw)
     if a is None or len(a) < 2:
         return None
@@ -157,6 +166,10 @@ def _rebase_benchmark(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | Non
     lead = aligned.index < in_win.index[0]
     aligned = aligned.mask(lead, anchor).bfill()
     return list(((aligned / anchor - 1.0) * 100.0).values.astype(float))
+
+
+# Back-compat alias: benchmark rebasing is just the general case.
+_rebase_benchmark = _rebase_to_window
 
 
 def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.Series | None":
@@ -187,10 +200,12 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         return None
     idx = val.index
 
-    nav = (_norm_series(m.portfolio_history).reindex(idx, method="ffill").bfill()
-           if m.portfolio_history is not None else None)
-    twror = (list(((nav / nav.iloc[0] - 1.0) * 100.0).values.astype(float))
-             if nav is not None and float(nav.iloc[0]) else None)
+    # TWROR line: anchor on the NAV's first in-window observation (the same
+    # canonical rule as the benchmark line and compute_period_return), so the
+    # line's endpoint equals the authoritative window return rather than a
+    # value stale-filled from before the window.
+    twror = (_rebase_to_window(m.portfolio_history, idx)
+             if m.portfolio_history is not None else None)
 
     acwi = None
     acwi_raw = _geo_benchmark_series(m, geo_name)
