@@ -10,6 +10,8 @@ tarzan/
 ├── __init__.py                  # Package root, versioning
 ├── main.py                      # CLI entry point (writes side reports)
 ├── orchestrator.py              # Pipeline: load → enrich → compute
+├── delivery.py                  # Newsletter service: resolve inputs → run → render → email
+├── drive_loader.py              # Download input CSVs from a private Google Drive folder
 ├── exceptions.py                # Domain exception hierarchy (TarzanError).
 │                                #   NOTE: only DataIngestionError is currently
 │                                #   raised; other stages fail soft and record

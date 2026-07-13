@@ -197,7 +197,8 @@ input files. No value before there is an API.
   `tenant_id → {drive_subfolder, recipient_email, locale, created_at, consent_ts}`.
 - Per-tenant Drive subfolders (`/tarzan/<tenant_id>/order_list.csv`), never a
   shared folder.
-- `send_newsletter.py` becomes `for tenant in tenants: run(tenant)`; the Apps
+- `tarzan.delivery.run_and_send` becomes `for tenant in tenants: run(tenant)`
+  (the delivery logic already lives in the package, not the CI shim); the Apps
   Script dispatches one job per tenant (tenant_id in payload).
 
 **B2. Tenant isolation invariant.**
