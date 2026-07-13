@@ -267,7 +267,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
               f'style="border-collapse:collapse;">{head_html}{row_t}{row_u}{row_w}</table>')
 
     footer = (f'<div style="margin-top:12px;padding-top:10px;border-top:2px solid {P["border"]};'
-              f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized — '
+              f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized: '
               f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> · '
               f'XIRR <strong style="color:{_sgn(m.xirr_pct)};">{_pct(m.xirr_pct, signed=True)}</strong>'
               + (f' <span style="color:{P["subtle"]};">· net of tax: see note at the bottom &#8595;</span>'
@@ -407,7 +407,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
             f'text-transform:uppercase;">You vs the market</div>'
             f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">Your return paths vs '
-            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong> — since inception (cumulative) and '
+            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong>, since inception (cumulative) and '
             f'the last 30 days (rebased).</div>{charts_tbl}{divergence_html}'
         )
         # Wrapped in the same card shell as the matrix above so the section
@@ -423,7 +423,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
               f'text-transform:uppercase;">Performance</div>'
               f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{P["ink"]};">How your money moved</div>'
               f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Total &amp; unrealized P&amp;L and your '
-              f'time-weighted return across 1 day, 7 days, 30 days and since inception — then your return vs the market.</div>')
+              f'time-weighted return across 1 day, 7 days, 30 days and since inception, then your return vs the market.</div>')
 
     return {"available": True, "html": header + matrix_card + "".join(parts)}
 
@@ -1315,25 +1315,25 @@ def _build_risk_legend() -> list[dict]:
          "portfolio from start to end value, with compounding."),
         ("Volatility", "volatility",
          "Annualized standard deviation of daily returns. Equity indexes "
-         "~15–20%, bonds ~3–7%."),
+         "~15-20%, bonds ~3-7%."),
         ("Sharpe", "sharpe",
          "(CAGR − risk-free rate) / Volatility. Return per unit of total "
          "risk. >1 is good, >2 excellent."),
         ("Sortino", "sortino",
          "Like Sharpe but penalizes only downside volatility. Usually "
-         "higher than Sharpe — gap shows good (upside) volatility."),
+         "higher than Sharpe; the gap shows good (upside) volatility."),
         ("Max Drawdown", "max_drawdown",
          "Worst peak-to-trough loss over the period. -20% is typical for "
          "diversified equity; deeper drops signal concentration risk."),
         ("Ulcer Index", "ulcer_index",
-         "Root-mean-square of drawdowns from the running peak — captures both "
+         "Root-mean-square of drawdowns from the running peak; captures both "
          "depth and time spent underwater. Lower is smoother; penalizes long "
          "slumps more than a one-point Max DD."),
         ("VaR 95%", "var_pct",
          "Daily loss exceeded only 5% of the time (historical sim). "
-         "Non-parametric — no normal-distribution assumption."),
+         "Non-parametric: no normal-distribution assumption."),
         ("CVaR 95%", "cvar_pct",
-         "Average loss on the worst 5% of days. More negative than VaR — "
+         "Average loss on the worst 5% of days. More negative than VaR; "
          "captures tail risk."),
         (f"\u03b1", "alpha",
          "Extra annual return vs the benchmark, after adjusting for "

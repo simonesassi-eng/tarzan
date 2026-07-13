@@ -375,7 +375,7 @@ def _fallback_divergence_note(d: dict) -> str:
     if rb is not None and cb is not None and direction and abs(cb - rb) >= 0.02:
         tail = ("should narrow if it holds" if direction == "converging"
                 else "may widen if it holds")
-        bits.append(f"Beta now {cb:.2f} vs {rb:.2f} realized — {direction}, gap {tail}.")
+        bits.append(f"Beta now {cb:.2f} vs {rb:.2f} realized: {direction}, gap {tail}.")
 
     contrib = d.get("contributors") or {}
     bottom = (contrib.get("bottom") or [])
@@ -395,7 +395,7 @@ def _fallback_divergence_note(d: dict) -> str:
     beta = rvs.get("beta") if rvs else None
     if si and beta is not None and beta < 1 and si["gap_pp"] < 0:
         bits.append(f"The lag is the cost of lower risk; closing it means more market risk "
-                    f"and bigger drawdowns — a choice, not a fix.")
+                    f"and bigger drawdowns, a choice, not a fix.")
     elif si and beta is not None and beta > 1 and si["gap_pp"] < 0:
         bits.append(f"You take more risk than {bench} yet trail it, so the gap is the "
                     f"holdings, not the risk level.")
@@ -434,17 +434,19 @@ def _divergence_system_prompt(language: str) -> str:
         "3. Attribution: state the realized beta value, then "
         "'risk level explains Xpp, picks Ypp'.\n"
         "4. Beta trend, ONLY if realized_beta and current_beta differ: "
-        "'beta now C vs R realized — converging/diverging'.\n"
+        "'beta now C vs R realized: converging/diverging'.\n"
         "5. Biggest drag and top contributor with their pp figures.\n"
         "6. ONE takeaway: if beta<1, the lag is the cost of lower risk and "
-        "closing it means more market risk — a choice, not a fix; if beta>1 and "
-        "still trailing, the gap is the holdings, not the risk. NEVER suggest "
-        "rebalancing toward allocation targets or buying an asset class to close "
-        "the gap (backwards: more bonds lowers beta and widens the lag).\n"
+        "closing it means more market risk and bigger drawdowns, a choice, not "
+        "a fix; if beta>1 and still trailing, the gap is the holdings, not the "
+        "risk. NEVER suggest rebalancing toward allocation targets or buying an "
+        "asset class to close the gap (backwards: more bonds lowers beta and "
+        "widens the lag).\n"
         "RULES: every claim carries a JSON number; signed % with + or -; gaps "
         "and contributions as 'pp' (e.g. -4.53pp), never 'percentage points'; "
-        "beta to two decimals; invent nothing; no preamble, salutation, "
-        "markdown, headings or bullets. Analysis, not a solicitation. "
+        "beta to two decimals; invent nothing; NEVER use an em-dash (write '—' "
+        "as a colon, comma or period); no preamble, salutation, markdown, "
+        "headings or bullets. Analysis, not a solicitation. "
         f"Write in {language}."
     )
 
