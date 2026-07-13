@@ -270,10 +270,13 @@ def main() -> int:
 
     subject = _build_subject(metrics, subject_prefix, trigger_label)
 
-    # 3. Optionally write a local copy for traceability (CI artifacts)
-    output_dir = ROOT / "output"
-    output_dir.mkdir(exist_ok=True)
-    timestamp = _now_local().strftime("%Y%m%d_%H%M")
+    # 3. Optionally write a local copy for traceability (CI artifacts).
+    # Group per run date (output/<YYYY-MM-DD>/) so copies don't pile up flat,
+    # matching the CLI's output layout.
+    now = _now_local()
+    output_dir = ROOT / "output" / now.strftime("%Y-%m-%d")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = now.strftime("%Y%m%d_%H%M")
     artifact = output_dir / f"newsletter_{timestamp}.html"
     artifact.write_text(html, encoding="utf-8")
     logger.info("Saved local copy: %s", artifact)
