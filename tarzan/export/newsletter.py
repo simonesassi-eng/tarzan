@@ -995,6 +995,24 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     return {"available": True, "html": header + "".join(blocks)}
 
 
+def _benchmark_period_return(m, bench_name: Optional[str], period: str):
+    """The AUTHORITATIVE period return (e.g. '1m') for a benchmark, read from
+    the engine's ``holding_performance`` — the same source the Returns tables
+    use. Returns None when unavailable. This is what chart legends must show so
+    a benchmark's chart number equals its table number by construction."""
+    if not bench_name:
+        return None
+    hp = getattr(m, "holding_performance", None)
+    if hp is None or hp.empty or "name" not in hp.columns or period not in hp.columns:
+        return None
+    want = bench_name.strip().lower()
+    match = hp[hp["name"].astype(str).str.strip().str.lower() == want]
+    if match.empty:
+        return None
+    val = match.iloc[0].get(period)
+    return None if (val is None or (isinstance(val, float) and pd.isna(val))) else float(val)
+
+
 def _build_performance30(ctx: _NewsletterContext) -> dict:
     """Performance section: a 1D / 7D / 30D / since-inception returns matrix
     (Total P&L €+%, Unrealized P&L €+%, TWROR %) with an annualized footer,
@@ -1097,31 +1115,41 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     def _colcap(t: str) -> str:
         return f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};margin-bottom:3px;">{t}</div>'
 
-    # Last 30 days (rebased to 0).
+    # Legend numbers are pinned to the engine's AUTHORITATIVE figures, never
+    # the chart line's own endpoint: the line draws the trajectory, but the %
+    # it is labelled with is the same number the Performance tables show, so a
+    # chart and a table can never tell two stories. (The lines are anchored on
+    # the same canonical window rule, so the endpoint already coincides — the
+    # pin makes that a guarantee, not a coincidence.)
+    perf_full = m.performance_full or {}
+    acwi_1m = _benchmark_period_return(m, ctx.benchmark_geo, "1m")
+
+    # Last 30 days (rebased to 0). Labels pinned to performance_full["1m"] and
+    # the benchmark's authoritative 1m return.
     s30, l30 = [], []
     if win["twror"] is not None:
         s30.append({"values": win["twror"], "color": GREEN})
-        l30.append((f'TWROR {_pct(win["twror"][-1], signed=True)}', GREEN, False))
+        l30.append((f'TWROR {_pct(perf_full.get("1m"), signed=True)}', GREEN, False))
     if win["pnl_pct"] is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL})
         l30.append((f'Total P&L % {_pct(win["pnl_pct"][-1], signed=True)}', PNL, False))
     if win["acwi"] is not None:
         s30.append({"values": win["acwi"], "color": BENCH, "dash": True})
-        l30.append((f'MSCI ACWI {_pct(win["acwi"][-1], signed=True)}', BENCH, True))
+        l30.append((f'MSCI ACWI {_pct(acwi_1m, signed=True)}', BENCH, True))
 
     # Since inception (cumulative), over the WHOLE inception→today range — its
-    # own x-axis, not the last-30-days window. Total P&L % replaces the old
-    # unrealized line.
+    # own x-axis, not the last-30-days window. Labels pinned to the lifetime
+    # authoritative fields (m.twror_pct, m.pnl_pct).
     ssi, lsi = [], []
     full = _perf_full_series(m, ctx.benchmark_geo)
     si_dates = full["dates"] if full else dates
     if full is not None:
         if full["twror"] is not None:
             ssi.append({"values": full["twror"], "color": GREEN})
-            lsi.append((f'TWROR {_pct(full["twror"][-1], signed=True)}', GREEN, False))
+            lsi.append((f'TWROR {_pct(m.twror_pct, signed=True)}', GREEN, False))
         if full["pnl_pct"] is not None:
             ssi.append({"values": full["pnl_pct"], "color": PNL})
-            lsi.append((f'Total P&L % {_pct(full["pnl_pct"][-1], signed=True)}', PNL, False))
+            lsi.append((f'Total P&L % {_pct(m.pnl_pct, signed=True)}', PNL, False))
         if full["acwi"] is not None:
             ssi.append({"values": full["acwi"], "color": BENCH, "dash": True})
             lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, True))

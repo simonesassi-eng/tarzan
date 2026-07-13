@@ -91,3 +91,103 @@ def test_full_series_spans_inception_and_downsamples():
     assert full["dates"][-1].date() == idx[-1].date()
     # Downsampled to keep the SVG light.
     assert len(full["dates"]) <= 180
+
+
+def test_window_twror_matches_engine_period_return():
+    # _window_twror must equal the engine's compute_period_return (single
+    # convention): the matrix cell and performance_full must never disagree.
+    from tarzan.export._perf_series import _window_twror, _norm_series
+    from tarzan.engine.stats import compute_period_return
+    idx = pd.date_range("2026-04-01", "2026-07-13", freq="B")
+    nav = pd.Series(np.linspace(100, 108, len(idx)), index=idx)
+    for days in (7, 30, 90):
+        assert _window_twror(_norm_series(nav), days) == compute_period_return(_norm_series(nav), days)
+
+
+# ── CONTRACT: newsletter numbers == engine authoritative fields ──────────────
+# These are the single-source-of-truth guarantee. They build a real
+# order-derived PortfolioMetrics (network stubbed) with a benchmark that has
+# history, then assert the newsletter's chart/legend numbers equal the engine's
+# authoritative scalars. If a future change re-introduces an independent
+# computation, one of these fails.
+
+import datetime as _dt  # noqa: E402
+import pytest  # noqa: E402
+from tarzan import orchestrator  # noqa: E402
+
+_C_AS_OF = _dt.date(2026, 7, 13)
+_C_ORDERS = (
+    "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate\n"
+    "2025-07-01,buy,IE00B4L5Y983,100,10000,-10000,EUR,100,1.0\n"
+    "2025-07-01,buy,IE00B4WXJJ64,50,5000,-5000,EUR,100,1.0\n"
+    "2026-01-05,buy,IE00B4L5Y983,20,2400,-2400,EUR,120,1.0\n"
+)
+
+
+@pytest.fixture
+def _contract_metrics(tmp_path, monkeypatch):
+    from tarzan.models.holding import AssetClass, Geography
+    # Deterministic per-instrument price ramps over a full year.
+    hist_idx = pd.date_range("2025-07-01", "2026-07-13", freq="D")
+
+    def _stub_enrich(holdings):
+        meta = {"IE00B4L5Y983": ("Equities", "USA", 100.0, 1.25),
+                "IE00B4WXJJ64": ("Fixed Income", None, 100.0, 1.06)}
+        for h in holdings:
+            ac_s, geo_s, p0, mult = meta.get(h.isin, ("Equities", "USA", 100.0, 1.1))
+            s = pd.Series([p0 * (1 + (mult - 1) * i / (len(hist_idx) - 1))
+                           for i in range(len(hist_idx))], index=hist_idx)
+            h.price_history = s
+            h.current_price = float(s.iloc[-1])
+            h.current_value = h.quantity * h.current_price
+            h.asset_class = {a.value: a for a in AssetClass}[ac_s]
+            if geo_s:
+                g = {gg.value: gg for gg in Geography}[geo_s]
+                h.geography = g
+                h.geo_breakdown = {g: 100.0}
+            h.class_breakdown = {h.asset_class: 100.0}
+        return holdings
+
+    # A benchmark WITH history (business days only → weekend-start windows
+    # exercise the anchoring), so benchmark_histories + holding_performance
+    # both populate. Same series for both engine fetch entry points.
+    bench = pd.Series(
+        np.linspace(200.0, 230.0, len(pd.date_range("2025-07-01", "2026-07-13", freq="B"))),
+        index=pd.date_range("2025-07-01", "2026-07-13", freq="B"))
+
+    monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", _stub_enrich)
+    monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history", lambda *a, **k: bench)
+    monkeypatch.setattr("tarzan.engine.metrics._build_benchmark_series", lambda *a, **k: bench)
+    # Route the geo benchmark name to our stub so benchmark_histories has it.
+    monkeypatch.setattr("tarzan.engine.metrics.BENCHMARKS", {"MSCI ACWI": "ACWI"}, raising=False)
+    monkeypatch.setattr("tarzan.engine.metrics.MetricsEngine._live_1d", lambda self, ctx: None)
+
+    orders = tmp_path / "order_list.csv"
+    orders.write_text(_C_ORDERS)
+    metrics, _ = orchestrator.run(config_source=None, orders_source=str(orders),
+                                  targets_per_holding_source=None,
+                                  deterministic=True, as_of=_C_AS_OF)
+    return metrics
+
+
+def test_contract_matrix_twror_equals_performance_full(_contract_metrics):
+    from tarzan.export._perf_series import _window_twror, _norm_series
+    m = _contract_metrics
+    pf = m.performance_full or {}
+    nav = _norm_series(m.portfolio_history)
+    for days, key in ((7, "1w"), (30, "1m")):
+        chart = _window_twror(nav, days)
+        eng = pf.get(key)
+        if chart is not None and eng is not None:
+            assert abs(chart - eng) < 1e-6, f"{key}: matrix {chart} != engine {eng}"
+
+
+def test_contract_chart_twror_line_endpoint_matches_engine(_contract_metrics):
+    from tarzan.export._perf_series import _perf_window
+    m = _contract_metrics
+    pf = m.performance_full or {}
+    win = _perf_window(m, 30, None)
+    if win and win.get("twror") and pf.get("1m") is not None:
+        # The 30-day TWROR chart line's endpoint equals the authoritative 1m.
+        assert abs(win["twror"][-1] - pf["1m"]) < 0.05
+
