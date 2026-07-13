@@ -1,0 +1,388 @@
+"""Inline-SVG chart/spark builders for the newsletter.
+
+Holds the two SVG clipPath id counters (_day_spark_uid, _dual_uid) and the
+reset_spark_uids() the orchestrator calls at the start of each render so ids
+depend only on how many charts a render draws, not process history.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import pandas as pd
+
+from tarzan.export._format import eur_smart as _eur_smart
+from tarzan.export import _charts as _charts
+from tarzan.export.newsletter._constants import PALETTE
+
+_day_spark_uid = 0
+
+_dual_uid = 0
+
+
+
+def reset_spark_uids() -> None:
+    """Reset the per-render SVG clipPath id counters. Called by build_context
+    so a render's element ids depend only on how many charts it draws, not on
+    how many newsletters the process rendered before it (deterministic ids)."""
+    global _day_spark_uid, _dual_uid
+    _day_spark_uid = 0
+    _dual_uid = 0
+
+
+def _spark(vals: list[float], target: Optional[float], color: str,
+           w: int = 250, h: int = 40) -> str:
+    """Tiny area+line sparkline with an optional dashed target line.
+
+    Auto-scaled to the data range around the target so small slices stay
+    legible (a fixed 0–100 axis would flatten a 6% sleeve). Inline SVG with
+    ``preserveAspectRatio="none"`` so it stretches to the table cell width;
+    legacy Outlook (Word engine) ignores SVG and simply shows nothing,
+    which is acceptable — the target/gap numbers carry the same story.
+    Returns an empty string when there are fewer than two points.
+    """
+    n = len(vals)
+    if n < 2:
+        return ""
+    anchor = target if target is not None else vals[-1]
+    lo = min(min(vals), anchor)
+    hi = max(max(vals), anchor)
+    span = (hi - lo) or 1.0
+    lo -= span * 0.18
+    hi += span * 0.18
+    span = hi - lo
+
+    def _x(i: int) -> float:
+        return i / (n - 1) * w
+
+    def _y(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    pts = [(_x(i), _y(v)) for i, v in enumerate(vals)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"0,{h:.1f} " + line + f" {w},{h:.1f}"
+    parts = [
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" '
+        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" '
+        f'style="display:block;">',
+        f'<polygon points="{area}" fill="{color}" fill-opacity="0.12"/>',
+    ]
+    if target is not None:
+        ty = _y(float(target))
+        parts.append(
+            f'<line x1="0" y1="{ty:.1f}" x2="{w}" y2="{ty:.1f}" '
+            f'stroke="{PALETTE["muted"]}" stroke-width="1" stroke-dasharray="3,3"/>'
+        )
+    parts.append(
+        f'<polyline points="{line}" fill="none" stroke="{color}" '
+        f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+    )
+    lx, ly = pts[-1]
+    parts.append(
+        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="{color}" '
+        f'stroke="#fff" stroke-width="1.5"/>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
+               stretch: bool = False) -> str:
+    """Yahoo-style intraday sparkline: green area where the line is above the
+    previous close (``baseline``), red where below, with a dashed baseline.
+
+    Uses two clipped copies of the line-to-baseline area (above/below the
+    baseline) so the fill is two-tone without per-segment crossing math.
+    Email clients that render inline SVG (Gmail, Apple Mail) show it;
+    legacy Outlook simply omits it, which is acceptable."""
+    global _day_spark_uid
+    n = len(vals)
+    if n < 2:
+        return ""
+    lo = min(min(vals), baseline)
+    hi = max(max(vals), baseline)
+    span = (hi - lo) or 1.0
+    pad = span * 0.14
+    lo -= pad
+    hi += pad
+    span = hi - lo
+
+    def _xx(i: int) -> float:
+        return i / (n - 1) * w
+
+    def _yy(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    yb = _yy(baseline)
+    line = " ".join(f"{_xx(i):.1f},{_yy(v):.1f}" for i, v in enumerate(vals))
+    poly = f"{line} {_xx(n - 1):.1f},{yb:.1f} {_xx(0):.1f},{yb:.1f}"
+    _day_spark_uid += 1
+    gid, rid = f"sg{_day_spark_uid}", f"sr{_day_spark_uid}"
+    yb_c = max(0.0, min(yb, h))
+    # Endpoint dot, colored by sign vs the previous-close baseline.
+    _dot_col = PALETTE["green"] if vals[-1] >= baseline else PALETTE["red"]
+    _dot = f'<circle cx="{_xx(n - 1):.1f}" cy="{_yy(vals[-1]):.1f}" r="1.8" fill="{_dot_col}"/>'
+    # ``stretch`` makes the sparkline fill its container width (width:100% +
+    # preserveAspectRatio="none") so a card leaves no unused space on the
+    # right; otherwise it renders at the fixed ``w`` px.
+    _svg_w = "100%" if stretch else str(w)
+    _par = 'preserveAspectRatio="none" ' if stretch else ""
+    _style_w = "width:100%;" if stretch else ""
+    return (
+        f'<svg width="{_svg_w}" height="{h}" viewBox="0 0 {w} {h}" {_par}'
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;{_style_w}">'
+        f'<defs>'
+        f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
+        f'</defs>'
+        # Two-tone fill: green above the previous-close baseline, red below.
+        f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
+        f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        # Dashed baseline = previous close (the 0% reference, Yahoo-style).
+        f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="0.75" stroke-dasharray="2,2"/>'
+        # Two-tone line: same clips, so each segment is green above the
+        # baseline and red below it, switching exactly at the dashed line.
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["green"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
+        f'{_dot}'
+        f'</svg>'
+    )
+
+def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> str:
+    """Dual-axis hero chart: portfolio value (€, left axis) as a two-tone
+    green/red line (green above the window-start baseline, red below) and the
+    Unrealized PnL % (right axis) as a grey dashed line, with cash-flow
+    triangles on the value line (▲ deposit green / ▼ withdrawal grey)."""
+    global _dual_uid
+    _dual_uid += 1
+    u = _dual_uid
+    P = PALETTE
+    n = len(values)
+    if n < 2 or not pct or len(pct) != n:
+        return ""
+    ML, MR, MT, MB = 52, 48, 12, 26
+    PW, PH = w - ML - MR, h - MT - MB
+    base = values[0]
+    from tarzan.export import _charts as _ch
+    vlo, vhi, vticks = _ch.nice_ticks(min(min(values), base), max(max(values), base), 4)
+    plo, phi, pticks = _ch.nice_ticks(min(pct), max(pct), 4)
+
+    def X(i):
+        return ML + (i / (n - 1) * PW if n > 1 else 0)
+
+    def Yv(v):
+        return MT + (1 - (v - vlo) / ((vhi - vlo) or 1)) * PH
+
+    def Yp(p):
+        return MT + (1 - (p - plo) / ((phi - plo) or 1)) * PH
+
+    grid = ""
+    for t in vticks:
+        if t < vlo - 1e-9 or t > vhi + 1e-9:
+            continue
+        y = Yv(t)
+        grid += (f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" stroke="{P["border"]}" stroke-width="1"/>'
+                 f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" font-size="9" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>')
+    for t in pticks:
+        if t < plo - 1e-9 or t > phi + 1e-9:
+            continue
+        grid += f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" text-anchor="start" font-size="9" fill="{P["muted"]}">{_ch.fmt_pct_tick(t)}</text>'
+    xlab = ""
+    for k in sorted({0, n // 3, 2 * n // 3, n - 1}):
+        x = X(k)
+        anc = "start" if k == 0 else "end" if k == n - 1 else "middle"
+        xlab += (f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="9" '
+                 f'fill="{P["subtle"]}">{pd.Timestamp(dates[k]).strftime("%b %d")}</text>')
+
+    vline = " ".join(f"{X(i):.1f},{Yv(v):.1f}" for i, v in enumerate(values))
+    yb = Yv(base)
+    poly = f"{vline} {X(n - 1):.1f},{yb:.1f} {X(0):.1f},{yb:.1f}"
+    pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
+    yb_c = max(MT, min(yb, MT + PH))
+
+    marks = ""
+    if flows:
+        xmap = {pd.Timestamp(d).normalize(): i for i, d in enumerate(dates)}
+        for d, v in flows:
+            i = xmap.get(pd.Timestamp(d).normalize())
+            if i is None:
+                continue
+            x, y = X(i), Yv(values[i])
+            col = P["green"] if v >= 0 else P["muted"]
+            if v >= 0:
+                marks += f'<polygon points="{x:.1f},{y-5:.1f} {x-4:.1f},{y+3:.1f} {x+4:.1f},{y+3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+            else:
+                marks += f'<polygon points="{x:.1f},{y+5:.1f} {x-4:.1f},{y-3:.1f} {x+4:.1f},{y-3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+
+    return (
+        f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;font-family:-apple-system,Helvetica,Arial,sans-serif;">'
+        f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="dr{u}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath></defs>'
+        + grid
+        + f'<polygon points="{poly}" fill="{P["green"]}" fill-opacity="0.16" clip-path="url(#dg{u})"/>'
+        + f'<polygon points="{poly}" fill="{P["red"]}" fill-opacity="0.16" clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["green"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
+        + marks + xlab + "</svg>"
+        + f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
+        f'<span style="margin-right:16px;"><span style="display:inline-block;width:22px;height:5px;border-radius:3px;background:{P["green"]};vertical-align:middle;margin-right:5px;"></span>Value (\u20ac) \u00b7 left</span>'
+        f'<span><span style="display:inline-block;width:22px;height:0;border-top:2px dashed {P["muted"]};vertical-align:middle;margin-right:5px;"></span>Unrealized PnL (%) \u00b7 right</span>'
+        f'</div>'
+    )
+
+def _hero_flow_chips(flows) -> str:
+    """Deposit/withdrawal chips with date + amount (green/grey), for the hero."""
+    if not flows:
+        return ""
+    P = PALETTE
+    items = ""
+    for d, v in sorted(flows, key=lambda t: t[0]):
+        col = P["green"] if v >= 0 else P["muted"]
+        arrow = "\u25b2" if v >= 0 else "\u25bc"
+        items += (f'<span style="display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:999px;'
+                  f'background:#fff;border:1px solid {P["border"]};font-size:11px;white-space:nowrap;">'
+                  f'<span style="color:{col};font-weight:700;">{arrow} {_eur_smart(v, signed=True)}</span>'
+                  f'<span style="color:{P["subtle"]};"> &middot; {pd.Timestamp(d).strftime("%b %d")}</span></span>')
+    return (f'<div style="margin-top:8px;font-size:9px;font-weight:700;letter-spacing:0.04em;'
+            f'color:{P["muted"]};text-transform:uppercase;">Cash flows</div>'
+            f'<div style="margin-top:2px;">{items}</div>')
+
+def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
+    """Extract the per-bucket weights for one category from an allocation
+    timeline series. Returns None when the category never carried weight
+    (so the caller can skip drawing an empty sparkline)."""
+    if not series:
+        return None
+    vals = [float(pt.get(key, 0.0)) for pt in series]
+    return vals if any(v > 0 for v in vals) else None
+
+def _intraday_spark(intra: "pd.Series", baseline: float,
+                    w: int = 84, h: int = 18,
+                    in_progress: Optional[bool] = None) -> str:
+    """Intraday sparkline on a full-session time axis.
+
+    Unlike the stretched ``_day_spark`` (which spreads N points across the
+    whole width regardless of how many there are), each bar is placed at its
+    real position within the trading session [open → open+session_length], so
+    early in the day the line only fills the left portion and grows rightward
+    as the session progresses. A completed session fills the full width. This
+    makes "how far into the day we are" visible and doubles as a live vs
+    closed cue. Two-tone (green above the previous close, red below), with a
+    dashed baseline; stretches to the cell width.
+
+    ``in_progress`` says whether the market is trading *now*: when the caller
+    knows this (from exchange hours) it should pass it explicitly so a closed
+    same-day session renders full width even if its last bar is recent. When
+    None, it is inferred from bar recency (FX/futures fallback)."""
+    global _day_spark_uid
+    ts = list(intra.index)
+    vals = [float(x) for x in intra.values]
+    n = len(vals)
+    if n < 2:
+        return ""
+    t0, t_last = ts[0], ts[-1]
+    # A completed session (e.g. a US index in the European morning, or any
+    # market viewed after its close) fills the full width. Only the session
+    # trading *now* grows from the left, so early in that market's day the
+    # line covers just the elapsed portion. Prefer the caller's exchange-hours
+    # signal; fall back to bar recency when it isn't provided.
+    if in_progress is None:
+        try:
+            _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
+                   else t_last.tz_localize("UTC"))
+            _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
+            in_progress = _age_min <= 60
+        except Exception:  # noqa: BLE001
+            in_progress = False
+    if in_progress:
+        # Session length from the open's UTC hour (yfinance returns intraday
+        # timestamps in UTC): US cash opens ~13:30 UTC, Europe ~07:00 UTC.
+        try:
+            oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
+        except Exception:  # noqa: BLE001
+            oh = 8
+        sess = (6.5 if oh >= 12 else 8.5) * 3600.0
+
+        def _xpos(t) -> float:
+            try:
+                return max(0.0, min(1.0, (t - t0).total_seconds() / sess)) * w
+            except Exception:  # noqa: BLE001
+                return 0.0
+        xs = [_xpos(t) for t in ts]
+    else:
+        xs = [i / (n - 1) * w for i in range(n)]
+
+    lo = min(min(vals), baseline)
+    hi = max(max(vals), baseline)
+    span = (hi - lo) or 1.0
+    pad = span * 0.16
+    lo -= pad
+    hi += pad
+    span = hi - lo
+
+    def _yy(v: float) -> float:
+        return h - (v - lo) / span * h
+
+    yb = _yy(baseline)
+    line = " ".join(f"{x:.1f},{_yy(v):.1f}" for x, v in zip(xs, vals))
+    x_last = xs[-1]
+    y_last = _yy(vals[-1])
+    poly = f"{line} {x_last:.1f},{yb:.1f} {xs[0]:.1f},{yb:.1f}"
+    _day_spark_uid += 1
+    gid, rid = f"pg{_day_spark_uid}", f"pr{_day_spark_uid}"
+    yb_c = max(0.0, min(yb, h))
+    # Endpoint dot, colored by sign vs the previous close (baseline): anchors
+    # the eye to the current level and its up/down direction for the day.
+    dot_col = PALETTE["green"] if vals[-1] >= baseline else PALETTE["red"]
+    dot = (f'<circle cx="{x_last:.1f}" cy="{y_last:.1f}" r="1.8" fill="{dot_col}"/>')
+    return (
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
+        f'<defs>'
+        f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
+        f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
+        f'</defs>'
+        f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
+        f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="0.75" stroke-dasharray="2,2"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["green"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
+        f'{dot}'
+        f'</svg>'
+    )
+
+def _flat_dashed_spark(w: int = 84, h: int = 18) -> str:
+    """Placeholder sparkline for instruments with no intraday trades: a single
+    dashed horizontal line (the previous-close reference). Keeps the 1D cell
+    the same height as the intraday rows so the pill stays aligned, while
+    signalling 'no intraday, this is the previous-day change'."""
+    y = h / 2.0
+    return (
+        f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
+        f'<line x1="0" y1="{y:.1f}" x2="{w}" y2="{y:.1f}" stroke="{PALETTE["subtle"]}" '
+        f'stroke-width="1" stroke-dasharray="3,2"/></svg>'
+    )
+
+def _prev_session_label(m) -> str:
+    """Report-level 'previous session' date as ``dd/mm`` for the PREV. DAY tag
+    — the last completed trading day in the portfolio history (the close the
+    non-live 1D moves are measured against). Empty when unavailable."""
+    ph = getattr(m, "portfolio_history", None)
+    try:
+        if ph is not None and len(ph) >= 1:
+            today = pd.Timestamp.now().normalize()
+            past = [d for d in ph.index if pd.Timestamp(d).normalize() < today]
+            d = pd.Timestamp(past[-1]) if past else pd.Timestamp(ph.index[-1])
+            return d.strftime("%d/%m")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
