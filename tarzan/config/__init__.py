@@ -79,7 +79,7 @@ def _warn_taxonomy(message: str) -> None:
     """Emit a taxonomy-degradation warning to the data-quality report,
     tolerating the (rare) case where the report module is unavailable."""
     try:
-        from tarzan import data_quality as dq
+        from tarzan.runtime import data_quality as dq
         dq.warning("config", message, context="instrument_taxonomy.csv")
     except Exception:  # noqa: BLE001
         pass

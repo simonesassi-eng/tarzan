@@ -74,9 +74,9 @@ Tarzan/
 ├── tarzan/                  # Python package
 │   ├── main.py              # CLI entry point
 │   ├── orchestrator.py      # Pipeline: load → enrich → compute
-│   ├── data_quality.py      # Per-run data-quality report
-│   ├── audit.py             # Per-run rebalancing audit trail
-│   ├── validation.py        # Input-boundary validators
+│   ├── contracts/           # Input/output boundary: schema, validation, exceptions
+│   ├── runtime/             # Per-run state: clock/determinism, data-quality, audit, report.html
+│   ├── delivery/            # Newsletter service + Google Drive input loader
 │   ├── config/              # YAML + taxonomy-CSV configuration
 │   ├── data/                # Loader, enricher, market quotes, price cache, geo
 │   ├── engine/              # stats, metrics, returns, benchmarks, rebalancer, tax

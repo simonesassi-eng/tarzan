@@ -91,7 +91,7 @@ class TestLoaderOrderIds:
 
     def test_duplicate_rows_kept_but_ids_unique_and_flagged(self):
         import datetime as _dt
-        from tarzan import data_quality as dq
+        from tarzan.runtime import data_quality as dq
         from tarzan.data.loader import load_orders
         dq.reset()
         rows = [
@@ -108,7 +108,7 @@ class TestLoaderOrderIds:
         assert dups[0].context == "IE00B4L5Y983"
 
     def test_no_duplicates_no_warning(self):
-        from tarzan import data_quality as dq
+        from tarzan.runtime import data_quality as dq
         from tarzan.data.loader import load_orders
         dq.reset()
         rows = [

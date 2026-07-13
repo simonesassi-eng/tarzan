@@ -54,7 +54,7 @@ logger = logging.getLogger("tarzan.newsletter")
 
 # Repo root (…/tarzan/delivery.py → parents[1]). Used to place local HTML copies
 # under output/<date>/ the same way the CLI does.
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _env(name: str, default: str | None = None, required: bool = False) -> str:
@@ -142,7 +142,7 @@ def resolve_inputs() -> dict[str, str | None]:
     drive_folder = _env("DRIVE_FOLDER_ID")
     drive_creds = _env("GOOGLE_DRIVE_CREDENTIALS_JSON")
     if drive_folder and drive_creds:
-        from tarzan.drive_loader import KNOWN_INPUT_FILES, download_files
+        from tarzan.delivery.drive_loader import KNOWN_INPUT_FILES, download_files
         logger.info("Loading inputs from Google Drive folder %s", drive_folder)
         files = download_files(
             folder_id=drive_folder,

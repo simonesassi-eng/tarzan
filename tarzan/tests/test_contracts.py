@@ -16,15 +16,15 @@ import json
 
 import pytest
 
-from tarzan import schema as sch
+from tarzan.contracts import schema as sch
 from tarzan.data.loader import load_orders, ORDER_REQUIRED_COLUMNS
-from tarzan.exceptions import DataIngestionError
+from tarzan.contracts.exceptions import DataIngestionError
 from tarzan.models.portfolio import (
     PortfolioMetrics,
     SUMMARY_CONTRACT_KEYS,
     SUMMARY_CONTRACT_OPTIONAL_KEYS,
 )
-from tarzan.validation import validate_columns
+from tarzan.contracts.validation import validate_columns
 
 
 # --- Input schema ----------------------------------------------------------

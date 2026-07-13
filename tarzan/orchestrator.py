@@ -16,7 +16,7 @@ from tarzan.data.loader import (
 )
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.engine.metrics import MetricsEngine
-from tarzan.exceptions import DataIngestionError
+from tarzan.contracts.exceptions import DataIngestionError
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,8 @@ def run(
     # process. (Universal market data in price_cache is left cached.)
     from tarzan import config as _cfg
     from tarzan.data import geo_resolver as _geo
-    from tarzan import data_quality as _dq
-    from tarzan import audit as _audit
+    from tarzan.runtime import data_quality as _dq
+    from tarzan.runtime import audit as _audit
     from tarzan import runtime as _runtime
     # Configure the run clock/determinism FIRST so every downstream default
     # ``today`` and the live/AI gates see it. Default (both falsy) restores
@@ -237,7 +237,8 @@ def _check_taxonomy_coverage(holdings) -> None:
     data-quality WARNING (best-effort; never fatal).
     """
     try:
-        from tarzan import config as _cfg, data_quality as _dq
+        from tarzan import config as _cfg
+        from tarzan.runtime import data_quality as _dq
         from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 
         taxonomy = _cfg.instrument_taxonomy()  # keys: uppercased ISIN + bare ticker

@@ -168,7 +168,7 @@ skipped):**
 The boundary half of the data work: with the *structures* sound, the
 *contracts around them* were still shaped for one expert user. Implemented:
 
-- **A′1 — Explicit, versioned input schema** (`tarzan/schema.py`): a
+- **A′1 — Explicit, versioned input schema** (`tarzan/contracts/schema.py`): a
   dependency-free declarative `FileSchema`/`ColumnSpec` for `order_list.csv`
   and `targets_per_holding.csv` — one source of truth for the format, with a
   `SCHEMA_VERSION` and self-documenting `to_markdown()`. The loader's required

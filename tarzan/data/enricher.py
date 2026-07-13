@@ -37,7 +37,7 @@ import yfinance as yf
 from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.data import price_cache
 from tarzan import config as cfg
-from tarzan import data_quality as dq
+from tarzan.runtime import data_quality as dq
 
 logger = logging.getLogger(__name__)
 

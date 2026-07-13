@@ -7,7 +7,7 @@ lean log table (Tarzan records + any warning/error; third-party debug hidden).
 
 from __future__ import annotations
 
-from tarzan import data_quality, report_html
+from tarzan.runtime import data_quality, report_html
 
 
 def _rec(level, msg, time="10:00:00", origin="tarzan"):
