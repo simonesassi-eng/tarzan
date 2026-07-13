@@ -205,14 +205,16 @@ def _divergence_metrics() -> PortfolioMetrics:
     m.xirr_pct = 16.0
     m.benchmark_histories = {"iShares MSCI ACWI": acwi}
     m.goal_deltas = gd
-    # m.risk carries a DIFFERENT beta than the Risk-profile table on purpose:
-    # the note must use the table's beta (historical_risk) so the reader sees
-    # one beta everywhere.
-    m.risk = {"beta": 1.40, "alpha": -2.1, "volatility": 16.0}
+    # Two distinct betas on purpose:
+    #   realized (m.risk) = 1.20  → beta of the ACTUAL NAV over the period;
+    #                               this is what the gap attribution must use.
+    #   current (historical_risk) = 1.40 → today's-weights beta (Risk table);
+    #                               |1.40-1| > |1.20-1| ⇒ DIVERGING.
+    m.risk = {"beta": 1.20, "alpha": -2.1, "volatility": 16.0}
     m.historical_risk = {
         "available": True,
         "portfolio": {"is_portfolio": True, "label": "Your portfolio",
-                      "metrics": {"beta": 1.15, "alpha": -2.1}},
+                      "metrics": {"beta": 1.40, "alpha": -2.1}},
     }
     return m
 
@@ -223,21 +225,30 @@ def test_divergence_digest_has_both_windows_and_capm_split():
     # Both chart windows carry a portfolio/benchmark/gap.
     assert d["since_inception"]["gap_pp"] == -6.0          # 38 − 44
     assert "gap_pp" in d["window_30d"]
-    # CAPM split uses the RISK-TABLE beta (1.15 from historical_risk), NOT
-    # m.risk's 1.40 — so the note and the table show one beta.
+    # CAPM split uses the REALIZED beta (1.20 from m.risk — the actual NAV),
+    # NOT the current-weights 1.40, since the gap is a since-inception fact.
     rvs = d["risk_vs_selection"]
-    assert rvs["beta"] == 1.15
-    assert round(rvs["market_risk_contribution_pp"], 1) == round((1.15 - 1) * 44.0, 1)
+    assert rvs["beta"] == 1.20
+    assert round(rvs["market_risk_contribution_pp"], 1) == round((1.20 - 1) * 44.0, 1)
     assert round(rvs["market_risk_contribution_pp"] + rvs["selection_contribution_pp"], 1) == -6.0
 
 
-def test_divergence_note_uses_risk_table_beta():
-    # The beta quoted in the note must equal historical_risk's portfolio beta
-    # (what the Risk table shows), never m.risk's separate value.
+def test_divergence_digest_carries_beta_trend():
+    d = ai_summary.build_divergence_digest(_divergence_metrics(), _config())
+    trend = d["beta_trend"]
+    assert trend["realized_beta"] == 1.20      # actual NAV
+    assert trend["current_beta"] == 1.40       # today's weights (Risk table)
+    assert trend["direction"] == "diverging"   # 1.40 is further from 1 than 1.20
+
+
+def test_divergence_note_states_both_betas_and_trend():
+    # The note must quote the realized beta explicitly and both betas for the
+    # trend — and must NOT confuse the two (attribution uses realized).
     m = _divergence_metrics()
-    assert ai_summary._portfolio_beta(m) == 1.15
     note = ai_summary.divergence_note(m, _config())
-    assert "1.15" in note and "1.40" not in note
+    assert "1.20" in note                      # realized beta, stated
+    assert "1.40" in note                      # current beta, in the trend line
+    assert "realized" in note.lower() and "current" in note.lower()
 
 
 def test_divergence_digest_none_without_benchmark():
