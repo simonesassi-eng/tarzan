@@ -141,14 +141,27 @@ skipped):**
 - Add `schema_version: int`; make it `frozen`. Consumers assert the version.
   Cheap insurance against a silent field-rename breaking the newsletter/Excel.
 
-**A6. Money domain (F4).**
-- Introduce a `Money` type (integer minor-units or `Decimal`) at the ledger
-  boundary; keep `float` only inside vectorized numpy risk math (where Decimal
-  is impractical), converting explicitly at the seam.
-- **This is L effort and touches everything.** Recommendation: **stage behind
-  launch** unless a Principal insists — the Phase-1 NaN/round guards already
-  prevent the acute failure; sub-cent drift is a correctness-polish, not a
-  launch blocker. Flag it as a fast-follow.
+**A6. Money domain (F4). — DEFERRED (evidence-based, 2026-07-13).**
+- Would introduce a `Money` type (integer minor-units or `Decimal`) at the
+  ledger boundary; keep `float` only inside vectorized numpy risk math (where
+  Decimal is impractical), converting explicitly at the seam.
+- **Measured before deciding** (real 144-order portfolio, on `main`):
+  - `sum(net_eur)`: float vs exact-Decimal drift ≈ **4.4e-11 EUR** (~0.00000000004 ¢)
+  - `sum(cost_basis)`: drift **0.0**
+  So the reported `total_value` (€233,049.18) is already correct to the cent;
+  the float error is ~11 decimal places down and rounds away at every display
+  precision. Reason it's so small: Tarzan reads pre-computed EUR values from
+  the CSV and mostly *adds* a few hundred numbers — float drift only reaches
+  cent scale with millions of ops or long multiply/divide chains, not this
+  workload.
+- **Decision:** DEFER. This is L effort touching ~8 modules (loader, order,
+  holding, returns, tax, rebalancer, export) with real regression risk, for a
+  benefit that is currently unobservable. The Phase-1 NaN/Inf guards + output
+  sanitization already eliminated the *acute* float dangers. Rewriting a
+  money-critical hot path for a 1e-11 EUR gain would more likely introduce
+  bugs than fix them. Revisit only if the workload changes materially
+  (tick-level data, per-tenant aggregation over thousands of accounts). The
+  golden-master test is the safety net for doing it later.
 
 ### Track A′ — Contracts (input schema / validation / output DTO) — DONE
 
