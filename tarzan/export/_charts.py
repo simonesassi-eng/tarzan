@@ -76,7 +76,13 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
       * neither — just first/last labels (legacy).
     Vertical gridlines are drawn light (BORDER) so they read as a grid without
     competing with the data lines."""
-    ml, mr, mt, mb = 30, 8, 10, 20
+    # Dense-label modes tilt the x-axis labels so many of them don't collide;
+    # that needs more room below the plot, so grow the canvas + bottom margin
+    # (keeps the plot area itself the same height as the non-rotated charts).
+    _rotate = bool(month_ticks or min_day_ticks)
+    if _rotate:
+        h = h + 12
+    ml, mr, mt, mb = 30, 8, 10, (32 if _rotate else 20)
     pw, ph = w - ml - mr, h - mt - mb
     allv = [v for s in series for v in s["values"]]
     dlo, dhi = min(allv), max(allv)
@@ -112,15 +118,30 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
 
     def _xlabel(k: int, text: str) -> None:
         x = X(k)
-        anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
-        out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" '
-                   f'fill="{SUBTLE}">{text}</text>')
+        if _rotate:
+            # Tilt ~35° and right-anchor at the tick so dense labels never
+            # overlap. Anchor the text end at (x, baseline) and rotate about it.
+            # A slightly smaller font buys horizontal room at ~12 ticks.
+            y = mt + ph + 10
+            rfs = max(7, fs - 1)
+            out.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="end" '
+                       f'font-size="{rfs}" fill="{SUBTLE}" '
+                       f'transform="rotate(-35 {x:.1f} {y:.1f})">{text}</text>')
+        else:
+            anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
+            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" '
+                       f'fill="{SUBTLE}">{text}</text>')
 
     if month_ticks and n > 1:
         ts = [pd.Timestamp(d) for d in dates]
         # One tick at each month boundary — ALL of them (labelled + gridline).
         month_idx = [0] + [i for i in range(1, n)
                            if (ts[i].year, ts[i].month) != (ts[i - 1].year, ts[i - 1].month)]
+        # Drop the leading start-of-history tick when it sits right on top of
+        # the first month boundary (e.g. history starts Dec 23 → "Dec 25" and
+        # "Jan 26" would overlap). Keep the boundary; it carries the year.
+        if len(month_idx) > 1 and (month_idx[1] - month_idx[0]) < max(6, n // 20):
+            month_idx = month_idx[1:]
         # Do NOT append a separate end anchor: the last month boundary already
         # labels the current month, and adding n-1 would repeat it ("Jul Jul").
         # Every month gets exactly one tick at its first in-window day.
