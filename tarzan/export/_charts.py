@@ -62,11 +62,14 @@ def fmt_pct_tick(v: float) -> str:
 
 
 def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
-                      date_fmt="%b %d") -> str:
+                      date_fmt="%b %d", month_ticks=False) -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
     labels stay legible at ~half width. ``series``: list of
     ``{values, color, dash?}``. ``date_fmt`` sets the first/last x-axis tick
-    format (``%b %d`` for a short window, ``%b %Y`` for a multi-year span)."""
+    format (``%b %d`` for a short window). ``month_ticks=True`` instead labels
+    the axis at each month boundary (thinned to stay legible), so a
+    multi-month/since-inception span is granular — the year is shown when it
+    changes and on the first tick."""
     ml, mr, mt, mb = 30, 8, 10, 20
     pw, ph = w - ml - mr, h - mt - mb
     allv = [v for s in series for v in s["values"]]
@@ -94,11 +97,34 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     if include_zero and vmin < 0 < vmax:
         y0 = Y(0.0)
         out.append(f'<line x1="{ml}" y1="{y0:.1f}" x2="{ml + pw}" y2="{y0:.1f}" stroke="{MUTED}" stroke-width="1" stroke-dasharray="2,3"/>')
-    for k in sorted({0, n - 1}):
-        x = X(k)
-        anc = "start" if k == 0 else "end"
-        out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
-                   f'{pd.Timestamp(dates[k]).strftime(date_fmt)}</text>')
+    if month_ticks and n > 1:
+        # One tick per month boundary (first sample whose month differs from
+        # the previous). Thin to a max count so half-width panels don't crowd;
+        # show the year on the first tick and whenever it changes.
+        ts = [pd.Timestamp(d) for d in dates]
+        month_idx = [0] + [i for i in range(1, n)
+                           if (ts[i].year, ts[i].month) != (ts[i - 1].year, ts[i - 1].month)]
+        max_ticks = 6
+        if len(month_idx) > max_ticks:
+            step = -(-len(month_idx) // max_ticks)  # ceil
+            month_idx = month_idx[::step]
+        if month_idx[-1] != n - 1 and (n - 1 - month_idx[-1]) > max(1, n // (max_ticks * 3)):
+            month_idx.append(n - 1)  # anchor the end so "today" is labeled
+        prev_year = None
+        for j, k in enumerate(month_idx):
+            x = X(k)
+            anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
+            t = ts[k]
+            label = t.strftime("%b %y") if (prev_year != t.year or j == 0) else t.strftime("%b")
+            prev_year = t.year
+            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
+                       f'{label}</text>')
+    else:
+        for k in sorted({0, n - 1}):
+            x = X(k)
+            anc = "start" if k == 0 else "end"
+            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" fill="{SUBTLE}">'
+                       f'{pd.Timestamp(dates[k]).strftime(date_fmt)}</text>')
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)

@@ -240,12 +240,16 @@ def test_divergence_fallback_is_quantitative_when_ai_off():
 
 
 def test_divergence_note_embedded_in_charts_section():
+    import re
     from tarzan.export.newsletter import render_newsletter
     html = render_newsletter(_divergence_metrics(), _config(),
                              benchmark_geo="iShares MSCI ACWI")
     assert "Why you" in html and "diverging" in html
-    # The since-inception chart spans the full range → year labels present.
-    assert "2024" in html and "2026" in html
+    # The since-inception chart (LEFT) uses month ticks across the 2-year span,
+    # so several "<Mon> <yy>" / "<Mon>" axis labels appear — proving it is the
+    # full-range chart, not a 30-day one. (Format is %b %y, e.g. "Jul 24".)
+    month_labels = re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', html)
+    assert len([m for m in month_labels if re.fullmatch(r"[A-Z][a-z]{2} \d{2}", m)]) >= 2
 
 
 def test_divergence_note_uses_ai_prose_when_available(monkeypatch):
