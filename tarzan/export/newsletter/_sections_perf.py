@@ -308,8 +308,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         s30.append({"values": win["pnl_pct"], "color": PNL})
         l30.append((f'Total P&L % {_pct(win["pnl_pct"][-1], signed=True)}', PNL, False))
     if win["acwi"] is not None:
-        s30.append({"values": win["acwi"], "color": BENCH, "dash": True})
-        l30.append((f'MSCI ACWI {_pct(acwi_1m, signed=True)}', BENCH, True))
+        s30.append({"values": win["acwi"], "color": BENCH})
+        l30.append((f'MSCI ACWI {_pct(acwi_1m, signed=True)}', BENCH, False))
 
     # Since inception (cumulative), over the WHOLE inception→today range — its
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
@@ -325,12 +325,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi.append({"values": full["pnl_pct"], "color": PNL})
             lsi.append((f'Total P&L % {_pct(m.pnl_pct, signed=True)}', PNL, False))
         if full["acwi"] is not None:
-            ssi.append({"values": full["acwi"], "color": BENCH, "dash": True})
-            lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, True))
+            ssi.append({"values": full["acwi"], "color": BENCH})
+            lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, False))
 
-    # ── Volatility row (You vs the market, second row): rolling 21-day
-    #    annualized volatility over the same two windows. Grey dashed = the
-    #    benchmark, so the reader sees whether they run calmer or bumpier.
+    # ── Volatility row (You vs the market, second row): rolling annualized
+    #    volatility over the same two windows. Grey line = the benchmark, so the
+    #    reader sees whether they run calmer or bumpier.
     VOL = "#B45309"  # amber-brown, distinct from the return lines
     vol_full = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
     vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
@@ -341,8 +341,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             series.append({"values": vs["port"], "color": VOL})
             leg.append((f'You {_pct(vs["port"][-1], signed=False)}', VOL, False))
         if vs and vs.get("acwi"):
-            series.append({"values": vs["acwi"], "color": BENCH, "dash": True})
-            leg.append((f'MSCI ACWI {_pct(vs["acwi"][-1], signed=False)}', BENCH, True))
+            series.append({"values": vs["acwi"], "color": BENCH})
+            leg.append((f'MSCI ACWI {_pct(vs["acwi"][-1], signed=False)}', BENCH, False))
         if not series:
             return ""
         return (_charts.chart_pct_compact(series, dates_, include_zero=False,
@@ -365,9 +365,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         right_vol = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
                                month_ticks=False, min_day_ticks=12)
         if left_vol:
-            left_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· ann., rolling 21d</span>") + left_vol
+            left_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· annualized, rolling 1-month</span>") + left_vol
         if right_vol:
-            right_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· ann., rolling 21d</span>") + right_vol
+            right_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· annualized, rolling 1-month</span>") + right_vol
 
         def _row(l, r):
             return (f'<tr>'

@@ -165,10 +165,14 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        # Thin solid lines so small variations read clearly. The benchmark is
+        # distinguished by its grey colour, not a dash (dashes hide the very
+        # wobble the reader is trying to compare); ``dash`` is still honoured if
+        # a caller explicitly asks for it.
         dash = ' stroke-dasharray="5,4"' if s.get("dash") else ""
-        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="2.2"{dash} stroke-linejoin="round"/>')
+        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="1.5"{dash} stroke-linejoin="round"/>')
         lx, ly = pts[-1]
-        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="{s["color"]}" stroke="#fff" stroke-width="1.3"/>')
+        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" fill="{s["color"]}" stroke="#fff" stroke-width="1"/>')
     out.append("</svg>")
     return "".join(out)
 
