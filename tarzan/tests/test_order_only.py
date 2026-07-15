@@ -278,3 +278,38 @@ def test_zero_target_pins_full_sell_when_selling_allowed():
     # Classic mode (flag off): no pinning even with selling allowed.
     lo3, hi3, tr3 = _bounds(holdings, values, no_sell=False, per_holding_only=False)
     assert tr3[0] and hi3[0] == np.inf
+
+
+def test_extract_actions_carries_current_target_after():
+    # The optimizer newsletter table needs structured Now → Target → After per
+    # trade (not just an amount). Verify _extract_actions emits them, and that
+    # After = current + trade (in EUR), with % computed off the invested base.
+    import numpy as np
+    from tarzan.engine.rebalancer import _extract_actions, _ObjectiveModel
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.holding import AssetClass
+
+    cfg = InvestorConfig()
+    cfg.target_use_per_holding_only = True
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0),
+        _o(OrderType.BUY, "IE00BK5BQT80", qty=10.0, net=-3000.0),
+    ])
+    holdings[0].asset_class = AssetClass.EQUITIES
+    holdings[1].asset_class = AssetClass.EQUITIES
+    holdings[0].target_portfolio = 60.0
+    holdings[1].target_portfolio = 40.0
+    values = np.array([1000.0, 3000.0])
+    model = _ObjectiveModel(holdings, cfg, values)
+    trade = np.array([+1400.0, -1400.0])  # move toward 60/40 of 4000
+    actions = {a["ticker"]: a for a in _extract_actions(trade, holdings, model, values)}
+
+    a0 = actions[holdings[0].ticker]
+    assert a0["direction"] == "buy"
+    assert a0["current_eur"] == 1000.0
+    assert a0["target_pct"] == 60.0
+    # After EUR = current + trade; % on the post-trade invested base (4000).
+    assert a0["after_eur"] == pytest.approx(2400.0)
+    assert a0["after_pct"] == pytest.approx(60.0, abs=0.5)
+    # target_eur is target_pct × invested base.
+    assert a0["target_eur"] == pytest.approx(0.60 * 4000.0, abs=1.0)

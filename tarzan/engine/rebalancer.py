@@ -727,18 +727,41 @@ def optimize_local_search(
 
 def _extract_actions(t: np.ndarray, holdings: list[Holding], model: _ObjectiveModel,
                      values: np.ndarray) -> list[dict]:
+    new_values = values + t
+    # Invested (non-cash) base BEFORE and AFTER the plan, so current/target and
+    # post-trade weights each use the base they belong to (both are ~equal since
+    # trades net-fund from cash, but computing each honestly avoids rounding
+    # surprises). Guard against a zero base.
+    inv_now = max(float(model.noncash_mask @ values), 1e-9)
+    inv_after = max(float(model.noncash_mask @ new_values), 1e-9)
     actions = []
     for i, h in enumerate(holdings):
         amt = float(t[i])
         if abs(amt) < 1.0:
             continue
+        cur_eur = float(values[i])
+        post_eur = float(new_values[i])
+        # Per-instrument target only exists in per-holding mode; in asset-class
+        # mode a holding has no individual target (only its class does), so we
+        # leave it None and the newsletter shows "—".
+        tgt_pct = (float(h.target_portfolio or 0.0)
+                   if getattr(model, "per_holding_only", False) else None)
+        tgt_eur = (tgt_pct / 100.0 * inv_after) if tgt_pct is not None else None
         actions.append({
             "idx": i,
             "name": h.name or h.ticker,
             "ticker": h.ticker,
             "direction": "buy" if amt > 0 else "sell",
             "amount_eur": round(abs(amt), 2),
-            "reason": _reason(i, h, model, values + t),
+            # Structured current → target → after, so the newsletter can render a
+            # Diversification-style table (not just a bare amount + reason line).
+            "current_eur": round(cur_eur, 2),
+            "current_pct": round(cur_eur / inv_now * 100.0, 2),
+            "target_eur": (round(tgt_eur, 2) if tgt_eur is not None else None),
+            "target_pct": (round(tgt_pct, 2) if tgt_pct is not None else None),
+            "after_eur": round(post_eur, 2),
+            "after_pct": round(post_eur / inv_after * 100.0, 2),
+            "reason": _reason(i, h, model, new_values),
         })
     # Largest trades first (matches the display ordering).
     actions.sort(key=lambda a: -a["amount_eur"])
