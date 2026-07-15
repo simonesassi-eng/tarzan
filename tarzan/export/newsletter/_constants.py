@@ -82,6 +82,64 @@ _PERF_ROLE_ORDER = {
 _PF_INTRA_KEY = "__PORTFOLIO_INTRADAY__"
 
 
+# ── Shared instrument-categorization engine ─────────────────────────────────
+# One place that decides an instrument's (asset class, role) and how the
+# class→role groups are ordered, so EVERY table (Holdings, Optimizer, Returns
+# snapshot, Performance) splits and colours instruments identically. Before,
+# each table re-derived this inline and drifted.
+
+def role_for(isin, ticker, taxonomy) -> str:
+    """The curated role (e.g. 'Equity Factor', 'Long Duration') for an
+    instrument, from ``instrument_taxonomy.csv`` (ISIN first, then bare
+    ticker). ``taxonomy`` is ``config.instrument_taxonomy()`` — passed in so
+    this stays a pure function. Returns '—' when the role is unset."""
+    for k in (str(isin or "").strip().upper(),
+              str(ticker or "").split(".")[0].upper()):
+        if k and k in taxonomy and taxonomy[k][1]:
+            return taxonomy[k][1]
+    return "—"
+
+
+def _ordered(keys, preferred):
+    """``preferred`` order first (those present), then any extras in their
+    given order — so a new class/role is appended, never dropped."""
+    return ([k for k in preferred if k in keys]
+            + [k for k in keys if k not in preferred])
+
+
+def group_by_class_role(items, *, asset_class, taxonomy=None,
+                        isin=None, ticker=None, role=None):
+    """Group an iterable of items into the canonical
+    ``[(class, class_color, [(role, [item, ...]), ...]), ...]`` structure,
+    ordered by _PERF_CLASS_ORDER then _PERF_ROLE_ORDER. The accessors are
+    callables mapping an item to a field, so the SAME engine works for
+    holdings-df rows, optimizer actions, and performance rows alike.
+
+    Role is resolved one of two ways: pass ``role`` (a callable) when the item
+    already carries its role, else pass ``isin``+``ticker``+``taxonomy`` to
+    look it up via :func:`role_for`.
+
+    Returns the ordered groups; the class colour is ASSET_COLORS[class] so the
+    4px left bar / marker is consistent everywhere.
+    """
+    grouped: dict = {}
+    for it in items:
+        ac = str(asset_class(it) or "") or "Other"
+        if role is not None:
+            r = str(role(it) or "") or "—"
+        else:
+            r = role_for(isin(it), ticker(it), taxonomy)
+        grouped.setdefault(ac, {}).setdefault(r, []).append(it)
+    groups = []
+    for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
+        col = ASSET_COLORS.get(ac, PALETTE["accent"])
+        role_list = [(role, grouped[ac][role])
+                     for role in _ordered(list(grouped[ac].keys()),
+                                          _PERF_ROLE_ORDER.get(ac, []))]
+        groups.append((ac, col, role_list))
+    return groups
+
+
 @dataclass
 class _NewsletterContext:
     """Strongly-typed wrapper around the template context dict."""

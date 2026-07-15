@@ -33,6 +33,8 @@ from tarzan.export.newsletter._constants import (
     _PERF_CLASS_ORDER,
     _PERF_ROLE_ORDER,
     _PF_INTRA_KEY,
+    group_by_class_role,
+    role_for,
 )
 from tarzan.export.newsletter._format import (
     _clean_ticker,
@@ -794,17 +796,10 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         for _, pr in holdings_perf.iterrows():
             perf_by_ticker[str(pr.get("ticker", ""))] = {k: pr.get(k) for k in period_keys}
 
-    # Role per holding from the curated taxonomy (asset_class already on df),
-    # so the snapshot groups exactly like the Performance table.
+    # Curated taxonomy (asset_class already on df) for the shared grouping
+    # engine, so the snapshot groups exactly like every other instrument table.
     from tarzan import config as cfg
     _tax = cfg.instrument_taxonomy()
-
-    def _role_for(isin: str, ticker: str) -> str:
-        for k in (str(isin or "").strip().upper(),
-                  str(ticker or "").split(".")[0].upper()):
-            if k and k in _tax and _tax[k][1]:
-                return _tax[k][1]
-        return "\u2014"
 
     # Portfolio (highlighted) row. The portfolio has no single ticker, but its
     # holdings trade intraday, so build a value-weighted synthetic intraday
@@ -824,37 +819,30 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     portfolio = {"name": "Total Portfolio", "spark_inner": port_inner,
                  "returns": _returns_dict(port_full, is_portfolio=True)}
 
-    # Group holdings by asset class → role.
-    grouped: dict = {}
+    # Build one row per holding, then group via the SHARED engine (class → role,
+    # ordered) so this table splits/colours instruments identically to Holdings
+    # and the Optimizer.
+    row_items = []
     for _, h in df.iterrows():
         ticker = str(h.get("ticker", "") or "")
         isin = str(h.get("isin", "") or "")
-        ac = str(h.get("asset_class", "") or "") or "Other"
-        role = _role_for(isin, ticker)
         raw_name = str(h.get("name", "") or ticker)
         display_tk = _clean_ticker(isin) or _display_ticker(ticker) or ""
         sym = _resolve.get(ticker, ticker)
         _, inner = _perf_spark_cell(
             _raw1d.get(ticker), sym, _snap_intraday,
             live=bool(_live1d.get(ticker, False)), prev_label=_prev_lbl)
-        grouped.setdefault(ac, {}).setdefault(role, []).append({
+        row_items.append({
+            "_ac": str(h.get("asset_class", "") or "") or "Other",
+            "_isin": isin, "_ticker": ticker,
             "name_html": _perf_name_html(short_instrument_name(raw_name),
                                          display_tk, []),
             "spark_inner": inner,
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
         })
-
-    def _ordered(keys, preferred):
-        return ([k for k in preferred if k in keys]
-                + [k for k in keys if k not in preferred])
-
-    groups = []
-    for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
-        col = ASSET_COLORS.get(ac, PALETTE["accent"])
-        role_list = [(role, grouped[ac][role])
-                     for role in _ordered(list(grouped[ac].keys()),
-                                          _PERF_ROLE_ORDER.get(ac, []))]
-        groups.append((ac, col, role_list))
+    groups = group_by_class_role(
+        row_items, asset_class=lambda r: r["_ac"],
+        isin=lambda r: r["_isin"], ticker=lambda r: r["_ticker"], taxonomy=_tax)
 
     return {
         "available": True,
@@ -1082,11 +1070,6 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
     intraday_map = _perf_intraday_map([r.get("raw_ticker") for r in benchmark_rows])
 
-    def _ordered(keys, preferred):
-        seen = [k for k in preferred if k in keys]
-        extra = [k for k in keys if k not in preferred]
-        return seen + extra
-
     # Portfolio row (highlighted): a real 1D sparkline from a value-weighted
     # synthetic intraday path over the holdings (the portfolio has no single
     # ticker, but its holdings trade intraday); dashed placeholder when the
@@ -1105,17 +1088,15 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
     # Group benchmark rows by asset class → role, in the configured order,
     # then hand off to the shared table renderer.
-    grouped: dict = {}
-    for r in benchmark_rows:
-        grouped.setdefault(r.get("asset_class") or "Other", {}) \
-               .setdefault(r.get("role") or "\u2014", []).append(r)
+    raw_groups = group_by_class_role(
+        benchmark_rows, asset_class=lambda r: r.get("asset_class") or "Other",
+        role=lambda r: r.get("role"))
     groups = []
-    for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
-        col = ASSET_COLORS.get(ac, P["accent"])
-        role_list = []
-        for role in _ordered(list(grouped[ac].keys()), _PERF_ROLE_ORDER.get(ac, [])):
+    for ac, col, role_list in raw_groups:
+        rendered_roles = []
+        for role, rows in role_list:
             insts = []
-            for r in grouped[ac][role]:
+            for r in rows:
                 _, inner = _perf_spark_cell(
                     r.get("d1"), r.get("raw_ticker"), intraday_map,
                     live=bool(r.get("live")), prev_label=_prev_lbl)
@@ -1125,8 +1106,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                     "spark_inner": inner,
                     "returns": r["returns"],
                 })
-            role_list.append((role, insts))
-        groups.append((ac, col, role_list))
+            rendered_roles.append((role, insts))
+        groups.append((ac, col, rendered_roles))
 
     table_html = _returns_table_html(period_cols, portfolio, groups)
 

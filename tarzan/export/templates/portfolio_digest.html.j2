@@ -331,22 +331,36 @@
                   <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:64px;">Trade</td>
                   <td align="right" style="padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">After</td>
                 </tr>
-                {% for a in plan.actions %}
+                {# Grouped by asset class → role (shared engine), with the 4px
+                   class-colour bar running down each block, like Holdings. #}
+                {% for grp in plan.action_groups %}
                 <tr>
-                  <td style="padding:6px 8px;border-top:1px solid {{ palette.border }};vertical-align:top;color:{{ palette.ink }};">
+                  <td colspan="5" style="padding:7px 8px 4px;border-top:2px solid {{ palette.border }};border-left:4px solid {{ grp.color }};font-size:10px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:{{ grp.color }};">{{ grp.name }}</td>
+                </tr>
+                {% for rb in grp.role_blocks %}
+                {% if rb.role and rb.role != '—' %}
+                <tr>
+                  <td colspan="5" style="padding:3px 8px 3px;border-left:4px solid {{ grp.color }};font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">{{ rb.role }}</td>
+                </tr>
+                {% endif %}
+                {% for a in rb.actions %}
+                <tr>
+                  <td style="padding:6px 8px;border-top:1px solid #F1F2F8;border-left:4px solid {{ grp.color }};vertical-align:top;color:{{ palette.ink }};">
                     <span style="display:inline-block;padding:1px 6px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:9px;letter-spacing:0.04em;vertical-align:middle;margin-right:5px;">{{ a.direction }}</span>{% if a.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ a.ticker }}</span>{% endif %}<span style="font-size:11px;color:{{ palette.ink }};">{{ a.name }}</span>
                   </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
                     <div style="font-weight:700;color:{{ palette.ink }};">{{ a.now.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.now.eur }}</div>
                   </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
                     <div style="font-weight:700;color:{{ palette.muted }};">{{ a.target.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.target.eur }}</div>
                   </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
-                  <td align="right" style="padding:6px 8px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
+                  <td align="right" style="padding:6px 8px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
                     <div style="font-weight:700;color:{{ palette.ink }};">{{ a.after.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.after.eur }}</div>
                   </td>
                 </tr>
+                {% endfor %}
+                {% endfor %}
                 {% endfor %}
               </table>
               {% else %}
