@@ -24,6 +24,9 @@ from tarzan.export.newsletter._constants import (
     GEO_COLORS,
     PALETTE,
     _NewsletterContext,
+    _PERF_ROLE_ORDER,
+    group_by_class_role,
+    role_for,
 )
 from tarzan.export.newsletter._format import (
     _clean_ticker,
@@ -1098,6 +1101,10 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
     if df.empty:
         return {"groups": [], "summary": []}
 
+    # Curated taxonomy for the shared role categorizer (role sub-grouping).
+    from tarzan import config as _cfg
+    _tax = _cfg.instrument_taxonomy()
+
     # Class totals for header summary
     class_totals = df.groupby("asset_class")["current_value"].sum().to_dict()
     class_counts = df.groupby("asset_class").size().to_dict()
@@ -1141,6 +1148,7 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                 weight_str = "—"
             has_gain = gain_pct is not None and not pd.isna(gain_pct)
             rows.append({
+                "role": role_for(h.get("isin", ""), h.get("ticker", ""), _tax),
                 "name": short_instrument_name(h.get("name", ""), 34),
                 "ticker": _clean_ticker(h.get("isin", "")),
                 "isin": h.get("isin", ""),
@@ -1153,8 +1161,24 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                              if gain_eur is not None and not pd.isna(gain_eur) else "—"),
                 "gain_color": (PALETTE["green"] if (gain_pct or 0) >= 0 else PALETTE["red"]) if has_gain else PALETTE["muted"],
                 "pct_class": _pct(pct_class, decimals=1),
-                "alt_bg": i % 2 == 1,
             })
+        # Sub-group this class's rows by role (ordered), so Holdings splits by
+        # role like every other instrument table. Alternating-row bg is applied
+        # ACROSS the whole class block (continuous stripe under one colour bar).
+        _pref = _PERF_ROLE_ORDER.get(klass, [])
+        _by_role: dict = {}
+        for r in rows:
+            _by_role.setdefault(r["role"], []).append(r)
+        _role_order = ([x for x in _pref if x in _by_role]
+                       + [x for x in _by_role if x not in _pref])
+        role_blocks, _ri = [], 0
+        for role in _role_order:
+            rblock = []
+            for r in _by_role[role]:
+                r["alt_bg"] = (_ri % 2 == 1)
+                _ri += 1
+                rblock.append(r)
+            role_blocks.append({"role": role, "rows": rblock})
         # Cash is reported as a separate entity, not part of the
         # "invested" portfolio. Skip the share stat for the cash group
         # so it does not appear to compete with invested classes; for
@@ -1179,14 +1203,17 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "total_pct": total_pct_str,
             "is_cash": is_cash,
             "rows": rows,
+            "role_blocks": role_blocks,
         })
 
     return {"groups": groups, "summary": summary, "total_count": int(len(df))}
 
-def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
+def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -> dict:
     """Build one optimizer plan's render context (actions + totals) from a
-    list of rebalancing suggestions."""
+    list of rebalancing suggestions, grouped by asset class → role like the
+    other instrument tables."""
     df = m.holdings_df
+    taxonomy = taxonomy or {}
     total_buy = sum(float(s["amount_eur"]) for s in suggestions
                     if s["direction"].lower() == "buy")
     total_sell = sum(float(s["amount_eur"]) for s in suggestions
@@ -1205,6 +1232,7 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
         direction = s["direction"].upper()
         amount = float(s["amount_eur"])
         ticker = s.get("ticker", "")
+        isin = s.get("isin", "")
         klass = "Equities"
         if not df.empty:
             match = df[df["ticker"] == ticker]
@@ -1222,12 +1250,13 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
             # Clean pin ticker (no exchange suffix), same as Holdings/By holding:
             # resolve ISIN→symbol via price cache, else strip the suffix off
             # the raw ticker. Falls back to empty (no pin) for unresolved.
-            "ticker": (_clean_ticker(s.get("isin", ""))
+            "ticker": (_clean_ticker(isin)
                        or _clean_ticker(ticker)
                        or _display_ticker(ticker)
                        or ""),
-            "isin": s.get("isin", ""),
+            "isin": isin,
             "asset_class": klass,
+            "role": role_for(isin, ticker, taxonomy),
             "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
             # Now → Target → Trade → After, each abs + %.
             "now": _cell(s.get("current_pct"), s.get("current_eur")),
@@ -1236,10 +1265,21 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
             "amount": _eur_smart(signed_amount, signed=True),
         })
 
+    # Group actions by class → role (shared engine); keep the flat sort (largest
+    # trade first) WITHIN each role by leaving action order as-is.
+    raw_groups = group_by_class_role(
+        actions, asset_class=lambda a: a["asset_class"], role=lambda a: a["role"])
+    action_groups = [
+        {"name": ac, "color": col,
+         "role_blocks": [{"role": role, "actions": items} for role, items in role_list]}
+        for ac, col, role_list in raw_groups
+    ]
+
     n_total = len(suggestions)
     n_buy = sum(1 for s in suggestions if s["direction"].lower() == "buy")
     return {
         "actions": actions,
+        "action_groups": action_groups,
         "n_total": n_total,
         "n_buy": n_buy,
         "n_sell": n_total - n_buy,
@@ -1258,6 +1298,8 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     back to the single ``rebalancing_suggestions`` set for back-compat.
     """
     m = ctx.metrics
+    from tarzan import config as _cfg
+    _tax = _cfg.instrument_taxonomy()
     plans_src = getattr(m, "rebalancing_plans", None)
 
     def _attach_cost(pc: dict, p: dict) -> None:
@@ -1273,7 +1315,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     if plans_src:
         plans = []
         for p in plans_src:
-            pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []))
+            pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []), _tax)
             pc["label"] = p.get("label", "")
             pc["no_sell"] = p.get("no_sell")
             _attach_cost(pc, p)
@@ -1286,7 +1328,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     suggestions = list(m.rebalancing_suggestions or [])
     if not suggestions:
         return {"available": False}
-    pc = _optimizer_plan_ctx(m, suggestions)
+    pc = _optimizer_plan_ctx(m, suggestions, _tax)
     pc["label"] = "Suggested actions"
     pc["no_sell"] = None
     return {"available": True, "plans": [pc]}
