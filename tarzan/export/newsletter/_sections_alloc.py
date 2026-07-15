@@ -18,15 +18,16 @@ from tarzan.export._perf_series import (
     _window_money_pnl,
 )
 from tarzan.export.newsletter._constants import (
-    ASSET_BG,
     ASSET_CLASS_ORDER,
     ASSET_COLORS,
     GEO_COLORS,
     PALETTE,
     _NewsletterContext,
-    _PERF_ROLE_ORDER,
     group_by_class_role,
+    render_unified_table,
     role_for,
+    uni_cell,
+    uni_name,
 )
 from tarzan.export.newsletter._format import (
     _clean_ticker,
@@ -1095,17 +1096,19 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     return {"available": True, "html": "".join(html)}
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
-    """Build holdings grouped by asset class (Excel sort order)."""
+    """Build holdings grouped by asset class + role, rendered through the
+    shared unified-table renderer (identical shell to Returns / Performance /
+    Risk / Optimizer)."""
     m = ctx.metrics
     df = m.holdings_df
     if df.empty:
-        return {"groups": [], "summary": []}
+        return {"summary": [], "table_html": "", "total_count": 0}
 
     # Curated taxonomy for the shared role categorizer (role sub-grouping).
     from tarzan import config as _cfg
     _tax = _cfg.instrument_taxonomy()
 
-    # Class totals for header summary
+    # Class totals for header summary chips.
     class_totals = df.groupby("asset_class")["current_value"].sum().to_dict()
     class_counts = df.groupby("asset_class").size().to_dict()
 
@@ -1120,93 +1123,56 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "label": "positions" if class_counts[klass] != 1 else "position",
         })
 
-    groups = []
-    for klass in ASSET_CLASS_ORDER:
-        sub = df[df["asset_class"] == klass]
-        if sub.empty:
-            continue
-        # For invested classes the Weight column is reported as % of
-        # *invested* value (cash sits outside the invested portfolio).
-        # For cash the Weight column is shown as "—" because % of
-        # invested is undefined for the cash bucket.
-        is_cash_class = klass == "Cash & Cash Equivalents"
-        invested_base = m.invested_value if m.invested_value > 0 else 0.0
-        rows = []
-        for i, (_, h) in enumerate(sub.iterrows()):
-            value = float(h["current_value"])
-            cls_total = class_totals.get(klass, 1) or 1
-            pct_class = value / cls_total * 100
-            quantity = float(h.get("quantity", 0) or 0)
-            avg_price = float(h.get("avg_purchase_price", 0) or 0)
-            gain_pct = h.get("gain_pct")
-            gain_eur = h.get("gain_eur")
-            if is_cash_class:
-                weight_str = "—"
-            elif invested_base > 0:
-                weight_str = _pct(value / invested_base * 100, decimals=1)
-            else:
-                weight_str = "—"
-            has_gain = gain_pct is not None and not pd.isna(gain_pct)
-            rows.append({
-                "role": role_for(h.get("isin", ""), h.get("ticker", ""), _tax),
-                "name": short_instrument_name(h.get("name", ""), 34),
-                "ticker": _clean_ticker(h.get("isin", "")),
-                "isin": h.get("isin", ""),
-                "quantity": quantity,
-                "avg_price": _eur(avg_price, 2),
-                "value": _eur(value, 2),
-                "weight_pct": weight_str,
-                "gain_pct": _pct(gain_pct, signed=True) if has_gain else "—",
-                "gain_eur": (_eur_smart(gain_eur, signed=True)
-                             if gain_eur is not None and not pd.isna(gain_eur) else "—"),
-                "gain_color": (PALETTE["green"] if (gain_pct or 0) >= 0 else PALETTE["red"]) if has_gain else PALETTE["muted"],
-                "pct_class": _pct(pct_class, decimals=1),
-            })
-        # Sub-group this class's rows by role (ordered), so Holdings splits by
-        # role like every other instrument table. Alternating-row bg is applied
-        # ACROSS the whole class block (continuous stripe under one colour bar).
-        _pref = _PERF_ROLE_ORDER.get(klass, [])
-        _by_role: dict = {}
-        for r in rows:
-            _by_role.setdefault(r["role"], []).append(r)
-        _role_order = ([x for x in _pref if x in _by_role]
-                       + [x for x in _by_role if x not in _pref])
-        role_blocks, _ri = [], 0
-        for role in _role_order:
-            rblock = []
-            for r in _by_role[role]:
-                r["alt_bg"] = (_ri % 2 == 1)
-                _ri += 1
-                rblock.append(r)
-            role_blocks.append({"role": role, "rows": rblock})
-        # Cash is reported as a separate entity, not part of the
-        # "invested" portfolio. Skip the share stat for the cash group
-        # so it does not appear to compete with invested classes; for
-        # everything else, express the share as % of *invested* value
-        # (consistent with the convention that cash sits outside the
-        # invested allocation, exactly like the Diversification and
-        # Optimizer sections).
-        is_cash = klass == "Cash & Cash Equivalents"
-        total_pct_str: Optional[str] = None
-        if not is_cash:
-            base = m.invested_value if m.invested_value > 0 else m.total_value
-            pct = (class_totals.get(klass, 0) / base * 100) if base > 0 else 0
-            total_pct_str = _pct(pct, decimals=1)
-        groups.append({
-            "name": klass,
-            "name_short": "Cash & Cash Equivalents" if klass == "Cash & Cash Equivalents" else klass,
-            "color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-            "bg": ASSET_BG.get(klass, PALETTE["accent_bg"]),
-            "count": int(class_counts.get(klass, 0)),
-            "label": "positions" if class_counts.get(klass, 0) != 1 else "position",
-            "total_value": _eur_smart(class_totals.get(klass, 0)),
-            "total_pct": total_pct_str,
-            "is_cash": is_cash,
-            "rows": rows,
-            "role_blocks": role_blocks,
+    # One row item per holding; the shared engine groups them by class → role.
+    invested_base = m.invested_value if m.invested_value > 0 else 0.0
+    row_items = []
+    for _, h in df.iterrows():
+        klass = str(h.get("asset_class", "") or "") or "Other"
+        value = float(h["current_value"])
+        cls_total = class_totals.get(klass, 1) or 1
+        pct_class = value / cls_total * 100
+        gain_pct = h.get("gain_pct")
+        gain_eur = h.get("gain_eur")
+        has_gain = gain_pct is not None and not pd.isna(gain_pct)
+        # % of invested value; "—" for cash (undefined) or no invested base.
+        if klass == "Cash & Cash Equivalents" or invested_base <= 0:
+            weight_str = "—"
+        else:
+            weight_str = _pct(value / invested_base * 100, decimals=1)
+        gain_color = (PALETTE["green"] if (gain_pct or 0) >= 0
+                      else PALETTE["red"]) if has_gain else PALETTE["muted"]
+        cls_color = ASSET_COLORS.get(klass, PALETTE["accent"])
+        row_items.append({
+            "_ac": klass,
+            "_isin": h.get("isin", ""),
+            "_ticker": h.get("ticker", ""),
+            "name_html": uni_name(short_instrument_name(h.get("name", ""), 40),
+                                  _clean_ticker(h.get("isin", ""))),
+            "cells": [
+                uni_cell(_eur(value, 2), width=72),
+                uni_cell(weight_str, width=50),
+                uni_cell(_pct(pct_class, decimals=1), color=cls_color, width=48),
+                uni_cell(_pct(gain_pct, signed=True) if has_gain else "—",
+                         color=gain_color, weight=700, width=50),
+                uni_cell(_eur_smart(gain_eur, signed=True)
+                         if (gain_eur is not None and not pd.isna(gain_eur)) else "—",
+                         color=gain_color, weight=700, width=64),
+            ],
         })
+    groups = group_by_class_role(
+        row_items, asset_class=lambda r: r["_ac"],
+        isin=lambda r: r["_isin"], ticker=lambda r: r["_ticker"], taxonomy=_tax)
 
-    return {"groups": groups, "summary": summary, "total_count": int(len(df))}
+    table_html = render_unified_table(
+        "Holding",
+        [("Value €", "right", 72), ("% Inv.", "right", 50),
+         ("% Class", "right", 48), ("Gain %", "right", 50), ("Gain €", "right", 64)],
+        [(cls, col, [(role, [{"name_html": it["name_html"], "cells": it["cells"]}
+                             for it in items])
+                     for role, items in role_list])
+         for cls, col, role_list in groups])
+
+    return {"summary": summary, "table_html": table_html, "total_count": int(len(df))}
 
 def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -> dict:
     """Build one optimizer plan's render context (actions + totals) from a
@@ -1221,11 +1187,18 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
 
     # One cell showing a share as "% (bold) over € (muted)", the compact
     # Diversification-cell style, so four value columns fit at 600px.
-    def _cell(pct, eur):
-        if pct is None and eur is None:
-            return {"pct": "—", "eur": ""}
-        return {"pct": (_pct(pct, decimals=1) if pct is not None else "—"),
-                "eur": (_eur_smart(eur) if eur is not None else "")}
+    def _pct_eur_cell(pct, eur, *, color=None, weight=700):
+        """A "% (bold) over € (muted)" value cell for the unified renderer."""
+        return uni_cell(_pct(pct, decimals=1) if pct is not None else "—",
+                        color=color or PALETTE["ink"], weight=weight,
+                        sub=(_eur_smart(eur) if eur is not None else ""))
+
+    def _pill(direction):
+        c = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
+        return (f'<span style="display:inline-block;padding:1px 6px;background:#FFFFFF;'
+                f'color:{c};border:1px solid {c}33;border-radius:999px;font-weight:700;'
+                f'font-size:9px;letter-spacing:0.04em;vertical-align:middle;'
+                f'margin-right:5px;">{direction}</span>')
 
     actions = []
     for s in sorted(suggestions, key=lambda s: -float(s["amount_eur"])):
@@ -1239,47 +1212,51 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
             if not match.empty:
                 klass = match["asset_class"].iloc[0]
         signed_amount = amount if direction == "BUY" else -amount
+        # Clean pin ticker (no exchange suffix), same as Holdings/By holding.
+        tk = (_clean_ticker(isin) or _clean_ticker(ticker)
+              or _display_ticker(ticker) or "")
+        # Whole-row tint by action: light green for BUY, light red for SELL,
+        # so the proposed action reads at a glance across all columns.
+        row_bg = PALETTE["green_tint"] if direction == "BUY" else PALETTE["red_tint"]
+        dir_color = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
         actions.append({
             "direction": direction,
-            "direction_color": PALETTE["green"] if direction == "BUY" else PALETTE["red"],
-            "direction_bg": PALETTE["green_bg"] if direction == "BUY" else PALETTE["red_bg"],
-            # Shorten the name the SAME way every other table does (Holdings,
-            # Diversification, Returns), so "WisdomTree Global Efficient Core
-            # UCITS ETF USD Acc" reads as "WT Global Efficient Core".
-            "name": short_instrument_name(s.get("name", "")),
-            # Clean pin ticker (no exchange suffix), same as Holdings/By holding:
-            # resolve ISIN→symbol via price cache, else strip the suffix off
-            # the raw ticker. Falls back to empty (no pin) for unresolved.
-            "ticker": (_clean_ticker(isin)
-                       or _clean_ticker(ticker)
-                       or _display_ticker(ticker)
-                       or ""),
-            "isin": isin,
             "asset_class": klass,
             "role": role_for(isin, ticker, taxonomy),
-            "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
+            "_row_bg": row_bg,
+            # Name cell: action pill + ticker pin + shortened name, via the
+            # shared uni_name so it matches every other table.
+            "name_html": uni_name(short_instrument_name(s.get("name", "")), tk,
+                                   pill=_pill(direction)),
             # Now → Target → Trade → After, each abs + %.
-            "now": _cell(s.get("current_pct"), s.get("current_eur")),
-            "target": _cell(s.get("target_pct"), s.get("target_eur")),
-            "after": _cell(s.get("after_pct"), s.get("after_eur")),
-            "amount": _eur_smart(signed_amount, signed=True),
+            "cells": [
+                _pct_eur_cell(s.get("current_pct"), s.get("current_eur")),
+                _pct_eur_cell(s.get("target_pct"), s.get("target_eur"),
+                              color=PALETTE["muted"]),
+                uni_cell(_eur_smart(signed_amount, signed=True),
+                         color=dir_color, weight=700),
+                _pct_eur_cell(s.get("after_pct"), s.get("after_eur")),
+            ],
         })
 
     # Group actions by class → role (shared engine); keep the flat sort (largest
     # trade first) WITHIN each role by leaving action order as-is.
     raw_groups = group_by_class_role(
         actions, asset_class=lambda a: a["asset_class"], role=lambda a: a["role"])
-    action_groups = [
-        {"name": ac, "color": col,
-         "role_blocks": [{"role": role, "actions": items} for role, items in role_list]}
-        for ac, col, role_list in raw_groups
-    ]
+    table_html = render_unified_table(
+        "Holding",
+        [("Now", "right", 66), ("Target", "right", 66),
+         ("Trade", "right", 64), ("After", "right", 66)],
+        [(ac, col, [(role, [{"name_html": a["name_html"], "cells": a["cells"],
+                             "row_bg": a["_row_bg"]} for a in items])
+                    for role, items in role_list])
+         for ac, col, role_list in raw_groups])
 
     n_total = len(suggestions)
     n_buy = sum(1 for s in suggestions if s["direction"].lower() == "buy")
     return {
         "actions": actions,
-        "action_groups": action_groups,
+        "table_html": table_html,
         "n_total": n_total,
         "n_buy": n_buy,
         "n_sell": n_total - n_buy,

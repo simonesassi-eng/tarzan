@@ -191,41 +191,10 @@
                 </tr>
               </table>
               {% endif %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;border-spacing:0;">
-                {# Header row: empty corner + metric columns #}
-                <tr>
-                  <td style="padding:8px 8px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;border-top-left-radius:8px;">Series</td>
-                  {% for c in risk_profile.columns %}
-                  <td align="right" style="padding:8px 5px;background:{{ palette.ink }};color:#FFFFFF;font-size:10px;font-weight:700;{% if loop.last %}border-top-right-radius:8px;{% endif %}">{{ c.label }}{{ c.note }}</td>
-                  {% endfor %}
-                </tr>
-                {% for r in risk_profile.rows %}
-                {% set outer_last = loop.last %}
-                {% set row_bg = '#FFFFFF' if loop.index is odd else palette.card_alt %}
-                {% if r.group_header %}
-                {# Group separator row (asset class · role) — same style as Performance/Returns. #}
-                <tr>
-                  <td colspan="{{ risk_profile.columns|length + 1 }}" style="padding:8px 8px 4px;border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;color:{{ palette.muted }};letter-spacing:0.02em;"><span style="display:inline-block;width:8px;height:8px;background:{{ r.group_color }};border-radius:2px;vertical-align:middle;margin-right:6px;"></span><span style="color:{{ r.group_color }};font-weight:800;text-transform:uppercase;">{{ r.group_header[0] }}</span>{% if r.group_header[1] %}&nbsp;&middot;&nbsp;{{ r.group_header[1] }}{% endif %}</td>
-                </tr>
-                {% endif %}
-                {% if r.is_portfolio %}
-                {# Portfolio row — highlighted, same style as Performance. #}
-                <tr>
-                  <td style="padding:10px 8px;background:{{ palette.accent_bg }};color:{{ palette.accent }};font-weight:700;font-size:12px;{% if outer_last %}border-bottom-left-radius:8px;{% endif %}">★ {{ r.label }}{% if r.span_label %}<span style="display:inline-block;margin-left:6px;font-size:9px;font-weight:700;color:{{ palette.accent }};opacity:0.75;vertical-align:middle;">{{ r.span_label }}</span>{% endif %}</td>
-                  {% for c in r.cells %}
-                  <td align="right" style="padding:10px 5px;background:{{ palette.accent_bg }};font-variant-numeric:tabular-nums;color:{{ palette.ink }};font-weight:700;{% if outer_last and loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ c }}</td>
-                  {% endfor %}
-                </tr>
-                {% else %}
-                <tr>
-                  <td style="padding:9px 8px;background:{{ row_bg }};{% if not outer_last %}border-bottom:1px solid #F1F2F8;{% endif %}color:{{ palette.ink }};font-weight:600;{% if outer_last %}border-bottom-left-radius:8px;{% endif %}">{{ r.label }}{% if r.ticker %}<span style="display:inline-block;margin-left:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ r.ticker }}</span>{% endif %}{% for t in r.tags %}<span style="display:inline-block;margin-left:4px;padding:1px 6px;background:{{ t[2] }};color:{{ t[1] }};border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.04em;vertical-align:middle;">{{ t[0] }}</span>{% endfor %}{% if r.span_label %}<span style="display:inline-block;margin-left:6px;font-size:9px;font-weight:600;color:{{ palette.subtle }};vertical-align:middle;">{{ r.span_label }}</span>{% endif %}</td>
-                  {% for c in r.cells %}
-                  <td align="right" style="padding:9px 5px;background:{{ row_bg }};font-variant-numeric:tabular-nums;color:{{ palette.muted }};{% if not outer_last %}border-bottom:1px solid #F1F2F8;{% endif %}{% if outer_last and loop.last %}border-bottom-right-radius:8px;{% endif %}">{{ c }}</td>
-                  {% endfor %}
-                </tr>
-                {% endif %}
-                {% endfor %}
-              </table>
+              {# Unified instrument table (same shell as Holdings / Returns /
+                 Performance / Optimizer), pre-rendered in
+                 _sections_perf.py::_build_risk_profile. #}
+              {{ risk_profile.table_html|safe }}
               {% if risk_profile.alpha_beta_note %}
               <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
               {% endif %}
@@ -320,49 +289,12 @@
               </div>
               {% endif %}
               {% if plan.actions %}
-              {# Diversification-style: per instrument, Now → Target → Trade →
-                 After, each as "% (bold) over € (muted)" so four value columns
-                 fit at 600px. Header groups them under the holding. #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:11px;border-collapse:separate;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">
-                <tr>
-                  <td style="padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">Holding</td>
-                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">Now</td>
-                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">Target</td>
-                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:64px;">Trade</td>
-                  <td align="right" style="padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">After</td>
-                </tr>
-                {# Grouped by asset class → role (shared engine), with the 4px
-                   class-colour bar running down each block, like Holdings. #}
-                {% for grp in plan.action_groups %}
-                <tr>
-                  <td colspan="5" style="padding:7px 8px 4px;border-top:2px solid {{ palette.border }};border-left:4px solid {{ grp.color }};font-size:10px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:{{ grp.color }};">{{ grp.name }}</td>
-                </tr>
-                {% for rb in grp.role_blocks %}
-                {% if rb.role and rb.role != '—' %}
-                <tr>
-                  <td colspan="5" style="padding:3px 8px 3px;border-left:4px solid {{ grp.color }};font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">{{ rb.role }}</td>
-                </tr>
-                {% endif %}
-                {% for a in rb.actions %}
-                <tr>
-                  <td style="padding:6px 8px;border-top:1px solid #F1F2F8;border-left:4px solid {{ grp.color }};vertical-align:top;color:{{ palette.ink }};">
-                    <span style="display:inline-block;padding:1px 6px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:9px;letter-spacing:0.04em;vertical-align:middle;margin-right:5px;">{{ a.direction }}</span>{% if a.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ a.ticker }}</span>{% endif %}<span style="font-size:11px;color:{{ palette.ink }};">{{ a.name }}</span>
-                  </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
-                    <div style="font-weight:700;color:{{ palette.ink }};">{{ a.now.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.now.eur }}</div>
-                  </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
-                    <div style="font-weight:700;color:{{ palette.muted }};">{{ a.target.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.target.eur }}</div>
-                  </td>
-                  <td align="right" style="padding:6px 6px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
-                  <td align="right" style="padding:6px 8px;border-top:1px solid #F1F2F8;vertical-align:top;font-variant-numeric:tabular-nums;">
-                    <div style="font-weight:700;color:{{ palette.ink }};">{{ a.after.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.after.eur }}</div>
-                  </td>
-                </tr>
-                {% endfor %}
-                {% endfor %}
-                {% endfor %}
-              </table>
+              {# Unified instrument table: per instrument, Now → Target → Trade
+                 → After, each as "% (bold) over € (muted)". BUY rows tinted
+                 light green, SELL rows light red. Same shell as Holdings /
+                 Returns / Performance / Risk. Pre-rendered in
+                 _sections_alloc.py::_optimizer_plan_ctx. #}
+              {{ plan.table_html|safe }}
               {% else %}
               <div style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;font-size:12px;color:{{ palette.ink }};">Already on target: no trades needed.</div>
               {% endif %}

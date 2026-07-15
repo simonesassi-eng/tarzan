@@ -32,6 +32,8 @@ from tarzan.export.newsletter._constants import (
     _NewsletterContext,
     _PF_INTRA_KEY,
     group_by_class_role,
+    render_unified_table,
+    uni_cell,
 )
 from tarzan.export.newsletter._format import (
     _clean_ticker,
@@ -591,93 +593,49 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
             where each ``row`` is ``{name_html, spark_inner, returns}``.
     """
     P = PALETTE
-    ncols = len(period_cols) + 2
 
-    def _th(label, first=False, last=False, center=False):
-        radius = ("border-top-left-radius:8px;" if first else
-                  "border-top-right-radius:8px;" if last else "")
-        align = "center" if center else ("left" if first else "right")
-        return (f'<td align="{align}" style="padding:8px 6px;background:{P["ink"]};'
-                f'color:#FFFFFF;font-size:10px;font-weight:700;letter-spacing:0.04em;'
-                f'text-transform:uppercase;{radius}">{label}</td>')
-
-    hcells = [_th("Instrument", first=True), _th("1D / Intraday", center=True)]
-    for i, p in enumerate(period_cols):
-        hcells.append(_th(p.upper(), last=(i == len(period_cols) - 1)))
-    header = "<tr>" + "".join(hcells) + "</tr>"
-
-    def _period_cells(returns_dict, *, weight, bg):
-        bgc = f"background:{bg};" if bg else ""
-        out = ""
+    def _cells(returns_dict, spark_inner, *, weight):
+        # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
+        # the gap after the name closes and the period columns get that width.
+        cells = [uni_cell(spark_inner, align="left", width=84, valign="middle",
+                          pad="6px 4px 6px 0")]
         for p in period_cols:
-            cell = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
-            out += (f'<td align="right" style="padding:8px 6px;{bgc}'
-                    f'font-variant-numeric:tabular-nums;color:{cell["color"]};'
-                    f'font-weight:{weight};">{cell["value"]}</td>')
-        return out
+            r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
+            cells.append(uni_cell(r["value"], color=r["color"], weight=weight))
+        return cells
 
-    pbg = P["accent_bg"]
-    rows_html = [
-        "<tr>"
-        f'<td style="padding:10px 8px;background:{pbg};color:{P["accent"]};'
-        f'font-weight:700;font-size:12px;">\u2605 {portfolio["name"]}</td>'
-        f'<td width="96" align="center" style="padding:6px 8px;background:{pbg};">'
-        f'{portfolio.get("spark_inner", "")}</td>'
-        + _period_cells(portfolio["returns"], weight=700, bg=pbg)
-        + "</tr>"
-    ]
-
-    ridx = 0  # running instrument-row index for the alternating background
-    for cls, col, role_list in groups:
-        for role, insts in role_list:
-            if not insts:
-                continue
-            rows_html.append(
-                f'<tr><td colspan="{ncols}" style="padding:8px 8px 4px;'
-                f'border-bottom:1px solid {P["border"]};font-size:10px;font-weight:700;'
-                f'color:{P["muted"]};letter-spacing:0.02em;">'
-                f'<span style="display:inline-block;width:8px;height:8px;background:{col};'
-                f'border-radius:2px;vertical-align:middle;margin-right:6px;"></span>'
-                f'<span style="color:{col};font-weight:800;text-transform:uppercase;">{cls}</span>'
-                f'&nbsp;&middot;&nbsp;{role}</td></tr>'
-            )
-            for inst in insts:
-                ridx += 1
-                rowbg = "#FFFFFF" if (ridx % 2 == 1) else P["card_alt"]
-                rows_html.append(
-                    "<tr>"
-                    f'<td style="padding:8px;background:{rowbg};border-bottom:1px solid #F1F2F8;'
-                    f'color:{P["ink"]};font-size:12px;">{inst["name_html"]}</td>'
-                    f'<td width="96" align="center" style="padding:6px 8px;background:{rowbg};'
-                    f'border-bottom:1px solid #F1F2F8;">{inst.get("spark_inner", "")}</td>'
-                    + _period_cells(inst["returns"], weight=600, bg=rowbg)
-                    + "</tr>"
-                )
-
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'border="0" style="margin-top:14px;font-size:11px;border-collapse:separate;'
-        f'border-spacing:0;">{header}{"".join(rows_html)}</table>'
-    )
+    # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
+    # ruled period grid.
+    columns = ([("1D / Intraday", "left", 84, True)]
+               + [(p.upper(), "right") for p in period_cols])
+    portfolio_row = {
+        "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
+                      f'font-size:12px;">\u2605 {portfolio["name"]}</span>'),
+        "cells": _cells(portfolio["returns"], portfolio.get("spark_inner", ""),
+                        weight=700),
+    }
+    uni_groups = [
+        (cls, col, [(role, [{"name_html": inst["name_html"],
+                             "cells": _cells(inst["returns"],
+                                             inst.get("spark_inner", ""), weight=600)}
+                            for inst in insts])
+                    for role, insts in role_list])
+        for cls, col, role_list in groups]
+    # Compact numeric cells + a capped name column (so it can't hoard width and
+    # leave a gap before the sparkline) + faint vertical separators so a reader
+    # can tell 1W from 1M from 1Y at a glance. Role lives in the group header
+    # and the ticker trails the name, so names wrap cleanly.
+    return render_unified_table("Instrument", columns, uni_groups,
+                                portfolio_row=portfolio_row, compact=True,
+                                first_col_width=150, separators=True)
 
 def _perf_name_html(name: str, ticker: str, tags: list) -> str:
-    """Instrument label used in the returns tables: name + ticker chip +
-    optional reference tags (α/β, GEO)."""
-    P = PALETTE
-    tk_chip = ""
-    if ticker:
-        tk_chip = (
-            f'<span style="display:inline-block;margin-left:5px;padding:1px 5px;'
-            f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
-            f'border-radius:4px;font-size:9px;font-weight:700;'
-            f'font-family:SFMono-Regular,Menlo,Consolas,monospace;'
-            f'letter-spacing:0.02em;vertical-align:middle;">{ticker}</span>')
-    tag_chips = "".join(
-        f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
-        f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;'
-        f'font-weight:700;letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>'
-        for t in (tags or []))
-    return f"{name}{tk_chip}{tag_chips}"
+    """Instrument label used in the returns tables. Delegates to the shared
+    :func:`uni_name` (ticker trails the name, role lives in the group header),
+    so names wrap cleanly to ~2 lines without a hard clamp — matching the
+    earlier layout the user preferred."""
+    from tarzan.export.newsletter._constants import uni_name
+    return uni_name(name, ticker or "", tags=tuple(tags or ()))
 
 def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     """Build the per-holding returns snapshot table.
@@ -1173,8 +1131,10 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         ("Sortino", "sortino", False, ""),
         ("Max DD", "max_drawdown", True, ""),
         ("Ulcer", "ulcer_index", True, ""),
-        ("VaR 95%", "var_95", True, ""),
-        ("CVaR 95%", "cvar_95", True, ""),
+        # "95%" is spelled out in the legend below; drop it from the column
+        # header so these two cells stay narrow in the 10-column table.
+        ("VaR", "var_95", True, ""),
+        ("CVaR", "cvar_95", True, ""),
         ("\u03b1", "alpha", True, "*"),
         ("\u03b2", "beta", False, "*"),
     ]
@@ -1197,44 +1157,59 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
         return tags
 
-    rows = []
+    from tarzan.export.newsletter._constants import (
+        render_unified_table, uni_cell, uni_name)
+
+    def _metric_cells(metrics, *, weight, color):
+        return [uni_cell(v, color=color, weight=weight)
+                for v in _cells_from(metrics)]
+
     port = hr.get("portfolio")
+    if not (port or hr.get("instruments")):
+        return {"available": False, "rows": [], "columns": []}
+
+    portfolio_row = None
     if port:
-        rows.append({
-            "label": port.get("label", "Your portfolio"),
-            "ticker": None,
-            "span_label": port.get("span_label", "\u2014"),
-            "tags": [],
-            "is_portfolio": True,
-            "cells": _cells_from(port.get("metrics")),
-            "group_header": None,
-            "group_color": None,
-        })
-    # Group instruments by asset_class → role, identical to Performance.
+        span = port.get("span_label", "\u2014")
+        span_html = (f'<span style="display:inline-block;margin-left:6px;font-size:9px;'
+                     f'font-weight:700;color:{PALETTE["accent"]};opacity:0.75;'
+                     f'vertical-align:middle;">{span}</span>' if span else "")
+        portfolio_row = {
+            "name_html": (f'<span style="color:{PALETTE["accent"]};font-weight:700;'
+                          f'font-size:12px;">\u2605 {port.get("label", "Your portfolio")}'
+                          f'</span>{span_html}'),
+            "cells": _metric_cells(port.get("metrics"), weight=700,
+                                   color=PALETTE["ink"]),
+        }
+
+    # Group instruments by asset_class -> role via the shared engine, then hand
+    # off to the ONE unified renderer (same shell as every other table).
+    uni_groups = []
     for ac, gc, role_list in group_by_class_role(
             hr.get("instruments", []),
             asset_class=lambda inst: inst.get("asset_class") or "Other",
             role=lambda inst: inst.get("role")):
+        rendered = []
         for role, insts in role_list:
-            # One group header per (class, role) block — same as Performance.
-            first = True
-            for inst in insts:
-                rows.append({
-                    # Shorten the display label like every other table (tags
-                    # still match on the raw label below).
-                    "label": short_instrument_name(inst.get("label", "")),
-                    "ticker": _display_ticker(inst.get("ticker")),
-                    "span_label": inst.get("span_label", "\u2014"),
-                    "tags": _tags_for(inst.get("label", "")),
-                    "is_portfolio": False,
-                    "cells": _cells_from(inst.get("metrics")),
-                    "group_header": (ac, role if role != "\u2014" else "") if first else None,
-                    "group_color": gc if first else None,
-                })
-                first = False
+            block = [{
+                "name_html": uni_name(
+                    short_instrument_name(inst.get("label", "")),
+                    _display_ticker(inst.get("ticker")) or "",
+                    tags=_tags_for(inst.get("label", "")),
+                    span=inst.get("span_label", "\u2014")),
+                "cells": _metric_cells(inst.get("metrics"), weight=600,
+                                       color=PALETTE["muted"]),
+            } for inst in insts]
+            rendered.append((role, block))
+        uni_groups.append((ac, gc, rendered))
 
-    if not rows:
-        return {"available": False, "rows": [], "columns": []}
+    columns = [(f"{label}{note}", "right") for (label, _k, _p, note) in metric_cols]
+    # Compact mode: 10 numeric columns, so tighten value-cell padding to keep
+    # the instrument-name column wide enough. Faint vertical separators help
+    # the reader track which metric a number belongs to across the wide row.
+    table_html = render_unified_table("Series", columns, uni_groups,
+                                      portfolio_row=portfolio_row, compact=True,
+                                      first_col_width=132, separators=True)
 
     description = (
         "Each instrument is measured over its full available price history "
@@ -1247,9 +1222,7 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         "available": True,
         "title": "Historical risk profile",
         "subtitle": "Full available history, per instrument",
-        "columns": [{"label": label, "note": note}
-                    for (label, _k, _p, note) in metric_cols],
-        "rows": rows,
+        "table_html": table_html,
         "description": description,
         # Backtest transparency note (holdings excluded / renormalized).
         "portfolio_note": (port or {}).get("note"),
