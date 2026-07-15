@@ -124,36 +124,31 @@ class TestRiskProfileBenchmarkLabels:
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
         assert profile["available"]
-        # Transposed layout: metrics are columns, series are rows.
-        labels = [r["label"] for r in profile["rows"]]
-        assert labels[0] == "Your portfolio"
-        assert profile["rows"][0]["is_portfolio"] is True
+        # The risk table is now pre-rendered through the shared unified
+        # renderer, so we assert on the produced HTML (the row/column dicts are
+        # gone). Portfolio row first, then the configured benchmarks.
+        html = profile["table_html"]
+        assert "Your portfolio" in html
         # Display labels go through short_instrument_name (which normalizes the
         # hyphen: "FTSE All-World" → "FTSE All World"); tag-matching still uses
         # the raw configured name.
-        assert "MSCI World" in labels and "FTSE All World" in labels
+        assert "MSCI World" in html and "FTSE All World" in html
         # 10 metric columns now (Ulcer added), with α/β carrying the marker.
-        col_labels = [c["label"] for c in profile["columns"]]
-        assert col_labels[0] == "CAGR" and len(profile["columns"]) == 10
-        assert "Ulcer" in col_labels
-        assert profile["columns"][-2]["note"] == "*"  # α
-        assert profile["columns"][-1]["note"] == "*"  # β
+        assert "CAGR" in html and "Ulcer" in html
+        assert "α*" in html and "β*" in html  # α*, β* column headers
         assert "MSCI World" in profile["alpha_beta_note"]
         # Ticker pins are shortened (exchange suffix stripped).
-        ab_row = next(r for r in profile["rows"] if r["label"] == "MSCI World")
-        assert ab_row["ticker"] == "SWDA"
-        assert ab_row["span_label"] == "10.0Y"
+        assert "SWDA" in html and "SWDA.MI" not in html
+        assert "10.0Y" in html  # span chip
 
     def test_benchmark_values_populated_in_rows(self):
-        # Each instrument row must carry real values (not blank), proving
-        # the metrics are read straight from historical_risk.
+        # The rendered table must carry real values (not blank), proving the
+        # metrics are read straight from historical_risk.
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
-        bench_rows = [r for r in profile["rows"] if not r["is_portfolio"]]
-        assert bench_rows
-        for r in bench_rows:
-            assert len(r["cells"]) == 10
-            assert r["cells"][0] != "—"  # CAGR populated
+        html = profile["table_html"]
+        # CAGR values from the fixture appear as formatted percentages.
+        assert "4.00%" in html and "4.50%" in html
 
 
 class TestShortInstrumentName:
