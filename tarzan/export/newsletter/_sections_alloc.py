@@ -1215,7 +1215,10 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
             "direction": direction,
             "direction_color": PALETTE["green"] if direction == "BUY" else PALETTE["red"],
             "direction_bg": PALETTE["green_bg"] if direction == "BUY" else PALETTE["red_bg"],
-            "name": s.get("name", ""),
+            # Shorten the name the SAME way every other table does (Holdings,
+            # Diversification, Returns), so "WisdomTree Global Efficient Core
+            # UCITS ETF USD Acc" reads as "WT Global Efficient Core".
+            "name": short_instrument_name(s.get("name", "")),
             # Clean pin ticker (no exchange suffix), same as Holdings/By holding:
             # resolve ISIN→symbol via price cache, else strip the suffix off
             # the raw ticker. Falls back to empty (no pin) for unresolved.
@@ -1257,12 +1260,23 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     plans_src = getattr(m, "rebalancing_plans", None)
 
+    def _attach_cost(pc: dict, p: dict) -> None:
+        # Estimated execution cost, shown atop the table: CGT on the sells and
+        # fixed commission fees (from the engine's plan_cost, same tax/fee model
+        # the optimizer solved for). Only render when non-zero.
+        cgt = float(p.get("cgt_eur") or 0.0)
+        fees = float(p.get("fees_eur") or 0.0)
+        pc["cgt_eur"] = _eur_smart(cgt) if cgt else None
+        pc["fees_eur"] = _eur_smart(fees) if fees else None
+        pc["cost_total_eur"] = _eur_smart(cgt + fees) if (cgt or fees) else None
+
     if plans_src:
         plans = []
         for p in plans_src:
             pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []))
             pc["label"] = p.get("label", "")
             pc["no_sell"] = p.get("no_sell")
+            _attach_cost(pc, p)
             plans.append(pc)
         if not any(pc["actions"] for pc in plans):
             return {"available": False}

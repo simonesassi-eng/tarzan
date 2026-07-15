@@ -313,3 +313,43 @@ def test_extract_actions_carries_current_target_after():
     assert a0["after_pct"] == pytest.approx(60.0, abs=0.5)
     # target_eur is target_pct × invested base.
     assert a0["target_eur"] == pytest.approx(0.60 * 4000.0, abs=1.0)
+
+
+def test_plan_cost_cgt_and_fees():
+    # plan_cost estimates CGT on the sells (per-unit tax model) + fixed fees,
+    # reusing the same _tax_per_unit_sold the optimizer used — so the displayed
+    # cost matches the cash-conservation the plan solved for.
+    from tarzan.engine.rebalancer import plan_cost
+    from tarzan.models.investor_config import InvestorConfig
+
+    cfg = InvestorConfig()
+    cfg.rebalancing_transaction_fee_buy_eur = 19.0
+    cfg.rebalancing_transaction_fee_sell_eur = 19.0
+    cfg.rebalancing_capital_gains_tax_standard_pctg = 26.0
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0),
+        _o(OrderType.BUY, "IE00BK5BQT80", qty=10.0, net=-1000.0),
+    ])
+    holdings[0].gain_pct = 100.0   # +100% → taxable fraction 100/200 = 0.5
+    holdings[1].gain_pct = 0.0     # flat → no CGT
+    actions = [
+        {"idx": 0, "direction": "sell", "amount_eur": 2000.0},  # appreciated
+        {"idx": 1, "direction": "buy", "amount_eur": 500.0},
+    ]
+    cost = plan_cost(actions, holdings, cfg)
+    # CGT = 2000 × 0.26 × (100/200) = 260 ; fees = 1 buy + 1 sell = 38
+    assert cost["cgt_eur"] == pytest.approx(260.0, abs=0.5)
+    assert cost["fees_eur"] == pytest.approx(38.0)
+
+
+def test_plan_cost_buy_only_has_no_cgt():
+    from tarzan.engine.rebalancer import plan_cost
+    from tarzan.models.investor_config import InvestorConfig
+    cfg = InvestorConfig()
+    cfg.rebalancing_transaction_fee_buy_eur = 19.0
+    cfg.rebalancing_capital_gains_tax_standard_pctg = 26.0
+    holdings = build_holdings_from_orders([_o(OrderType.BUY, "IE00BDBRDM35", qty=10.0, net=-1000.0)])
+    holdings[0].gain_pct = 50.0
+    cost = plan_cost([{"idx": 0, "direction": "buy", "amount_eur": 500.0}], holdings, cfg)
+    assert cost["cgt_eur"] == 0.0          # no sells → no CGT
+    assert cost["fees_eur"] == pytest.approx(19.0)

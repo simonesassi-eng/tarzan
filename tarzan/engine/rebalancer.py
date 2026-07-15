@@ -442,6 +442,34 @@ def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.nd
     return tax
 
 
+def plan_cost(actions: list[dict], holdings: list[Holding],
+              config: InvestorConfig) -> dict:
+    """Estimated cash cost of executing a plan: capital-gains tax on the sells
+    and fixed per-trade commission fees. Reuses the SAME per-unit tax model the
+    optimizer used to build the plan (``_tax_per_unit_sold``) and the same fee
+    params, so the displayed CGT/fees match the cash-conservation the optimizer
+    solved for — no second formula to drift.
+
+    ``actions`` are the dicts from ``_extract_actions`` (each carries ``idx``,
+    ``direction``, ``amount_eur``). Returns ``{"cgt_eur", "fees_eur"}``."""
+    tax = _tax_per_unit_sold(holdings, config)
+    fee_buy = float(config.rebalancing_transaction_fee_buy_eur or 0.0)
+    fee_sell = float(config.rebalancing_transaction_fee_sell_eur or 0.0)
+    cgt = 0.0
+    n_buy = n_sell = 0
+    for a in actions:
+        amt = float(a.get("amount_eur", 0.0) or 0.0)
+        if a.get("direction") == "sell":
+            n_sell += 1
+            i = a.get("idx")
+            if isinstance(i, int) and 0 <= i < len(tax):
+                cgt += amt * float(tax[i])  # tax is per-euro-of-proceeds
+        elif a.get("direction") == "buy":
+            n_buy += 1
+    fees = fee_buy * n_buy + fee_sell * n_sell
+    return {"cgt_eur": round(cgt, 2), "fees_eur": round(fees, 2)}
+
+
 def _net_cash_cost(t: np.ndarray, tax: np.ndarray, fee_buy: float, fee_sell: float,
                    min_trade: float) -> float:
     """Net external cash the plan consumes: buys + fees − (sell proceeds net of
