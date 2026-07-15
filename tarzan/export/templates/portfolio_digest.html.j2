@@ -311,28 +311,32 @@
                 net <span style="color:{{ plan.net_color }};font-weight:600;">{{ plan.net }}</span>
               </div>
               {% if plan.actions %}
-              {# Same table style as Diversification "By holding": card_alt
-                 container, light uppercase header, per-row border, ticker pin. #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;border-collapse:separate;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">
+              {# Diversification-style: per instrument, Now → Target → Trade →
+                 After, each as "% (bold) over € (muted)" so four value columns
+                 fit at 600px. Header groups them under the holding. #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:11px;border-collapse:separate;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">
                 <tr>
-                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:56px;">Action</td>
-                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">Holding</td>
-                  <td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:92px;">Asset</td>
-                  <td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:92px;">Amount</td>
+                  <td style="padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};">Holding</td>
+                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">Now</td>
+                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">Target</td>
+                  <td align="right" style="padding:5px 6px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:64px;">Trade</td>
+                  <td align="right" style="padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};width:66px;">After</td>
                 </tr>
                 {% for a in plan.actions %}
                 <tr>
-                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;">
-                    <span style="display:inline-block;padding:2px 7px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:10px;letter-spacing:0.04em;">{{ a.direction }}</span>
+                  <td style="padding:6px 8px;border-top:1px solid {{ palette.border }};vertical-align:top;color:{{ palette.ink }};">
+                    <span style="display:inline-block;padding:1px 6px;background:{{ a.direction_bg }};color:{{ a.direction_color }};border-radius:999px;font-weight:700;font-size:9px;letter-spacing:0.04em;vertical-align:middle;margin-right:5px;">{{ a.direction }}</span>{% if a.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ a.ticker }}</span>{% endif %}<span style="font-size:11px;color:{{ palette.ink }};">{{ a.name }}</span>
                   </td>
-                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;color:{{ palette.ink }};">
-                    <div style="font-size:12px;line-height:1.3;">{% if a.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ a.ticker }}</span>{% endif %}{{ a.name }}</div>
-                    {% if a.reason %}
-                    <div style="margin-top:3px;font-size:10px;color:{{ palette.subtle }};line-height:1.45;">{{ a.reason }}</div>
-                    {% endif %}
+                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                    <div style="font-weight:700;color:{{ palette.ink }};">{{ a.now.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.now.eur }}</div>
                   </td>
-                  <td style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:11px;font-weight:600;color:{{ a.asset_color }};">{{ a.asset_class }}</td>
-                  <td align="right" style="padding:6px 8px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
+                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                    <div style="font-weight:700;color:{{ palette.muted }};">{{ a.target.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.target.eur }}</div>
+                  </td>
+                  <td align="right" style="padding:6px 6px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;font-weight:700;color:{{ a.direction_color }};">{{ a.amount }}</td>
+                  <td align="right" style="padding:6px 8px;border-top:1px solid {{ palette.border }};vertical-align:top;font-variant-numeric:tabular-nums;">
+                    <div style="font-weight:700;color:{{ palette.ink }};">{{ a.after.pct }}</div><div style="font-size:9px;color:{{ palette.subtle }};">{{ a.after.eur }}</div>
+                  </td>
                 </tr>
                 {% endfor %}
               </table>

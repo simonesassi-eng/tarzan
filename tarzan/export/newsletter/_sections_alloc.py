@@ -1192,17 +1192,25 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
     total_sell = sum(float(s["amount_eur"]) for s in suggestions
                      if s["direction"].lower() == "sell")
 
+    # One cell showing a share as "% (bold) over € (muted)", the compact
+    # Diversification-cell style, so four value columns fit at 600px.
+    def _cell(pct, eur):
+        if pct is None and eur is None:
+            return {"pct": "—", "eur": ""}
+        return {"pct": (_pct(pct, decimals=1) if pct is not None else "—"),
+                "eur": (_eur_smart(eur) if eur is not None else "")}
+
     actions = []
     for s in sorted(suggestions, key=lambda s: -float(s["amount_eur"])):
         direction = s["direction"].upper()
         amount = float(s["amount_eur"])
-        pct_of_port = (amount / m.total_value * 100) if m.total_value > 0 else 0.0
         ticker = s.get("ticker", "")
         klass = "Equities"
         if not df.empty:
             match = df[df["ticker"] == ticker]
             if not match.empty:
                 klass = match["asset_class"].iloc[0]
+        signed_amount = amount if direction == "BUY" else -amount
         actions.append({
             "direction": direction,
             "direction_color": PALETTE["green"] if direction == "BUY" else PALETTE["red"],
@@ -1218,9 +1226,11 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list) -> dict:
             "isin": s.get("isin", ""),
             "asset_class": klass,
             "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-            "amount": _eur(amount, decimals=2),
-            "pct_of_portfolio": _pct(pct_of_port, decimals=1),
-            "reason": s.get("reason", ""),
+            # Now → Target → Trade → After, each abs + %.
+            "now": _cell(s.get("current_pct"), s.get("current_eur")),
+            "target": _cell(s.get("target_pct"), s.get("target_eur")),
+            "after": _cell(s.get("after_pct"), s.get("after_eur")),
+            "amount": _eur_smart(signed_amount, signed=True),
         })
 
     n_total = len(suggestions)
