@@ -47,27 +47,24 @@
                   <td align="right" style="padding:6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:50px;">Gain %</td>
                   <td align="right" style="padding:6px 12px 6px 5px;background:{{ palette.card_alt }};border-bottom:1px solid {{ palette.border }};font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;width:64px;">Gain €</td>
                 </tr>
-                {# Role sub-blocks: a small role label row, then its holdings.
-                   The 4px class-colour bar runs continuously down the whole
-                   class block; the alternating row bg (r.alt_bg) is continuous
-                   across roles too, so roles read as sub-sections, not tables. #}
+                {# Rows: the 4px class-colour bar runs UNBROKEN down the whole
+                   block. Roles are shown as a faint inline caption on the first
+                   row of each role group (no separate strip, no extra border),
+                   so the bar stays one clean line as before. Row bg alternates
+                   continuously across the class via r.alt_bg. #}
                 {% for rb in g.role_blocks %}
-                {% if rb.role and rb.role != '—' %}
-                <tr>
-                  <td colspan="6" style="padding:5px 12px 5px 14px;background:{{ palette.card_alt }};border-bottom:1px solid #F1F2F8;border-left:4px solid {{ g.color }};font-size:9px;font-weight:700;letter-spacing:0.04em;color:{{ palette.subtle }};text-transform:uppercase;">{{ rb.role }}</td>
-                </tr>
-                {% endif %}
                 {% for r in rb.rows %}
                 {% set rbg = '#FFFFFF' if not r.alt_bg else palette.card_alt %}
                 <tr>
                   <td style="padding:8px 12px 8px 14px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;border-left:4px solid {{ g.color }};">
+                    {% if loop.first and rb.role and rb.role != '—' %}<div style="font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:{{ palette.subtle }};margin-bottom:2px;">{{ rb.role }}</div>{% endif %}
                     <div style="font-size:12px;font-weight:600;color:{{ palette.ink }};line-height:1.3;">{% if r.ticker %}<span style="display:inline-block;margin-right:5px;padding:1px 5px;background:{{ palette.page }};color:{{ palette.muted }};border:1px solid {{ palette.border }};border-radius:4px;font-size:9px;font-weight:700;font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;vertical-align:middle;">{{ r.ticker }}</span>{% endif %}<span style="color:{{ palette.ink }};">{{ r.name|truncate(40, true, '…') }}</span></div>
                   </td>
-                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};">{{ r.value }}</td>
-                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.ink }};">{{ r.weight_pct }}</td>
-                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;">{{ r.pct_class }}</td>
-                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_pct }}</td>
-                  <td align="right" style="padding:8px 12px 8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;">{{ r.gain_eur }}</td>
+                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;font-weight:600;color:{{ palette.ink }};vertical-align:bottom;">{{ r.value }}</td>
+                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ palette.ink }};vertical-align:bottom;">{{ r.weight_pct }}</td>
+                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ g.color }};font-weight:600;vertical-align:bottom;">{{ r.pct_class }}</td>
+                  <td align="right" style="padding:8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;vertical-align:bottom;">{{ r.gain_pct }}</td>
+                  <td align="right" style="padding:8px 12px 8px 5px;background:{{ rbg }};border-bottom:1px solid #F1F2F8;font-variant-numeric:tabular-nums;color:{{ r.gain_color }};font-weight:700;vertical-align:bottom;">{{ r.gain_eur }}</td>
                 </tr>
                 {% endfor %}
                 {% endfor %}
