@@ -30,11 +30,8 @@ from tarzan.export.newsletter._constants import (
     MARKET_REGION_COLORS,
     PALETTE,
     _NewsletterContext,
-    _PERF_CLASS_ORDER,
-    _PERF_ROLE_ORDER,
     _PF_INTRA_KEY,
     group_by_class_role,
-    role_for,
 )
 from tarzan.export.newsletter._format import (
     _clean_ticker,
@@ -1214,20 +1211,11 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             "group_color": None,
         })
     # Group instruments by asset_class → role, identical to Performance.
-    from collections import OrderedDict
-    _grouped: dict[str, dict[str, list]] = OrderedDict()
-    for inst in hr.get("instruments", []):
-        ac = inst.get("asset_class") or "Other"
-        role = inst.get("role") or "\u2014"
-        _grouped.setdefault(ac, OrderedDict()).setdefault(role, []).append(inst)
-    # Same order as the Performance table (was a verbatim copy of
-    # _PERF_CLASS_ORDER — now shares the one registry-backed list).
-    _perf_cls_order = _PERF_CLASS_ORDER
-    def _cls_sort(ac):
-        return _perf_cls_order.index(ac) if ac in _perf_cls_order else 99
-    for ac in sorted(_grouped.keys(), key=_cls_sort):
-        gc = ASSET_COLORS.get(ac, PALETTE["accent"])
-        for role, insts in _grouped[ac].items():
+    for ac, gc, role_list in group_by_class_role(
+            hr.get("instruments", []),
+            asset_class=lambda inst: inst.get("asset_class") or "Other",
+            role=lambda inst: inst.get("role")):
+        for role, insts in role_list:
             # One group header per (class, role) block — same as Performance.
             first = True
             for inst in insts:
