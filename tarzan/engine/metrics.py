@@ -734,11 +734,20 @@ class MetricsEngine:
 
         s_true, v_true = _plan(True)
         s_false, v_false = _plan(False)
+        # Estimated cash cost of executing each plan (CGT on the sells + fixed
+        # commission fees), from the same tax/fee model the optimizer solved
+        # for. Computed here where ``rebal_holdings`` (real + seeds) is in scope
+        # so the action ``idx`` lookups are correct.
+        from tarzan.engine.rebalancer import plan_cost as _plan_cost
+        cost_true = _plan_cost(s_true, rebal_holdings, self.config)
+        cost_false = _plan_cost(s_false, rebal_holdings, self.config)
         ctx["rebalancing_plans"] = [
             {"label": "Buy only (accumulate)", "no_sell": True,
-             "suggestions": s_true, "verifications": v_true},
+             "suggestions": s_true, "verifications": v_true,
+             "cgt_eur": cost_true["cgt_eur"], "fees_eur": cost_true["fees_eur"]},
             {"label": "Buy & sell (full rebalance)", "no_sell": False,
-             "suggestions": s_false, "verifications": v_false},
+             "suggestions": s_false, "verifications": v_false,
+             "cgt_eur": cost_false["cgt_eur"], "fees_eur": cost_false["fees_eur"]},
         ]
 
         # Append both plans to the per-run rebalancing audit trail (inputs +

@@ -310,6 +310,15 @@
                 <span style="color:{{ palette.red }};font-weight:600;">{{ plan.total_sell }}</span> out,
                 net <span style="color:{{ plan.net_color }};font-weight:600;">{{ plan.net }}</span>
               </div>
+              {% if plan.cost_total_eur %}
+              {# Estimated cost of executing the plan: CGT on the sells + fixed
+                 commission fees. Only shown when non-zero. #}
+              <div style="margin-top:3px;font-size:12px;color:{{ palette.muted }};">
+                Est. cost <span style="color:{{ palette.red }};font-weight:700;">{{ plan.cost_total_eur }}</span>
+                {% if plan.cgt_eur %}&nbsp;·&nbsp; tax (CGT) {{ plan.cgt_eur }}{% endif %}
+                {% if plan.fees_eur %}&nbsp;·&nbsp; fees {{ plan.fees_eur }}{% endif %}
+              </div>
+              {% endif %}
               {% if plan.actions %}
               {# Diversification-style: per instrument, Now → Target → Trade →
                  After, each as "% (bold) over € (muted)" so four value columns
