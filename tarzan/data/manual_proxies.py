@@ -181,7 +181,11 @@ def ingest(key: str, path: Optional[str] = None) -> Optional[pd.Series]:
     used with its dedicated parser. Returns the stored series (or None)."""
     if path is not None:
         p = Path(path).expanduser()
-        parser = _PARSERS["generic"]
+        # Use the dedicated parser for a known key (e.g. the BNP xlsx layout),
+        # even when the file comes from an explicit path (e.g. downloaded from
+        # the private Drive in CI); fall back to the generic parser otherwise.
+        src = _SOURCES.get(key)
+        parser = _PARSERS[src[1]] if src else _PARSERS["generic"]
     else:
         src = _SOURCES.get(key)
         if not src:

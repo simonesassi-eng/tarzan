@@ -192,6 +192,66 @@ def resolve_inputs() -> dict[str, str | None]:
     }
 
 
+# Manual-proxy source files (third-party index levels) that feed the carry /
+# CTA backtest sleeves. Never committed to the repo; carried in the SAME private
+# Drive folder as the personal inputs. filename → manual_proxies cache key.
+_MANUAL_PROXY_SOURCES = {
+    "US_BNPIF73P.xlsx": "CRRYSIM",   # BNP Enhanced Commodity Carry (UEQC/CRRY)
+    "NHIndexMonthly.csv": "NHCTA",   # NilssonHedge CTA index
+}
+
+
+def _seed_manual_proxies() -> None:
+    """Populate the manual-proxy cache (carry / CTA index levels) for the
+    backtest, WITHOUT committing third-party data to the repo.
+
+    Idempotent and fully guarded: a series already in the cache (warm via
+    actions/cache) is left alone; a missing one is sourced — first from the
+    private Drive folder (same channel as the personal inputs), then from a
+    local path — and ingested. If neither is available the backtest simply
+    uses its generic fallback for that sleeve. Never raises.
+    """
+    try:
+        from tarzan.data import manual_proxies as mp
+        missing = {fn: key for fn, key in _MANUAL_PROXY_SOURCES.items()
+                   if mp.get_series(key) is None}
+        if not missing:
+            return  # all warm (e.g. restored from actions/cache)
+
+        downloaded: dict[str, Path] = {}
+        drive_folder = _env("DRIVE_FOLDER_ID")
+        drive_creds = _env("GOOGLE_DRIVE_CREDENTIALS_JSON")
+        if drive_folder and drive_creds:
+            try:
+                from tarzan.delivery.drive_loader import download_files
+                downloaded = download_files(
+                    folder_id=drive_folder, credentials_json=drive_creds,
+                    filenames=list(missing),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.info("Manual-proxy Drive fetch skipped (%s): %s",
+                            type(e).__name__, e)
+
+        for fn, key in missing.items():
+            path = downloaded.get(fn)
+            if path is None:
+                for base in (ROOT / "tbtf-analisi", ROOT / ".private"):
+                    cand = base / fn
+                    if cand.exists():
+                        path = cand
+                        break
+            if path is None:
+                logger.info("Manual proxy %s: source %s not available — "
+                            "backtest uses the generic fallback.", key, fn)
+                continue
+            try:
+                mp.ingest(key, str(path))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Manual proxy ingest failed for %s: %s", key, e)
+    except Exception as e:  # noqa: BLE001
+        logger.info("Manual-proxy seeding skipped (%s): %s", type(e).__name__, e)
+
+
 def run_and_send() -> int:
     """Run the full pipeline, render the newsletter, and email it.
 
@@ -241,6 +301,9 @@ def run_and_send() -> int:
     # Long-history backtest of the candidate portfolios, computed once and
     # rendered into the newsletter's "Backtesting" section. Guarded: a failure
     # (or a missing weights file) simply omits the section, never blocks the send.
+    # Seed the carry/CTA manual proxies from the private Drive first (idempotent)
+    # so the section models those sleeves with the real indices in CI too.
+    _seed_manual_proxies()
     from tarzan.backtest import newsletter_portfolios
     backtest_portfolios = newsletter_portfolios()
 
