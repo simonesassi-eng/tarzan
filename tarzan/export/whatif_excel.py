@@ -15,7 +15,10 @@ import logging
 from datetime import datetime
 
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, Reference
+from openpyxl.chart import BarChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.drawing.line import LineProperties
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -41,6 +44,42 @@ _C = {
     "amber": "D97706",
     "border": "CBD5E1",
 }
+
+# High-contrast, colour-blind-friendlier series palette for charts (indigo,
+# red, green, amber, cyan, pink, violet, slate). Distinct hues + brightness so
+# adjacent portfolio lines/bars are easy to tell apart.
+_CHART_COLORS = ["5B5BD6", "DC2626", "16A34A", "D97706",
+                 "0891B2", "DB2777", "7C3AED", "475569"]
+
+
+def _style_line_series(chart) -> None:
+    """Give each series a distinct solid colour and a readable line width."""
+    for i, s in enumerate(chart.series):
+        color = _CHART_COLORS[i % len(_CHART_COLORS)]
+        s.graphicalProperties = GraphicalProperties()
+        s.graphicalProperties.line = LineProperties(solidFill=color, w=26000)  # ~2pt
+        s.smooth = False
+
+
+def _style_bar_series(chart) -> None:
+    """Give each bar series a distinct solid fill from the palette."""
+    for i, s in enumerate(chart.series):
+        color = _CHART_COLORS[i % len(_CHART_COLORS)]
+        s.graphicalProperties = GraphicalProperties(solidFill=color)
+
+
+def _show_axes(chart, x_title: str, y_title: str) -> None:
+    """Force both axes (and their titles/tick labels) to render — openpyxl
+    leaves ``delete`` unset, which makes Excel hide the axes entirely so the
+    chart looks empty. Setting delete=False restores the scale and labels."""
+    chart.x_axis.title = x_title
+    chart.y_axis.title = y_title
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.x_axis.tickLblPos = "low"
+    chart.y_axis.majorGridlines = chart.y_axis.majorGridlines  # keep y gridlines
+    if chart.legend is not None:
+        chart.legend.position = "b"                            # legend at bottom
 
 from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
 
@@ -69,8 +108,9 @@ def _border():
 
 
 def _renorm(d):
-    total = sum(d.values())
-    return {k: v * 100.0 / total for k, v in d.items()} if total > 0 else dict(d)
+    # Shared primitive — same normalisation the metrics engine and backtest use.
+    from tarzan.engine.allocations import renorm
+    return renorm(d)
 
 
 def _dev_color(delta, tol):
@@ -193,56 +233,101 @@ def _plain_row(ws, row, label, portfolios, text_of, color=None):
     return row + 1
 
 
-def _specs_block(ws, row, portfolios, anchor) -> int:
-    """Summary rows + per-instrument weight matrix (portfolios as columns)."""
+def _instrument_matrix_block(ws, row, portfolios) -> int:
+    """Per-instrument weight matrix, grouped by asset class + role (sub-class) —
+    the same layout as the newsletter's "Instruments × portfolios" block."""
     ncols = _PCOL0 + len(portfolios) - 1
-    row = _section_header(ws, row, "Portfolio specs", ncols)
-    _col_headers(ws, row, portfolios, "", with_target=False)
-    row += 1
-    row = _plain_row(ws, row, "Instruments", portfolios, lambda p: len(p.items))
-    row = _plain_row(ws, row, "Gross exposure", portfolios, lambda p: f"{p.gross:.0f}%")
-    row = _plain_row(ws, row, "Leverage", portfolios, lambda p: f"{p.leverage:.2f}x", color=_C["amber"])
-    row = _plain_row(ws, row, "Notional EUR", portfolios,
-                     lambda p: eur_smart(anchor * p.gross / 100.0), color=_C["muted"])
-    row += 1
-
-    # Weight matrix: Ticker (col A) + Description (col B), portfolios from C.
+    row = _section_header(ws, row, "Instruments \u00d7 portfolios", ncols)
     _col_headers(ws, row, portfolios, "Ticker", with_target=False, second_hdr="Description")
     row += 1
-    tickers = sorted({it.bare for p in portfolios for it in p.items})
-    name_by = {}
+
+    reps: dict = {}
     for p in portfolios:
         for it in p.items:
-            name_by.setdefault(it.bare, short_instrument_name(it.holding.name or it.bare, 46))
+            reps.setdefault(it.bare, it)
+
+    def _cls(it):
+        return (it.holding.asset_class.value
+                if getattr(it.holding, "asset_class", None) else "Other")
+
+    def _role(it):
+        return getattr(it.holding, "role", "") or "\u2014"
+
+    by_cls: dict = {}
+    for it in reps.values():
+        by_cls.setdefault(_cls(it), []).append(it)
+    ordered = [c for c in _ASSET_ORDER if c in by_cls] + \
+              [c for c in by_cls if c not in _ASSET_ORDER]
+    name_by = {b: short_instrument_name(it.holding.name or b, 46)
+               for b, it in reps.items()}
     wmaps = [p.weights() for p in portfolios]
-    for i, tk in enumerate(tickers):
-        bg = _C["alt"] if i % 2 else _C["white"]
-        a = ws.cell(row=row, column=1, value=tk)
-        a.font = _font(9, bold=True)
-        a.fill = _fill(bg)
-        a.border = _border()
-        b = ws.cell(row=row, column=2, value=name_by.get(tk, ""))
-        b.font = _font(9, color=_C["muted"])
-        b.fill = _fill(bg)
-        b.border = _border()
-        for j, wm in enumerate(wmaps):
-            c = ws.cell(row=row, column=_PCOL0 + j,
-                        value=(wm[tk] / 100.0 if tk in wm else None))
-            c.number_format = "0.0%"
-            c.alignment = _align("center")
-            c.fill = _fill(bg)
-            c.border = _border()
+
+    i = 0
+    for cls in ordered:
+        color = asset_class_color(cls)
+        # Class header spanning the full width, coloured swatch via font colour.
+        ch = _merge_label(ws, row, cls, bold=True, color=color, bg=_C["alt"])
+        for j in range(len(portfolios)):
+            cc = ws.cell(row=row, column=_PCOL0 + j)
+            cc.fill = _fill(_C["alt"])
+            cc.border = _border()
         row += 1
+        roles: dict = {}
+        for it in by_cls[cls]:
+            roles.setdefault(_role(it), []).append(it)
+        for role, its in roles.items():
+            if role and role != "\u2014":
+                r = ws.cell(row=row, column=1, value=f"   {role}")
+                r.font = _font(8, italic=True, color=_C["muted"])
+                ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+                row += 1
+            for it in sorted(its, key=lambda x: x.bare):
+                bg = _C["alt"] if i % 2 else _C["white"]
+                i += 1
+                a = ws.cell(row=row, column=1, value=it.bare)
+                a.font = _font(9, bold=True)
+                a.fill = _fill(bg)
+                a.border = _border()
+                b = ws.cell(row=row, column=2, value=name_by.get(it.bare, ""))
+                b.font = _font(9, color=_C["muted"])
+                b.fill = _fill(bg)
+                b.border = _border()
+                for j, wm in enumerate(wmaps):
+                    c = ws.cell(row=row, column=_PCOL0 + j,
+                                value=(wm[it.bare] / 100.0 if it.bare in wm else None))
+                    c.number_format = "0.0%"
+                    c.alignment = _align("center")
+                    c.fill = _fill(bg)
+                    c.border = _border()
+                row += 1
     return row + 1
 
 
+# Same metric set as the newsletter "Portfolio risk metrics" block (incl. Ulcer).
 _METRIC_ROWS = [
     ("CAGR", "cagr", "%"), ("Volatility (ann.)", "volatility", "%"),
     ("Sharpe", "sharpe", ""), ("Sortino", "sortino", ""),
-    ("Max Drawdown", "max_drawdown", "%"),
+    ("Max Drawdown", "max_drawdown", "%"), ("Ulcer index", "ulcer_index", "%"),
     ("VaR 95% (daily)", "var_95", "%"), ("CVaR 95% (daily)", "cvar_95", "%"),
     ("Beta vs S&P 500", "beta", ""), ("Alpha (ann.)", "alpha", "%"),
 ]
+
+
+def _inject_ulcer(portfolios) -> None:
+    """Ensure each portfolio's aligned metrics carry an Ulcer index (computed
+    from its NAV, currency-independent) — mirrors the newsletter block."""
+    from tarzan.engine.stats import compute_ulcer_index
+    for p in portfolios:
+        nav = getattr(p, "nav", None)
+        if nav is None:
+            continue
+        for attr in ("metrics_aligned_eur", "metrics_aligned_usd"):
+            m = getattr(p, attr, None)
+            if isinstance(m, dict) and "ulcer_index" not in m:
+                try:
+                    m["ulcer_index"] = compute_ulcer_index(nav)
+                except Exception:  # noqa: BLE001
+                    m["ulcer_index"] = None
 
 
 def _metric_value(metrics, key, unit):
@@ -252,24 +337,39 @@ def _metric_value(metrics, key, unit):
     return f"{v:.2f}{unit}"
 
 
-def _risk_matrix(ws, row, portfolios) -> int:
+def _metrics_block(ws, row, portfolios, attr, ccy_label) -> int:
+    """Render one currency block of the metrics matrix (EUR or USD)."""
     ncols = _PCOL0 + len(portfolios) - 1
-    w = next((p.window for p in portfolios if getattr(p, "window", None)), None)
-    win = f"{w[0]:%Y-%m} → {w[1]:%Y-%m}" if w else "aligned"
-    row = _section_header(ws, row, f"Portfolio metrics — single aligned history ({win})", ncols)
-    _col_headers(ws, row, portfolios, "Metric", with_target=False)
+    rf = next(((getattr(p, attr, {}) or {}).get("risk_free")
+               for p in portfolios if getattr(p, attr, None)), None)
+    rf_s = f"  ·  risk-free {rf:.2f}%" if isinstance(rf, (int, float)) else ""
+    _merge_label(ws, row, f"{ccy_label}{rf_s}", bold=True, color=_C["band"])
     row += 1
     for i, (label, key, unit) in enumerate(_METRIC_ROWS):
         bg = _C["alt"] if i % 2 else _C["white"]
         _merge_label(ws, row, label, bold=True, bg=bg)
         for j, p in enumerate(portfolios):
             c = ws.cell(row=row, column=_PCOL0 + j,
-                        value=_metric_value(p.metrics_aligned, key, unit))
+                        value=_metric_value(getattr(p, attr, {}), key, unit))
             c.alignment = _align("center")
             c.fill = _fill(bg)
             c.border = _border()
             c.font = _font(9)
         row += 1
+    return row
+
+
+def _risk_matrix(ws, row, portfolios) -> int:
+    _inject_ulcer(portfolios)
+    ncols = _PCOL0 + len(portfolios) - 1
+    w = next((p.window for p in portfolios if getattr(p, "window", None)), None)
+    win = f"{w[0]:%Y-%m} → {w[1]:%Y-%m}" if w else "aligned"
+    row = _section_header(ws, row, f"Portfolio metrics — single aligned history ({win})", ncols)
+    _col_headers(ws, row, portfolios, "Metric", with_target=False)
+    row += 1
+    row = _metrics_block(ws, row, portfolios, "metrics_aligned_eur", "EUR numeraire (unhedged)")
+    row += 1
+    row = _metrics_block(ws, row, portfolios, "metrics_aligned_usd", "USD numeraire")
     return row + 1
 
 
@@ -301,59 +401,68 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     ws.row_dimensions[1].height = 28
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
     st = ws.cell(row=2, column=1, value=(
-        f"Anchor (real invested, ex-cash): {eur_smart(anchor)}  ·  "
+        f"Notional anchor (display only): {eur_smart(anchor)}  ·  "
         f"generated {datetime.now():%Y-%m-%d %H:%M}"))
     st.font = _font(9, italic=True, color=_C["muted"])
 
+    # The workbook mirrors the newsletter "Backtesting" section — same
+    # components, no more, no less (plus the testfol tab): (1) instruments ×
+    # portfolios, (2) diversification (notional asset class + gross/leverage +
+    # leverage-by-class + geography), (3) portfolio risk metrics EUR/USD,
+    # (4) robustness sheet, (5) simulation sheet.
     row = 4
-    row = _specs_block(ws, row, portfolios, anchor)
+    row = _instrument_matrix_block(ws, row, portfolios)
 
-    funded_labels = [c for c in _ASSET_ORDER if any(p.cap.get(c, 0.0) for p in portfolios)]
-    cap_tbl = _alloc_matrix(
-        ws, row, "Asset allocation — FUNDED CAPITAL (where euros sit, incl. cash)",
-        funded_labels, portfolios, lambda p, l: p.cap.get(l, 0.0),
-        target=asset_target, tolerance=tolerance, swatch=asset_class_color)
-    row = cap_tbl["last"] + 2
-
-    notl_labels = [c for c in _ASSET_ORDER if any(p.notl_mix.get(c, 0.0) for p in portfolios)]
-    notl_tbl = _alloc_matrix(
-        ws, row, "Asset allocation — NOTIONAL EXPOSURE (mix, normalised) vs target",
-        notl_labels, portfolios, lambda p, l: p.notl_mix.get(l, 0.0),
-        target=asset_target, tolerance=tolerance, swatch=asset_class_color)
-    row = notl_tbl["last"] + 2
-
-    # Gross exposure per class (leveraged, NOT normalised — sums to > 100%).
+    # --- Diversification: asset class NOTIONAL exposure (gross, leverage-aware),
+    # coloured by drift vs target — like the newsletter's "By asset class".
     gross_labels = [c for c in _ASSET_ORDER if any(p.notl_gross.get(c, 0.0) for p in portfolios)]
     gross_tbl = _alloc_matrix(
-        ws, row, "Asset allocation — NOTIONAL EXPOSURE (gross % of capital, leveraged)",
+        ws, row, "Diversification — by asset class (NOTIONAL, % of capital) vs target",
         gross_labels, portfolios, lambda p, l: p.notl_gross.get(l, 0.0),
-        target=None, swatch=asset_class_color)
+        target=asset_target, tolerance=tolerance, swatch=asset_class_color)
     row = gross_tbl["last"] + 1
-    row = _plain_row(ws, row, "Gross / leverage", portfolios,
-                     lambda p: f"{p.gross:.0f}% · {p.leverage:.2f}x", color=_C["amber"])
-    row += 2
+    tgt_gross = sum(v for v in (asset_target or {}).values() if v) or None
+    row = _plain_row(ws, row, "Gross exposure", portfolios,
+                     lambda p: f"{p.gross:.0f}%")
+    row = _plain_row(ws, row, "Leverage", portfolios,
+                     lambda p: f"{p.leverage:.2f}x", color=_C["amber"])
+    row += 1
 
-    # Leverage applied per class = notional − funded (isolates where leverage
-    # sits; unlevered legs are 0). Only shown when some portfolio is levered.
+    # Leverage by class = notional / funded capital in each class (>1.00x =
+    # partly synthetic). Shown as a ratio (like the newsletter), only when some
+    # class is levered.
+    def _lev(p, c):
+        return (p.notl_gross.get(c, 0.0) / p.cap[c]) if p.cap.get(c, 0.0) > 0 else None
     lev_labels = [c for c in _ASSET_ORDER
-                  if any(abs(p.lev_by_class.get(c, 0.0)) > 0.05 for p in portfolios)]
+                  if any((_lev(p, c) or 0) > 1.001 for p in portfolios)]
     if lev_labels:
-        lev_tbl = _alloc_matrix(
-            ws, row, "Leverage by class (notional − funded, pp of capital)",
-            lev_labels, portfolios, lambda p, l: p.lev_by_class.get(l, 0.0),
-            target=None, swatch=asset_class_color)
-        row = lev_tbl["last"] + 2
+        ncols = _PCOL0 + len(portfolios) - 1
+        row = _section_header(ws, row, "Diversification — leverage by class (notional / funded)", ncols)
+        _col_headers(ws, row, portfolios, "Category", with_target=False)
+        row += 1
+        for k, cls in enumerate(lev_labels):
+            bg = _C["alt"] if k % 2 else _C["white"]
+            _merge_label(ws, row, cls, bold=True, color=asset_class_color(cls), bg=bg)
+            for j, p in enumerate(portfolios):
+                lv = _lev(p, cls)
+                c = ws.cell(row=row, column=_PCOL0 + j,
+                            value=("\u2014" if lv is None else f"{lv:.2f}x"))
+                c.alignment = _align("center")
+                c.fill = _fill(bg)
+                c.border = _border()
+                c.font = _font(9)
+            row += 1
+        row += 1
 
     geo_labels = [c for c in _GEO_ORDER if any(p.geo_notl.get(c, 0.0) for p in portfolios)]
     geo_tbl = _alloc_matrix(
-        ws, row, "Equity geography — NOTIONAL (% of equity sleeve) vs target",
+        ws, row, "Diversification — by geography (NOTIONAL, % of equity sleeve) vs target",
         geo_labels, portfolios, lambda p, l: p.geo_notl.get(l, 0.0),
         target=geo_target, tolerance=tolerance, swatch=geo_color)
     row = geo_tbl["last"] + 2
 
     row = _risk_matrix(ws, row, portfolios)
 
-    _add_chart(ws, cap_tbl, portfolios)
     _robustness_sheet(wb, portfolios)
     if sim_rows:
         _simulation_sheet(wb, sim_rows)
@@ -363,24 +472,6 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     wb.save(path)
     logger.info("What-if workbook saved to %s", path)
     return path
-
-
-def _add_chart(ws, cap_tbl, portfolios) -> None:
-    """Clustered bar of funded-capital allocation across portfolios + target."""
-    cats = Reference(ws, min_col=1, min_row=cap_tbl["first"], max_row=cap_tbl["last"])
-    max_col = cap_tbl["tcol"] or (_PCOL0 + len(portfolios) - 1)
-    bar = BarChart()
-    bar.type = "col"
-    bar.title = "Funded capital allocation"
-    bar.height = 8
-    bar.width = 16
-    bar.y_axis.numFmt = "0%"
-    data = Reference(ws, min_col=_PCOL0, max_col=max_col,
-                     min_row=cap_tbl["header_row"], max_row=cap_tbl["last"])
-    bar.add_data(data, titles_from_data=True)
-    bar.set_categories(cats)
-    anchor_col = get_column_letter(max_col + 2)
-    ws.add_chart(bar, f"{anchor_col}4")
 
 
 def _robustness_sheet(wb, portfolios) -> None:
@@ -451,11 +542,139 @@ def _robustness_sheet(wb, portfolios) -> None:
     row = 3
     row = block(row, "Rolling & Monte-Carlo (aligned history)", rolling_rows)
     row = block(row, "Historical stress scenarios", stress_rows)
+
+    # Plain-language legend so the metrics are self-explanatory.
+    row = _section_header(ws, row, "How to read these metrics", ncol)
+    legend = [
+        ("Rolling 1Y / 3Y return (p05 · median · p95)",
+         "Annualised return over EVERY rolling 1- or 3-year window in the history. "
+         "p05 = unlucky start (5th percentile), median = typical, p95 = lucky start. "
+         "A wide spread means the outcome depends a lot on WHEN you start."),
+        ("1Y windows positive",
+         "Share of all rolling 1-year windows that ended in positive territory."),
+        ("Rolling 1Y Sharpe min–max",
+         "Worst-to-best annualised Sharpe over any rolling 1-year window (risk-adjusted consistency)."),
+        ("MC CAGR 1Y [p05 / p95]",
+         "Monte-Carlo (block bootstrap, 2000 paths): 90% confidence band for next-year CAGR. "
+         "Blocks keep momentum / volatility-clustering, unlike a naive random resample."),
+        ("MC MaxDD p05 (worst)",
+         "Bad-case (5th-percentile) max drawdown across the Monte-Carlo paths — a plausible worst year."),
+        ("Historical stress maxDD / return",
+         "Actual peak-to-trough drawdown (and total return) the portfolio WOULD have suffered in each "
+         "real crisis window, using the reconstructed history."),
+    ]
+    for i, (term, desc) in enumerate(legend):
+        bg = _C["alt"] if i % 2 else _C["white"]
+        a = ws.cell(row=row, column=1, value=term)
+        a.font = _font(9, bold=True); a.fill = _fill(bg); a.border = _border()
+        a.alignment = _align("left", "top")
+        b = ws.cell(row=row, column=2, value=desc)
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
+        b.font = _font(9, color=_C["muted"]); b.fill = _fill(bg); b.border = _border()
+        b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        ws.row_dimensions[row].height = 42
+        row += 1
+    row += 1
+
+    row = _robustness_charts(ws, portfolios, row, ncol)
+
+    try:
+        from tarzan.data import proxy_data as _pd
+        _ccy = getattr(_pd, "_TARGET_CCY", "EUR")
+    except Exception:  # noqa: BLE001
+        _ccy = "EUR"
     note = ws.cell(row=row, column=1, value=(
         "Single aligned history = per-instrument splice: real fund returns where available, "
-        "proxy-reconstructed (geo + leverage financing) before inception. Modeled, USD-based."))
+        f"proxy-reconstructed (geo + leverage financing) before inception. Modeled, {_ccy}-based; "
+        "equity proxies are total-return (^SP500TR), commodities collateralised, "
+        "managed futures = RYMFX/AQMNX or custom SG-CTA CSV. Net of each fund's TER on "
+        "the modeled base (real returns already net); periodic rebalancing (CLI "
+        "--rebalance, default quarterly), costless. Sharpe/Sortino use a currency-matched, "
+        "TIME-VARYING daily risk-free (USD = ^IRX T-bill; EUR = ECB AAA-govt 3M spot via "
+        "SDMX); the header % is the window average of that path."))
     note.font = _font(8, italic=True, color=_C["muted"])
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncol)
+
+
+def _robustness_charts(ws, portfolios, start_row, ncol) -> int:
+    """Line charts from the aligned monthly NAV: growth-of-100, drawdown, and
+    rolling 5Y / 10Y annualised return. Source data lives on a hidden helper
+    SHEET (not hidden columns — Excel refuses to plot hidden cells, which is why
+    the earlier version showed blank charts)."""
+    try:
+        import pandas as pd
+    except Exception:  # noqa: BLE001
+        return start_row
+    navs = {p.name: p.nav[p.nav > 0] for p in portfolios
+            if getattr(p, "nav", None) is not None and len(p.nav) >= 30}
+    if not navs:
+        return start_row
+    daily = pd.DataFrame(navs).dropna(how="all").ffill()
+    if daily.empty or daily.shape[0] < 30:
+        return start_row
+    cols = list(daily.columns)
+    n = len(cols)
+
+    def _roll_ann(df, win):
+        r = (df / df.shift(win)) ** (252.0 / win) - 1.0
+        return r * 100.0
+
+    growth = (daily / daily.iloc[0] * 100.0).iloc[::21]
+    dd = ((daily / daily.cummax() - 1.0) * 100.0).iloc[::21]
+    r5 = _roll_ann(daily, 5 * 252).iloc[::21].dropna(how="all")
+    r10 = _roll_ann(daily, 10 * 252).iloc[::21].dropna(how="all")
+
+    # Dedicated hidden data sheet (charts still plot from a hidden sheet).
+    wb = ws.parent
+    data_title = "ChartData"
+    dws = wb[data_title] if data_title in wb.sheetnames else wb.create_sheet(data_title)
+
+    anchor_col = 1
+
+    def _write_block(frame, title):
+        """Write [Date | names...] starting at the next free column; return the
+        (first_data_col, n, header_row, last_row) needed to build References."""
+        nonlocal anchor_col
+        c0 = anchor_col
+        dws.cell(row=1, column=c0, value=title)
+        dws.cell(row=2, column=c0, value="Date")
+        for j, name in enumerate(cols):
+            dws.cell(row=2, column=c0 + 1 + j, value=name)
+        for i, (idx, r) in enumerate(frame.iterrows(), start=3):
+            dws.cell(row=i, column=c0, value=idx.to_pydatetime().date())
+            for j, name in enumerate(cols):
+                v = r[name]
+                dws.cell(row=i, column=c0 + 1 + j,
+                         value=None if pd.isna(v) else round(float(v), 2))
+        last = frame.shape[0] + 2
+        anchor_col = c0 + n + 2          # leave a gap before the next block
+        return c0, last
+
+    def _line(frame, title, y_title, at_cell, logscale=False):
+        c0, last = _write_block(frame, title)
+        ch = LineChart()
+        ch.title = title
+        ch.height, ch.width = 9, 22
+        ch.x_axis.number_format = "yyyy"
+        ch.x_axis.majorTimeUnit = "years"
+        if logscale:
+            ch.y_axis.scaling.logBase = 10
+        data = Reference(dws, min_col=c0 + 1, max_col=c0 + n, min_row=2, max_row=last)
+        cats = Reference(dws, min_col=c0, min_row=3, max_row=last)
+        ch.add_data(data, titles_from_data=True)
+        ch.set_categories(cats)
+        _style_line_series(ch)                 # distinct colours + line width
+        _show_axes(ch, "Year", y_title)        # force axes/titles to render
+        ws.add_chart(ch, at_cell)
+
+    _line(growth, "Growth of 100 — aligned history (monthly)", "Index (start = 100)",
+          f"A{start_row}")
+    _line(dd, "Drawdown (underwater), monthly", "Drawdown %", f"A{start_row + 19}")
+    _line(r5, "Rolling 5-year return (annualised)", "Ann. return %", f"A{start_row + 38}")
+    _line(r10, "Rolling 10-year return (annualised)", "Ann. return %", f"A{start_row + 57}")
+
+    dws.sheet_state = "hidden"
+    return start_row + 76
 
 
 def _simulation_sheet(wb, sim_rows) -> None:
@@ -493,7 +712,10 @@ def _simulation_sheet(wb, sim_rows) -> None:
         row += 1
     note = ws.cell(row=row + 1, column=1, value=(
         "Recent period uses REAL fund returns from 'Real from'; earlier history is the proxy "
-        "base (geo/asset index × exposure, leverage financed at ^IRR+0.5%). Modeled, USD-based."))
+        "base (geo/asset index × exposure, leverage financed at ^IRX+0.5%, net of TER). Proxies "
+        "are total-return, converted to the reporting currency; modeled, not an exact replication. "
+        "Factor ETFs additionally carry a factor tilt (Developed FF SMB/HML/RMW/MOM loadings, shown in the "
+        "base column) so their value/momentum/quality tilt is preserved pre-inception."))
     note.font = _font(8, italic=True, color=_C["muted"])
     ws.merge_cells(start_row=row + 1, start_column=1, end_row=row + 1, end_column=4)
 

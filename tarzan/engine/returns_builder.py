@@ -42,6 +42,7 @@ from tarzan.data.bond_fetcher import (
     looks_like_bond_from_orders,
     value_position,
 )
+from tarzan.engine import allocations as _alloc
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
 from tarzan.runtime import data_quality as dq
@@ -1133,6 +1134,8 @@ def build_allocation_timeline(
         # it), so leveraged/efficient-core funds make the class weights sum to
         # >100% rather than being normalised away.
         invested = 0.0
+        class_pairs: list = []           # (value, class breakdown minus cash)
+        geo_pairs: list = []             # (equity €, per-holding normalised geo)
         for isin, v in iso_val.items():
             bd = _breakdown_for(isin)
             prim = max(bd, key=bd.get) if bd else "Other"
@@ -1140,19 +1143,19 @@ def build_allocation_timeline(
             if prim == cash_class:
                 continue
             invested += v
-            for cls, pct in bd.items():
-                if cls == cash_class:
-                    continue
-                class_val[cls] = class_val.get(cls, 0.0) + v * (float(pct) / 100.0)
+            class_pairs.append((v, {cls: pct for cls, pct in bd.items()
+                                    if cls != cash_class}))
             eq_contrib = v * (float(bd.get(eq_class, 0.0)) / 100.0)
             iso_eq[isin] = eq_contrib
             if eq_contrib > 0:
                 h = enriched_by_isin.get(isin)
                 if h and h.geo_breakdown:
-                    tot = sum(h.geo_breakdown.values()) or 1.0
-                    for g, p in h.geo_breakdown.items():
-                        gn = g.value if hasattr(g, "value") else str(g)
-                        geo_val[gn] = geo_val.get(gn, 0.0) + eq_contrib * (p / tot)
+                    geo_pairs.append((eq_contrib, _alloc.renorm(
+                        {(g.value if hasattr(g, "value") else str(g)): p
+                         for g, p in h.geo_breakdown.items()})))
+        # Shared aggregation primitive (same as the live snapshot & backtest).
+        class_val = _alloc.accumulate(class_pairs)
+        geo_val = _alloc.accumulate(geo_pairs)
         eq_val = sum(iso_eq.values())
         asset_series.append({
             k: (val / invested * 100.0)

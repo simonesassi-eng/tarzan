@@ -252,13 +252,74 @@ def twror(
 # Risk
 # ======================================================================
 
-def compute_sharpe(annual_return: float, annual_volatility: float) -> float:
+def compute_sharpe(annual_return: float, annual_volatility: float,
+                   risk_free: float | None = None) -> float:
+    rf = RISK_FREE_RATE if risk_free is None else risk_free
     if annual_volatility <= 0:
         return float("nan")
-    return (annual_return - RISK_FREE_RATE) / annual_volatility
+    return (annual_return - rf) / annual_volatility
 
 
-def compute_sortino(daily_returns: pd.Series, annual_return: float) -> float:
+def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
+    """Align a risk-free input to ``daily_returns``' index, returning a daily
+    fraction per row. ``rf_daily`` may be a daily-fraction ``pd.Series`` (a
+    time-varying path, aligned by date with forward-fill), a scalar annual
+    percent, or ``None`` (falls back to ``RISK_FREE_RATE``)."""
+    idx = daily_returns.index
+    if isinstance(rf_daily, pd.Series) and not rf_daily.empty:
+        def _norm(ix):
+            ix = pd.DatetimeIndex(ix)
+            if getattr(ix, "tz", None) is not None:
+                ix = ix.tz_convert("UTC").tz_localize(None)
+            return ix.normalize()
+        r = rf_daily.copy()
+        r.index = _norm(r.index)
+        r = r[~r.index.duplicated(keep="last")]
+        aligned = r.reindex(_norm(idx), method="ffill").ffill().bfill()
+        aligned.index = idx
+        return aligned
+    scalar = (RISK_FREE_RATE if rf_daily is None else float(rf_daily))
+    return pd.Series(scalar / 100.0 / TRADING_DAYS, index=idx)
+
+
+def compute_sharpe_tv(daily_returns: pd.Series, rf_daily) -> float:
+    """Annualised Sharpe from a TIME-VARYING daily risk-free path.
+
+    Builds daily excess returns ``r_t − rf_t`` (each day charged its own
+    prevailing short rate) and annualises ``mean/std × √252``. This is the
+    textbook excess-return Sharpe and is strictly more correct than using a
+    single window-average rate when rates move a lot across the window.
+    """
+    if daily_returns is None or daily_returns.empty:
+        return float("nan")
+    rf = _align_rf_daily(daily_returns, rf_daily)
+    excess = (daily_returns - rf).dropna()
+    sd = float(excess.std())
+    if excess.empty or sd <= 0:
+        return float("nan")
+    return float(excess.mean()) / sd * np.sqrt(TRADING_DAYS)
+
+
+def compute_sortino_tv(daily_returns: pd.Series, rf_daily) -> float:
+    """Sortino with a TIME-VARYING daily risk-free target. Downside deviation
+    is the RMS shortfall of daily excess returns below zero (i.e. below the
+    prevailing daily risk-free), annualised — the target-semideviation form,
+    consistent with ``compute_sortino`` but with a per-day target."""
+    if daily_returns is None or daily_returns.empty:
+        return float("nan")
+    rf = _align_rf_daily(daily_returns, rf_daily)
+    excess = (daily_returns - rf).dropna()
+    if excess.empty:
+        return float("nan")
+    downside = excess.clip(upper=0.0)
+    dd = float((downside ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS)
+    if dd <= 0:
+        return float("nan")
+    return float(excess.mean()) * TRADING_DAYS / dd
+
+
+def compute_sortino(daily_returns: pd.Series, annual_return: float,
+                    risk_free: float | None = None) -> float:
     """Sortino ratio using the textbook *target downside deviation*.
 
     The downside deviation is the root-mean-square shortfall below the
@@ -270,12 +331,13 @@ def compute_sortino(daily_returns: pd.Series, annual_return: float) -> float:
     """
     if daily_returns is None or daily_returns.empty:
         return float("nan")
-    target_daily = RISK_FREE_RATE / 100.0 / TRADING_DAYS
+    rf = RISK_FREE_RATE if risk_free is None else risk_free
+    target_daily = rf / 100.0 / TRADING_DAYS
     shortfall = (daily_returns - target_daily).clip(upper=0.0)
     downside_std = float((shortfall ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS) * 100
     if downside_std <= 0:
         return float("nan")
-    return (annual_return - RISK_FREE_RATE) / downside_std
+    return (annual_return - rf) / downside_std
 
 
 def compute_max_drawdown(series: pd.Series) -> float:
@@ -344,6 +406,7 @@ def _compute_beta_alpha(
     series_or_returns: pd.Series,
     benchmark_history: pd.Series,
     annual_return: float = 0.0,
+    risk_free: float | None = None,
 ) -> tuple[float, float]:
     """Compute beta and Jensen's alpha via OLS on weekly returns.
 
@@ -388,7 +451,7 @@ def _compute_beta_alpha(
         return float("nan"), float("nan")
 
     # Weekly risk-free
-    rf_weekly = RISK_FREE_RATE / 100.0 / 52.0
+    rf_weekly = (RISK_FREE_RATE if risk_free is None else risk_free) / 100.0 / 52.0
 
     port_excess = rets["port"] - rf_weekly
     bench_excess = rets["bench"] - rf_weekly

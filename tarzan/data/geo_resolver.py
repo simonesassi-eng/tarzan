@@ -181,11 +181,13 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
     """
     try:
         import yfinance as yf
+        from tarzan.data import _yf_net
         t = yf.Ticker(ticker)
 
-        # Try to get top holdings
+        # Try to get top holdings (spaced+retried against 429 bursts).
         try:
-            holdings_df = t.funds_data.top_holdings
+            holdings_df = _yf_net.fetch_yf(lambda: t.funds_data.top_holdings,
+                                           what=f"top_holdings {ticker}", log=logger)
         except Exception:
             holdings_df = None
 
@@ -201,9 +203,11 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
             if weight <= 0:
                 continue
 
-            # Look up country for this holding
+            # Look up country for this holding (spaced against 429 bursts).
             try:
-                h_info = yf.Ticker(str(holding_ticker)).info or {}
+                h_info = _yf_net.fetch_yf(
+                    lambda ht=holding_ticker: yf.Ticker(str(ht)).info,
+                    what=f"info {holding_ticker}", log=logger) or {}
                 country = h_info.get("country", "")
                 geo = gm.get(country, Geography.OTHER)
             except Exception:
@@ -257,6 +261,70 @@ def justetf_index_name(isin: str) -> Optional[str]:
     except Exception as e:
         logger.debug("justETF failed for %s: %s", isin, e)
     return None
+
+
+def resolve_isin(symbol: str) -> Optional[str]:
+    """Best-effort ISIN for a bare/suffixed TICKER, so ticker and ISIN are
+    interchangeable inputs (no manual ISIN entry needed).
+
+    Chain: learned ticker↔ISIN cache → yfinance ``.isin`` (reliable for US
+    listings; European UCITS listings usually return "-"). Any hit is cached
+    (immutable). Returns None when no free source knows it (caller then keeps
+    whatever ISIN it already has, or degrades gracefully).
+    """
+    if not symbol:
+        return None
+    from tarzan.data import price_cache
+    cached = price_cache.load_ticker_isin(symbol)
+    if cached:
+        return cached
+    try:
+        import yfinance as yf
+        from tarzan.data import _yf_net
+        raw = _yf_net.fetch_yf(lambda: yf.Ticker(symbol).isin,
+                               what=f"isin {symbol}", log=logger) or ""
+        raw = raw.replace("-", "").strip().upper()
+        if len(raw) == 12 and raw[:2].isalpha():
+            price_cache.store_ticker_isin(symbol, raw)
+            return raw
+    except Exception as e:  # noqa: BLE001
+        logger.debug("ISIN resolve failed for %s: %s", symbol, e)
+    return None
+
+
+def justetf_ter(isin: str) -> Optional[float]:
+    """Total expense ratio (as a FRACTION, e.g. 0.0020 == 0.20%) for an ISIN
+    from its justETF profile page. yfinance rarely carries the TER for European
+    UCITS ETFs, so this is the automatic source for a new EU ticker's real fee.
+
+    Disk-cached per ISIN (``price_cache`` TER map, TTL-refreshed) — including a
+    cached "miss" (None) so an ISIN justETF has no TER for is not re-fetched
+    every run. Returns None if unavailable (caller falls back to a class default).
+    """
+    if not isin:
+        return None
+    from tarzan.data import price_cache
+    if price_cache.has_ter(isin):
+        return price_cache.load_ter(isin)
+    ter: Optional[float] = None
+    try:
+        import re
+
+        import requests as req
+        url = f"https://www.justetf.com/en/etf-profile.html?isin={isin}"
+        resp = req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if resp.status_code == 200:
+            m = re.search(r"[Tt]otal expense ratio[^0-9]{0,40}?(\d[.,]\d{1,2})\s*%",
+                          resp.text)
+            if m:
+                pct = float(m.group(1).replace(",", "."))
+                if 0.0 <= pct < 5.0:                 # sane TER band, in percent
+                    ter = pct / 100.0                # → fraction
+                    logger.info("justETF TER: %s → %.2f%%", isin, pct)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("justETF TER failed for %s: %s", isin, e)
+    price_cache.store_ter(isin, ter)                 # cache hit OR miss
+    return ter
 
 
 # ---------------------------------------------------------------------------

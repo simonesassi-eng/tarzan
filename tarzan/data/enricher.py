@@ -36,6 +36,7 @@ import yfinance as yf
 
 from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.data import price_cache
+from tarzan.data import _yf_net
 from tarzan import config as cfg
 from tarzan.runtime import data_quality as dq
 
@@ -82,10 +83,8 @@ def _backtest_period() -> str:
 # All in-memory stores are guarded by a lock because enrichment runs under
 # a ThreadPoolExecutor.
 
-_MAX_FETCH_ATTEMPTS = 3          # total tries per request before giving up
-_BACKOFF_BASE_SECONDS = 0.75     # exponential backoff base
+# yfinance spacing/backoff constants now live in tarzan.data._yf_net (shared).
 _OPENFIGI_MIN_INTERVAL = 0.3     # spacing between OpenFIGI calls (~25/min cap)
-_YF_MIN_INTERVAL = 0.2           # min spacing between yfinance calls (anti-429)
 
 _net_lock = threading.Lock()
 _openfigi_memo: dict[str, list] = {}
@@ -93,7 +92,6 @@ _ticker_info_memo: dict[str, dict] = {}
 _history_memo: dict[str, pd.Series] = {}
 _benchmark_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
-_yf_last_call: list[float] = [0.0]        # mutable single-cell timestamp
 
 
 def reset_run_caches() -> None:
@@ -107,50 +105,23 @@ def reset_run_caches() -> None:
         _geo_breakdown_memo.clear()
         _geo_source_memo.clear()
         _openfigi_last_call[0] = 0.0
-        _yf_last_call[0] = 0.0
+    _yf_net.reset()
 
 
+# yfinance spacing + retry live in the shared network layer so the enricher,
+# the backtest proxy fetch and the geo/ISIN resolver all share ONE throttle
+# discipline. Bound the enricher's logger into retry so its debug lines keep
+# the enricher origin.
 def _space_yf_call() -> None:
-    """Enforce a minimum interval between yfinance calls across threads.
-
-    yfinance scrapes Yahoo's unofficial endpoints, which rate-limit (HTTP
-    429) on bursts. The ThreadPoolExecutor would otherwise fire all
-    requests at once; this spreads them out by at least _YF_MIN_INTERVAL
-    so we stay under the limit and keep market-data coverage high.
-    """
-    with _net_lock:
-        wait = _YF_MIN_INTERVAL - (_time.monotonic() - _yf_last_call[0])
-        if wait > 0:
-            _time.sleep(wait)
-        _yf_last_call[0] = _time.monotonic()
+    _yf_net.space_yf_call()
 
 
 def _is_transient_error(exc: Exception) -> bool:
-    """True when an exception looks like throttling/transient network
-    trouble (worth retrying) rather than a definitive 'not found'."""
-    msg = str(exc).lower()
-    transient = ("429", "too many requests", "rate limit", "timed out",
-                 "timeout", "connection", "temporarily", "503", "502")
-    return any(t in msg for t in transient)
+    return _yf_net.is_transient_error(exc)
 
 
 def _retry(fn, *, what: str):
-    """Run ``fn`` with bounded exponential backoff on transient errors.
-
-    Returns ``fn()`` on success, or None if every attempt failed. A
-    definitive (non-transient) error is not retried.
-    """
-    for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
-        try:
-            return fn()
-        except Exception as e:  # noqa: BLE001 — classified below
-            if not _is_transient_error(e) or attempt == _MAX_FETCH_ATTEMPTS:
-                logger.debug("%s failed (attempt %d): %s", what, attempt, e)
-                return None
-            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 0.25)
-            logger.debug("%s throttled (attempt %d), backing off %.2fs", what, attempt, delay)
-            _time.sleep(delay)
-    return None
+    return _yf_net.retry(fn, what=what, log=logger)
 
 
 # ---------------------------------------------------------------------------
@@ -1334,6 +1305,12 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         holding.ter = _as_fraction(
             info.get("annualReportExpenseRatio") or info.get("expenseRatio")
         )
+        # Curated TER from instrument_taxonomy.csv (a FRACTION) overrides the
+        # yfinance value when present — yfinance rarely carries a correct TER
+        # for EU UCITS ETFs, so the hand-verified taxonomy cell is authoritative.
+        _tax_ter = cfg.ter_for(holding.isin, holding.ticker)
+        if _tax_ter is not None:
+            holding.ter = _tax_ter
         holding.yield_pct = _as_fraction(
             info.get("yield") or info.get("dividendYield")
             or info.get("trailingAnnualDividendYield") or info.get("fiveYearAvgDividendYield")
@@ -1562,6 +1539,17 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
             )
             return False
         holding.role = role
+        # Resilient display name: fall back to the curated taxonomy ``name``
+        # when enrichment produced none (yfinance unreachable / rate-limited)
+        # or left the bare ticker as the name — so a curated instrument always
+        # shows a real name, even offline and even when its taxonomy row is
+        # keyed only by ticker (no ISIN).
+        bare = (holding.ticker or "").split(".")[0].strip().upper()
+        if not holding.name or holding.name.strip().upper() in (
+                (holding.ticker or "").strip().upper(), bare):
+            tax_name = cfg.name_for(holding.isin, holding.ticker)
+            if tax_name:
+                holding.name = tax_name
         return True
     return False
 
