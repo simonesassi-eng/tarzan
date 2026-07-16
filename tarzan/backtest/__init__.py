@@ -18,7 +18,7 @@ from tarzan.backtest.model import (  # noqa: F401
 )
 from tarzan.backtest.engine import (  # noqa: F401
     backfill_label, compute_robustness, instrument_exposures,
-    portfolio_long_returns, run_backtest, simulation_rows,
+    newsletter_portfolios, portfolio_long_returns, run_backtest, simulation_rows,
 )
 from tarzan.backtest.loader import (  # noqa: F401
     build_symbol_map, enrich_universe, load_portfolios, portfolio_items,
@@ -29,7 +29,7 @@ from tarzan.backtest.testfol import (  # noqa: F401
 )
 
 __all__ = [
-    "run_backtest", "Portfolio", "WhatIfItem", "compute_allocations",
+    "run_backtest", "newsletter_portfolios", "Portfolio", "WhatIfItem", "compute_allocations",
     "simulation_rows", "instrument_exposures", "portfolio_long_returns",
     "compute_robustness", "backfill_label", "instrument_ter",
     "testfol_lines", "testfol_instrument_map", "load_portfolios",
