@@ -142,34 +142,6 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
         logger.debug("Run report step failed: %s", e)
 
 
-_WEIGHTS_PATH = "input/portfolio_test.csv"
-
-
-def _run_backtest(config, *, deterministic: bool):
-    """Run the candidate-portfolio backtest once (shared by newsletter + Excel).
-
-    Returns the list of Portfolio objects, or None when it is skipped
-    (deterministic/as-of run, missing weights file) or fails. Fully guarded —
-    the backtest is network-bound and must never break the primary run.
-    """
-    if deterministic:
-        logger.info("Backtest skipped (deterministic/as-of run).")
-        return None
-    if not os.path.exists(_WEIGHTS_PATH):
-        logger.info("Backtest skipped (%s not found).", _WEIGHTS_PATH)
-        return None
-    try:
-        from tarzan.backtest import run_backtest
-        logger.info("Running candidate-portfolio backtest (%s)...", _WEIGHTS_PATH)
-        portfolios = run_backtest(_WEIGHTS_PATH, currency="eur",
-                                  backfill="factor", rebalance="quarterly")
-        logger.info("Backtest built %d candidate portfolio(s).", len(portfolios or []))
-        return portfolios or None
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Backtest skipped (%s): %s", type(e).__name__, e)
-        return None
-
-
 def _export_whatif(portfolios, config, output_dir: str) -> None:
     """Write the what-if Excel workbook from the computed backtest. Guarded."""
     try:
@@ -246,8 +218,9 @@ def main(argv=None) -> int:
         # what-if Excel, so a single run yields all three artifacts. Skipped in
         # deterministic / as-of runs (network-bound, not reproducible) and fully
         # guarded so it can never break the primary newsletter.
-        backtest_portfolios = _run_backtest(
-            config, deterministic=(args.deterministic or as_of is not None))
+        from tarzan.backtest import newsletter_portfolios
+        backtest_portfolios = newsletter_portfolios(
+            deterministic=(args.deterministic or as_of is not None))
 
         # Render the newsletter — Tarzan's primary artifact. (Benchmark names
         # are resolved from config inside generate_newsletter when omitted.)

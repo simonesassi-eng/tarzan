@@ -260,6 +260,35 @@ def backfill_label(backfill: str) -> str:
         backfill, "1:1 proxy")
 
 
+_DEFAULT_WEIGHTS = ROOT / "input" / "portfolio_test.csv"
+
+
+def newsletter_portfolios(*, deterministic: bool = False):
+    """Guarded backtest for the newsletter/Excel: run the candidate backtest
+    ONCE with the production defaults, or return None when it should be skipped.
+
+    Shared by the CLI (``tarzan.main``) and the email path (``tarzan.delivery``)
+    so both wire the backtest identically. Skipped in deterministic/as-of runs
+    (network-bound, not reproducible) and when the weights file is absent; any
+    failure is swallowed so it can never break the primary newsletter/send.
+    """
+    if deterministic:
+        logger.info("Backtest skipped (deterministic/as-of run).")
+        return None
+    if not _DEFAULT_WEIGHTS.exists():
+        logger.info("Backtest skipped (%s not found).", _DEFAULT_WEIGHTS)
+        return None
+    try:
+        logger.info("Running candidate-portfolio backtest (%s)...", _DEFAULT_WEIGHTS)
+        portfolios = run_backtest(_DEFAULT_WEIGHTS, currency="eur",
+                                  backfill="factor", rebalance="quarterly")
+        logger.info("Backtest built %d candidate portfolio(s).", len(portfolios or []))
+        return portfolios or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Backtest skipped (%s): %s", type(e).__name__, e)
+        return None
+
+
 def run_backtest(weights_path: str | Path, *, currency: str = "eur",
                  backfill: str = "factor", rebalance: str = "quarterly",
                  ) -> list["Portfolio"]:

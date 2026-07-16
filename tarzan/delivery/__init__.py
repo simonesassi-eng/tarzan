@@ -238,10 +238,17 @@ def run_and_send() -> int:
                 "enabled (market-context block resolved at render)"
                 if _ai_on() else "disabled (no GEMINI_API_KEY / deterministic)")
 
+    # Long-history backtest of the candidate portfolios, computed once and
+    # rendered into the newsletter's "Backtesting" section. Guarded: a failure
+    # (or a missing weights file) simply omits the section, never blocks the send.
+    from tarzan.backtest import newsletter_portfolios
+    backtest_portfolios = newsletter_portfolios()
+
     html = render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=issue_number,
+        backtest_portfolios=backtest_portfolios,
     )
 
     subject = build_subject(metrics, subject_prefix, trigger_label)
