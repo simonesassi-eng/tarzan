@@ -326,3 +326,67 @@ def store_geo(key: str, breakdown: dict, source: str) -> None:
             pickle.dump(data, f)
     except Exception as e:  # noqa: BLE001
         logger.debug("Geo cache write failed for %s: %s", key, e)
+
+
+# ---------------------------------------------------------------------------
+# Ticker → ISIN cross-reference (bidirectional, learned over time)
+# ---------------------------------------------------------------------------
+# ISIN↔ticker is immutable, so once learned (from any ISIN-keyed use, from
+# yfinance for US tickers, or from a resolver) it is cached forever. This lets
+# the what-if tool accept a bare TICKER or an ISIN interchangeably: whichever
+# is supplied, the other is filled in automatically on later runs.
+
+def _ticker_isin_path() -> Path:
+    return _subdir("xref") / "ticker_isin.pkl"
+
+
+def _load_ticker_isin_map() -> dict:
+    if not is_enabled():
+        return {}
+    path = _ticker_isin_path()
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Ticker↔ISIN cache read failed: %s", e)
+        return {}
+
+
+def load_ticker_isin(ticker: str) -> Optional[str]:
+    """Cached ISIN for a bare ticker (immutable; no TTL), or None."""
+    if not ticker:
+        return None
+    return _load_ticker_isin_map().get(ticker.split(".")[0].strip().upper())
+
+
+def load_ticker_isin_reverse(isin: str) -> Optional[str]:
+    """Cached bare ticker for an ISIN — the reverse of :func:`load_ticker_isin`
+    — or None. The stored map is ticker→ISIN, so this scans its items; the map
+    holds at most a few hundred instruments, so a linear scan is fine and keeps
+    a single source of truth (no second on-disk map to keep in sync)."""
+    if not isin:
+        return None
+    want = isin.replace("-", "").strip().upper()
+    for ticker, mapped_isin in _load_ticker_isin_map().items():
+        if mapped_isin == want:
+            return ticker
+    return None
+
+
+def store_ticker_isin(ticker: str, isin: str) -> None:
+    """Learn a ticker→ISIN mapping (best-effort, both keyed forms)."""
+    if not is_enabled() or not ticker or not isin:
+        return
+    clean = isin.replace("-", "").strip().upper()
+    if len(clean) != 12 or not clean[:2].isalpha():
+        return
+    try:
+        data = _load_ticker_isin_map()
+        data[ticker.split(".")[0].strip().upper()] = clean
+        with open(_ticker_isin_path(), "wb") as f:
+            pickle.dump(data, f)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Ticker↔ISIN cache write failed for %s: %s", ticker, e)

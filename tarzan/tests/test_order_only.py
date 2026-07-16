@@ -224,6 +224,54 @@ def test_seed_matches_held_by_bare_ticker():
     assert orchestrator._seed_missing_targets(holdings, targets) == []
 
 
+def test_apply_target_bridges_isin_to_ticker_via_xref(monkeypatch):
+    # Regression (the "UEQC" optimizer bug): a Fineco order carries only an
+    # ISIN (holding.ticker defaults to the ISIN, pre-enrichment), the target
+    # row is keyed only by TICKER, and the NAMES do NOT prefix-match
+    # ("UBS CMCI USD-A-AC" vs "UBS CMCI Commodity Carry"). Only the learned
+    # ISIN↔ticker xref can bridge them; without it the target never attaches,
+    # the position sells to 0%, and a phantom buy-new is seeded — the SAME fund
+    # as both BUY and SELL.
+    from tarzan.data import price_cache
+    monkeypatch.setattr(price_cache, "load_ticker_isin_reverse",
+                        lambda isin: "UEQC" if isin == "IE00BKFB6L02" else None)
+    monkeypatch.setattr(price_cache, "load_ticker_isin", lambda t: None)
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "IE00BKFB6L02", qty=40.0, net=-5099.9),
+    ])
+    holdings[0].ticker = "IE00BKFB6L02"  # no ticker on the order → ISIN
+    holdings[0].name = "UBS CMCI USD-A-AC"  # broker name, does NOT match target
+    # Target keyed exactly like the real loader keys a ticker-only row.
+    row = {"isin": "", "ticker": "UEQC.DE", "name": "UBS CMCI Commodity Carry",
+           "target_portfolio": 5.0, "no_buy_no_sell": False}
+    targets = {"UEQC.DE": row, "TICKER:UEQC": row}
+    orchestrator._apply_per_holding_targets(holdings, targets)
+    assert holdings[0].target_portfolio == pytest.approx(5.0)
+    # And it must NOT be seeded as a phantom buy-new.
+    assert orchestrator._seed_missing_targets(holdings, targets) == []
+
+
+def test_apply_target_bridges_ticker_to_isin_via_xref(monkeypatch):
+    # The mirror case: holding known by ticker, target keyed by ISIN, bridged
+    # through the ticker→ISIN xref.
+    from tarzan.data import price_cache
+    monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda isin: None)
+    monkeypatch.setattr(price_cache, "load_ticker_isin",
+                        lambda t: "IE00BKFB6L02" if t.split(".")[0].upper() == "UEQC" else None)
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "PLACEHOLDER01", qty=40.0, net=-5099.9),
+    ])
+    # Holding known by ticker only (ISIN not carried on this leg).
+    holdings[0].isin = ""
+    holdings[0].ticker = "UEQC.DE"
+    holdings[0].name = "UBS CMCI USD-A-AC"
+    row = {"isin": "IE00BKFB6L02", "ticker": "", "name": "UBS CMCI Commodity Carry",
+           "target_portfolio": 5.0, "no_buy_no_sell": False}
+    targets = {"IE00BKFB6L02": row}
+    orchestrator._apply_per_holding_targets(holdings, targets)
+    assert holdings[0].target_portfolio == pytest.approx(5.0)
+
+
 def test_per_holding_only_objective_uses_portfolio_targets():
     import numpy as np
     from tarzan.engine.rebalancer import _ObjectiveModel

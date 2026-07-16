@@ -493,20 +493,42 @@ def _resolve_isin(
     if not candidates:
         return None
 
-    # Best = max by rank key, with alphabetical symbol as the final
-    # deterministic tiebreak (smaller symbol wins when keys are equal).
-    best = max(
+    # Rank all candidates deterministically (best first). The alphabetical
+    # symbol is the final tiebreak (smaller symbol wins when keys are equal).
+    ranked = sorted(
         candidates,
         key=lambda c: (_rank_key(c, canonical_name, expected_currency), _neg_str(c.symbol)),
+        reverse=True,
     )
 
-    # Fetch history only for the winner (ranking never needed it).
+    # Walk in rank order and pick the FIRST candidate that actually serves a
+    # usable price *history* — not merely a live quote. A quote-only listing
+    # (e.g. a thin Stuttgart ".SG" line that yfinance quotes but has no daily
+    # series) would otherwise win on suffix priority and then force the whole
+    # returns series onto the carry-flat fallback. Only a symbol with history
+    # is cached, so a bad pick can't persist across runs. In the common case
+    # the top-ranked symbol has history and we fetch exactly once, as before.
+    best = ranked[0]
+    for cand in ranked:
+        history = _fetch_history(cand.symbol)
+        if history is not None and not history.empty:
+            cand.data = {"info": cand.info, "history": history}
+            price_cache.store_resolution(clean_isin, cand.symbol)
+            logger.info(
+                "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
+                isin, cand.symbol, cand.price, cand.currency, cand.name[:40],
+            )
+            return cand.data, cand.symbol
+
+    # No candidate served a history. Return the top-ranked (best-effort quote)
+    # but do NOT cache it, so next run re-resolves and can self-heal once a
+    # vendor serves the series.
     history = _fetch_history(best.symbol)
     best.data = {"info": best.info, "history": history}
-    price_cache.store_resolution(clean_isin, best.symbol)
-    logger.info(
-        "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
-        isin, best.symbol, best.price, best.currency, best.name[:40],
+    logger.warning(
+        "Resolved ISIN %s → %s by quote only (no price history from any "
+        "candidate); not cached so it re-resolves next run.",
+        isin, best.symbol,
     )
     return best.data, best.symbol
 
@@ -1217,6 +1239,16 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                 data_source = f"yfinance:{resolved_ticker}"
                 info = data.get("info", {})
                 history = data.get("history", pd.DataFrame())
+                # Write the resolved market symbol back onto the holding. Orders
+                # from a broker export often carry no ticker (Fineco is ISIN-
+                # only), so without this the holding keeps the ISIN as its
+                # "ticker" and every downstream ticker lookup — the curated
+                # taxonomy (asset class + role), intraday sparkline resolution,
+                # display pin — silently misses. Learn the ISIN↔ticker xref too
+                # so the mapping is reusable in both directions.
+                if resolved_ticker and resolved_ticker != clean_isin:
+                    holding.ticker = resolved_ticker
+                    price_cache.store_ticker_isin(resolved_ticker, clean_isin)
 
         if data is None:
             data = _fetch_ticker_data(ticker)
@@ -1502,6 +1534,20 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
         keys.append(holding.isin.strip().upper())
     if holding.ticker:
         keys.append(holding.ticker.split(".")[0].strip().upper())
+    # Bidirectional bridge: a taxonomy row may be keyed by only one of
+    # (ISIN, ticker) while the holding knows only the other — e.g. a Fineco
+    # ISIN-only order vs a ticker-only UEQC row. Resolve across the learned
+    # ISIN↔ticker xref so either identifier reaches the row. (The xref is
+    # populated as instruments resolve; ticker→ISIN also lets an ISIN-keyed
+    # row match a ticker-only holding.)
+    if holding.isin:
+        xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin.strip().upper())
+        if xref_ticker:
+            keys.append(xref_ticker.split(".")[0].strip().upper())
+    if holding.ticker:
+        xref_isin = price_cache.load_ticker_isin(holding.ticker)
+        if xref_isin:
+            keys.append(xref_isin.strip().upper())
     for k in keys:
         hit = lut.get(k)
         if not hit:
