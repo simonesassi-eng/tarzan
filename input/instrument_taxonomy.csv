@@ -5,7 +5,7 @@ L&G Multi-Strategy Enhanced Commodities,ENCO.MI,,etc,Commodities,Broad Basket,TR
 Invesco Bloomberg Commodity,CMOD.MI,,etc,Commodities,Broad Basket,TRUE,,,,,,,,,,,,,,Broad commodities long-only tracking the Bloomberg Commodity Index.,7/8/26
 WisdomTree Enhanced Commodity,WCOA.MI,,etc,Commodities,Broad Basket,TRUE,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (WisdomTree) to reduce contango drag.,7/8/26
 WisdomTree Enhanced Commodity Carry,CRRY.MI,,etc,Commodities,Carry,TRUE,,,,,,,,,,,,,,Commodity carry factor via long/short positions in commodity futures.,6/24/26
-UBS CMCI Commodity Carry,UEQC.DE,,etc,Commodities,Carry,TRUE,,,,,,,,,,,,,,Commodity carry via 2.5x leveraged long/short spread between CMCI and BCOM ex-precious metals.,6/24/26
+UBS CMCI Commodity Carry,UEQC.DE,IE00BKFB6L02,etc,Commodities,Carry,TRUE,,,,,,,,,,,,,,Commodity carry via 2.5x leveraged long/short spread between CMCI and BCOM ex-precious metals.,6/24/26
 Fineco AM ESTR Plus,MONEY.MI,IE0005PGDJ30,etf,Cash & Cash Equivalents,Cash / Money Market,,,,,,,,,,,,,,,EUR overnight rate (ESTR) money market.,7/9/26
 KRC Cat Bond,CATB.MI,,etf,Alternative,Cat Bond,TRUE,,,,,,,,,,,,,,Catastrophe bond portfolio providing uncorrelated income via insurance-linked securities.,6/27/26
 WisdomTree Global Efficient Core,NTSG.MI,IE00077IIPQ8,etf,Equities,Efficient Core,TRUE,,,69.84,0,11.51,5.99,12.66,90,60,,,,,Global developed equities plus a leveraged government bond futures overlay (90/60).,7/9/26

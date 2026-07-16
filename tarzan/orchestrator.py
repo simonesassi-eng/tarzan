@@ -37,6 +37,7 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     if not targets:
         return
     from tarzan.models.instrument_key import instrument_key, normalize_ticker
+    from tarzan.data import price_cache
     matched = 0
     for h in holdings:
         # Canonical key first (built the same way for holding and target row),
@@ -44,6 +45,23 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
         t = (targets.get(instrument_key(h.isin, h.ticker))
              or targets.get(h.isin)
              or (targets.get(normalize_ticker(h.ticker)) if h.ticker else None))
+        # Cross-identifier bridge: a broker import (Fineco) gives a holding only
+        # its ISIN, while the target row may be keyed only by ticker (or vice
+        # versa). This runs BEFORE enrichment resolves the holding's ticker, so
+        # match through the learned ISIN↔ticker xref too — otherwise the target
+        # never attaches, the position sells to 0%, and a phantom buy-new is
+        # seeded, showing the SAME fund as both BUY and SELL. (The data file's
+        # ISIN column is the cold-cache backstop; this covers the warm path and
+        # any row still missing one identifier.)
+        if not t and h.isin:
+            xref_ticker = price_cache.load_ticker_isin_reverse(h.isin)
+            if xref_ticker:
+                t = (targets.get(normalize_ticker(xref_ticker))
+                     or targets.get(instrument_key("", xref_ticker)))
+        if not t and h.ticker:
+            xref_isin = price_cache.load_ticker_isin(h.ticker)
+            if xref_isin:
+                t = targets.get(xref_isin) or targets.get(instrument_key(xref_isin, ""))
         if not t:
             continue
         if t.get("target_equities") is not None:
@@ -87,6 +105,8 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     def _bare(t) -> str:
         return _norm(t).split(".")[0]  # NTSG.DE → NTSG
 
+    from tarzan.data import price_cache
+
     held_keys: set[str] = set()
     held_isins: set[str] = set()
     held_tickers: set[str] = set()
@@ -95,9 +115,20 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
         held_keys.add(instrument_key(h.isin, h.ticker))
         if h.isin:
             held_isins.add(_norm(h.isin))
+            # Cross-identifier bridge: a holding known only by ISIN (Fineco
+            # import, ticker not yet resolved) still counts as "holding" the
+            # ticker-keyed target — via the learned ISIN↔ticker xref — so it is
+            # not seeded as a phantom buy-new duplicate.
+            xref_ticker = price_cache.load_ticker_isin_reverse(h.isin)
+            if xref_ticker:
+                held_tickers.add(_norm(xref_ticker))
+                held_tickers.add(_bare(xref_ticker))
         if h.ticker:
             held_tickers.add(_norm(h.ticker))
             held_tickers.add(_bare(h.ticker))
+            xref_isin = price_cache.load_ticker_isin(h.ticker)
+            if xref_isin:
+                held_isins.add(_norm(xref_isin))
         if h.name:
             held_names.add(_norm(h.name))
     held_keys.discard("")

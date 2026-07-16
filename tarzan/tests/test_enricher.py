@@ -256,6 +256,64 @@ class TestResolveIsinDeterminism:
         self._patch(monkeypatch, {}, "", [])
         assert enricher._resolve_isin("XX0000000000") is None
 
+    def test_prefers_candidate_with_usable_history(self, monkeypatch):
+        """A higher-ranked quote-only listing (no price history) must lose to a
+        lower-ranked listing that actually serves a series — otherwise the
+        returns build is forced onto the carry-flat fallback. Regression for
+        IE00BKFB6L02 resolving to a dead .SG line instead of UEQC.DE."""
+        isin = "IE00BKFB6L02"
+        # .SG ranks higher on suffix priority (index 1) than .DE (index 3), but
+        # only .DE serves a history.
+        cands = {
+            f"{isin}.SG": _cand(f"{isin}.SG", price=127.0, currency="EUR",
+                                 name="UBS CMCI Commodity Carry"),
+            "UEQC.DE": _cand("UEQC.DE", price=127.0, currency="EUR",
+                             name="UBS CMCI Commodity Carry"),
+        }
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda i: "UBS CMCI Commodity Carry")
+        monkeypatch.setattr(enricher, "_openfigi_lookup", lambda i: ["UEQC.DE"])
+        monkeypatch.setattr(enricher, "_fetch_candidate_meta",
+                            lambda s: cands.get(s))
+        # Only UEQC.DE has a real series; the .SG line quotes but has no history.
+        hist = pd.DataFrame({"Close": [1.0, 1.1]},
+                            index=pd.to_datetime(["2026-07-14", "2026-07-15"]))
+        monkeypatch.setattr(enricher, "_fetch_history",
+                            lambda s: hist if s == "UEQC.DE" else pd.DataFrame())
+        monkeypatch.setattr(enricher.price_cache, "store_resolution",
+                            lambda *a, **k: None)
+        result = enricher._resolve_isin(isin, hint_ticker=isin, expected_currency="EUR")
+        assert result is not None
+        _, symbol = result
+        assert symbol == "UEQC.DE"
+
+
+class TestTaxonomyBidirectionalMatch:
+    """_apply_taxonomy_override must match a taxonomy row keyed by one of
+    (ISIN, ticker) when the holding knows only the other, via the learned
+    ISIN↔ticker xref. Regression for the Fineco ISIN-only UEQC order missing
+    the ticker-keyed UEQC taxonomy row."""
+
+    def test_isin_only_holding_matches_ticker_keyed_row(self, monkeypatch):
+        from tarzan.models.holding import Holding
+
+        # Taxonomy row keyed by ticker only (blank ISIN), like the UEQC row.
+        monkeypatch.setattr(
+            enricher.cfg, "instrument_taxonomy",
+            lambda: {"UEQC": ("Commodities", "Carry")})
+        # xref knows UEQC.DE ↔ IE00BKFB6L02 (learned during resolution).
+        monkeypatch.setattr(enricher.price_cache, "load_ticker_isin_reverse",
+                            lambda isin: "UEQC.DE" if isin == "IE00BKFB6L02" else None)
+        monkeypatch.setattr(enricher.price_cache, "load_ticker_isin",
+                            lambda t: None)
+
+        # Holding known ONLY by ISIN (no ticker) — the Fineco import case.
+        h = Holding(isin="IE00BKFB6L02", ticker="", quantity=40.0,
+                    cost_basis_eur=5090.0, market_value_eur=4982.0, currency="EUR",
+                    name="UBS CMCI USD-A-AC")
+        assert enricher._apply_taxonomy_override(h) is True
+        assert h.asset_class.value == "Commodities"
+        assert h.role == "Carry"
+
 
 # ---------------------------------------------------------------------------
 # Network layer — retry/backoff, currency matching, per-run memoization
