@@ -19,17 +19,24 @@ from tarzan.engine.stats import (
     compute_cvar,
     compute_max_drawdown,
     compute_sharpe,
+    compute_sharpe_tv,
     compute_sortino,
+    compute_sortino_tv,
     compute_var,
 )
 
 
-def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None) -> dict:
+def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
+                 risk_free: float | None = None, rf_daily=None) -> dict:
     """Full return + risk metric set from a single NAV series (one window).
 
     CAGR / volatility / Sharpe / Sortino / MaxDrawdown / VaR / CVaR, plus
     Beta / Alpha vs an optional benchmark NAV. All in the percent units the
     stats module uses, so it reads like the dashboard's risk block.
+
+    When ``rf_daily`` (a daily risk-free path) is supplied, Sharpe and Sortino
+    use the TIME-VARYING excess-return form (r_t − rf_t); otherwise they fall
+    back to the scalar ``risk_free`` (window-average) form.
     """
     if nav is None or len(nav) < 30:
         return {}
@@ -42,11 +49,18 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None) -> dict:
         return {}
     ann_ret = compute_cagr(nav)                                   # percent
     ann_vol = float(daily.std()) * np.sqrt(TRADING_DAYS) * 100.0  # percent
+    if rf_daily is not None:
+        sharpe = compute_sharpe_tv(daily, rf_daily)
+        sortino = compute_sortino_tv(daily, rf_daily)
+    else:
+        sharpe = compute_sharpe(ann_ret, ann_vol, risk_free=risk_free)
+        sortino = compute_sortino(daily, ann_ret, risk_free=risk_free)
     m = {
         "cagr": ann_ret,
         "volatility": ann_vol,
-        "sharpe": compute_sharpe(ann_ret, ann_vol),
-        "sortino": compute_sortino(daily, ann_ret),
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "risk_free": (RISK_FREE_RATE if risk_free is None else risk_free),
         "max_drawdown": compute_max_drawdown(nav) * 100.0,
         "var_95": compute_var(daily, 0.95) * 100.0,
         "cvar_95": compute_cvar(daily, 0.95) * 100.0,
@@ -55,7 +69,7 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None) -> dict:
     }
     if bench_nav is not None and not bench_nav.empty and len(bench_nav) > 1:
         try:
-            beta, alpha = _compute_beta_alpha(nav, bench_nav, ann_ret)
+            beta, alpha = _compute_beta_alpha(nav, bench_nav, ann_ret, risk_free=risk_free)
             m["beta"], m["alpha"] = beta, alpha
         except Exception:  # noqa: BLE001
             pass

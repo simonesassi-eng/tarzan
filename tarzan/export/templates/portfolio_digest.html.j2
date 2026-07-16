@@ -303,6 +303,18 @@
           </tr>
           {% endif %}
 
+          {# ─── BACKTESTING (long-history synthetic comparison of candidate
+             portfolios) — rendered right after the Optimizer. Guarded and
+             cached: only present when the backtest ran (see
+             _sections_backtest.py). ── #}
+          {% if backtesting.available %}
+          <tr>
+            <td class="px-32" style="padding:32px 32px 0 32px;">
+              {{ backtesting.html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── NET-OF-TAX NOTE (estimate) — moved to the very bottom so it
              does not crowd the Performance headline numbers. ── #}
           {% if tax_note.available %}

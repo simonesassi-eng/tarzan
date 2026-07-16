@@ -329,6 +329,71 @@ def store_geo(key: str, breakdown: dict, source: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# TER (ISIN → total expense ratio fraction)
+# ---------------------------------------------------------------------------
+# An ETF's TER is near-immutable (it changes at most once a year), so it is
+# cached like the geo breakdown — with a TTL so a rare fee change self-heals.
+# This makes the fee drag in the what-if backtest resilient to justETF outages
+# and, more importantly, fetched only once per ISIN across runs.
+
+def _ter_path() -> Path:
+    return _subdir("ter") / "ter_by_isin.pkl"
+
+
+def _load_ter_map() -> dict:
+    if not is_enabled():
+        return {}
+    path = _ter_path()
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("TER cache read failed: %s", e)
+        return {}
+
+
+def load_ter(key: str) -> Optional[float]:
+    """Return the cached TER FRACTION for a key (ISIN/ticker) if present and
+    not expired, else None. A cached "miss" (None value) is honoured within the
+    TTL so a fund justETF has no TER for isn't re-fetched every run."""
+    if not key:
+        return None
+    entry = _load_ter_map().get(key)
+    if not entry:
+        return None
+    if time.time() - entry.get("ts", 0) > RESOLUTION_TTL_DAYS * 86400:
+        return None
+    return entry.get("ter")  # may be None (a cached miss)
+
+
+def has_ter(key: str) -> bool:
+    """True if a (non-expired) TER entry exists for the key, even if its cached
+    value is None — so callers can skip a re-fetch on a known miss."""
+    if not key:
+        return False
+    entry = _load_ter_map().get(key)
+    if not entry:
+        return False
+    return time.time() - entry.get("ts", 0) <= RESOLUTION_TTL_DAYS * 86400
+
+
+def store_ter(key: str, ter: Optional[float]) -> None:
+    """Persist a TER fraction (or a None 'miss') for a key (best-effort)."""
+    if not is_enabled() or not key:
+        return
+    try:
+        data = _load_ter_map()
+        data[key] = {"ter": ter, "ts": time.time()}
+        with open(_ter_path(), "wb") as f:
+            pickle.dump(data, f)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("TER cache write failed for %s: %s", key, e)
+
+
+# ---------------------------------------------------------------------------
 # Ticker → ISIN cross-reference (bidirectional, learned over time)
 # ---------------------------------------------------------------------------
 # ISIN↔ticker is immutable, so once learned (from any ISIN-keyed use, from

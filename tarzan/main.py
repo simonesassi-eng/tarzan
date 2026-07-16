@@ -142,6 +142,57 @@ def _write_run_reports(output_dir: str, metrics=None) -> None:
         logger.debug("Run report step failed: %s", e)
 
 
+_WEIGHTS_PATH = "input/portfolio_test.csv"
+
+
+def _run_backtest(config, *, deterministic: bool):
+    """Run the candidate-portfolio backtest once (shared by newsletter + Excel).
+
+    Returns the list of Portfolio objects, or None when it is skipped
+    (deterministic/as-of run, missing weights file) or fails. Fully guarded —
+    the backtest is network-bound and must never break the primary run.
+    """
+    if deterministic:
+        logger.info("Backtest skipped (deterministic/as-of run).")
+        return None
+    if not os.path.exists(_WEIGHTS_PATH):
+        logger.info("Backtest skipped (%s not found).", _WEIGHTS_PATH)
+        return None
+    try:
+        from tarzan.backtest import run_backtest
+        logger.info("Running candidate-portfolio backtest (%s)...", _WEIGHTS_PATH)
+        portfolios = run_backtest(_WEIGHTS_PATH, currency="eur",
+                                  backfill="factor", rebalance="quarterly")
+        logger.info("Backtest built %d candidate portfolio(s).", len(portfolios or []))
+        return portfolios or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Backtest skipped (%s): %s", type(e).__name__, e)
+        return None
+
+
+def _export_whatif(portfolios, config, output_dir: str) -> None:
+    """Write the what-if Excel workbook from the computed backtest. Guarded."""
+    try:
+        from tarzan.backtest import (
+            simulation_rows, testfol_instrument_map, testfol_lines,
+        )
+        from tarzan.export.whatif_excel import export_whatif_excel
+        out = os.path.join(output_dir, "whatif.xlsx")
+        export_whatif_excel(
+            out, portfolios,
+            config.invested_allocation_targets_pctg or {},
+            config.equity_geo_targets_pctg or {},
+            100_000.0,
+            tolerance=config.rebalancing_target_tolerance_pctg,
+            sim_rows=simulation_rows(portfolios),
+            testfol={p.name: testfol_lines(p) for p in portfolios},
+            testfol_byinst={p.name: testfol_instrument_map(p) for p in portfolios},
+        )
+        logger.info("What-if workbook saved to: %s", out)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("What-if Excel skipped (%s): %s", type(e).__name__, e)
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
 
@@ -190,11 +241,26 @@ def main(argv=None) -> int:
             logger.error("No portfolio value computed. Check input data.")
             return 1
 
+        # Long-history backtest of the candidate portfolios — computed ONCE
+        # and shared by both the newsletter "Backtesting" section and the
+        # what-if Excel, so a single run yields all three artifacts. Skipped in
+        # deterministic / as-of runs (network-bound, not reproducible) and fully
+        # guarded so it can never break the primary newsletter.
+        backtest_portfolios = _run_backtest(
+            config, deterministic=(args.deterministic or as_of is not None))
+
         # Render the newsletter — Tarzan's primary artifact. (Benchmark names
         # are resolved from config inside generate_newsletter when omitted.)
         from tarzan.export.newsletter import generate_newsletter
-        output_path = generate_newsletter(metrics, config, output_dir)
+        output_path = generate_newsletter(
+            metrics, config, output_dir, backtest_portfolios=backtest_portfolios)
         logger.info("Newsletter saved to: %s", output_path)
+
+        # What-if Excel workbook (same components as the newsletter section,
+        # plus the testfol tab), from the SAME computed backtest.
+        if backtest_portfolios:
+            _export_whatif(backtest_portfolios, config, output_dir)
+
         logger.info("Completed successfully.")
         return 0
 

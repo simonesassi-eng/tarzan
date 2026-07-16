@@ -19,10 +19,56 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
-from tarzan.data import price_cache
+from tarzan.data import manual_proxies, price_cache
 from tarzan.engine.stats import TRADING_DAYS
+
+# Approx all-in fee drag (%/yr) for the commodity-carry ETFs (UEQC ~0.34 TER,
+# CRRY ~0.66 TER+swap) applied to the BNP carry index for a net-of-fees proxy.
+_CARRY_FEE_ANNUAL = 0.006
+
+# EUR risk-free: the ECB SDMX API's AAA euro-area government yield curve,
+# 3-month spot rate — a real daily rate LEVEL (%), the direct EUR analogue of
+# ^IRX (US 13-week T-bill). AAA-government = the truest euro risk-free (no bank
+# credit premium as in 3M EURIBOR, no ETF fee drag as in a €STR ETF). Fetched
+# from the ECB SDMX REST endpoint (CSV, no extra package) and disk-cached with
+# staleness refresh like the yfinance proxies — no manual input file. Real
+# daily data from 2004-09-06, updated every TARGET business day.
+_ECB_YC_3M_URL = ("https://data-api.ecb.europa.eu/service/data/YC/"
+                  "B.U2.EUR.4F.G_N_A.SV_C_YM.SR_3M?format=csvdata")
+_ECB_YC_3M_KEY = "ECB_YC_SR_3M"
+
+# EONIA (euro overnight index average) — the real ECB overnight rate, used to
+# fill the 1999→2004-09 tail that predates the AAA yield curve above. EONIA was
+# discontinued on 2022-01-03, so it is a CLOSED series: fetched once, then read
+# from cache forever (no staleness re-fetch). Overnight vs the 3M spot differ by
+# only ~10-15bps in normal times — a negligible splice for 2000-2004.
+_ECB_EONIA_URL = ("https://data-api.ecb.europa.eu/service/data/EON/"
+                  "D.EONIA_TO.RATE?format=csvdata")
+_ECB_EONIA_KEY = "ECB_EONIA"
+
+# Pre-1999 FALLBACK only: 3-month EURIBOR annual averages (%), forward-filled to
+# a daily path. This predates our ~2000 backtest window, so within any real
+# window it is never actually reached — kept only as an ultimate safety net if
+# BOTH ECB series are unreachable and uncached.
+_EUR_RATE_ANNUAL: dict[int, float] = {
+    2000: 4.40, 2001: 4.26, 2002: 3.32, 2003: 2.33, 2004: 2.11, 2005: 2.19,
+    2006: 3.08, 2007: 4.28, 2008: 4.64, 2009: 1.22, 2010: 0.81, 2011: 1.39,
+    2012: 0.57, 2013: 0.22, 2014: 0.21, 2015: -0.02, 2016: -0.26, 2017: -0.33,
+    2018: -0.32, 2019: -0.36, 2020: -0.43, 2021: -0.55, 2022: 0.35, 2023: 3.43,
+    2024: 3.58, 2025: 2.20,
+}
+
+
+def _eur_rate_for_year(y: int) -> float:
+    """EURIBOR-3M annual average (%) for year ``y``, clamped to the table
+    range (nearest edge year) for out-of-range years like 2026."""
+    if y in _EUR_RATE_ANNUAL:
+        return _EUR_RATE_ANNUAL[y]
+    ys = sorted(_EUR_RATE_ANNUAL)
+    return _EUR_RATE_ANNUAL[ys[0]] if y < ys[0] else _EUR_RATE_ANNUAL[ys[-1]]
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +76,11 @@ logger = logging.getLogger(__name__)
 # longest-history first (mutual funds reach further back than ETFs, à la
 # testfol.io's SIM backfills) → enables a ~2000 start.
 EQUITY_GEO_PROXY = {
-    "USA": ["^GSPC"],                         # S&P 500, 1927+
+    # ^SP500TR is the S&P 500 TOTAL-return index (dividends reinvested, 1988+);
+    # ^GSPC is price-only and silently omits ~1.9%/yr of dividends, which would
+    # understate the dominant USA sleeve and the beta/alpha benchmark. TR first,
+    # price index only as a last-resort fallback.
+    "USA": ["^SP500TR", "^GSPC"],             # S&P 500 total return, 1988+
     "Japan": ["EWJ"],                         # iShares Japan, 1996+
     "Eurozone EMU": ["EZU"],                  # iShares EMU, 2000+
     # Vanguard Developed Markets index (1999-08) → Fidelity Diversified Intl
@@ -52,31 +102,55 @@ ASSET_PROXY = {
 
 CASH_KEYS = ("Alternative", "Cash & Cash Equivalents")
 _FINANCING_SYMBOL = "^IRX"
-# Managed-futures / trend proxy for the "Alternative" bucket: real trend
-# fund (AQR Managed Futures, daily) from its 2010 inception, spliced onto
-# cash before then (so it captures 2022 crisis-alpha without truncating the
-# window). Replace/extend by dropping input/managed_futures.csv (see loader).
+# Managed-futures / trend proxy for the "Alternative" bucket. Real trend funds
+# spliced longest-history first: RYMFX (Rydex/Guggenheim MF, ~2007) as the deep
+# base — so the GFC 2008 crisis-alpha is captured, not flat cash — with AQMNX
+# (AQR MF, ~2010, a cleaner trend model) taking precedence where they overlap.
+# Cash fills the pre-2007 tail. For an exact long series (SG CTA Index, the
+# index MFEH/DBMF replicate, back to 2000) ingest it once into the cache DB:
+# `python -m tarzan.data.manual_proxies ingest MFSIM <path>` (read at runtime
+# from the cache only — never parsed from a file at launch).
 _MF_FUND = "AQMNX"
+_MF_FUND_DEEP = "RYMFX"
 
 _returns_memo: dict[str, pd.Series] = {}
 # Which concrete ticker each bucket resolved to, and from when.
 USED_PROXY: dict[str, tuple[str, pd.Timestamp]] = {}
 
 
+_STALE_DAYS = 7   # re-fetch a cached proxy only once its tail is this old
+
+
 def _fetch_max(symbol: str) -> pd.Series:
-    """Full-history daily close for ``symbol`` (disk-cached, namespaced)."""
+    """Full-history daily close for ``symbol`` (disk-cached, namespaced).
+
+    The cached series is reused while its last date is fresh (< _STALE_DAYS old)
+    and only re-fetched when stale, so historical closes are reused across runs
+    but recent sessions stay current. A failed re-fetch degrades gracefully to
+    the cached series rather than dropping the proxy."""
     key = f"PROXYMAX_{symbol}"
     cached = price_cache.load_history(key)
     if cached is not None and not cached.empty:
-        return cached
+        last = pd.Timestamp(cached.index.max())
+        if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
+            return cached
     try:
         import yfinance as yf
-        h = yf.Ticker(symbol).history(period="max")
+        from tarzan.data import _yf_net
+        # auto_adjust=True is set EXPLICITLY: it makes fund/ETF closes
+        # dividend- and split-adjusted (total return). The yfinance default has
+        # flip-flopped across versions, so pinning it here prevents a silent
+        # regression to price-only closes for the income-paying proxies.
+        # Go through the shared spacing+retry so a proxy fetch survives a 429
+        # burst the same way the enricher does (was raw before → flaky).
+        h = _yf_net.fetch_yf(
+            lambda: yf.Ticker(symbol).history(period="max", auto_adjust=True),
+            what=f"proxy {symbol}", log=logger)
     except Exception as e:  # noqa: BLE001
         logger.warning("Proxy fetch failed for %s: %s", symbol, e)
-        return pd.Series(dtype=float)
+        return cached if cached is not None else pd.Series(dtype=float)
     if h is None or h.empty or "Close" not in h:
-        return pd.Series(dtype=float)
+        return cached if cached is not None else pd.Series(dtype=float)
     s = h["Close"].dropna()
     idx = s.index
     s.index = (idx.tz_convert("UTC").tz_localize(None).normalize()
@@ -97,7 +171,13 @@ def _returns(symbol: str) -> pd.Series:
 
 
 def financing_daily() -> Optional[pd.Series]:
-    """Daily financing rate (fraction) from ^IRX (annualised % → /100 /252)."""
+    """Daily financing rate (fraction) from ^IRX (annualised % → /100 /252).
+
+    ^IRX is consumed as a yield LEVEL (not a price change). Dividing the annual
+    rate by TRADING_DAYS (252) is consistent because the resulting series is
+    applied on a trading-day grid (252 × daily ≈ annual). It would need /365 if
+    ever laid on a calendar-day index.
+    """
     px = _fetch_max(_FINANCING_SYMBOL)
     if px.empty:
         return None
@@ -113,6 +193,267 @@ def _resolve_bucket(candidates: list[str]) -> tuple[pd.Series, Optional[str]]:
     return pd.Series(dtype=float), None
 
 
+# ---------------------------------------------------------------------------
+# Currency: the proxies are USD, but the real holdings' price_history is already
+# EUR-converted by the enricher. Splicing a USD proxy tail onto EUR live returns
+# would mix currencies inside one instrument, so by default we convert proxy
+# returns to a EUR investor's (unhedged) returns — which also makes the whole
+# backtest EUR-native (testfol.io is USD-only). Set to "USD" to keep raw USD.
+# ---------------------------------------------------------------------------
+_TARGET_CCY = "EUR"
+
+
+def set_target_currency(ccy: Optional[str]) -> None:
+    """Set the reporting currency for proxy returns ('EUR' default, or 'USD')."""
+    global _TARGET_CCY
+    _TARGET_CCY = (ccy or "EUR").strip().upper()
+
+
+def _eur_per_usd() -> Optional[pd.Series]:
+    """Daily EUR-per-USD level = 1 / EURUSD=X (which quotes USD per EUR)."""
+    px = _fetch_max("EURUSD=X")
+    if px is None or px.empty:
+        return None
+    return (1.0 / px).sort_index()
+
+
+def _usd_returns_to_eur(usd_ret: pd.Series) -> pd.Series:
+    """Convert a USD daily-return series to a EUR investor's UNHEDGED return.
+
+    r_eur = (1+r_usd)·(1+r_fx) − 1, where r_fx is the change in EUR-per-USD
+    (USD appreciating vs EUR ⇒ the EUR holder of a USD asset gains). Returns
+    the input unchanged when the target is USD or FX data is unavailable.
+    """
+    if _TARGET_CCY == "USD" or usd_ret is None or usd_ret.empty:
+        return usd_ret
+    eu = _eur_per_usd()
+    if eu is None or eu.empty:
+        return usd_ret
+    fx_ret = (eu.reindex(eu.index.union(usd_ret.index)).ffill()
+              .pct_change().reindex(usd_ret.index).fillna(0.0))
+    out = (1.0 + usd_ret) * (1.0 + fx_ret) - 1.0
+    return out.dropna()
+
+
+def _carry_returns(fin: Optional[pd.Series]) -> pd.Series:
+    """Commodity-carry proxy from the cached BNP Enhanced Commodity Carry index
+    (CRRY's benchmark, 2008+). It is an EXCESS-return index, so add T-bill
+    collateral for total return, subtract an approximate fund fee, and convert
+    to the reporting currency. Empty if the manual series is unavailable (the
+    caller then leaves the carry sleeve unmodelled rather than mislabel it)."""
+    lvl = manual_proxies.get_series("CRRYSIM")
+    if lvl is None or lvl.empty:
+        return pd.Series(dtype=float)
+    r = lvl.pct_change().dropna()
+    r = _apply_collateral(r, fin)                     # excess → total return
+    r = r - _CARRY_FEE_ANNUAL / TRADING_DAYS          # net-of-fees fund proxy
+    # Splice onto cash before the index's 2008 inception so carry-holding
+    # portfolios still reach the ~2000 window (carry sleeve = cash pre-2008),
+    # mirroring the managed-futures pre-inception handling.
+    if fin is not None and not fin.empty:
+        r = pd.concat([fin.loc[fin.index < r.index.min()], r]).sort_index()
+    return _usd_returns_to_eur(r)
+
+
+def _ecb_fetch(url: str, key: str, static: bool = False) -> Optional[pd.Series]:
+    """Daily rate LEVEL (%) from an ECB SDMX CSV REST endpoint, disk-cached.
+
+    No extra package and no manual file — a plain CSV call. Reused from cache
+    while fresh (or FOREVER when ``static`` marks a discontinued series), re-
+    fetched when stale, and degrading gracefully to the cached copy on any
+    network/parse failure.
+    """
+    cached = price_cache.load_history(key)
+    if cached is not None and not cached.empty:
+        if static:
+            return cached           # closed series (e.g. EONIA): never re-fetch
+        last = pd.Timestamp(cached.index.max())
+        if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
+            return cached
+    try:
+        import io
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = urllib.request.urlopen(req, timeout=30).read().decode()
+        df = pd.read_csv(io.StringIO(raw))
+        s = pd.Series(df["OBS_VALUE"].values,
+                      index=pd.to_datetime(df["TIME_PERIOD"])).dropna()
+        s = s[~s.index.duplicated(keep="last")].sort_index()
+        s.index = s.index.normalize()
+        if not s.empty:
+            price_cache.store_history(key, s)
+            return s
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ECB SDMX fetch failed for %s: %s", key, e)
+    return cached  # cached copy if we have one, else None → table fallback
+
+
+def _ecb_eur_rate_level() -> Optional[pd.Series]:
+    """Daily EUR risk-free LEVEL (%) from real ECB series, spliced longest-first:
+    the AAA-govt 3-month spot rate (2004-09→, the ^IRX analogue) takes priority,
+    and EONIA (the ECB overnight rate, 1999→2021) fills the earlier tail."""
+    sr3m = _ecb_fetch(_ECB_YC_3M_URL, _ECB_YC_3M_KEY)
+    eonia = _ecb_fetch(_ECB_EONIA_URL, _ECB_EONIA_KEY, static=True)
+    level = sr3m if (sr3m is not None and not sr3m.empty) else None
+    if eonia is not None and not eonia.empty:
+        # combine_first: SR_3M wins where present; EONIA fills the pre-2004 gap.
+        level = eonia if level is None else level.combine_first(eonia)
+    return level
+
+
+def risk_free_daily(start=None, end=None) -> Optional[pd.Series]:
+    """Daily risk-free path (fraction, per trading day) in the TARGET currency,
+    on the ^IRX trading-day grid — the time-varying input for an excess-return
+    Sharpe/Sortino (r_t − rf_t), so ZIRP years and rate-hike years are each
+    charged their OWN rate instead of a single window average.
+
+    USD: the ^IRX 13-week T-bill path itself.
+    EUR: REAL ECB data (``_ecb_eur_rate_level``) — AAA-govt 3M spot from 2004-09
+    spliced onto EONIA back to 1999 — an independent EUR rate series, so 2011
+    (EUR above the Fed) and 2015-2021 (negative EUR rates) are faithful. Within
+    any ~2000+ window this is entirely real; the EURIBOR table is only an
+    ultimate fallback if BOTH ECB series are unreachable and uncached.
+    """
+    fin = financing_daily()          # USD daily fraction on the ^IRX grid
+    if fin is None or fin.empty:
+        return None
+    if _TARGET_CCY == "USD":
+        s = fin
+    else:
+        # Ultimate fallback: annual EURIBOR table on the ^IRX grid (no NaN).
+        tbl = pd.Series([_eur_rate_for_year(int(y)) for y in fin.index.year],
+                        index=fin.index)
+        tbl = (tbl / 100.0) / TRADING_DAYS
+        lvl = _ecb_eur_rate_level()  # ECB rate LEVEL in %, from 1999
+        if lvl is None or lvl.empty:
+            s = tbl
+        else:
+            # A rate LEVEL persists between observations, so reindexing onto the
+            # ^IRX grid with ffill is robust to the TARGET-vs-US calendar
+            # mismatch. Convert %→daily fraction; table only fills any pre-1999
+            # gap (outside our window).
+            lvl_grid = lvl.reindex(fin.index, method="ffill")
+            eur_daily = (lvl_grid / 100.0) / TRADING_DAYS
+            s = eur_daily.where(eur_daily.notna(), tbl)
+    return s.loc[start:end] if (start or end) else s
+
+
+def risk_free_annual(start=None, end=None) -> Optional[float]:
+    """Window-average annualised risk-free (%) in the TARGET currency — the
+    mean of ``risk_free_daily`` over the window. Used for DISPLAY (the header
+    figure) and as a scalar fallback; the Sharpe/Sortino themselves use the
+    full time-varying daily path via ``risk_free_daily``.
+    """
+    s = risk_free_daily(start, end)
+    if s is None or s.empty:
+        return None
+    return float(s.mean()) * TRADING_DAYS * 100.0
+
+
+# ---------------------------------------------------------------------------
+# Fama-French-Carhart factor legs (for the factor-aware backfill)
+# ---------------------------------------------------------------------------
+# The Ken French Data Library publishes the long-SHORT research factors as
+# daily returns (US research factors, back to 1926/1927). SMB (size), HML
+# (value) and MOM (momentum) are dollar-NEUTRAL long-short legs, so their EUR
+# value ≈ their USD value (the FX on the long and short sides cancels) — no
+# currency conversion is needed. Fetched from the public CSV zips and disk-
+# cached like the ECB series (no manual file). Used to give factor ETFs
+# (value/momentum/quality/size) a factor-AWARE pre-inception backfill instead
+# of a plain market-cap proxy that discards the tilt.
+# DEVELOPED-markets factor set (not the US one): our factor ETFs track MSCI
+# WORLD (developed) indices, so the Developed research factors are the correct
+# regressors. Using US factors badly understated the momentum loading (a World
+# momentum fund on the US UMD factor); Developed factors recover it. Daily from
+# 1990-07 (covers the ~2000 backtest window). Long-short legs are dollar-neutral
+# so no currency conversion is needed.
+_FF_DEV5_URL = ("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+                "Developed_5_Factors_Daily_CSV.zip")
+_FF_DEVMOM_URL = ("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+                  "Developed_Mom_Factor_Daily_CSV.zip")
+_FF_CACHE_KEY = "FF_DEV_FACTORS_DAILY"
+
+
+def _ff_download(url: str, colnames: list[str]) -> Optional[pd.DataFrame]:
+    """Download a Ken French daily-factor CSV zip and parse its daily block
+    (rows keyed by an 8-digit YYYYMMDD date) into a DataFrame of PERCENT values
+    with the given column names."""
+    import io
+    import re
+    import urllib.request
+    import zipfile
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    raw = urllib.request.urlopen(req, timeout=40).read()
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    text = z.read(z.namelist()[0]).decode("latin-1")
+    idx, rows = [], []
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if not parts or not re.fullmatch(r"\d{8}", parts[0] or ""):
+            continue
+        vals = parts[1:1 + len(colnames)]
+        try:
+            fv = [float(v) for v in vals]
+        except ValueError:
+            continue
+        if len(fv) == len(colnames):
+            idx.append(pd.Timestamp(parts[0]))
+            rows.append(fv)
+    if not idx:
+        return None
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(idx), columns=colnames)
+
+
+def factor_daily() -> Optional[pd.DataFrame]:
+    """Daily DEVELOPED-markets factor-leg returns as FRACTIONS: columns ``SMB``
+    (size), ``HML`` (value), ``RMW`` (profitability/quality) from the Developed
+    5-factor set, plus ``MOM`` (momentum) — the dollar-neutral long-short legs
+    spanning the common ETF tilts. Developed (not US) factors match the MSCI
+    World indices our factor ETFs track, which is what recovers the momentum
+    loading. The CMA (investment) leg is intentionally excluded: it is highly
+    collinear with HML/RMW and not a standard ETF factor, so it only
+    destabilises the fitted loadings. Fetched from the Ken French Data Library
+    and disk-cached with staleness refresh; degrades gracefully to the cached
+    copy on any network/parse failure. None if unavailable (caller falls back to
+    calibrated/naive)."""
+    cached = price_cache.load_history(_FF_CACHE_KEY)
+    if cached is not None and not cached.empty:
+        last = pd.Timestamp(cached.index.max())
+        if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
+            return cached
+    try:
+        ff = _ff_download(_FF_DEV5_URL, ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"])
+        mom = _ff_download(_FF_DEVMOM_URL, ["MOM"])
+        if ff is None or ff.empty:
+            return cached
+        # SMB/HML/RMW/MOM are the tilt legs; MKT (Mkt-RF) and RF are kept as
+        # clean market/riskfree CONTROLS for the loading regression (they let
+        # the tilt loadings come out clean; they are NOT applied as a tilt).
+        df = ff[["SMB", "HML", "RMW"]].copy()
+        df["MKT"] = ff["Mkt-RF"]
+        df["RF"] = ff["RF"]
+        if mom is not None and not mom.empty:
+            df = df.join(mom["MOM"], how="outer")
+        df = (df / 100.0).sort_index()          # percent → fraction
+        df.index = df.index.normalize()
+        df = df[~df.index.duplicated(keep="last")].dropna(how="all")
+        if not df.empty:
+            price_cache.store_history(_FF_CACHE_KEY, df)
+            return df
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Ken French factor fetch failed: %s", e)
+    return cached
+
+
+def _apply_collateral(excess_ret: pd.Series, fin: Optional[pd.Series]) -> pd.Series:
+    """Turn an EXCESS-return series (e.g. ^BCOM) into TOTAL return by adding the
+    T-bill collateral yield: (1+r_tr) = (1+r_excess)·(1+r_cash)."""
+    if fin is None or fin.empty or excess_ret is None or excess_ret.empty:
+        return excess_ret
+    coll = fin.reindex(excess_ret.index).ffill().fillna(0.0)
+    return (1.0 + excess_ret) * (1.0 + coll) - 1.0
+
+
 def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
     """Return ({key: daily-return Series} for the requested buckets, financing).
 
@@ -120,67 +461,72 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
     ``USED_PROXY`` (for the per-instrument simulation report). Cash-like
     buckets map to the financing (T-bill) return.
     """
-    fin = financing_daily()
+    fin = financing_daily()          # USD T-bill rate (kept USD as a cost proxy)
+    ccy = "" if _TARGET_CCY == "USD" else " → EUR"
     out: dict[str, pd.Series] = {}
     for k in keys:
         if k in EQUITY_GEO_PROXY or k in ASSET_PROXY:
             candidates = EQUITY_GEO_PROXY.get(k) or ASSET_PROXY.get(k)
             r, sym = _resolve_bucket(candidates)
-            out[k] = r
+            # ^BCOM is an EXCESS-return index → add T-bill collateral for total
+            # return (DBC and the funds are already total-return via auto_adjust).
+            if k == "Commodities" and sym == "^BCOM":
+                r = _apply_collateral(r, fin)
             if sym is not None and not r.empty:
-                USED_PROXY[k] = (sym, r.index.min())
+                USED_PROXY[k] = (f"{sym}{ccy}", r.index.min())
+            out[k] = _usd_returns_to_eur(r)
         elif k == "Alternative":
             s, label, start = _alt_series(fin)
-            out[k] = s
             if s is not None and not s.empty:
-                USED_PROXY[k] = (label, start)
+                USED_PROXY[k] = (f"{label}{ccy}", start)
+            out[k] = _usd_returns_to_eur(s)
+        elif k == "Carry":
+            out[k] = _carry_returns(fin)
+            if not out[k].empty:
+                USED_PROXY[k] = (f"BNPIF73P carry 2008+/cash{ccy}", out[k].index.min())
         elif k in CASH_KEYS:
-            out[k] = fin if fin is not None else pd.Series(dtype=float)
+            out[k] = _usd_returns_to_eur(fin) if fin is not None else pd.Series(dtype=float)
             if fin is not None and not fin.empty:
-                USED_PROXY[k] = (f"{_FINANCING_SYMBOL} (cash)", fin.index.min())
+                USED_PROXY[k] = (f"{_FINANCING_SYMBOL} (cash){ccy}", fin.index.min())
+    # ``fin`` (the financing COST rate charged on leverage) is intentionally
+    # returned in USD terms — the borrow is a USD short rate; EUR/USD short-rate
+    # differences are a small second-order effect on the financed sleeve.
     return out, fin
 
 
-def _custom_mf_returns() -> Optional[pd.Series]:
-    """Optional user-supplied managed-futures/trend series from
-    ``input/managed_futures.csv`` (columns: date + level/close/value or
-    return/ret). Lets you plug in a full-history series (AQR TSMOM, SG Trend)
-    à la testfol's custom tickers. Returns daily-ish returns, or None."""
-    import os
-    path = os.path.join("input", "managed_futures.csv")
-    if not os.path.exists(path):
-        return None
-    try:
-        df = pd.read_csv(path)
-        df.columns = [c.strip().lower() for c in df.columns]
-        date_col = next((c for c in df.columns if "date" in c), df.columns[0])
-        idx = pd.to_datetime(df[date_col]).dt.normalize()
-        lvl = next((c for c in df.columns if c in ("level", "close", "value", "nav", "price")), None)
-        ret = next((c for c in df.columns if c in ("return", "ret", "monthly_return")), None)
-        if lvl is not None:
-            s = pd.Series(pd.to_numeric(df[lvl], errors="coerce").values, index=idx).dropna()
-            return s.pct_change().dropna()
-        if ret is not None:
-            r = pd.to_numeric(df[ret], errors="coerce")
-            r = r / 100.0 if r.abs().median() > 1 else r  # percent → fraction
-            return pd.Series(r.values, index=idx).dropna()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Custom managed_futures.csv unreadable: %s", e)
-    return None
-
-
 def _alt_series(fin: Optional[pd.Series]):
-    """Managed-futures returns for the Alternative bucket: custom CSV if
-    provided, else AQMNX (2010+) spliced onto cash, else cash."""
-    custom = _custom_mf_returns()
+    """Managed-futures returns for the Alternative bucket.
+
+    Priority: an ad-hoc series in the cache DB (``MANUAL_MFSIM``, e.g. an SG
+    CTA/Trend index ingested once) -> real trend funds spliced longest-first
+    (RYMFX ~2007, overridden by AQMNX ~2010 where they overlap) -> cash for the
+    pre-2007 tail -> cash-only fallback. Using RYMFX for 2007-2010 means the GFC
+    crisis-alpha of managed futures is modeled instead of a flat cash line.
+
+    The ad-hoc series is READ FROM THE CACHE DB only, never parsed from a file
+    at launch. Populate it with:
+    ``python -m tarzan.data.manual_proxies ingest MFSIM <path>``.
+    """
+    custom = manual_proxies.get_series("MFSIM")
     if custom is not None and not custom.empty:
-        return custom, "custom managed-futures series", custom.index.min()
-    aq = _returns(_MF_FUND)
-    if aq is None or aq.empty:
+        r = custom.pct_change().dropna()
+        return r, "custom managed-futures series (cache)", r.index.min()
+
+    # Real trend funds, deepest history first; later funds override in overlap.
+    parts = [(sym, _returns(sym)) for sym in (_MF_FUND_DEEP, _MF_FUND)]
+    parts = [(sym, r) for sym, r in parts if r is not None and not r.empty]
+    if not parts:
         start = fin.index.min() if fin is not None and not fin.empty else None
         return fin, f"{_FINANCING_SYMBOL} (cash)", start
+
+    trend = parts[0][1]
+    used = [parts[0][0]]
+    for sym, r in parts[1:]:
+        trend = pd.concat([trend.loc[trend.index < r.index.min()], r]).sort_index()
+        used.append(sym)
+    tstart = trend.index.min()
+    label = "/".join(used)
     if fin is None or fin.empty:
-        return aq, f"{_MF_FUND} (managed futures)", aq.index.min()
-    start = aq.index.min()
-    spliced = pd.concat([fin.loc[fin.index < start], aq]).sort_index()
-    return spliced, f"{_MF_FUND} {start:%Y}+/cash", start
+        return trend, f"{label} (managed futures)", tstart
+    spliced = pd.concat([fin.loc[fin.index < tstart], trend]).sort_index()
+    return spliced, f"{label} {tstart:%Y}+/cash", tstart

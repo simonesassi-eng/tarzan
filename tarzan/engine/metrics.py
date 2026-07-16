@@ -601,15 +601,19 @@ class MetricsEngine:
             }
         notional: dict[str, float] = {}
         if not df.empty and invested_value > 0:
+            # Distribute each non-cash holding's value across its class
+            # breakdown and sum — the shared notional-aggregation primitive,
+            # so the live portfolio and the backtest aggregate identically.
+            from tarzan.engine import allocations as alloc
+            pairs = []
             for _, row in df.iterrows():
                 if row.get("asset_class") == cash_class:
                     continue
                 val = float(row.get("current_value", 0.0) or 0.0)
                 bd = bd_by_isin.get(row.get("isin")) or {row.get("asset_class"): 100.0}
-                for cls, pct in bd.items():
-                    if not cls or cls == cash_class:
-                        continue
-                    notional[cls] = notional.get(cls, 0.0) + val * (float(pct) / 100.0)
+                pairs.append((val, {c: p for c, p in bd.items()
+                                    if c and c != cash_class}))
+            notional = alloc.accumulate(pairs)
             by_class = pd.DataFrame(
                 [{"category": k, "weight_pct": v / invested_value * 100.0}
                  for k, v in notional.items()]
@@ -1204,31 +1208,28 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
                 kv = k.value if hasattr(k, "value") else str(k)
                 if kv == "Equities":
                     eq_frac[h.ticker] = float(v) / 100.0
-    geo_weights: dict[str, float] = {}
-    eq_total = 0.0
+    # Distribute each holding's equity notional across its (per-holding
+    # normalised) geo breakdown and sum — the shared aggregation primitive.
+    # Policy here (distinct from the backtest's): keep the scraped buckets as-is
+    # and fall back to the row's single ``geography`` when no breakdown exists.
+    from tarzan.engine import allocations as alloc
+    pairs = []
     for _, row in df.iterrows():
         ticker = row.get("ticker", "")
         weight = float(row.get("weight_pct", 0.0) or 0.0)
-        # Equity notional fraction of this holding: from class_breakdown, else
-        # 100% for a primary-equity holding, else 0.
         frac = eq_frac.get(ticker)
         if frac is None:
             frac = 1.0 if row.get("asset_class") == "Equities" else 0.0
         eq_weight = weight * frac
         if eq_weight <= 0:
             continue
-        eq_total += eq_weight
         breakdown = geo_lookup.get(ticker)
         if breakdown:
-            total_bd = sum(breakdown.values())
-            if total_bd > 0:
-                for geo, pct in breakdown.items():
-                    geo_name = geo.value if hasattr(geo, "value") else str(geo)
-                    geo_weights[geo_name] = geo_weights.get(geo_name, 0) + eq_weight * (pct / total_bd)
+            norm = alloc.renorm({(g.value if hasattr(g, "value") else str(g)): p
+                                 for g, p in breakdown.items()})
         else:
-            geo_name = row.get("geography", "USA")
-            geo_weights[geo_name] = geo_weights.get(geo_name, 0) + eq_weight
-    by_geo = pd.DataFrame([{"category": k, "weight_pct": v} for k, v in geo_weights.items()])
-    if eq_total > 0 and not by_geo.empty:
-        by_geo["weight_pct"] = by_geo["weight_pct"] / eq_total * 100
-    return by_geo
+            norm = {row.get("geography", "USA"): 100.0}
+        pairs.append((eq_weight, norm))
+    geo_weights = alloc.renorm(alloc.accumulate(pairs))
+    return pd.DataFrame([{"category": k, "weight_pct": v}
+                         for k, v in geo_weights.items()])

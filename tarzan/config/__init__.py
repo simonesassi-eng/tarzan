@@ -190,6 +190,94 @@ def class_exposure_lookup() -> dict:
     return merged
 
 
+@lru_cache(maxsize=1)
+def ter_lookup() -> dict:
+    """Curated TER (total expense ratio, as a FRACTION e.g. 0.0035 == 0.35%)
+    from the ``ter`` column of instrument_taxonomy.csv.
+
+    Keyed by ISIN (uppercased) and bare ticker (suffix stripped, uppercased).
+    Only rows with a numeric ``ter`` cell are included — the single, editable
+    source of truth for per-instrument fees (no hardcoded fee tables in code)."""
+    df = _load_indexes_csv()
+    if df.empty or "ter" not in df.columns:
+        return {}
+    by_isin: dict[str, float] = {}
+    by_ticker: dict[str, float] = {}
+    for _, row in df.iterrows():
+        s = str(row.get("ter", "")).strip()
+        if not s or s.lower() == "nan":
+            continue
+        try:
+            v = float(s)
+        except (TypeError, ValueError):
+            continue
+        if v <= 0:
+            continue
+        isin = str(row.get("isin", "")).strip().upper()
+        if isin and isin.lower() != "nan":
+            by_isin.setdefault(isin, v)
+        tk = str(row.get("ticker", "")).strip()
+        bare = tk.split(".")[0].upper() if tk else ""
+        if bare and bare.lower() != "nan":
+            by_ticker.setdefault(bare, v)
+    merged = dict(by_ticker)
+    merged.update(by_isin)  # ISIN wins on collision
+    return merged
+
+
+@lru_cache(maxsize=1)
+def name_lookup() -> dict:
+    """Curated instrument display name from the ``name`` column of
+    instrument_taxonomy.csv, keyed by ISIN (uppercased) and bare ticker
+    (suffix stripped, uppercased). Used as a resilient fallback for
+    ``holding.name`` when yfinance is unreachable / carries no name."""
+    df = _load_indexes_csv()
+    if df.empty or "name" not in df.columns:
+        return {}
+    by_isin: dict[str, str] = {}
+    by_ticker: dict[str, str] = {}
+    for _, row in df.iterrows():
+        nm = str(row.get("name", "")).strip()
+        if not nm or nm.lower() == "nan":
+            continue
+        isin = str(row.get("isin", "")).strip().upper()
+        if isin and isin.lower() != "nan":
+            by_isin.setdefault(isin, nm)
+        tk = str(row.get("ticker", "")).strip()
+        bare = tk.split(".")[0].upper() if tk else ""
+        if bare and bare.lower() != "nan":
+            by_ticker.setdefault(bare, nm)
+    merged = dict(by_ticker)
+    merged.update(by_isin)  # ISIN wins on collision
+    return merged
+
+
+def name_for(isin: Optional[str], ticker: Optional[str]) -> Optional[str]:
+    """Curated display name for one instrument by ISIN then bare ticker, or
+    None when the taxonomy has no ``name`` for it."""
+    lut = name_lookup()
+    for key in (
+        (isin or "").strip().upper(),
+        (ticker or "").split(".")[0].strip().upper(),
+    ):
+        if key and key in lut:
+            return lut[key]
+    return None
+
+
+def ter_for(isin: Optional[str], ticker: Optional[str]) -> Optional[float]:
+    """Curated TER (FRACTION) for one instrument by ISIN then bare ticker, or
+    None when the taxonomy has no ``ter`` for it."""
+    lut = ter_lookup()
+    for key in (
+        (isin or "").strip().upper(),
+        (ticker or "").split(".")[0].strip().upper(),
+    ):
+        if key and key in lut:
+            return lut[key]
+    return None
+
+
 def class_breakdown_for(isin: Optional[str], ticker: Optional[str],
                         asset_class_value: Optional[str]) -> dict:
     """Notional asset-class breakdown for one instrument.
@@ -233,6 +321,8 @@ def reset_input_caches() -> None:
     _load_indexes_csv.cache_clear()
     _taxonomy_lookup.cache_clear()
     class_exposure_lookup.cache_clear()
+    ter_lookup.cache_clear()
+    name_lookup.cache_clear()
 
 
 # --- Risk & Performance ---

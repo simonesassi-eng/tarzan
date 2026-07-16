@@ -308,10 +308,15 @@ def _fetch_intraday(symbols: list[str]) -> dict:
     try:
         import warnings
         import yfinance as yf
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            raw = yf.download(symbols, period="1d", interval="15m",
-                              group_by="ticker", progress=False, threads=True)
+        from tarzan.data import _yf_net
+
+        def _download():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return yf.download(symbols, period="1d", interval="15m",
+                                   group_by="ticker", progress=False, threads=True)
+        # Shared spacing+retry so the intraday batch survives a 429 burst.
+        raw = _yf_net.fetch_yf(_download, what="intraday batch", log=logger)
         if raw is None or len(raw) == 0:
             return {}
         level0 = set(raw.columns.get_level_values(0)) if hasattr(raw.columns, "get_level_values") else set()

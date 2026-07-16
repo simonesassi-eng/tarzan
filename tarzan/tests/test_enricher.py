@@ -363,7 +363,8 @@ class TestRetry:
         assert state["n"] == 1  # not retried
 
     def test_gives_up_after_max_attempts(self, monkeypatch):
-        monkeypatch.setattr(enricher._time, "sleep", lambda s: None)
+        from tarzan.data import _yf_net
+        monkeypatch.setattr(_yf_net._time, "sleep", lambda s: None)
         state = {"n": 0}
 
         def always_throttled():
@@ -371,7 +372,7 @@ class TestRetry:
             raise Exception("timeout")
 
         assert enricher._retry(always_throttled, what="x") is None
-        assert state["n"] == enricher._MAX_FETCH_ATTEMPTS
+        assert state["n"] == _yf_net._MAX_FETCH_ATTEMPTS
 
 
 class TestCurrencyMatches:
@@ -490,21 +491,23 @@ class TestBacktestPeriod:
 
 class TestYfCallSpacing:
     def test_spacing_enforced_between_calls(self, monkeypatch):
+        from tarzan.data import _yf_net
         enricher.reset_run_caches()
         slept = []
         # Freeze monotonic so the gate always sees zero elapsed time and
         # therefore must wait the full interval on the second call.
-        monkeypatch.setattr(enricher._time, "monotonic", lambda: 0.0)
-        monkeypatch.setattr(enricher._time, "sleep", lambda s: slept.append(s))
+        monkeypatch.setattr(_yf_net._time, "monotonic", lambda: 0.0)
+        monkeypatch.setattr(_yf_net._time, "sleep", lambda s: slept.append(s))
         enricher._space_yf_call()  # first call: last=0 set, may or may not wait
         slept.clear()
         enricher._space_yf_call()  # second call: 0 elapsed → must wait full interval
-        assert slept and slept[0] == enricher._YF_MIN_INTERVAL
+        assert slept and slept[0] == _yf_net._YF_MIN_INTERVAL
 
     def test_reset_clears_yf_timestamp(self):
-        enricher._yf_last_call[0] = 123.0
+        from tarzan.data import _yf_net
+        _yf_net._last_call[0] = 123.0
         enricher.reset_run_caches()
-        assert enricher._yf_last_call[0] == 0.0
+        assert _yf_net._last_call[0] == 0.0
 
 
 class TestBondFxConversion:
