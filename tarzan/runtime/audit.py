@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -34,14 +35,22 @@ class _Audit:
     records: list[dict] = field(default_factory=list)
 
 
-# Process-global, reset per run.
-_audit = _Audit()
+# Context-local compatibility projection; active runs mirror records to their
+# session-owned ledger.
+_audit: ContextVar[Optional[_Audit]] = ContextVar("tarzan_rebalancing_audit", default=None)
+
+
+def _current_audit() -> _Audit:
+    audit = _audit.get()
+    if audit is None:
+        audit = _Audit()
+        _audit.set(audit)
+    return audit
 
 
 def reset() -> None:
-    """Start a fresh audit trail for a new run."""
-    global _audit
-    _audit = _Audit()
+    """Start a fresh audit trail in the current run context."""
+    _audit.set(_Audit())
 
 
 def record_rebalancing_plan(
@@ -90,20 +99,27 @@ def record_rebalancing_plan(
                 "no_buy_no_sell": getattr(h, "no_buy_no_sell", None),
                 "is_seeded_target": getattr(h, "is_seeded_target", False),
             })
-        _audit.records.append({
+        record = {
             "plan": label,
             "total_value_eur": round(float(total_value or 0.0), 2),
             "config": cfg_snapshot,
             "holdings": holdings_snapshot,
             "actions": suggestions or [],
             "verifications": verifications or [],
-        })
+        }
+        _current_audit().records.append(record)
+        from tarzan.runtime.ledger import LedgerEntryType
+        from tarzan.runtime.session import current_session
+        session = current_session()
+        if session is not None:
+            session.audit.append(record)
+            session.ledger.append(LedgerEntryType.PLAN, record)
     except Exception as e:  # noqa: BLE001 — audit must never break the pipeline
         logger.debug("Rebalancing audit record failed: %s", e)
 
 
 def records() -> list[dict]:
-    return list(_audit.records)
+    return list(_current_audit().records)
 
 
 def write_report(output_dir: str, filename: str = "rebalancing_audit.jsonl") -> Optional[str]:
@@ -113,13 +129,13 @@ def write_report(output_dir: str, filename: str = "rebalancing_audit.jsonl") -> 
     I/O error rather than breaking the run. Not written when empty (a run
     with no rebalancing produced no plans to audit).
     """
-    if not _audit.records:
+    if not _current_audit().records:
         return None
     try:
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
-            for rec in _audit.records:
+            for rec in _current_audit().records:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str))
                 f.write("\n")
         return path

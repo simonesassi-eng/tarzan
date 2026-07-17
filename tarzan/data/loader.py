@@ -20,6 +20,12 @@ from tarzan.runtime import data_quality as dq
 from tarzan.models.order import Order, OrderType
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.contracts.targets import (
+    TargetError,
+    TargetSetOutcome,
+    TargetSetStatus,
+    ValidatedTargetRow,
+)
 from tarzan.contracts.validation import (
     check_order_sign,
     currency_is_known,
@@ -118,9 +124,19 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "",
             order = _parse_order_row(idx, row)
             if order is not None:
                 orders.append(order)
+            elif strict:
+                raise DataIngestionError(
+                    f"order row {int(idx) + 2} violates the executable type/value contract"
+                )
             else:
                 skipped += 1
+        except DataIngestionError:
+            raise
         except Exception as e:
+            if strict:
+                raise DataIngestionError(
+                    f"order row {int(idx) + 2} violates the executable contract: {e}"
+                ) from e
             logger.warning("Order row %d: unexpected error '%s', skipping", idx, e)
             skipped += 1
 
@@ -255,72 +271,126 @@ def _clean_str(val) -> str:
 
 def load_targets_per_holding(
     source: Union[str, io.BytesIO], filename: str = ""
-) -> dict[str, dict]:
-    """Load per-holding rebalancing targets keyed by ISIN.
+) -> TargetSetOutcome:
+    """Load a row-preserving, domain-validated target set.
 
-    The order list carries no target columns, so when the snapshot is
-    derived from orders (order-only mode) the rebalancer's per-holding
-    targets come from this side file instead. Expected columns:
-    ``name, isin, ticker, target_equities, target_fixed_income,
-    no_buy_no_sell`` (only ``isin`` is required; the rest are optional and
-    blanks map to "no target").
-
-    A missing path returns ``{}`` (non-fatal) so the pipeline runs without
-    it — holdings simply carry no per-instrument target.
-
-    Columns (case-insensitive): ``name, isin, ticker, target_equities,
-    target_fixed_income, target_portfolio, no_buy_no_sell``. ``target_portfolio``
-    is the instrument's target weight as a % of the whole invested portfolio
-    (used by the per-holding-only rebalancing mode). At least one of ``isin``
-    / ``ticker`` must be present per row.
-
-    Each row is keyed by its ISIN when present, otherwise by its uppercased
-    ticker — so ticker-only rows (e.g. a not-yet-held instrument to buy) are
-    kept, and the caller can match holdings by ISIN or ticker.
-
-    Returns:
-        ``{key: {"isin", "ticker", "name", "target_equities",
-                 "target_fixed_income", "target_portfolio", "no_buy_no_sell"}}``.
+    Blank optional cells remain ``None`` and notional percentages may exceed
+    100. Every malformed/negative/non-finite value or duplicate canonical key
+    invalidates the complete planning target set while retaining source rows.
     """
     if isinstance(source, str) and not os.path.exists(source):
         logger.info("No per-holding targets at %s; none applied.", source)
-        return {}
+        return TargetSetOutcome.absent()
 
     df = _read_source(source, filename)
     df.columns = [c.strip().lower() for c in df.columns]
+    errors: list[TargetError] = []
+    rows: list[ValidatedTargetRow] = []
     if "isin" not in df.columns and "ticker" not in df.columns:
-        logger.warning("Per-holding targets file has no 'isin'/'ticker' column; ignoring.")
-        return {}
+        error = TargetError(
+            code="MISSING_TARGET_IDENTIFIER_COLUMN",
+            message="target input requires an ISIN or ticker column",
+            canonical_key="",
+            source_rows=(),
+        )
+        dq.error("target_load", error.message, context=filename or "targets")
+        return TargetSetOutcome(status=TargetSetStatus.INVALID, errors=(error,))
 
-    from tarzan.models.instrument_key import instrument_key
-    result: dict[str, dict] = {}
-    for _, row in df.iterrows():
-        isin = _clean_str(row.get("isin"))
+    from tarzan.models.instrument_key import instrument_key, normalize_isin
+
+    def parse_target(raw, field_name: str, source_row: int, canonical_key: str):
+        text = _clean_str(raw)
+        if not text:
+            return None
+        try:
+            value = float(_parse_number(raw))
+        except (TypeError, ValueError):
+            errors.append(TargetError(
+                code="MALFORMED_TARGET_VALUE",
+                message=f"{field_name} must be a finite nonnegative number",
+                canonical_key=canonical_key,
+                source_rows=(source_row,),
+            ))
+            return None
+        if not math.isfinite(value) or value < 0:
+            errors.append(TargetError(
+                code="INVALID_TARGET_DOMAIN",
+                message=f"{field_name} must be finite and nonnegative",
+                canonical_key=canonical_key,
+                source_rows=(source_row,),
+            ))
+            return None
+        return value
+
+    grouped: dict[str, list[ValidatedTargetRow]] = {}
+    for index, row in df.iterrows():
+        source_row = int(index) + 2
+        raw_isin = _clean_str(row.get("isin"))
         ticker = _clean_str(row.get("ticker"))
-        legacy_key = isin or ticker.upper()
-        if not legacy_key:
+        isin = normalize_isin(raw_isin)
+        canonical_key = instrument_key(isin, ticker)
+        if not canonical_key:
+            errors.append(TargetError(
+                code="MISSING_TARGET_IDENTIFIER",
+                message="target row requires an ISIN or ticker",
+                canonical_key="",
+                source_rows=(source_row,),
+            ))
             continue
-        nbns = str(row.get("no_buy_no_sell", "")).strip().lower()
+        nbns = _clean_str(row.get("no_buy_no_sell")).lower()
         entry = {
             "isin": isin,
             "ticker": ticker,
             "name": _clean_str(row.get("name")),
-            "target_equities": _parse_number_optional(row.get("target_equities")),
-            "target_fixed_income": _parse_number_optional(row.get("target_fixed_income")),
-            "target_portfolio": _parse_number_optional(row.get("target_portfolio")),
+            "target_equities": parse_target(row.get("target_equities"), "target_equities", source_row, canonical_key),
+            "target_fixed_income": parse_target(row.get("target_fixed_income"), "target_fixed_income", source_row, canonical_key),
+            "target_portfolio": parse_target(row.get("target_portfolio"), "target_portfolio", source_row, canonical_key),
             "no_buy_no_sell": nbns in ("true", "1", "yes"),
         }
-        # Store under BOTH the legacy key (raw ISIN / uppercased ticker, for
-        # back-compat) and the canonical instrument_key, so callers can match
-        # via one canonical rule while existing lookups keep working.
+        validated = ValidatedTargetRow(
+            source_name=filename or "targets",
+            source_row=source_row,
+            canonical_key=canonical_key,
+            value=entry,
+        )
+        rows.append(validated)
+        grouped.setdefault(canonical_key, []).append(validated)
+
+    for canonical_key, duplicates in grouped.items():
+        if len(duplicates) > 1:
+            source_rows = tuple(item.source_row for item in duplicates)
+            errors.append(TargetError(
+                code="DUPLICATE_TARGET_ROW",
+                message=f"duplicate target {canonical_key} at source rows {source_rows}",
+                canonical_key=canonical_key,
+                source_rows=source_rows,
+            ))
+
+    if errors:
+        for error in errors:
+            dq.error(
+                "target_load",
+                f"{error.code}: {error.message}; planning suppressed for the target set.",
+                context=error.canonical_key or filename or "targets",
+            )
+        return TargetSetOutcome(
+            status=TargetSetStatus.INVALID,
+            rows=tuple(rows),
+            errors=tuple(errors),
+        )
+
+    result: dict[str, dict] = {}
+    for validated in rows:
+        entry = dict(validated.value)
+        legacy_key = entry["isin"] or entry["ticker"].upper()
         result[legacy_key] = entry
-        canon = instrument_key(isin, ticker)
-        if canon and canon not in result:
-            result[canon] = entry
-    # Count distinct instruments, not dict keys (an entry may be under two).
-    n = len({id(v) for v in result.values()})
-    logger.info("Loaded per-holding targets for %d instrument(s)", n)
-    return result
+
+    logger.info("Loaded per-holding targets for %d instrument(s)", len(rows))
+    return TargetSetOutcome(
+        status=TargetSetStatus.VALID,
+        rows=tuple(rows),
+        mapping=result,
+    )
 
 
 def _parse_date_safe(val):

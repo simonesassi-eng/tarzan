@@ -25,6 +25,9 @@ import time as _time
 from datetime import datetime, time as dtime
 from typing import Optional
 
+from tarzan.runtime.ledger import Availability
+from tarzan.runtime.provider import ProviderAttempt, ProviderResult
+
 logger = logging.getLogger(__name__)
 
 # A market is treated as "trading now" (live) when its latest intraday bar is
@@ -380,12 +383,26 @@ def broker_1d(tickers: list[str]) -> dict:
     the % is the EUR daily move. Never raises."""
     import pandas as pd
     uniq = [t for t in {t for t in tickers if t}]
+    policy = {"policy_id": "broker_1d-v1", "requested_tickers": len(uniq)}
     if not uniq:
-        return {}
+        return ProviderResult(
+            {}, availability=Availability.AVAILABLE, attempts=(), policy=policy
+        )
     try:
         from tarzan.data.enricher import _fetch_history
-    except Exception:  # noqa: BLE001
-        return {}
+    except Exception as exc:  # noqa: BLE001
+        return ProviderResult(
+            {},
+            availability=Availability.UNAVAILABLE,
+            attempts=(ProviderAttempt(
+                source="yfinance",
+                operation="broker_1d",
+                ordinal=1,
+                outcome=f"FAILED:{type(exc).__name__}",
+                fallback_rung=0,
+            ),),
+            policy=policy,
+        )
     # Resolve intraday with EUR sibling fallback: a ``.MI`` holding with no
     # Milan intraday borrows the series from its Xetra/Euronext twin. ``src``
     # is the listing the series came from, so the previous close is pulled
@@ -449,7 +466,26 @@ def broker_1d(tickers: list[str]) -> dict:
             prev = float(intra.iloc[0])
         if prev:
             out[tk] = {"pct": (cur / prev - 1.0) * 100.0, "live": bool(is_live)}
-    return out
+    coverage = len(out) / len(uniq) * 100.0 if uniq else 100.0
+    availability = (
+        Availability.AVAILABLE if len(out) == len(uniq)
+        else Availability.DEGRADED if out
+        else Availability.UNAVAILABLE
+    )
+    return ProviderResult(
+        out,
+        availability=availability,
+        attempts=(ProviderAttempt(
+            source="yfinance",
+            operation="broker_1d",
+            ordinal=1,
+            outcome="SUCCEEDED" if out else "UNAVAILABLE",
+            fallback_rung=0,
+            coverage_pct=coverage,
+        ),),
+        policy=policy,
+        selected_source="yfinance" if out else None,
+    )
 
 
 def fetch_market_quotes(force: bool = False) -> list[dict]:

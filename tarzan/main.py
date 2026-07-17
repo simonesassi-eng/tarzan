@@ -11,9 +11,12 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
 import traceback
 from datetime import date as _dtdate
+from pathlib import Path
 
+from tarzan import __version__
 from tarzan.contracts.exceptions import DataIngestionError, TarzanError
 
 logger = logging.getLogger("tarzan")
@@ -120,49 +123,128 @@ def setup_logging(output_dir: str) -> None:
         root.addHandler(_LOG_CAPTURE)
 
 
-def _write_run_reports(output_dir: str, metrics=None) -> None:
-    """Write THE single run report — ``output/report.html`` — a color-coded
-    table of the whole run's log (one row per entry, colored by level).
-
-    This is the one and only log for a run: there is no separate analyzer.log.
-    Best-effort: a diagnostic must never turn a good run into a failure.
-    """
+def _write_run_reports(
+    output_dir: str,
+    metrics=None,
+    config=None,
+    *,
+    newsletter_html: str | None = None,
+    what_if=None,
+) -> None:
+    """Finalize one correlated local artifact set for every initialized run."""
     from tarzan.runtime import data_quality as dq
     from tarzan.runtime import report_html
     from tarzan import runtime
+    from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
+    from tarzan.runtime.ledger import LedgerEntryType
+    from tarzan.runtime.publication import PublicationEvaluator
+    from tarzan.runtime.session import last_run_result
+    from tarzan.runtime.summary import SummaryProjector
+
     try:
         logger.info(dq.summary_line())
+        result = last_run_result()
         stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
-        path = report_html.write_report(output_dir, generated_at=stamp,
-                                        log_records=_LOG_CAPTURE.records)
-        if path:
-            logger.info("Run report: %s (%d data-quality issue(s))",
-                        path, len(dq.issues()))
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Run report step failed: %s", e)
+        if result is None:
+            # Argument parsing can fail before a RunSession exists. Keep the
+            # legacy atomic report fallback for that pre-initialization case.
+            path = report_html.write_report(
+                output_dir,
+                generated_at=stamp,
+                log_records=_LOG_CAPTURE.records,
+            )
+            if path:
+                logger.info("Pre-run report: %s", path)
+            return
+
+        publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
+        summary = SummaryProjector.project(result, publication)
+        storage = StorageDescriptor(
+            storage_scope="local",
+            automation_local_ephemeral=False,
+            retention_guarantee="none",
+            execution_environment="cli",
+        )
+        rendered_report = report_html.render(
+            generated_at=stamp,
+            log_records=_LOG_CAPTURE.records,
+            ledger=result.ledger,
+            publication_state=publication.decision.value,
+            storage_scope=storage.storage_scope,
+            automation_local_ephemeral=storage.automation_local_ephemeral,
+            retention_guarantee=storage.retention_guarantee,
+        )
+        result.ledger.append(LedgerEntryType.ARTIFACT, {
+            "artifact_set": "local",
+            "state": "FINALIZATION_REQUESTED",
+            "storage_scope": storage.storage_scope,
+            "automation_local_ephemeral": storage.automation_local_ephemeral,
+            "retention_guarantee": storage.retention_guarantee,
+        })
+        writer = LocalArtifactWriter(
+            Path(output_dir),
+            result.attempt_id,
+            storage=storage,
+        )
+        manifest = writer.finalize(
+            analysis_id=result.analysis_id,
+            summary=summary.to_dict(),
+            ledger_entries=(entry.to_dict() for entry in result.ledger.entries),
+            report_html=rendered_report,
+            publication_state=publication.decision.value,
+            newsletter_html=newsletter_html,
+            what_if=what_if,
+        )
+        logger.info(
+            "Local artifact manifest: %s (%d data-quality issue(s))",
+            manifest,
+            len(dq.issues()),
+        )
+    except Exception as error:  # noqa: BLE001
+        result = last_run_result()
+        if result is not None:
+            result.ledger.open_failure(
+                stage="local_artifacts",
+                stable_code="LOCAL_ARTIFACT_FINALIZATION_FAILED",
+                severity="ERROR",
+                error=error,
+                affected_outputs=["manifest", "summary", "ledger", "report"],
+                analytical_impact="analysis remains in memory but local evidence is incomplete",
+                publication_impact="DEGRADE",
+            )
+        logger.error(
+            "Local artifact finalization failed (%s); normalized evidence remains in memory.",
+            type(error).__name__,
+        )
 
 
-def _export_whatif(portfolios, config, output_dir: str) -> None:
-    """Write the what-if Excel workbook from the computed backtest. Guarded."""
+def _export_whatif(portfolios, config):
+    """Render What-If to bytes; only LocalArtifactWriter can publish it."""
     try:
         from tarzan.backtest import (
             simulation_rows, testfol_instrument_map, testfol_lines,
         )
         from tarzan.export.whatif_excel import export_whatif_excel
-        out = os.path.join(output_dir, "whatif.xlsx")
-        export_whatif_excel(
-            out, portfolios,
-            config.invested_allocation_targets_pctg or {},
-            config.equity_geo_targets_pctg or {},
-            100_000.0,
-            tolerance=config.rebalancing_target_tolerance_pctg,
-            sim_rows=simulation_rows(portfolios),
-            testfol={p.name: testfol_lines(p) for p in portfolios},
-            testfol_byinst={p.name: testfol_instrument_map(p) for p in portfolios},
-        )
-        logger.info("What-if workbook saved to: %s", out)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("What-if Excel skipped (%s): %s", type(e).__name__, e)
+        from tarzan.runtime.artifacts import LocalOnlyWorkbook
+
+        with tempfile.TemporaryDirectory(prefix="tarzan-what-if-") as directory:
+            out = Path(directory) / "what_if.xlsx"
+            export_whatif_excel(
+                str(out), portfolios,
+                config.invested_allocation_targets_pctg or {},
+                config.equity_geo_targets_pctg or {},
+                100_000.0,
+                tolerance=config.rebalancing_target_tolerance_pctg,
+                sim_rows=simulation_rows(portfolios),
+                testfol={p.name: testfol_lines(p) for p in portfolios},
+                testfol_byinst={p.name: testfol_instrument_map(p) for p in portfolios},
+            )
+            workbook = LocalOnlyWorkbook(content=out.read_bytes())
+        logger.info("What-If workbook rendered for local-only finalization.")
+        return workbook
+    except Exception as error:  # noqa: BLE001
+        logger.warning("What-If Excel skipped (%s): %s", type(error).__name__, error)
+        return None
 
 
 def main(argv=None) -> int:
@@ -189,7 +271,7 @@ def main(argv=None) -> int:
     # that pre-namespace).
     output_dir = _dated_output_dir(args.output, as_of)
     setup_logging(output_dir)
-    logger.info("Tarzan v3.0 starting...")
+    logger.info("Tarzan v%s starting...", __version__)
     logger.info("Output directory: %s", output_dir)
 
     if args.deterministic or as_of is not None:
@@ -199,6 +281,9 @@ def main(argv=None) -> int:
     if strict:
         logger.info("Strict input validation ON (unrecognized columns rejected).")
     metrics = None
+    config = None
+    newsletter_html = None
+    what_if = None
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
@@ -209,30 +294,46 @@ def main(argv=None) -> int:
             as_of=as_of,
             strict=strict,
         )
+        from tarzan.runtime.ledger import LedgerEntryType
+        from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
+        from tarzan.runtime.session import last_run_result
+
+        result = last_run_result()
+        if result is None:
+            raise RuntimeError("orchestrator completed without a RunResult")
+        publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
+        result.ledger.append(LedgerEntryType.PUBLICATION, {
+            "decision": publication.decision.value,
+            "delivery_purpose": publication.delivery_purpose.value,
+            "critical_failure_refs": list(publication.critical_failure_ids),
+        })
+        if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
+            logger.critical(
+                "Normal newsletter blocked by critical run evidence: %s",
+                ", ".join(publication.critical_failure_ids),
+            )
+            return 1
         if metrics.total_value == 0:
             logger.error("No portfolio value computed. Check input data.")
             return 1
 
         # Long-history backtest of the candidate portfolios — computed ONCE
-        # and shared by both the newsletter "Backtesting" section and the
-        # what-if Excel, so a single run yields all three artifacts. Skipped in
-        # deterministic / as-of runs (network-bound, not reproducible) and fully
-        # guarded so it can never break the primary newsletter.
+        # and shared by both the newsletter and the local-only What-If workbook.
         from tarzan.backtest import newsletter_portfolios
         backtest_portfolios = newsletter_portfolios(
             deterministic=(args.deterministic or as_of is not None))
 
-        # Render the newsletter — Tarzan's primary artifact. (Benchmark names
-        # are resolved from config inside generate_newsletter when omitted.)
-        from tarzan.export.newsletter import generate_newsletter
-        output_path = generate_newsletter(
-            metrics, config, output_dir, backtest_portfolios=backtest_portfolios)
-        logger.info("Newsletter saved to: %s", output_path)
+        # Render in memory. LocalArtifactWriter is the only file publisher for
+        # newsletter, report, summary, ledger, manifest, and What-If evidence.
+        from tarzan.export.newsletter import render_newsletter
+        newsletter_html = render_newsletter(
+            metrics=metrics,
+            config=config,
+            backtest_portfolios=backtest_portfolios,
+        )
 
-        # What-if Excel workbook (same components as the newsletter section,
-        # plus the testfol tab), from the SAME computed backtest.
         if backtest_portfolios:
-            _export_whatif(backtest_portfolios, config, output_dir)
+            what_if = _export_whatif(backtest_portfolios, config)
 
         logger.info("Completed successfully.")
         return 0
@@ -255,7 +356,13 @@ def main(argv=None) -> int:
         # on success, on the no-value early exit, and on any failure — so the
         # user always has one readable record of what the run produced and
         # what it skipped, regardless of how the run ended.
-        _write_run_reports(output_dir, metrics=metrics)
+        _write_run_reports(
+            output_dir,
+            metrics=metrics,
+            config=config,
+            newsletter_html=newsletter_html,
+            what_if=what_if,
+        )
 
 
 if __name__ == "__main__":

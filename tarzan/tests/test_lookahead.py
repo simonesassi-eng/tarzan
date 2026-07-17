@@ -144,3 +144,105 @@ def test_asof_valuation_uses_asof_not_last_price(monkeypatch, tmp_path):
         f"total_value {m.total_value} implies future ×3 prices leaked into the "
         "as-of valuation"
     )
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C1 output invariance
+# ---------------------------------------------------------------------------
+
+_C1_TAX_CONFIG = (
+    "key,value\n"
+    "rebalancing_capital_gains_tax_standard_pctg,26\n"
+    "rebalancing_capital_gains_tax_government_pctg,12.5\n"
+    "rebalancing_lump_sum_amount_eur,5000\n"
+    "target_invested_allocation_equities_pctg,65\n"
+    "target_invested_allocation_fixed_income_pctg,35\n"
+)
+
+
+def _run_c1_orders(monkeypatch, tmp_path, orders_csv: str):
+    """Run the same pinned, network-free pipeline with a supplied order ledger."""
+    monkeypatch.setattr(
+        "tarzan.data.enricher.enrich_holdings", _make_enrich(1.0, 4)
+    )
+    empty = pd.Series(dtype=float)
+    monkeypatch.setattr(
+        "tarzan.engine.metrics._fetch_benchmark_history", lambda *a, **k: empty
+    )
+    monkeypatch.setattr(
+        "tarzan.engine.metrics._build_benchmark_series", lambda *a, **k: empty
+    )
+    orders = tmp_path / "c1_order_list.csv"
+    config = tmp_path / "c1_targets.csv"
+    orders.write_text(orders_csv)
+    config.write_text(_C1_TAX_CONFIG)
+    metrics, _ = orchestrator.run(
+        config_source=str(config),
+        orders_source=str(orders),
+        targets_per_holding_source=None,
+        deterministic=True,
+        as_of=_AS_OF,
+    )
+    return metrics
+
+
+def _c1_financial_fingerprint(metrics) -> dict:
+    hdf = metrics.holdings_df.sort_values("isin")
+    holdings = tuple(
+        (
+            row.isin,
+            round(float(row.quantity), 6),
+            round(float(row.cost_basis_eur), 2),
+            round(float(row.current_value), 2),
+        )
+        for row in hdf.itertuples()
+    )
+    timeline = metrics.allocation_timeline or {}
+    timeline_tail = tuple(sorted(
+        (str(k), round(float(v), 6))
+        for k, v in ((timeline.get("asset") or [{}])[-1]).items()
+    ))
+    actions = tuple(sorted(
+        (
+            action.get("ticker"),
+            action.get("direction"),
+            round(float(action.get("amount_eur", 0.0)), 2),
+        )
+        for action in (metrics.rebalancing_suggestions or [])
+    ))
+    return {
+        "holdings_and_cost": holdings,
+        "total_value": round(float(metrics.total_value), 2),
+        "returns": (
+            round(float(metrics.xirr_pct), 6) if metrics.xirr_pct is not None else None,
+            round(float(metrics.twror_pct), 6) if metrics.twror_pct is not None else None,
+            round(float(metrics.pnl_eur), 2) if metrics.pnl_eur is not None else None,
+        ),
+        "estimated_cgt_eur": round(float(metrics.estimated_cgt_eur or 0.0), 2),
+        "allocation_timeline_tail": timeline_tail,
+        "displayed_plan": actions,
+    }
+
+
+# **Validates: Requirements 2.1**
+def test_c1_post_asof_sell_cannot_change_any_pinned_financial_surface(
+    monkeypatch, tmp_path,
+):
+    """A future profitable sale must be invisible to the entire pinned run.
+
+    The fixed counterexample changes quantity/cost, returns, estimated tax,
+    the timeline endpoint, and planning through the one unfiltered order list.
+    """
+    future_sell = (
+        "2025-07-01,sell,IE00B4L5Y983,-5,1000,1000,EUR,200,1.0\n"
+    )
+    baseline = _c1_financial_fingerprint(
+        _run_c1_orders(monkeypatch, tmp_path, _ORDERS_CSV)
+    )
+    with_future_order = _c1_financial_fingerprint(
+        _run_c1_orders(monkeypatch, tmp_path, _ORDERS_CSV + future_sell)
+    )
+    assert with_future_order == baseline, (
+        "post-as_of sale changed pinned financial output; "
+        f"baseline={baseline}; with_future_order={with_future_order}"
+    )

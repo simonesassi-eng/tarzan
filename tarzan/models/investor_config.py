@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass, field
 
 from tarzan import config as cfg
+from tarzan.runtime.provider import ProviderQualityPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,33 @@ def normalize_percentages(d: dict[str, float]) -> dict[str, float]:
     if total <= 1e-9:
         return d
     return {k: v * 100.0 / total for k, v in d.items()}
+
+
+def _configured_provider_quality_policies() -> dict[str, ProviderQualityPolicy]:
+    """Load and validate explicit instrument/data-class policy declarations."""
+    raw = cfg.get("provider_quality_policies")
+    if not isinstance(raw, dict):
+        raise ValueError("provider_quality_policies must be declared in constants.yaml")
+    required_kinds = {"STOCK", "ETF", "BOND", "CASH", "UNKNOWN"}
+    if set(raw) != required_kinds:
+        missing = sorted(required_kinds - set(raw))
+        extra = sorted(set(raw) - required_kinds)
+        raise ValueError(
+            f"provider_quality_policies kind mismatch; missing={missing}, extra={extra}"
+        )
+    policies: dict[str, ProviderQualityPolicy] = {}
+    for kind in sorted(raw):
+        data_classes = raw[kind]
+        if not isinstance(data_classes, dict) or set(data_classes) != {"current_valuation"}:
+            raise ValueError(f"{kind} must declare exactly current_valuation policy")
+        values = data_classes["current_valuation"]
+        if not isinstance(values, dict):
+            raise ValueError(f"{kind}:current_valuation policy must be a mapping")
+        try:
+            policies[f"{kind}:current_valuation"] = ProviderQualityPolicy(**values)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"invalid {kind}:current_valuation policy: {error}") from error
+    return policies
 
 
 @dataclass
@@ -120,6 +148,13 @@ class InvestorConfig:
     # Equity geography (% of equity portion)
     equity_geo_targets_pctg: dict[str, float] = field(
         default_factory=lambda: dict(cfg.default_equity_geo_targets_pctg())
+    )
+
+    # Explicit provider/valuation policy keyed by instrument kind and data
+    # class. Loaded from constants.yaml and validated into immutable policy
+    # values; callers cannot silently fall through to a universal threshold.
+    provider_quality_policies: dict[str, ProviderQualityPolicy] = field(
+        default_factory=_configured_provider_quality_policies
     )
 
     # Metadata

@@ -66,3 +66,44 @@ def clean_geo(gb: Optional[dict]) -> Optional[dict]:
     if total <= 0:
         return None
     return {k: v * 100.0 / total for k, v in known.items()}
+
+
+# Canonical exposure schema. Percentages are intentionally not normalized:
+# leveraged/multi-class holdings may contribute more than 100% notional.
+CANONICAL_EXPOSURE_SCHEMA_VERSION = "1.0"
+CANONICAL_EXPOSURE_TOLERANCE_PCT = 0.000001
+
+
+def holding_class_breakdown(holding) -> dict[str, float]:
+    """Return validated, string-keyed notional class percentages."""
+    raw = getattr(holding, "class_breakdown", None)
+    if not raw:
+        asset_class = getattr(holding, "asset_class", None)
+        raw = {asset_class: 100.0} if asset_class is not None else {}
+    result: dict[str, float] = {}
+    for key, value in raw.items():
+        name = key.value if hasattr(key, "value") else str(key)
+        pct = float(value)
+        if pct < 0:
+            raise ValueError(f"negative canonical exposure for {name}: {pct}")
+        result[name] = result.get(name, 0.0) + pct
+    return result
+
+
+def exposure_fraction(holding, category: str) -> float:
+    """Notional fraction of a holding assigned to ``category``."""
+    return holding_class_breakdown(holding).get(category, 0.0) / 100.0
+
+
+def class_exposure_matrix(holdings: Iterable, categories: Iterable[str]):
+    """Build a category-by-holding notional exposure matrix."""
+    import numpy as np
+
+    category_list = list(categories)
+    return np.array(
+        [
+            [exposure_fraction(holding, category) for holding in holdings]
+            for category in category_list
+        ],
+        dtype=float,
+    )

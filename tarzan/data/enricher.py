@@ -939,7 +939,7 @@ def _derive_security_type(holding: Holding) -> str:
     return type_map.get(ac, "Alternative") if ac else "Alternative"
 
 
-def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClass:
+def classify_asset_class(info: dict, ticker: str, holding: Holding):
     """Determine asset class from yfinance info and ticker patterns.
 
     Classification priority:
@@ -1006,7 +1006,23 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding) -> AssetClas
     if qt == "CRYPTOCURRENCY":
         return AssetClass.CRYPTO
 
-    return AssetClass.ALTERNATIVE
+    from tarzan.instruments import CapabilityResult, SupportState
+    from tarzan.runtime.ledger import Availability
+
+    evidence = tuple(
+        value for value in (
+            str(info.get("quoteType") or "").strip(),
+            str(holding.instrument_type or holding.security_type or holding.asset_type or "").strip(),
+        ) if value
+    )
+    return CapabilityResult(
+        support=SupportState.UNSUPPORTED,
+        availability=Availability.UNAVAILABLE,
+        value=None,
+        provenance=evidence,
+        analytical_impact="asset classification and dependent capabilities unavailable",
+        publication_impact="DEGRADE",
+    )
 
 
 def _classify_from_hint(hint: str, kw: dict) -> Optional[AssetClass]:
@@ -1573,15 +1589,29 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     curated = _apply_taxonomy_override(holding)
 
     if not curated:
+        unresolved_kind = False
         if holding.asset_class is None:
-            holding.asset_class = classify_asset_class(info, holding.ticker, holding)
+            classification = classify_asset_class(info, holding.ticker, holding)
+            if isinstance(classification, AssetClass):
+                holding.asset_class = classification
+            else:
+                unresolved_kind = True
+                dq.error(
+                    "instrument_capability",
+                    "Explicit instrument kind is unknown or ambiguous; asset classification, "
+                    "sector, and rebalancing capabilities are unavailable and no default "
+                    "adapter was selected.",
+                    context=holding.isin or holding.ticker,
+                )
 
-        # Post-classification: use enriched name as additional signal
-        _reclassify_by_name(holding)
+        # Heuristic/name/OpenFIGI fallbacks are retained only for legacy
+        # recognized evidence. An explicitly unknown kind may not borrow a
+        # tracked category's behavior.
+        if not unresolved_kind:
+            _reclassify_by_name(holding)
 
-        # OpenFIGI fallback
-        if holding.asset_class == AssetClass.ALTERNATIVE or holding.instrument_type in (None, "Other"):
-            _apply_openfigi_fallback(holding)
+            if holding.asset_class == AssetClass.ALTERNATIVE or holding.instrument_type in (None, "Other"):
+                _apply_openfigi_fallback(holding)
 
         logger.debug(
             "No curated taxonomy for %s / %s → auto-classified %s (role unset). "

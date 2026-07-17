@@ -1,83 +1,128 @@
-"""Per-run runtime context — the single clock and determinism switch.
+"""Context-local run clock and mode compatibility facade.
 
-Tarzan's output is normally perturbed by three live inputs: the wall clock
-(``datetime.now()``), live intraday quotes (the broker-style 1D and the
-Markets strip), and the Gemini AI narrative. That makes a run impossible to
-reproduce offline and un-golden-testable end-to-end.
-
-This module centralizes the clock and a ``deterministic`` switch so a run can
-be pinned:
-
-  * ``as_of`` pins "today" — the terminal valuation date for XIRR/TWROR and
-    the daily series — so the same inputs + as_of always produce the same
-    numbers.
-  * ``deterministic`` additionally tells the live/AI surfaces to stand down
-    (skip intraday quotes and the Gemini call), so nothing network-live or
-    non-reproducible leaks into the output.
-
-Design mirrors ``data_quality`` / ``audit``: a process-global context, reset
-at the top of ``orchestrator.run``, best-effort accessors. **Default is OFF**
-— ``today()`` returns ``datetime.now().date()`` and ``is_deterministic()`` is
-False — so an ordinary run behaves exactly as before this module existed.
+The authoritative run lifecycle lives in :mod:`tarzan.runtime.session`. This
+module keeps the established clock helpers while storing the same immutable
+``RunContext`` object owned by the active ``RunSession``. Live, point-in-time,
+and reproducible modes therefore cannot split clocks or transport policy.
 """
 
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
+from contextvars import ContextVar
 from typing import Optional
 
-
-@dataclass
-class RunContext:
-    deterministic: bool = False
-    # Pinned "today". When None, the live wall-clock date is used.
-    as_of: Optional[datetime.date] = None
+from tarzan.runtime.session import RunContext, RunMode
 
 
-# Process-global, reset per run.
-_ctx = RunContext()
+_ctx: ContextVar[Optional[RunContext]] = ContextVar("tarzan_run_context", default=None)
 
 
-def reset() -> None:
-    """Clear any pinning — a fresh run starts live unless configured otherwise."""
-    global _ctx
-    _ctx = RunContext()
+def _build_context(
+    *,
+    deterministic: bool,
+    as_of: Optional[datetime.date],
+    attempt_id: str,
+    invocation_source: str,
+) -> RunContext:
+    if deterministic and as_of is None:
+        raise ValueError("reproducible mode requires an as_of effective date")
+    mode_value = (
+        RunMode.REPRODUCIBLE
+        if deterministic
+        else RunMode.POINT_IN_TIME
+        if as_of is not None
+        else RunMode.LIVE
+    )
+    return RunContext(
+        attempt_id=attempt_id,
+        mode=mode_value,
+        effective_date=as_of,
+        captured_at=datetime.datetime.now(datetime.timezone.utc),
+        invocation_source=invocation_source,
+        schema_versions={
+            "input": "1",
+            "summary": "1",
+            "ledger": "1.0",
+            "manifest": "1.0",
+            "cache": "1",
+            "exposure": "1.0",
+            "capability": "1.0",
+            "provider_policy": "1.0",
+            "delivery_identity": "1.0",
+            "delivery_state": "1.0",
+        },
+        policy_versions={"release": "1.0"},
+    )
 
 
-def configure(deterministic: bool = False, as_of: Optional[datetime.date] = None) -> None:
-    """Set the run context. ``as_of`` implies a pinned clock even if
-    ``deterministic`` is False (an as-of valuation without silencing live
-    quotes is a legitimate mode); ``deterministic`` additionally stands the
-    live/AI surfaces down."""
-    global _ctx
-    _ctx = RunContext(deterministic=deterministic, as_of=as_of)
+def reset(
+    *,
+    attempt_id: str = "compatibility",
+    invocation_source: str = "compatibility",
+) -> RunContext:
+    """Install a fresh live context for the current execution context."""
+    value = _build_context(
+        deterministic=False,
+        as_of=None,
+        attempt_id=attempt_id,
+        invocation_source=invocation_source,
+    )
+    _ctx.set(value)
+    return value
+
+
+def configure(
+    deterministic: bool = False,
+    as_of: Optional[datetime.date] = None,
+    *,
+    attempt_id: str = "compatibility",
+    invocation_source: str = "compatibility",
+) -> RunContext:
+    """Resolve one coherent mode before any provider or financial work."""
+    value = _build_context(
+        deterministic=deterministic,
+        as_of=as_of,
+        attempt_id=attempt_id,
+        invocation_source=invocation_source,
+    )
+    _ctx.set(value)
+    return value
+
+
+def context() -> RunContext:
+    value = _ctx.get()
+    return value if value is not None else reset()
+
+
+def mode() -> RunMode:
+    return context().mode
 
 
 def is_deterministic() -> bool:
-    return _ctx.deterministic
+    """Return the established reproducible-mode compatibility flag."""
+    return mode() is RunMode.REPRODUCIBLE
+
+
+def allows_live_transport() -> bool:
+    return context().allows_live_transport
 
 
 def as_of() -> Optional[datetime.date]:
-    return _ctx.as_of
+    return context().effective_date
 
 
 def today() -> datetime.date:
-    """The run's "today": the pinned ``as_of`` when set, else the live date.
-
-    This is the single source callers should use instead of
-    ``datetime.now().date()`` for anything that anchors a valuation/return, so
-    a pinned run is reproducible.
-    """
-    return _ctx.as_of if _ctx.as_of is not None else datetime.datetime.now().date()
+    """Return the one captured analysis date for this run."""
+    return context().analysis_date
 
 
 def now_stamp(fmt: str = "%d %b %Y, %H:%M") -> str:
-    """A wall-clock stamp for report headers. In deterministic mode this is
-    the as_of date at midnight (so headers don't vary run-to-run); otherwise
-    the live formatted now()."""
-    if _ctx.deterministic and _ctx.as_of is not None:
-        return datetime.datetime(
-            _ctx.as_of.year, _ctx.as_of.month, _ctx.as_of.day
-        ).strftime(fmt)
-    return datetime.datetime.now().strftime(fmt)
+    """Render a coherent artifact stamp from the run-owned clock."""
+    value = context()
+    stamp = (
+        datetime.datetime.combine(value.effective_date, datetime.time.min)
+        if value.effective_date is not None
+        else value.captured_at
+    )
+    return stamp.strftime(fmt)

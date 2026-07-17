@@ -306,3 +306,85 @@ class TestDrawdownZeroPeakGuard:
         # Worst peak-to-trough among positive points: 120 → 80 = -33.3%.
         assert dd == pytest.approx(-1.0 / 3.0, abs=1e-3)
         assert math.isfinite(compute_ulcer_index(s))
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C4 canonical exposure
+# ---------------------------------------------------------------------------
+
+from hypothesis import given as _given, settings as _settings, strategies as _st  # noqa: E402
+
+
+# **Validates: Requirements 2.4**
+@_given(capital_eur=_st.integers(min_value=100, max_value=100_000))
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c4_report_optimizer_and_verifier_share_90_60_notional_exposure(capital_eur):
+    """Property 1 / C4 exploration across three current consumers.
+
+    Reporting correctly preserves 90% equity + 60% fixed-income notional
+    exposure over invested capital (150% total).  The optimizer and verifier
+    instead reconstruct 100% equity + 0% fixed income from the primary class.
+    """
+    from tarzan.engine.metrics import MetricsEngine
+    from tarzan.engine.rebalancer import _ObjectiveModel, _verify
+    from tarzan.models.holding import AssetClass, Holding
+    from tarzan.models.investor_config import InvestorConfig
+
+    capital = float(capital_eur)
+    holding = Holding(
+        isin="LEV", ticker="LEV", quantity=capital / 100.0,
+        cost_basis_eur=capital, market_value_eur=capital, currency="EUR",
+        current_price=100.0, current_value=capital,
+        asset_class=AssetClass.EQUITIES,
+        class_breakdown={
+            AssetClass.EQUITIES: 90.0,
+            AssetClass.FIXED_INCOME: 60.0,
+        },
+    )
+    config = InvestorConfig()
+    config.invested_allocation_targets_pctg = {
+        "Equities": 90.0,
+        "Fixed Income": 60.0,
+    }
+    config.equity_geo_targets_pctg = {}
+    config.target_cash_buffer_eur = 0.0
+
+    engine = MetricsEngine([holding], config)
+    ctx = {}
+    engine._valuation(ctx)
+    engine._allocations(ctx)
+    reporting = {
+        str(row.category): float(row.weight_pct)
+        for row in ctx["allocation_by_class"].itertuples()
+    }
+
+    values = np.array([capital], dtype=float)
+    model = _ObjectiveModel([holding], config, values)
+    gaps = model.gaps(values)
+    optimizer = {
+        key: float(target + gap)
+        for key, target, gap in zip(model.ac_keys, model.ac_targets, gaps)
+    }
+    verification = _verify(
+        values, [holding], config, model.geo_frac, model.all_geos
+    )
+    asset_check = next(v for v in verification if v.get("kind") == "asset")
+    verifier = {
+        item["category"]: float(item["actual_pct"])
+        for item in asset_check["items"]
+    }
+
+    expected = {"Equities": 90.0, "Fixed Income": 60.0}
+    assert reporting == pytest.approx(expected, abs=1e-6)
+    assert sum(reporting.values()) == pytest.approx(150.0, abs=1e-6), (
+        "150% is intentional notional exposure and must not be normalized or rejected"
+    )
+    mismatches = {
+        name: surface
+        for name, surface in (("optimizer", optimizer), ("verifier", verifier))
+        if surface != pytest.approx(reporting, abs=1e-6)
+    }
+    assert mismatches == {}, (
+        "same holding has contradictory exposure across consumers; "
+        f"reporting={reporting}, mismatches={mismatches}"
+    )

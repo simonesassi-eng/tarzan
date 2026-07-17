@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -59,24 +60,72 @@ class _Report:
     issues: list[Issue] = field(default_factory=list)
 
 
-# Process-global, reset per run.
-_report = _Report()
+# Context-local compatibility projection; the active RunSession also owns each
+# issue and its ledger evidence.
+_report: ContextVar[Optional[_Report]] = ContextVar("tarzan_data_quality", default=None)
+
+
+def _current_report() -> _Report:
+    report = _report.get()
+    if report is None:
+        report = _Report()
+        _report.set(report)
+    return report
 
 
 def reset() -> None:
-    """Start a fresh report. Called at the top of every run so one run never
-    shows a previous run's issues."""
-    global _report
-    _report = _Report()
+    """Start a fresh report in the current run context."""
+    _report.set(_Report())
 
 
 def record(severity: str, source: str, message: str,
            context: Optional[str] = None) -> None:
     """Record one issue. Best-effort — never raises into the caller."""
     try:
-        _report.issues.append(
-            Issue(severity=severity, source=source, message=message, context=context)
-        )
+        issue = Issue(severity=severity, source=source, message=message, context=context)
+        _current_report().issues.append(issue)
+        from tarzan.runtime.ledger import Availability, LedgerEntryType
+        from tarzan.runtime.session import current_session
+        session = current_session()
+        if session is not None:
+            session.diagnostics.append(issue)
+            availability = (
+                Availability.DEGRADED
+                if severity == WARNING
+                else Availability.UNAVAILABLE
+                if severity == ERROR
+                else Availability.AVAILABLE
+            )
+            session.ledger.append(LedgerEntryType.STAGE, {
+                "stage": source,
+                "severity": severity,
+                "message": message,
+                "context": context,
+                "availability": availability.value,
+            })
+            if severity in (ERROR, WARNING):
+                failure_id = session.ledger.open_failure(
+                    stage=source,
+                    stable_code=f"DATA_QUALITY_{severity}",
+                    severity=severity,
+                    error={"message": message, "context": context},
+                    affected_outputs=[source],
+                    analytical_impact=(
+                        "affected result is unavailable"
+                        if severity == ERROR
+                        else "affected result is degraded and requires review"
+                    ),
+                    publication_impact=(
+                        "DEGRADE" if severity == WARNING else "DEGRADE_OR_BLOCK_BY_POLICY"
+                    ),
+                )
+                if severity == WARNING:
+                    session.ledger.close_failure(
+                        failure_id,
+                        automatically_corrected=False,
+                        selected_resolution=None,
+                        availability=Availability.DEGRADED,
+                    )
     except Exception:  # noqa: BLE001 — a diagnostic must never break the pipeline
         pass
 
@@ -95,12 +144,12 @@ def info(source: str, message: str, context: Optional[str] = None) -> None:
 
 def issues() -> list[Issue]:
     """The issues recorded so far this run (most callers just want counts)."""
-    return list(_report.issues)
+    return list(_current_report().issues)
 
 
 def counts() -> dict[str, int]:
     """Issue counts per severity, e.g. ``{"ERROR": 0, "WARNING": 3}``."""
-    return Counter(i.severity for i in _report.issues)
+    return Counter(i.severity for i in _current_report().issues)
 
 
 def summary_line() -> str:
@@ -126,7 +175,7 @@ def render() -> str:
     )
     lines.append("")
 
-    all_issues = _report.issues
+    all_issues = _current_report().issues
     if not all_issues:
         lines.append("No issues this run — every input parsed and priced cleanly. ✅")
         lines.append("")

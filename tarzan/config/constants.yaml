@@ -78,6 +78,62 @@ metric_ratings:
 
 max_workers: 4                    # Parallel threads for yfinance API calls (kept low to avoid HTTP 429 throttling)
 
+# Validated provider and valuation policy by explicit instrument kind and data
+# class. These values are evidence-bearing release configuration, not hidden
+# code defaults. Missing kinds/data classes fail validation rather than falling
+# through to a universal threshold.
+provider_quality_policies:
+  STOCK:
+    current_valuation:
+      policy_id: stock-current-v1
+      freshness_seconds: 86400
+      minimum_coverage_pct: 100
+      timeout_seconds: 20
+      retry_budget: 1
+      allow_fallback: true
+      valuation_materiality_pct: 1.0
+      publication_materiality_pct: 1.0
+  ETF:
+    current_valuation:
+      policy_id: etf-current-v1
+      freshness_seconds: 86400
+      minimum_coverage_pct: 100
+      timeout_seconds: 20
+      retry_budget: 1
+      allow_fallback: true
+      valuation_materiality_pct: 1.0
+      publication_materiality_pct: 1.0
+  BOND:
+    current_valuation:
+      policy_id: bond-current-v1
+      freshness_seconds: 172800
+      minimum_coverage_pct: 100
+      timeout_seconds: 20
+      retry_budget: 1
+      allow_fallback: true
+      valuation_materiality_pct: 0.5
+      publication_materiality_pct: 0.5
+  CASH:
+    current_valuation:
+      policy_id: cash-current-v1
+      freshness_seconds: 86400
+      minimum_coverage_pct: 100
+      timeout_seconds: 10
+      retry_budget: 0
+      allow_fallback: true
+      valuation_materiality_pct: 0.0
+      publication_materiality_pct: 0.0
+  UNKNOWN:
+    current_valuation:
+      policy_id: unknown-current-v1
+      freshness_seconds: 0
+      minimum_coverage_pct: 100
+      timeout_seconds: 0
+      retry_budget: 0
+      allow_fallback: false
+      valuation_materiality_pct: 0.0
+      publication_materiality_pct: 0.0
+
 
 # =============================================================================
 # 3. DEFAULT ALLOCATION TARGETS

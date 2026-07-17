@@ -124,6 +124,13 @@ const MAX_LAG_MINUTES = 25;
 // Script Property key prefix for per-(date, slot) idempotency markers.
 const SENT_MARKER_PREFIX = 'sent:';
 
+// Durable delivery claims use a separate namespace and outlive the explicit
+// reconciliation window. Values contain only hashed intent/control metadata.
+const DELIVERY_CLAIM_PREFIX = 'delivery_claim:';
+const DELIVERY_CLAIM_RETENTION_DAYS = 45;
+const DELIVERY_RECONCILIATION_WINDOW_DAYS = 30;
+const DELIVERY_STATE_SCHEMA_VERSION = '1.0';
+
 // Markers older than this many days are pruned on each run so Script
 // Properties don't grow unbounded.
 const MARKER_RETENTION_DAYS = 3;
@@ -224,7 +231,8 @@ function checkSchedule() {
     for (const slot of SLOTS) {
       const decision = _slotDecision_(slot, nowMin, isWeekend, props, today);
       if (decision.fire) {
-        _dispatch_(owner, repo, token, slot.label, 'scheduled:' + slot.name + ' ' + today);
+        const eventId = 'scheduled:' + today + ':' + slot.name;
+        _dispatch_(owner, repo, token, slot.label, 'scheduled:' + slot.name + ' ' + today, eventId);
         _markSent_(props, today, slot.name, now);
         dispatched += 1;
         Logger.log('Dispatched slot "%s" (label=%s) for %s (now=%s).',
@@ -360,8 +368,10 @@ function processInbox() {
 
   let dispatched = 0;
   for (const thread of threads) {
-    if (_threadHasUpdateRequest_(thread, wordMatch)) {
-      _dispatch_(owner, repo, token, 'on-demand', _summarize_(thread));
+    const matchingMessageId = _matchingUpdateMessageId_(thread, wordMatch);
+    if (matchingMessageId) {
+      const eventId = 'update:' + thread.getId() + ':' + matchingMessageId;
+      _dispatch_(owner, repo, token, 'on-demand', _summarize_(thread), eventId);
       thread.addLabel(label);
       dispatched += 1;
     }
@@ -399,24 +409,25 @@ function _ensureLabel_(name) {
  * This filters out the original outbound newsletters (which contain
  * neither "Update" body nor are addressed to Tarzan from the user).
  */
-function _threadHasUpdateRequest_(thread, wordMatch) {
+function _matchingUpdateMessageId_(thread, wordMatch) {
   const messages = thread.getMessages();
-  // The original newsletter is the first message in the thread; replies
-  // are all messages after it. We only consider messages from the
-  // current user (i.e. replies they sent themselves).
-  if (messages.length < 2) return false;
+  if (messages.length < 2) return null;
   const myAddress = Session.getActiveUser().getEmail().toLowerCase();
   const tokenRegex = new RegExp('\\b' + wordMatch + '\\b', 'i');
-  for (let i = 1; i < messages.length; i += 1) {
+  for (let i = messages.length - 1; i >= 1; i -= 1) {
     const m = messages[i];
     const sender = (m.getFrom() || '').toLowerCase();
     if (sender.indexOf(myAddress) === -1) continue;
     const body = m.getPlainBody() || '';
     if (tokenRegex.test(body)) {
-      return true;
+      return m.getId();
     }
   }
-  return false;
+  return null;
+}
+
+function _threadHasUpdateRequest_(thread, wordMatch) {
+  return _matchingUpdateMessageId_(thread, wordMatch) !== null;
 }
 
 function _summarize_(thread) {
@@ -434,7 +445,7 @@ function _summarize_(thread) {
  *   scheduled slots, "on-demand" for an "Update" reply).
  * @param {string} summary  short human context for the logs.
  */
-function _dispatch_(owner, repo, token, dispatchLabel, summary) {
+function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId) {
   const url =
     'https://api.github.com/repos/' + owner + '/' + repo + '/dispatches';
   const payload = {
@@ -442,6 +453,7 @@ function _dispatch_(owner, repo, token, dispatchLabel, summary) {
     client_payload: {
       label: dispatchLabel,
       origin: 'gmail-apps-script',
+      event_id: eventId,
       thread_subject: summary,
       timestamp: new Date().toISOString(),
     },
@@ -466,4 +478,154 @@ function _dispatch_(owner, repo, token, dispatchLabel, summary) {
     throw new Error('GitHub dispatch failed with HTTP ' + code);
   }
   Logger.log('GitHub dispatch OK (label=%s): %s', dispatchLabel, summary);
+}
+
+
+// ---------------------------------------------------------------------------
+// Durable delivery-claim web endpoint
+// ---------------------------------------------------------------------------
+
+/**
+ * Authenticated transactional claim endpoint used by the final workflow step.
+ * Deploy this script as a web app and set CLAIM_SERVICE_TOKEN in Script
+ * Properties. Requests and stored records contain no recipient or portfolio
+ * data; only logical hashes, purpose, state, and control timestamps persist.
+ */
+function doPost(e) {
+  try {
+    const request = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const props = PropertiesService.getScriptProperties();
+    const expectedToken = _required_(props, 'CLAIM_SERVICE_TOKEN');
+    if (!_secureEqual_(String(request.auth_token || ''), expectedToken)) {
+      return _claimResponse_({ ok: false, error_code: 'AUTHENTICATION_FAILED' });
+    }
+    if (request.state_schema_version !== DELIVERY_STATE_SCHEMA_VERSION) {
+      return _claimResponse_({ ok: false, error_code: 'STATE_SCHEMA_MISMATCH' });
+    }
+
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(20000)) {
+      return _claimResponse_({ ok: false, error_code: 'LOCK_UNAVAILABLE' });
+    }
+    try {
+      _pruneDeliveryClaims_(props, new Date());
+      if (request.action === 'claim') {
+        return _claimResponse_(_createDeliveryClaim_(props, request));
+      }
+      if (request.action === 'transition') {
+        return _claimResponse_(_transitionDeliveryClaim_(props, request));
+      }
+      return _claimResponse_({ ok: false, error_code: 'UNKNOWN_ACTION' });
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    // Do not reflect request bodies, credentials, or raw exception chains.
+    return _claimResponse_({ ok: false, error_code: 'MALFORMED_OR_INTERNAL_ERROR' });
+  }
+}
+
+function _claimResponse_(value) {
+  value.retention_days = DELIVERY_CLAIM_RETENTION_DAYS;
+  value.reconciliation_window_days = DELIVERY_RECONCILIATION_WINDOW_DAYS;
+  return ContentService
+    .createTextOutput(JSON.stringify(value))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function _secureEqual_(left, right) {
+  const l = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, left);
+  const r = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, right);
+  if (l.length !== r.length) return false;
+  let different = 0;
+  for (let i = 0; i < l.length; i += 1) different |= (l[i] ^ r[i]);
+  return different === 0;
+}
+
+function _deliveryClaimKey_(logicalId) {
+  if (!/^[0-9a-f]{64}$/.test(String(logicalId || ''))) {
+    throw new Error('invalid logical id');
+  }
+  return DELIVERY_CLAIM_PREFIX + logicalId;
+}
+
+function _createDeliveryClaim_(props, request) {
+  if (!/^[0-9a-f]{64}$/.test(String(request.intent_digest || ''))) {
+    return { ok: false, error_code: 'INVALID_INTENT_DIGEST' };
+  }
+  if (request.purpose !== 'NORMAL_NEWSLETTER' &&
+      request.purpose !== 'CRITICAL_FAILURE_NOTIFICATION') {
+    return { ok: false, error_code: 'INVALID_PURPOSE' };
+  }
+  const key = _deliveryClaimKey_(request.logical_id);
+  const existingRaw = props.getProperty(key);
+  if (existingRaw !== null) {
+    const existing = JSON.parse(existingRaw);
+    const conflict = existing.intent_digest !== request.intent_digest;
+    return {
+      ok: true,
+      created: false,
+      duplicate: !conflict,
+      conflict: conflict,
+      state: existing.state,
+    };
+  }
+  const now = new Date().toISOString();
+  const record = {
+    schema_version: DELIVERY_STATE_SCHEMA_VERSION,
+    intent_digest: request.intent_digest,
+    purpose: request.purpose,
+    state: 'CLAIMED',
+    created_at: now,
+    updated_at: now,
+  };
+  props.setProperty(key, JSON.stringify(record));
+  return {
+    ok: true,
+    created: true,
+    duplicate: false,
+    conflict: false,
+    state: record.state,
+  };
+}
+
+function _transitionDeliveryClaim_(props, request) {
+  const key = _deliveryClaimKey_(request.logical_id);
+  const raw = props.getProperty(key);
+  if (raw === null) return { ok: false, error_code: 'CLAIM_NOT_FOUND' };
+  const record = JSON.parse(raw);
+  const expected = Array.isArray(request.expected) ? request.expected : [];
+  const target = String(request.target || '');
+  if (expected.indexOf(record.state) === -1) {
+    return { ok: false, error_code: 'CONDITIONAL_TRANSITION_FAILED' };
+  }
+  const allowed = {
+    CLAIMED: ['SMTP_INVOCATION_STARTED', 'DEFINITE_PRE_SEND_FAILURE'],
+    SMTP_INVOCATION_STARTED: ['ACKNOWLEDGED_SUCCESS', 'UNCERTAIN'],
+    ACKNOWLEDGED_SUCCESS: [],
+    DEFINITE_PRE_SEND_FAILURE: [],
+    UNCERTAIN: [],
+  };
+  if (!allowed[record.state] || allowed[record.state].indexOf(target) === -1) {
+    return { ok: false, error_code: 'INVALID_TRANSITION' };
+  }
+  record.state = target;
+  record.updated_at = new Date().toISOString();
+  props.setProperty(key, JSON.stringify(record));
+  return { ok: true, state: record.state };
+}
+
+function _pruneDeliveryClaims_(props, now) {
+  const cutoff = now.getTime() - DELIVERY_CLAIM_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const values = props.getProperties();
+  for (const key in values) {
+    if (key.indexOf(DELIVERY_CLAIM_PREFIX) !== 0) continue;
+    try {
+      const record = JSON.parse(values[key]);
+      if (new Date(record.created_at).getTime() < cutoff) props.deleteProperty(key);
+    } catch (err) {
+      // Corrupt control records are removed while holding the script lock.
+      props.deleteProperty(key);
+    }
+  }
 }

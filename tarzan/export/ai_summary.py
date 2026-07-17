@@ -20,7 +20,8 @@ Design constraints (in priority order):
 Configuration (environment):
   * ``GEMINI_API_KEY``       — enables the feature (a free key from
     https://aistudio.google.com/apikey). Absent → feature off.
-  * ``GEMINI_MODEL``         — model id (default ``gemini-2.5-flash``).
+  * Gemini model — immutably pinned by the release manifest; runtime model
+    overrides are intentionally unsupported.
   * ``AI_SUMMARY_LANGUAGE``  — output language (default ``English`` to match
     the newsletter).
   * ``TARZAN_DISABLE_AI``    — set to 1/true to force the feature off.
@@ -32,6 +33,9 @@ import json
 import logging
 import os
 import re
+import time
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 from urllib.error import HTTPError
@@ -42,11 +46,112 @@ logger = logging.getLogger(__name__)
 _GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_PINNED_MODEL = "gemini-2.5-flash"
 _TIMEOUT_SECONDS = 20
 _MAX_OUTPUT_TOKENS = 1400
 _MAX_CHARS = 1600  # generous safety cap for a ~150-word, 6-7 sentence note;
 # the trim always ends on a full sentence, never mid-thought or mid-number.
+
+
+@dataclass(frozen=True)
+class GeminiAttemptEvidence:
+    provider: str
+    model: str
+    mode: str
+    ordinal: int
+    outcome: str
+    latency_ms: Optional[float] = None
+    selected_fallback: Optional[str] = None
+    summary_availability: str = "UNAVAILABLE"
+    analytical_impact: str = ""
+    publication_impact: str = "NONE"
+
+
+@dataclass(frozen=True)
+class GeminiProviderResult:
+    attempts: tuple[GeminiAttemptEvidence, ...]
+    selected_mode: Optional[str]
+    summary_availability: str
+
+
+_last_provider_result: ContextVar[Optional[GeminiProviderResult]] = ContextVar(
+    "tarzan_last_gemini_provider_result", default=None
+)
+
+
+def last_provider_result() -> Optional[GeminiProviderResult]:
+    """Return non-secret attempt evidence for the current run context."""
+    return _last_provider_result.get()
+
+
+def _store_provider_result(result: GeminiProviderResult) -> None:
+    """Store context-local evidence and mirror only non-secret fields to ledger."""
+    _last_provider_result.set(result)
+    try:
+        from tarzan.runtime.ledger import Availability, LedgerEntryType
+        from tarzan.runtime.session import current_session
+
+        session = current_session()
+        if session is None:
+            return
+        for attempt in result.attempts:
+            session.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
+                "provider": attempt.provider,
+                "model": attempt.model,
+                "operation": "portfolio_summary",
+                "mode": attempt.mode,
+                "ordinal": attempt.ordinal,
+                "outcome": attempt.outcome,
+                "latency_ms": attempt.latency_ms,
+                "selected_fallback": attempt.selected_fallback,
+                "summary_availability": attempt.summary_availability,
+                "analytical_impact": attempt.analytical_impact,
+                "publication_impact": attempt.publication_impact,
+            })
+            if attempt.outcome == "FAILED":
+                failure_id = session.ledger.open_failure(
+                    stage="gemini",
+                    stable_code=f"GEMINI_{attempt.mode}_FAILED",
+                    severity="WARNING",
+                    error={"provider": attempt.provider, "model": attempt.model, "mode": attempt.mode},
+                    affected_outputs=["market_context_summary"],
+                    analytical_impact=attempt.analytical_impact or "Gemini summary attempt unavailable",
+                    publication_impact=attempt.publication_impact,
+                )
+                if attempt.selected_fallback:
+                    availability = (
+                        Availability.DEGRADED
+                        if result.summary_availability != "UNAVAILABLE"
+                        else Availability.UNAVAILABLE
+                    )
+                    session.ledger.remedy(
+                        failure_id,
+                        remedy_id=f"select-{attempt.selected_fallback.casefold()}",
+                        action="select declared summary fallback",
+                        outcome="SUCCEEDED",
+                        availability=availability,
+                        provenance=[attempt.selected_fallback],
+                    )
+                    session.ledger.close_failure(
+                        failure_id,
+                        automatically_corrected=True,
+                        selected_resolution=f"select-{attempt.selected_fallback.casefold()}",
+                        availability=availability,
+                        provenance=[attempt.selected_fallback],
+                    )
+    except Exception:  # noqa: BLE001 - diagnostic mirroring is best effort
+        pass
+
+
+class GeminiPayloadBuilder:
+    """Pure domain-only request builder with no environment/filesystem access."""
+
+    @staticmethod
+    def build(metrics: Any, config: Any, instructions: str) -> dict[str, Any]:
+        return {
+            "portfolio_analysis": build_digest(metrics, config),
+            "instructions": str(instructions),
+        }
 
 
 def is_enabled() -> bool:
@@ -61,36 +166,90 @@ def is_enabled() -> bool:
 # ---------------------------------------------------------------------------
 
 def generate_summary(metrics, config) -> Optional[str]:
-    """Return a short AI portfolio summary, or None to fall back to Signals.
-
-    Best-effort: returns None on any error so the caller degrades to the
-    rule-based section. Never raises.
-    """
+    """Return an AI summary and retain only non-secret structured evidence."""
+    _last_provider_result.set(None)
     if not is_enabled():
+        _store_provider_result(GeminiProviderResult((), "SIGNALS", "UNAVAILABLE"))
         return None
-    # Deterministic mode: the Gemini call is network-live and non-reproducible,
-    # so skip it and let the caller fall back to the rule-based Signals section.
     from tarzan import runtime
-    if runtime.is_deterministic():
-        logger.info("Deterministic run: skipping the live AI summary.")
+    if not runtime.allows_live_transport():
+        logger.info("Pinned run: skipping the live AI summary.")
+        _store_provider_result(GeminiProviderResult((), "SIGNALS", "UNAVAILABLE"))
         return None
+
+    model = _PINNED_MODEL
+    attempts: list[GeminiAttemptEvidence] = []
     try:
         digest = build_digest(metrics, config)
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
         today_str = datetime.now().strftime("%A, %B %d, %Y")
         system, user = _system_prompt(language, today_str), _user_prompt(digest)
-        # Try the grounded (Google Search) call first; if the key's tier or
-        # model rejects grounding, retry once without it so the macro note
-        # still appears (from model knowledge) rather than dropping all the
-        # way back to the rule-based Signals.
+        grounded_started = time.perf_counter()
         try:
             text = _call_gemini(system, user, use_search=True)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Grounded AI summary failed (%s); retrying without search.", e)
-            text = _call_gemini(system, user, use_search=False)
+            attempts.append(GeminiAttemptEvidence(
+                provider="gemini", model=model, mode="GROUNDED", ordinal=1,
+                outcome="SUCCEEDED",
+                latency_ms=round((time.perf_counter() - grounded_started) * 1000.0, 3),
+                summary_availability="AVAILABLE",
+            ))
+            selected_mode = "GROUNDED"
+        except Exception as error:  # noqa: BLE001
+            attempts.append(GeminiAttemptEvidence(
+                provider="gemini", model=model, mode="GROUNDED", ordinal=1,
+                outcome="FAILED", selected_fallback="NON_GROUNDED",
+                latency_ms=round((time.perf_counter() - grounded_started) * 1000.0, 3),
+                analytical_impact="grounded context unavailable",
+                publication_impact="DEGRADE",
+            ))
+            logger.warning(
+                "Grounded AI summary failed (%s); retrying without search.",
+                type(error).__name__,
+            )
+            fallback_started = time.perf_counter()
+            try:
+                text = _call_gemini(system, user, use_search=False)
+            except Exception as fallback_error:  # noqa: BLE001
+                attempts.append(GeminiAttemptEvidence(
+                    provider="gemini", model=model, mode="NON_GROUNDED", ordinal=2,
+                    outcome="FAILED", selected_fallback="SIGNALS",
+                    latency_ms=round((time.perf_counter() - fallback_started) * 1000.0, 3),
+                    analytical_impact="AI narrative unavailable; Signals selected",
+                    publication_impact="DEGRADE",
+                ))
+                _store_provider_result(GeminiProviderResult(
+                    tuple(attempts), "SIGNALS", "UNAVAILABLE"
+                ))
+                logger.warning(
+                    "AI summary unavailable (%s); falling back to Signals.",
+                    type(fallback_error).__name__,
+                )
+                return None
+            attempts.append(GeminiAttemptEvidence(
+                provider="gemini", model=model, mode="NON_GROUNDED", ordinal=2,
+                outcome="SUCCEEDED",
+                latency_ms=round((time.perf_counter() - fallback_started) * 1000.0, 3),
+                summary_availability="DEGRADED",
+                analytical_impact="summary lacks live grounding",
+                publication_impact="DEGRADE",
+            ))
+            selected_mode = "NON_GROUNDED"
+        availability = "AVAILABLE" if selected_mode == "GROUNDED" else "DEGRADED"
+        _store_provider_result(GeminiProviderResult(
+            tuple(attempts), selected_mode, availability
+        ))
         return _sanitize(text) if text else None
-    except Exception as e:  # noqa: BLE001 — best-effort, never fatal
-        logger.warning("AI summary unavailable (%s); falling back to Signals.", e)
+    except Exception as error:  # noqa: BLE001
+        attempts.append(GeminiAttemptEvidence(
+            provider="gemini", model=model, mode="BUILD_OR_RENDER", ordinal=len(attempts) + 1,
+            outcome="FAILED", selected_fallback="SIGNALS",
+            analytical_impact="AI narrative unavailable; Signals selected",
+            publication_impact="DEGRADE",
+        ))
+        _store_provider_result(GeminiProviderResult(tuple(attempts), "SIGNALS", "UNAVAILABLE"))
+        logger.warning(
+            "AI summary unavailable (%s); falling back to Signals.", type(error).__name__
+        )
         return None
 
 
@@ -115,7 +274,7 @@ def divergence_note(metrics, config, benchmark_geo: Optional[str] = None) -> Opt
 
     # Deterministic mode or no key → the rule-based note (no network).
     from tarzan import runtime
-    if runtime.is_deterministic() or not is_enabled():
+    if not runtime.allows_live_transport() or not is_enabled():
         return _fallback_divergence_note(digest)
 
     try:
@@ -129,8 +288,11 @@ def divergence_note(metrics, config, benchmark_geo: Optional[str] = None) -> Opt
         # Never leave the section blank: fall back to the quant note if the
         # model returned nothing usable.
         return note or _fallback_divergence_note(digest)
-    except Exception as e:  # noqa: BLE001 — best-effort, never fatal
-        logger.warning("Divergence note unavailable (%s); using rule-based note.", e)
+    except Exception as error:  # noqa: BLE001 — best-effort, never fatal
+        logger.warning(
+            "Divergence note unavailable (%s); using rule-based note.",
+            type(error).__name__,
+        )
         return _fallback_divergence_note(digest)
 
 
@@ -755,7 +917,7 @@ def _call_gemini(system_prompt: str, user_prompt: str, use_search: bool = True) 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         return None
-    model = os.environ.get("GEMINI_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    model = _PINNED_MODEL
     url = _GEMINI_ENDPOINT.format(model=model)
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -782,18 +944,20 @@ def _call_gemini(system_prompt: str, user_prompt: str, use_search: bool = True) 
     try:
         with urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as e:
-        # Surface the API's actual error body — the single most useful clue
-        # for why the summary fell back (bad key, grounding not enabled for
-        # the tier, quota, unknown field, ...).
-        body = ""
+    except HTTPError as error:
+        # Provider response bodies can echo request details or credentials and
+        # therefore never enter logs, exceptions, ledger evidence, or artifacts.
+        # Retain only bounded non-secret transport metadata.
         try:
-            body = e.read().decode("utf-8", "replace")[:600]
+            error.read()
         except Exception:  # noqa: BLE001
             pass
-        logger.warning("Gemini HTTP %s%s: %s", e.code,
-                       " [grounded]" if use_search else "", body)
-        raise
+        logger.warning(
+            "Gemini HTTP %s%s; provider response body omitted.",
+            error.code,
+            " [grounded]" if use_search else "",
+        )
+        raise RuntimeError(f"Gemini request failed with HTTP {error.code}") from None
     text = _extract_text(data)
     if not text:
         # No text despite a 200: log the finish reason so a truncation or

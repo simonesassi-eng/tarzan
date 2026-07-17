@@ -302,3 +302,160 @@ def test_tax_per_unit_uses_proceeds_gain_fraction():
     # A flat/losing position is never taxed.
     h.gain_pct = 0.0
     assert _tax_per_unit_sold([h], cfg)[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C3 executable funding
+# ---------------------------------------------------------------------------
+
+from hypothesis import given as _given, settings as _settings, strategies as _st  # noqa: E402
+
+
+# **Validates: Requirements 2.3**
+@_given(
+    protected_cash=_st.integers(min_value=100, max_value=500),
+    authorized_release=_st.integers(min_value=100, max_value=1000),
+)
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c3_deployable_cash_is_a_funding_source_and_protected_cash_remains(
+    protected_cash, authorized_release,
+):
+    """Property 1 / C3 exploration for deployable existing cash.
+
+    The current optimizer freezes the cash line and balances trades only to an
+    external lump sum, so cash above the configured protected buffer cannot
+    fund purchases and no final sources/uses proof is emitted.
+    """
+    from tarzan.engine.rebalancer import LSParams, optimize_local_search
+    from tarzan.models.investor_config import InvestorConfig
+
+    equity = Holding(
+        isin="EQ", ticker="EQ", quantity=10.0, cost_basis_eur=1000.0,
+        market_value_eur=1000.0, currency="EUR", current_price=100.0,
+        current_value=1000.0, asset_class=AssetClass.EQUITIES,
+    )
+    cash_total = float(protected_cash + authorized_release)
+    cash = Holding(
+        isin="CASH", ticker="CASH", quantity=cash_total,
+        cost_basis_eur=cash_total, market_value_eur=cash_total, currency="EUR",
+        current_price=1.0, current_value=cash_total,
+        asset_class=AssetClass.CASH_EQUIVALENTS,
+    )
+    config = InvestorConfig()
+    config.invested_allocation_targets_pctg = {"Equities": 100.0}
+    config.equity_geo_targets_pctg = {}
+    config.target_cash_buffer_eur = float(protected_cash)
+    config.rebalancing_no_sell = True
+    config.rebalancing_target_tolerance_pctg = 0.1
+
+    actions, verifications = optimize_local_search(
+        [equity, cash], config, 1000.0 + cash_total, lump_sum=None,
+        params=LSParams(
+            n_restarts=0,
+            max_iters_per_descent=40,
+            step_fractions=(0.10, 0.05, 0.01),
+        ),
+    )
+    buy_total = sum(
+        float(action["amount_eur"])
+        for action in actions if action["direction"] == "buy"
+    )
+    cash_check = next((v for v in verifications if v.get("kind") == "cash"), None)
+    cash_after = (
+        float(cash_check["items"][0]["actual_eur"])
+        if cash_check and cash_check.get("items") else None
+    )
+    funding = next((v for v in verifications if v.get("kind") == "funding"), None)
+
+    violations = {}
+    if buy_total != pytest.approx(float(authorized_release), abs=0.01):
+        violations["authorized_cash_not_deployed"] = {
+            "expected_buy_eur": float(authorized_release),
+            "displayed_buy_eur": buy_total,
+        }
+    if cash_after != pytest.approx(float(protected_cash), abs=0.01):
+        violations["protected_cash_not_reconstructed"] = {
+            "expected_ending_cash_eur": float(protected_cash),
+            "reported_ending_cash_eur": cash_after,
+        }
+    if funding is None:
+        violations["final_funding_proof"] = "missing"
+
+    assert violations == {}, (
+        "displayed plan does not use separately authorized existing cash or "
+        f"prove protected ending cash: {violations}"
+    )
+
+
+# **Validates: Requirements 2.3**
+@_given(subthreshold_cents=_st.integers(min_value=1, max_value=99))
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c3_thresholded_and_rounded_actions_receive_final_sources_uses_proof(
+    subthreshold_cents,
+):
+    """Property 1 / C3 exploration at the post-projection threshold seam.
+
+    Force a budget-balanced candidate with one trade below the EUR 1 threshold.
+    Production projects first, drops that trade second, rounds displayed actions,
+    and returns allocation-only verification with no proof over the final list.
+    """
+    import pytest
+
+    from tarzan.engine import rebalancer as rebalancer_module
+    from tarzan.models.investor_config import InvestorConfig
+
+    remainder = subthreshold_cents / 100.0
+    contribution = 100.0
+    candidate = np.array([contribution - remainder, remainder], dtype=float)
+    holdings = [
+        Holding(
+            isin=f"EQ{i}", ticker=f"EQ{i}", quantity=10.0,
+            cost_basis_eur=1000.0, market_value_eur=1000.0, currency="EUR",
+            current_price=100.0, current_value=1000.0,
+            asset_class=AssetClass.EQUITIES,
+        )
+        for i in range(2)
+    ]
+    config = InvestorConfig()
+    config.invested_allocation_targets_pctg = {"Equities": 100.0}
+    config.equity_geo_targets_pctg = {}
+    config.rebalancing_no_sell = True
+    config.target_cash_buffer_eur = 0.0
+
+    def fixed_candidate(t, cost, lo, hi, tradeable, steps, params):
+        return candidate.copy(), cost(candidate)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(rebalancer_module, "_descent", fixed_candidate)
+        actions, verifications = rebalancer_module.optimize_local_search(
+            holdings,
+            config,
+            total_value=2000.0,
+            lump_sum=contribution,
+            params=rebalancer_module.LSParams(
+                n_restarts=0,
+                min_trade_eur=1.0,
+                max_iters_per_descent=1,
+            ),
+        )
+
+    displayed_buys = sum(
+        float(action["amount_eur"])
+        for action in actions if action["direction"] == "buy"
+    )
+    displayed_sells = sum(
+        float(action["amount_eur"])
+        for action in actions if action["direction"] == "sell"
+    )
+    displayed_residual = contribution + displayed_sells - displayed_buys
+    funding = next((v for v in verifications if v.get("kind") == "funding"), None)
+
+    assert funding is not None, (
+        "projection was balanced before thresholding, but the exact rounded "
+        "displayed actions have no final funding proof: "
+        f"candidate={candidate.tolist()}, displayed_actions={actions}, "
+        f"undisclosed_residual_eur={displayed_residual:.2f}"
+    )
+    assert funding.get("gross_purchases_eur") == pytest.approx(displayed_buys, abs=0.005)
+    assert funding.get("residual_eur") == pytest.approx(displayed_residual, abs=0.005)
+    assert funding.get("status") in {"EXECUTABLE", "NON_EXECUTABLE"}

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Optional, Union
+import time
+from dataclasses import asdict
+from typing import Any, Optional, Union
 
 from tarzan.data.loader import (
     load_config,
@@ -17,6 +19,7 @@ from tarzan.data.loader import (
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.engine.metrics import MetricsEngine
 from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.runtime.effective_orders import EffectiveOrderSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +176,13 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     return seeded
 
 
-def run(
+def _run_once(
     config_source: Optional[Union[str, io.BytesIO]] = None,
     orders_source: Optional[Union[str, io.BytesIO]] = None,
     targets_per_holding_source: Optional[Union[str, io.BytesIO]] = None,
     config_filename: str = "",
     orders_filename: str = "",
     targets_per_holding_filename: str = "",
-    deterministic: bool = False,
-    as_of=None,
     strict: bool = False,
 ) -> tuple[PortfolioMetrics, InvestorConfig]:
     """Execute the full analysis pipeline (order-only).
@@ -202,25 +203,28 @@ def run(
     # process. (Universal market data in price_cache is left cached.)
     from tarzan import config as _cfg
     from tarzan.data import geo_resolver as _geo
-    from tarzan.runtime import data_quality as _dq
-    from tarzan.runtime import audit as _audit
     from tarzan import runtime as _runtime
-    # Configure the run clock/determinism FIRST so every downstream default
-    # ``today`` and the live/AI gates see it. Default (both falsy) restores
-    # the pre-existing live behavior exactly.
-    if deterministic or as_of is not None:
-        _runtime.configure(deterministic=deterministic, as_of=as_of)
-    else:
-        _runtime.reset()
+    from tarzan.runtime.ledger import LedgerEntryType
+    from tarzan.runtime.session import current_session
+
+    # The public ``run`` boundary has already acquired the serial lease,
+    # established the sole run clock, activated a RunSession, and reset the
+    # context-local diagnostic projections. Input caches remain process-wide
+    # compatibility state, but can only be reset by the active leased run.
+    session = current_session()
+    if session is None:
+        raise RuntimeError("_run_once requires an active RunSession")
     _cfg.reset_input_caches()
     _geo.reset_caches()
-    # Start a fresh per-run data-quality report and rebalancing audit trail so
-    # this run never shows a previous run's issues/plans. The CLI writes both
-    # out after the run.
-    _dq.reset()
-    _audit.reset()
 
     config = load_config(config_source)
+    config_snapshot = asdict(config)
+    session.bind_config(config_snapshot)
+    session.ledger.append(LedgerEntryType.STAGE, {
+        "stage": "configuration",
+        "outcome": "SUCCEEDED",
+        "availability": "AVAILABLE",
+    })
     logger.info("Config loaded (target tolerance=±%.1f%%)", config.rebalancing_target_tolerance_pctg)
 
     # Load the order list — the single input that drives the whole report.
@@ -245,7 +249,34 @@ def run(
         logger.error("No order list available — cannot run.")
         return PortfolioMetrics(), config
 
-    # Derive the snapshot from the order list (net quantity, average-cost
+    # Form the effective ledger exactly once. Every financial consumer below
+    # receives this immutable on/before-boundary view; the original accepted
+    # list remains input provenance only and cannot leak into pinned analysis.
+    order_snapshot = EffectiveOrderSnapshot.build(orders, _runtime.as_of())
+    orders = list(order_snapshot.orders)
+    logger.info(
+        "Effective order snapshot: accepted=%d excluded=%d boundary=%s digest=%s",
+        order_snapshot.accepted_count,
+        order_snapshot.excluded_count,
+        order_snapshot.boundary.isoformat() if order_snapshot.boundary else "live",
+        order_snapshot.digest,
+    )
+    session.memo["effective_orders"] = {
+        "digest": order_snapshot.digest,
+        "accepted_count": order_snapshot.accepted_count,
+        "excluded_count": order_snapshot.excluded_count,
+        "boundary": order_snapshot.boundary.isoformat() if order_snapshot.boundary else None,
+    }
+    session.ledger.append(LedgerEntryType.BOUNDARY, {
+        "stage": "effective_orders",
+        **session.memo["effective_orders"],
+        "outcome": "SUCCEEDED",
+    })
+    if not orders:
+        logger.error("No orders are effective on or before the analysis boundary.")
+        return PortfolioMetrics(), config
+
+    # Derive the snapshot from the effective order list (net quantity,
     # basis, market value via enrichment) and attach per-instrument
     # rebalancing targets by ISIN.
     from tarzan.engine.returns_builder import build_holdings_from_orders
@@ -292,11 +323,53 @@ def run(
     # can quietly distort allocations. Surface it in the data-quality report.
     _check_taxonomy_coverage(holdings)
 
+    # Apply the explicit instrument/data-class valuation policy before any
+    # optimizer call. A material or indeterminate gap keeps a labeled known
+    # subtotal for evidence but suppresses planning and normal publication.
+    from tarzan.runtime.provider import ValuationCompletenessEvaluator
+    valuation = ValuationCompletenessEvaluator(
+        config.provider_quality_policies
+    ).evaluate(holdings, session.ledger)
+    session.memo["valuation"] = {
+        "availability": valuation.availability.value,
+        "trustworthy_total_eur": valuation.trustworthy_total_eur,
+        "known_subtotal_eur": valuation.known_subtotal_eur,
+        "missing_materiality_pct": valuation.missing_materiality_pct,
+        "planning_eligible": valuation.planning_eligible,
+        "failure_refs": list(valuation.failure_refs),
+    }
+    session.ledger.append(LedgerEntryType.STAGE, {
+        "stage": "valuation_completeness",
+        **session.memo["valuation"],
+    })
+
     # Compute
     logger.info("Computing metrics...")
-    engine = MetricsEngine(holdings, config, orders=orders, rebalance_seeds=seeds)
+    engine = MetricsEngine(
+        holdings,
+        config,
+        orders=orders,
+        rebalance_seeds=seeds,
+    )
+    # Preserve the established constructor contract for injected engines while
+    # attaching the run-scoped valuation gate before computation.
+    engine.planning_eligible = valuation.planning_eligible
+    engine.valuation_assessment = valuation
     metrics = engine.compute_all()
-    logger.info("Total portfolio value: €%.2f", metrics.total_value)
+    session.memo["workload"] = {
+        "orders": len(orders),
+        "holdings": len(holdings),
+        "rebalance_seeds": len(seeds),
+        "diagnostics": len(session.diagnostics),
+        "plan_records": len(session.audit),
+    }
+    if metrics.trustworthy_total_value_eur is None:
+        logger.error(
+            "Portfolio total is Unavailable; known partial subtotal: €%.2f",
+            metrics.known_valuation_subtotal_eur or 0.0,
+        )
+    else:
+        logger.info("Total portfolio value: €%.2f", metrics.trustworthy_total_value_eur)
 
     return metrics, config
 
@@ -357,3 +430,177 @@ def _load_targets_or_empty(
     except Exception as e:  # noqa: BLE001
         logger.warning("Per-holding targets unreadable (%s); none applied.", e)
         return {}
+
+
+# Supported production boundary: one active single-user analysis. Waiting
+# attempts own only their bootstrap envelope and in-memory correlation ledger
+# until the FIFO lease is acquired.
+from tarzan.runtime.ledger import Availability, LedgerEntryType, RunLedger
+from tarzan.runtime.session import (
+    RunAttemptEnvelope,
+    RunResult,
+    RunSession,
+    SerialExecutionGate,
+    activate_session,
+    canonical_analysis_id,
+    record_last_run_result,
+)
+
+_SERIAL_EXECUTION_GATE = SerialExecutionGate()
+
+
+def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, Any]:
+    """Return canonical output-affecting evidence for the stable Analysis ID."""
+    context = session.context
+    evidence: dict[str, Any] = {
+        "mode": context.mode.value,
+        "effective_date": (
+            context.effective_date.isoformat() if context.effective_date else None
+        ),
+        "schema_versions": dict(context.schema_versions),
+        "policy_versions": dict(context.policy_versions),
+        "config": dict(session.config_snapshot),
+        "effective_orders": session.memo.get("effective_orders"),
+        "valuation": session.memo.get("valuation"),
+    }
+    if metrics is not None:
+        try:
+            evidence["summary"] = metrics.to_summary_dict()
+        except Exception:  # noqa: BLE001 - identity remains available on partial runs
+            evidence["summary"] = {"status": "unavailable"}
+    return evidence
+
+
+def _record_terminal_result(
+    session: RunSession,
+    *,
+    metrics: Any,
+    config: Any,
+    outcome: str,
+    started_at: float,
+) -> RunResult:
+    analysis_id = canonical_analysis_id(_analysis_evidence(session, metrics))
+    session.analysis_id = analysis_id
+    session.ledger.append(LedgerEntryType.TELEMETRY, {
+        "schema_version": "1.0",
+        "stage": "orchestration",
+        "outcome": outcome,
+        "duration_ms": round((time.perf_counter() - started_at) * 1000.0, 3),
+        "dimensions": dict(session.memo.get("workload", {})),
+        "bounded": True,
+        "truncated": False,
+    })
+    session.ledger.append(LedgerEntryType.STAGE, {
+        "stage": "run",
+        "outcome": outcome,
+        "analysis_id": analysis_id,
+        "availability": (
+            Availability.AVAILABLE.value
+            if outcome == "SUCCEEDED"
+            else Availability.UNAVAILABLE.value
+        ),
+    })
+    result = RunResult(
+        metrics=metrics,
+        config=config,
+        attempt_id=session.context.attempt_id,
+        analysis_id=analysis_id,
+        ledger=session.ledger,
+    )
+    record_last_run_result(result)
+    return result
+
+
+def run(
+    config_source: Optional[Union[str, io.BytesIO]] = None,
+    orders_source: Optional[Union[str, io.BytesIO]] = None,
+    targets_per_holding_source: Optional[Union[str, io.BytesIO]] = None,
+    config_filename: str = "",
+    orders_filename: str = "",
+    targets_per_holding_filename: str = "",
+    deterministic: bool = False,
+    as_of=None,
+    strict: bool = False,
+) -> tuple[PortfolioMetrics, InvestorConfig]:
+    """Run one serialized analysis while preserving the public tuple result."""
+    from tarzan import runtime as _runtime
+    from tarzan.runtime import audit as _audit
+    from tarzan.runtime import data_quality as _dq
+
+    envelope = RunAttemptEnvelope.create("orchestrator")
+    bootstrap_ledger = RunLedger(envelope.attempt_id)
+    with _SERIAL_EXECUTION_GATE.acquire(envelope):
+        try:
+            context = _runtime.configure(
+                deterministic=deterministic,
+                as_of=as_of,
+                attempt_id=envelope.attempt_id,
+                invocation_source=envelope.invocation_source,
+            )
+        except BaseException as error:
+            bootstrap_ledger.open_failure(
+                stage="run_context",
+                stable_code="INVALID_RUN_CONTEXT",
+                severity="CRITICAL",
+                error=error,
+                affected_outputs=["run"],
+                analytical_impact="analysis did not start",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+                context={"attempt_id": envelope.attempt_id},
+            )
+            raise
+
+        session = RunSession(
+            context=context,
+            config_snapshot={},
+            ledger=bootstrap_ledger,
+        )
+        started_at = time.perf_counter()
+        with activate_session(session):
+            _dq.reset()
+            _audit.reset()
+            session.ledger.append(LedgerEntryType.BOUNDARY, {
+                "stage": "run_session",
+                "outcome": "LEASE_ACQUIRED",
+                "mode": context.mode.value,
+                "effective_date": (
+                    context.effective_date.isoformat()
+                    if context.effective_date else None
+                ),
+            })
+            try:
+                metrics, config = _run_once(
+                    config_source=config_source,
+                    orders_source=orders_source,
+                    targets_per_holding_source=targets_per_holding_source,
+                    config_filename=config_filename,
+                    orders_filename=orders_filename,
+                    targets_per_holding_filename=targets_per_holding_filename,
+                    strict=strict,
+                )
+                result = _record_terminal_result(
+                    session,
+                    metrics=metrics,
+                    config=config,
+                    outcome="SUCCEEDED",
+                    started_at=started_at,
+                )
+                return result.compatibility_tuple()
+            except BaseException as error:
+                session.ledger.open_failure(
+                    stage="orchestration",
+                    stable_code="UNHANDLED_RUN_FAILURE",
+                    severity="CRITICAL",
+                    error=error,
+                    affected_outputs=["portfolio", "planning", "publication"],
+                    analytical_impact="analysis terminated before completion",
+                    publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+                )
+                _record_terminal_result(
+                    session,
+                    metrics=None,
+                    config=(dict(session.config_snapshot) if session.config_snapshot else None),
+                    outcome="FAILED",
+                    started_at=started_at,
+                )
+                raise

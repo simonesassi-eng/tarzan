@@ -92,3 +92,98 @@ class TestProperty6SingleSeries:
         series_obj = ctx["portfolio_history"]
         engine._performance(ctx)
         assert ctx["portfolio_history"] is series_obj
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C1 effective-order boundary
+# ---------------------------------------------------------------------------
+
+from hypothesis import given as _given, settings as _settings, strategies as _st  # noqa: E402
+
+
+# **Validates: Requirements 2.1**
+@_given(
+    days_after=_st.integers(min_value=1, max_value=30),
+    future_quantity=_st.integers(min_value=1, max_value=25),
+)
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c1_orchestrator_never_wires_post_asof_orders_to_financial_consumers(
+    days_after, future_quantity,
+):
+    """Property 1 / C1 exploration.
+
+    A pinned run must form the effective order view before both snapshot
+    derivation and MetricsEngine wiring.  The unfixed orchestrator passes the
+    accepted list through unchanged, so this captures the shared causal seam
+    for holdings/cost, returns/tax/timeline, targets, and planning.
+    """
+    import io
+
+    from tarzan import orchestrator, runtime
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.portfolio import PortfolioMetrics
+
+    cutoff = datetime.date(2025, 6, 29)
+    future_day = cutoff + datetime.timedelta(days=days_after)
+    orders = [
+        _order(OrderType.BUY, "US0000000001", qty=10.0, net=-1000.0,
+               price=100.0, d=(2025, 1, 2)),
+        _order(OrderType.BUY, "US0000000001", qty=float(future_quantity),
+               net=-100.0 * future_quantity, price=100.0,
+               d=(future_day.year, future_day.month, future_day.day)),
+    ]
+    config = InvestorConfig()
+    captured: dict[str, list[Order]] = {}
+
+    snapshot_holding = Holding(
+        isin="US0000000001", ticker="TEST", quantity=10.0,
+        cost_basis_eur=1000.0, market_value_eur=1000.0, currency="EUR",
+        name="Test holding", current_price=100.0, current_value=1000.0,
+        asset_class=AssetClass.EQUITIES,
+    )
+
+    def fake_build_holdings(received):
+        captured["snapshot"] = list(received)
+        return [snapshot_holding]
+
+    class CapturingMetricsEngine:
+        def __init__(self, holdings, cfg, orders=None, rebalance_seeds=None):
+            captured["engine"] = list(orders or [])
+
+        def compute_all(self):
+            return PortfolioMetrics(total_value=1000.0)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(orchestrator, "load_config", lambda *a, **k: config)
+            mp.setattr(orchestrator, "load_orders", lambda *a, **k: list(orders))
+            mp.setattr(orchestrator, "_load_targets_or_empty", lambda *a, **k: {})
+            mp.setattr(orchestrator, "_check_taxonomy_coverage", lambda *a, **k: None)
+            mp.setattr(orchestrator, "MetricsEngine", CapturingMetricsEngine)
+            mp.setattr(
+                "tarzan.engine.returns_builder.build_holdings_from_orders",
+                fake_build_holdings,
+            )
+            mp.setattr("tarzan.data.enricher.enrich_holdings", lambda hs: hs)
+            mp.setattr(
+                "tarzan.data.enricher.set_portfolio_backtest_period",
+                lambda *a, **k: None,
+            )
+            orchestrator.run(
+                orders_source=io.BytesIO(b"intercepted"),
+                deterministic=True,
+                as_of=cutoff,
+            )
+    finally:
+        runtime.reset()
+
+    leaked = {
+        consumer: [o.trade_date.isoformat() for o in received
+                   if o.trade_date > cutoff]
+        for consumer, received in captured.items()
+        if any(o.trade_date > cutoff for o in received)
+    }
+    assert leaked == {}, (
+        "post-as_of orders crossed the effective-input boundary; all financial "
+        f"consumers share this unfiltered list: cutoff={cutoff}, leaked={leaked}"
+    )

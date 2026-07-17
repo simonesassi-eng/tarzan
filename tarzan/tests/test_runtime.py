@@ -90,3 +90,97 @@ class TestOpenIsinsDeterministicOrder:
         holdings = build_holdings_from_orders(orders)
         isins = [h.isin for h in holdings]
         assert isins == sorted(isins)  # stable, not set-hash order
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C2 coherent run modes
+# ---------------------------------------------------------------------------
+
+from hypothesis import given as _given, settings as _settings, strategies as _st  # noqa: E402
+
+
+# **Validates: Requirements 2.2**
+@_given(
+    effective_date=_st.dates(
+        min_value=datetime.date(2018, 1, 1),
+        max_value=datetime.date(2020, 12, 31),
+    )
+)
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_date):
+    """Property 1 / C2 exploration for the accepted ``as_of``-only mode.
+
+    CLI messaging calls this deterministic, but runtime gates only on the
+    separate deterministic flag.  Capture the report/artifact stamp plus live
+    market and Gemini transports in one diagnostic rather than stopping at the
+    first inconsistent surface.
+    """
+    import pandas as pd
+    import pytest
+
+    from tarzan.data import market_quotes, price_cache
+    from tarzan.engine.metrics import MetricsEngine
+    from tarzan.export import ai_summary
+    from tarzan.models.investor_config import InvestorConfig
+
+    calls: list[object] = []
+    violations: dict[str, object] = {}
+
+    def fake_broker_1d(tickers):
+        calls.append(("market", tuple(tickers)))
+        return {str(t): {"pct": 1.25, "live": True} for t in tickers}
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("TARZAN_DISABLE_AI", raising=False)
+            mp.setenv("GEMINI_API_KEY", "test-key-not-sent")
+            mp.setattr(ai_summary, "build_digest", lambda *a, **k: {})
+            mp.setattr(
+                ai_summary,
+                "_call_gemini",
+                lambda *a, **k: calls.append("gemini") or "Market context complete.",
+            )
+            mp.setattr(price_cache, "load_resolution", lambda ticker: ticker)
+            mp.setattr(market_quotes, "broker_1d", fake_broker_1d)
+
+            runtime.configure(deterministic=False, as_of=effective_date)
+            artifact_stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
+            ai_summary.generate_summary(object(), object())
+
+            engine = MetricsEngine([], InvestorConfig())
+            engine._live_1d({
+                "holding_performance": pd.DataFrame({"ticker": ["TEST"], "1d": [0.0]}),
+                "holdings_df": pd.DataFrame(),
+                "performance": {"1d": 0.0},
+                "performance_full": {"1d": 0.0},
+            })
+
+            expected_stamp = f"{effective_date.isoformat()} 00:00"
+            if artifact_stamp != expected_stamp:
+                violations["artifact_timestamp"] = {
+                    "expected": expected_stamp,
+                    "actual": artifact_stamp,
+                }
+            live_calls = [call for call in calls if call == "gemini" or
+                          (isinstance(call, tuple) and call[0] == "market")]
+            if live_calls:
+                violations["live_transports"] = live_calls
+    finally:
+        runtime.reset()
+
+    assert violations == {}, (
+        "as_of-only execution advertises a point-in-time run but retains "
+        f"split clocks/live surfaces: {violations}"
+    )
+
+
+# **Validates: Requirements 2.2**
+def test_c2_reproducible_flag_without_effective_date_is_rejected_actionably():
+    """A reproducible request without its effective boundary is unsupported."""
+    import pytest
+
+    try:
+        with pytest.raises(ValueError, match="as.of|effective date"):
+            runtime.configure(deterministic=True, as_of=None)
+    finally:
+        runtime.reset()
