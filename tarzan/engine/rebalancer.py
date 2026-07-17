@@ -130,15 +130,22 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
         })
         return verifications
 
-    # Invested asset allocation: percentages relative to invested_new
-    # (excludes cash). Cash is never in invested_allocation_targets_pctg.
+    # Invested asset allocation: leverage-aware notional percentages relative
+    # to invested capital, shared with reporting/history/optimizer.
+    from tarzan.engine import allocations as alloc
+
     class_pcts = {}
     if invested_new > 0:
         for i, h in enumerate(holdings):
             if h.asset_class == AssetClass.CASH_EQUIVALENTS:
                 continue
-            ac = h.asset_class.value if h.asset_class else "Alternative"
-            class_pcts[ac] = class_pcts.get(ac, 0) + new_values[i] / invested_new * 100
+            for asset_class, pct in alloc.holding_class_breakdown(h).items():
+                if asset_class == AssetClass.CASH_EQUIVALENTS.value:
+                    continue
+                class_pcts[asset_class] = (
+                    class_pcts.get(asset_class, 0.0)
+                    + new_values[i] * pct / invested_new
+                )
     ac_details, ac_items, max_ac = [], [], 0.0
     for ac, target in config.invested_allocation_targets_pctg.items():
         actual = class_pcts.get(ac, 0)
@@ -150,14 +157,18 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
                           "detail": ", ".join(ac_details),
                           "items": ac_items})
 
-    # Geo allocation (equity portion, no cash involved)
-    eq_mask = np.array([1.0 if h.asset_class == AssetClass.EQUITIES else 0.0 for h in holdings])
+    # Geo allocation uses the canonical equity-notional denominator.
+    eq_mask = np.array([
+        alloc.exposure_fraction(h, AssetClass.EQUITIES.value) for h in holdings
+    ])
     eq_total = (new_values * eq_mask).sum()
     geo_details, geo_items, max_geo = [], [], 0.0
     if eq_total > 0:
         for g_idx, gn in enumerate(all_geos):
-            actual = sum(geo_frac[i][g_idx] * new_values[i] for i, h in enumerate(holdings)
-                         if h.asset_class == AssetClass.EQUITIES) / eq_total * 100
+            actual = sum(
+                geo_frac[i][g_idx] * new_values[i]
+                for i, _holding in enumerate(holdings)
+            ) / eq_total * 100
             target = config.equity_geo_targets_pctg.get(gn, 0)
             d = abs(actual - target); max_geo = max(max_geo, d)
             geo_details.append(f"{gn} {actual:.1f}% (tgt. {target:.1f}%)")
@@ -170,9 +181,9 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
     # Per-holding equity
     ph_details, ph_items, max_ph = [], [], 0.0
     for i, h in enumerate(holdings):
-        if h.target_equities is None or h.asset_class != AssetClass.EQUITIES:
+        if h.target_equities is None or eq_mask[i] <= 0:
             continue
-        actual = new_values[i] / eq_total * 100 if eq_total > 0 else 0
+        actual = new_values[i] * eq_mask[i] / eq_total * 100 if eq_total > 0 else 0
         d = abs(actual - h.target_equities); max_ph = max(max_ph, d)
         ph_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_equities:.0f}%)")
         # ``ticker`` is included so renderers can correlate this entry with the
@@ -189,12 +200,14 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0):
 
     # Per-holding FI
     fi_details, fi_items, max_fi = [], [], 0.0
-    fi_mask = np.array([1.0 if h.asset_class == AssetClass.FIXED_INCOME else 0.0 for h in holdings])
+    fi_mask = np.array([
+        alloc.exposure_fraction(h, AssetClass.FIXED_INCOME.value) for h in holdings
+    ])
     fi_total = (new_values * fi_mask).sum()
     for i, h in enumerate(holdings):
-        if h.target_fixed_income is None or h.asset_class != AssetClass.FIXED_INCOME:
+        if h.target_fixed_income is None or fi_mask[i] <= 0:
             continue
-        actual = new_values[i] / fi_total * 100 if fi_total > 0 else 0
+        actual = new_values[i] * fi_mask[i] / fi_total * 100 if fi_total > 0 else 0
         d = abs(actual - h.target_fixed_income); max_fi = max(max_fi, d)
         fi_details.append(f"{h.ticker} {actual:.1f}% (tgt. {h.target_fixed_income:.0f}%)")
         fi_items.append({"category": h.name or h.ticker,
@@ -291,34 +304,41 @@ class _ObjectiveModel:
         # target (% of invested), ignoring asset-class and geo objectives.
         self.per_holding_only = bool(getattr(config, "target_use_per_holding_only", False))
 
+        from tarzan.engine import allocations as alloc
+
         cls = [(h.asset_class.value if h.asset_class else "Alternative") for h in holdings]
+        cash_name = AssetClass.CASH_EQUIVALENTS.value
+        equity_name = AssetClass.EQUITIES.value
+        fixed_income_name = AssetClass.FIXED_INCOME.value
         self.noncash_mask = np.array(
-            [0.0 if c == AssetClass.CASH_EQUIVALENTS.value else 1.0 for c in cls]
+            [0.0 if c == cash_name else 1.0 for c in cls], dtype=float
         )
         self.eq_mask = np.array(
-            [1.0 if c == AssetClass.EQUITIES.value else 0.0 for c in cls]
+            [alloc.exposure_fraction(h, equity_name) for h in holdings], dtype=float
         )
         self.fi_mask = np.array(
-            [1.0 if c == AssetClass.FIXED_INCOME.value else 0.0 for c in cls]
+            [alloc.exposure_fraction(h, fixed_income_name) for h in holdings], dtype=float
         )
         self.cash_mask = np.array(
-            [1.0 if c == AssetClass.CASH_EQUIVALENTS.value else 0.0 for c in cls]
+            [1.0 if c == cash_name else 0.0 for c in cls], dtype=float
         )
 
-        # Asset-class objectives (% of invested portfolio).
-        self.ac_masks, self.ac_targets, self.ac_keys = [], [], []
-        for ac, target in (config.invested_allocation_targets_pctg or {}).items():
-            self.ac_masks.append(np.array([1.0 if c == ac else 0.0 for c in cls]))
-            self.ac_targets.append(float(target))
-            self.ac_keys.append(ac)
-        self.ac_masks = np.array(self.ac_masks) if self.ac_masks else np.zeros((0, n))
-        self.ac_targets = np.array(self.ac_targets)
+        # Asset-class objectives (% of invested capital) use the same
+        # leverage-aware notional exposure matrix as reporting and history.
+        self.ac_targets = np.array(
+            [float(target) for target in (config.invested_allocation_targets_pctg or {}).values()]
+        )
+        self.ac_keys = list((config.invested_allocation_targets_pctg or {}).keys())
+        self.ac_masks = alloc.class_exposure_matrix(holdings, self.ac_keys)
+        if not self.ac_keys:
+            self.ac_masks = np.zeros((0, n))
 
         # Equity geography objectives (% of equity sleeve).
         self.all_geos = sorted((config.equity_geo_targets_pctg or {}).keys())
         self.geo_frac = np.zeros((n, len(self.all_geos)))
         for i, h in enumerate(holdings):
-            if h.asset_class != AssetClass.EQUITIES:
+            equity_fraction = self.eq_mask[i]
+            if equity_fraction <= 0:
                 continue
             if h.geo_breakdown:
                 tot = sum(h.geo_breakdown.values())
@@ -326,21 +346,21 @@ class _ObjectiveModel:
                     for g, p in h.geo_breakdown.items():
                         gn = g.value if hasattr(g, "value") else str(g)
                         if gn in self.all_geos:
-                            self.geo_frac[i][self.all_geos.index(gn)] = p / tot
+                            self.geo_frac[i][self.all_geos.index(gn)] = (p / tot) * equity_fraction
             elif h.geography:
                 gn = h.geography.value if hasattr(h.geography, "value") else str(h.geography)
                 if gn in self.all_geos:
-                    self.geo_frac[i][self.all_geos.index(gn)] = 1.0
+                    self.geo_frac[i][self.all_geos.index(gn)] = equity_fraction
         self.geo_targets = np.array(
             [float(config.equity_geo_targets_pctg.get(g, 0.0)) for g in self.all_geos]
         )
 
         # Per-holding equity / FI objectives.
         self.ph_eq_idx = [i for i, h in enumerate(holdings)
-                          if h.target_equities is not None and h.asset_class == AssetClass.EQUITIES]
+                          if h.target_equities is not None and self.eq_mask[i] > 0]
         self.ph_eq_tgt = np.array([float(holdings[i].target_equities) for i in self.ph_eq_idx])
         self.ph_fi_idx = [i for i, h in enumerate(holdings)
-                          if h.target_fixed_income is not None and h.asset_class == AssetClass.FIXED_INCOME]
+                          if h.target_fixed_income is not None and self.fi_mask[i] > 0]
         self.ph_fi_tgt = np.array([float(holdings[i].target_fixed_income) for i in self.ph_fi_idx])
 
         # Per-holding PORTFOLIO objectives (% of invested portfolio). Active
@@ -408,9 +428,15 @@ class _ObjectiveModel:
             geo_actual = (self.geo_frac.T @ new_values) / eq * 100.0
             parts.append(geo_actual - self.geo_targets)
         if self.ph_eq_idx:
-            parts.append(new_values[self.ph_eq_idx] / eq * 100.0 - self.ph_eq_tgt)
+            parts.append(
+                (new_values[self.ph_eq_idx] * self.eq_mask[self.ph_eq_idx])
+                / eq * 100.0 - self.ph_eq_tgt
+            )
         if self.ph_fi_idx:
-            parts.append(new_values[self.ph_fi_idx] / fi * 100.0 - self.ph_fi_tgt)
+            parts.append(
+                (new_values[self.ph_fi_idx] * self.fi_mask[self.ph_fi_idx])
+                / fi * 100.0 - self.ph_fi_tgt
+            )
         if self.cash_target > 0:
             cash_actual = float(self.cash_mask @ new_values)
             parts.append(np.array([(cash_actual - self.cash_target) / self.cash_target * 100.0]))
@@ -721,7 +747,12 @@ def optimize_local_search(
         return [], []
 
     model = _ObjectiveModel(holdings, config, values)
-    cost = _Cost(model, values, config, float(lump_sum or 0.0), params)
+    initial_cash = float(model.cash_mask @ values)
+    protected_cash = max(float(config.target_cash_buffer_eur or 0.0), 0.0)
+    deployable_existing_cash = max(initial_cash - protected_cash, 0.0)
+    external_contribution = max(float(lump_sum or 0.0), 0.0)
+    funding_budget = external_contribution + deployable_existing_cash
+    cost = _Cost(model, values, config, funding_budget, params)
     lo, hi, tradeable = _bounds(
         holdings, values, bool(config.rebalancing_no_sell),
         getattr(config, "target_use_per_holding_only", False))
@@ -743,13 +774,22 @@ def optimize_local_search(
 
     best = _project_to_budget(best, cost, model, lo, hi, params)
 
-    # Drop sub-threshold trades.
+    # Apply the display threshold, serialize/round actions, then reconstruct
+    # positions and funding exclusively from that final action vector.
     best = np.where(np.abs(best) >= params.min_trade_eur, best, 0.0)
 
     actions = _extract_actions(best, holdings, model, values)
-    new_values = values + best
+    new_values, funding = _finalize_action_proof(
+        actions=actions,
+        holdings=holdings,
+        values=values,
+        config=config,
+        external_contribution=external_contribution,
+        protected_cash=protected_cash,
+    )
     verifications = _verify(new_values, holdings, config, model.geo_frac,
                             model.all_geos, float((model.fi_mask * values).sum()))
+    verifications.append(funding)
     return actions, verifications
 
 
@@ -794,6 +834,106 @@ def _extract_actions(t: np.ndarray, holdings: list[Holding], model: _ObjectiveMo
     # Largest trades first (matches the display ordering).
     actions.sort(key=lambda a: -a["amount_eur"])
     return actions
+
+
+def _finalize_action_proof(
+    *,
+    actions: list[dict],
+    holdings: list[Holding],
+    values: np.ndarray,
+    config: InvestorConfig,
+    external_contribution: float,
+    protected_cash: float,
+) -> tuple[np.ndarray, dict]:
+    """Reconstruct positions and exact sources/uses from serialized actions."""
+    trades = np.zeros(len(holdings), dtype=float)
+    gross_purchases = 0.0
+    gross_sales = 0.0
+    frozen_ok = True
+    for action in actions:
+        idx = action.get("idx")
+        amount = float(action.get("amount_eur", 0.0) or 0.0)
+        if not isinstance(idx, int) or not 0 <= idx < len(holdings):
+            frozen_ok = False
+            continue
+        sign = 1.0 if action.get("direction") == "buy" else -1.0
+        trades[idx] += sign * amount
+        if sign > 0:
+            gross_purchases += amount
+        else:
+            gross_sales += amount
+        if holdings[idx].no_buy_no_sell or holdings[idx].asset_class == AssetClass.CASH_EQUIVALENTS:
+            frozen_ok = False
+
+    costs = plan_cost(actions, holdings, config)
+    taxes = float(costs["cgt_eur"])
+    fees = float(costs["fees_eur"])
+    cash_indices = [
+        i for i, holding in enumerate(holdings)
+        if holding.asset_class == AssetClass.CASH_EQUIVALENTS
+    ]
+    initial_cash = float(values[cash_indices].sum()) if cash_indices else 0.0
+    ending_cash = (
+        initial_cash
+        + external_contribution
+        + gross_sales
+        - taxes
+        - fees
+        - gross_purchases
+    )
+
+    reconstructed = values + trades
+    if cash_indices:
+        if initial_cash > 0:
+            for idx in cash_indices:
+                reconstructed[idx] = ending_cash * float(values[idx]) / initial_cash
+        else:
+            reconstructed[cash_indices[0]] = ending_cash
+            for idx in cash_indices[1:]:
+                reconstructed[idx] = 0.0
+
+    position_ok = all(
+        reconstructed[i] >= -0.005
+        for i, holding in enumerate(holdings)
+        if holding.asset_class != AssetClass.CASH_EQUIVALENTS
+    )
+    protected_ok = ending_cash >= protected_cash - 0.005
+    residual = ending_cash - protected_cash
+    sources = initial_cash + external_contribution + gross_sales
+    uses = gross_purchases + taxes + fees + ending_cash
+    equation_residual = sources - uses
+    status = "EXECUTABLE" if (
+        position_ok
+        and protected_ok
+        and frozen_ok
+        and abs(equation_residual) <= 0.005
+    ) else "NON_EXECUTABLE"
+
+    authorized_release = min(
+        max(initial_cash - protected_cash, 0.0),
+        max(gross_purchases + taxes + fees - gross_sales - external_contribution, 0.0),
+    )
+    funding = {
+        "check": "Final Serialized-Action Funding",
+        "kind": "funding",
+        "status": status,
+        "initial_cash_eur": round(initial_cash, 2),
+        "protected_cash_eur": round(protected_cash, 2),
+        "authorized_existing_cash_release_eur": round(authorized_release, 2),
+        "external_contribution_eur": round(external_contribution, 2),
+        "gross_sales_eur": round(gross_sales, 2),
+        "estimated_tax_eur": round(taxes, 2),
+        "fees_eur": round(fees, 2),
+        "gross_purchases_eur": round(gross_purchases, 2),
+        "ending_cash_eur": round(ending_cash, 2),
+        "residual_eur": round(residual, 2),
+        "equation_residual_eur": round(equation_residual, 2),
+        "position_invariants_satisfied": position_ok,
+        "protected_cash_satisfied": protected_ok,
+        "frozen_positions_satisfied": frozen_ok,
+        "items": [],
+    }
+    return reconstructed, funding
 
 
 def _reason(i: int, h: Holding, model: _ObjectiveModel, new_values: np.ndarray) -> str:

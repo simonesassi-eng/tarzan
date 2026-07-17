@@ -1,32 +1,6 @@
-# Tarzan — portfolio newsletter automation
-#
-# SCHEDULING LIVES OUTSIDE THIS WORKFLOW.
-#
-# GitHub Actions' built-in `schedule:` cron is best-effort: it goes into
-# backlog under load and then releases the queued runs in a burst, which
-# is exactly what caused multiple newsletters to arrive back-to-back.
-# It also can't express a local timezone, forcing a brittle winter/summer
-# double-cron + DST guard.
-#
-# So this workflow no longer schedules itself. A punctual external
-# scheduler — the Gmail Apps Script in scripts/apps_script/Code.gs,
-# running on Google's reliable time-driven triggers in Europe/Rome —
-# owns the *when*. It fires a `repository_dispatch` (event_type:
-# send_now) at each market slot, carrying the slot name as the payload
-# label. This workflow is now a pure *runner*: it executes whenever it
-# is told to, by one of three triggers:
-#
-#   * repository_dispatch (send_now)  — scheduled slots (morning / midday
-#       / close) AND on-demand "Update" replies, both from Apps Script.
-#       The slot/label travels in client_payload.label.
-#   * workflow_dispatch               — manual "Run workflow" button.
-#
-# The Apps Script scheduler is idempotent per (date, slot): each slot is
-# dispatched at most once per day regardless of polling jitter or
-# retries, so duplicates/bursts cannot reach this workflow. The
-# concurrency group below is a second line of defence — it serializes
-# runs so two dispatches arriving close together never overlap.
-
+# Tarzan portfolio newsletter automation.
+# Scheduling remains external: Apps Script dispatches named market slots and
+# this workflow serializes them without cancelling an active run.
 name: Tarzan Newsletter
 
 on:
@@ -39,104 +13,111 @@ on:
   repository_dispatch:
     types: [send_now]
 
-# Serialize newsletter runs. If two dispatches land close together the
-# second queues behind the first instead of running in parallel, so we
-# never send two overlapping renders.
 concurrency:
   group: tarzan-newsletter
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install immutable dependencies
+        run: python -m pip install --require-hashes -r requirements.txt
+
+      - name: Validate release declarations
+        run: python scripts/validate_release.py --manifest tarzan/release_manifest.json
+
+      - name: Compile positive Tarzan scopes
+        run: python -m compileall -q tarzan scripts
+
+      - name: Check installed dependency consistency
+        run: python -m pip check
+
+      - name: Run Tarzan tests
+        run: python -m pytest tarzan/tests -q
+
   send:
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 12
     permissions:
       contents: read
-
-    env:
-      # Email + SMTP — set these in repo Settings > Secrets and variables > Actions
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-      SMTP_HOST: smtp.gmail.com
-      SMTP_PORT: "465"
-      # Inputs from Google Drive (preferred for public repos).
-      # The service-account JSON must be the entire key, single-line,
-      # with newlines escaped as \n.
-      DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-      GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
-      SUBJECT_PREFIX: "Portfolio Digest"
-      # Optional AI portfolio summary (free Google Gemini tier). When set,
-      # the newsletter replaces the rule-based "Signals" block with a short
-      # AI narrative built from the full metrics dataset. Leave unset to keep
-      # the rule-based Signals (the send never fails if the API is down).
-      # Get a free key at https://aistudio.google.com/apikey
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # Issue counter — increments every send via $GITHUB_RUN_NUMBER
-      ISSUE_NUMBER: ${{ github.run_number }}
-
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Resolve a friendly slot label for the email subject. Scheduling
-      # decisions (which slot, weekend rule, DST) are made upstream by
-      # the Apps Script scheduler — this step only picks the label to
-      # display, it never decides whether to run.
-      #
-      #   repository_dispatch → client_payload.label
-      #       ("morning" / "midday" / "close" for scheduled slots,
-      #        "on-demand" for an "Update" reply)
-      #   workflow_dispatch   → the manual trigger_label input
       - name: Resolve trigger label
         id: trigger
         env:
           GH_EVENT: ${{ github.event_name }}
           MANUAL_LABEL: ${{ github.event.inputs.trigger_label }}
           REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
+          REPO_DISPATCH_EVENT_ID: ${{ github.event.client_payload.event_id }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           if [[ "$GH_EVENT" == "repository_dispatch" ]]; then
             LABEL="${REPO_DISPATCH_LABEL:-on-demand}"
+            EVENT_ID="${REPO_DISPATCH_EVENT_ID:-workflow:$GH_RUN_ID}"
           else
             LABEL="${MANUAL_LABEL:-manual}"
+            EVENT_ID="workflow:$GH_RUN_ID"
           fi
           echo "label=$LABEL" >> "$GITHUB_OUTPUT"
-          echo "Event: $GH_EVENT — resolved label: $LABEL"
+          echo "event_id=$EVENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements.txt
 
-      # Persist the immutable market-data cache across runs. The heavy
-      # multi-year price/FX history and the ISIN→symbol resolution are
-      # cached on disk by tarzan.data.price_cache; only the recent tail
-      # (incl. today) is re-fetched, so today's prices stay fresh while
-      # the historical download happens once. The cache is per-repository
-      # and isolated per fork — a user cloning the repo gets their own,
-      # with zero configuration. The dated key rotates daily (so a stale
-      # entry can never pin old data) while restore-keys lets each new day
-      # warm-start from the most recent prior cache.
+      - name: Install immutable dependencies
+        run: python -m pip install --require-hashes -r requirements.txt
+
       - name: Compute cache date
         id: cachedate
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Restore market-data cache
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ~/.cache/tarzan
           key: tarzan-market-cache-${{ steps.cachedate.outputs.date }}
           restore-keys: |
             tarzan-market-cache-
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
+      # Publication credentials are scoped only to the step that consumes
+      # them. Validation, checkout, setup, installation, and cache restore see
+      # no Drive, Gemini, claim-store, recipient, or SMTP credential.
       - name: Render & send newsletter
         env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "465"
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUBJECT_PREFIX: "Portfolio Digest"
+          ISSUE_NUMBER: ${{ github.run_number }}
+          TARZAN_STABLE_EVENT_ID: ${{ steps.trigger.outputs.event_id }}
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
+          DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
+          DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}
         run: python scripts/send_newsletter.py

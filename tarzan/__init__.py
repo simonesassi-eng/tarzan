@@ -6,4 +6,4 @@ newsletter for multi-asset portfolios with live market data integration.
 
 from __future__ import annotations
 
-__version__ = "3.0.0"
+from tarzan.version import APPLICATION_VERSION as __version__

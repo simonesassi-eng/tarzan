@@ -689,3 +689,80 @@ class TestAllocationTimelinePerHolding:
         # Position is closed → no holding weight and an empty asset bucket.
         assert all(not bucket for bucket in tl["holding"])
         assert all(not bucket for bucket in tl["asset"])
+
+
+# ---------------------------------------------------------------------------
+# Production-readiness bug exploration: C4 historical exposure consistency
+# ---------------------------------------------------------------------------
+
+from hypothesis import settings as _settings  # noqa: E402
+
+
+# **Validates: Requirements 2.4**
+@given(capital_eur=st.integers(min_value=100, max_value=100_000))
+@_settings(max_examples=5, deadline=None, derandomize=True)
+def test_c4_history_and_optimizer_share_90_60_notional_exposure(capital_eur):
+    """Property 1 / C4 exploration for history versus planning.
+
+    The historical allocation builder consumes ``class_breakdown`` and keeps
+    the legitimate 150% total, while the planning objective sees only the
+    holding's primary class.
+    """
+    import numpy as np
+
+    from tarzan.engine.rebalancer import _ObjectiveModel
+    from tarzan.models.investor_config import InvestorConfig
+
+    capital = float(capital_eur)
+    quantity = capital / 100.0
+    order = _o(
+        OrderType.BUY,
+        "LEV",
+        qty=quantity,
+        net=-capital,
+        gross=capital,
+        price=100.0,
+        d=(2025, 1, 1),
+    )
+    holding = _enriched_with_history("LEV", [100.0] * 90)
+    holding.quantity = quantity
+    holding.current_price = 100.0
+    holding.current_value = capital
+    holding.market_value_eur = capital
+    holding.asset_class = AssetClass.EQUITIES
+    holding.class_breakdown = {
+        AssetClass.EQUITIES: 90.0,
+        AssetClass.FIXED_INCOME: 60.0,
+    }
+
+    timeline = build_allocation_timeline(
+        [order], {"LEV": holding}, months=3, today=datetime.date(2025, 3, 31)
+    )
+    historical = {
+        str(key): float(value)
+        for key, value in timeline["asset"][-1].items()
+    }
+
+    config = InvestorConfig()
+    config.invested_allocation_targets_pctg = {
+        "Equities": 90.0,
+        "Fixed Income": 60.0,
+    }
+    config.equity_geo_targets_pctg = {}
+    config.target_cash_buffer_eur = 0.0
+    model = _ObjectiveModel([holding], config, np.array([capital], dtype=float))
+    gaps = model.gaps(np.array([capital], dtype=float))
+    optimizer = {
+        key: float(target + gap)
+        for key, target, gap in zip(model.ac_keys, model.ac_targets, gaps)
+    }
+
+    expected = {"Equities": 90.0, "Fixed Income": 60.0}
+    assert historical == pytest.approx(expected, abs=1e-6)
+    assert sum(historical.values()) == pytest.approx(150.0, abs=1e-6), (
+        "notional exposure above 100% is intentional and must be preserved"
+    )
+    assert optimizer == pytest.approx(historical, abs=1e-6), (
+        "historical analysis and planning disagree for the same 90/60 holding: "
+        f"history={historical}, optimizer={optimizer}"
+    )

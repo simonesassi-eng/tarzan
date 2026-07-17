@@ -64,10 +64,15 @@ class MetricsEngine:
 
     def __init__(self, holdings: list[Holding], config: InvestorConfig,
                  orders: Optional[list] = None,
-                 rebalance_seeds: Optional[list] = None):
+                 rebalance_seeds: Optional[list] = None,
+                 *,
+                 planning_eligible: bool = True,
+                 valuation_assessment=None):
         self.holdings = holdings
         self.config = config
         self.orders = orders
+        self.planning_eligible = planning_eligible
+        self.valuation_assessment = valuation_assessment
         # Not-held target instruments (quantity 0) used ONLY by the rebalancer
         # so it can open new positions. They are deliberately excluded from
         # the portfolio snapshot (holdings, returns, allocations).
@@ -160,7 +165,7 @@ class MetricsEngine:
                 "current_value": value, "cost_basis_eur": cost,
                 "gain_pct": gain, "gain_eur": value - cost,
                 "asset_class": h.asset_class.value if h.asset_class else AssetClass.ALTERNATIVE.value,
-                "geography": geo_str, "currency": h.currency,
+                "geography": geo_str, "sector": h.sector or "Unknown", "currency": h.currency,
                 "ter": h.ter, "yield_pct": h.yield_pct,
                 "data_source": h.data_source or "",
                 "geo_source": h.geo_source or "",
@@ -588,23 +593,18 @@ class MetricsEngine:
         # to >100% for capital-efficient / leveraged funds — e.g. NTSG 90
         # equity + 60 fixed income), so the class weights reflect the true
         # economic exposure and can sum to more than 100% of invested capital.
-        bd_by_isin: dict[str, dict] = {}
-        for h in self.holdings:
-            if not h.isin:
-                continue
-            bd = h.class_breakdown
-            if not bd and h.asset_class:
-                bd = {h.asset_class: 100.0}
-            bd_by_isin[h.isin] = {
-                (k.value if hasattr(k, "value") else str(k)): v
-                for k, v in (bd or {}).items()
-            }
+        from tarzan.engine import allocations as alloc
+
+        bd_by_isin: dict[str, dict] = {
+            h.isin: alloc.holding_class_breakdown(h)
+            for h in self.holdings
+            if h.isin
+        }
         notional: dict[str, float] = {}
         if not df.empty and invested_value > 0:
             # Distribute each non-cash holding's value across its class
             # breakdown and sum — the shared notional-aggregation primitive,
             # so the live portfolio and the backtest aggregate identically.
-            from tarzan.engine import allocations as alloc
             pairs = []
             for _, row in df.iterrows():
                 if row.get("asset_class") == cash_class:
@@ -623,9 +623,19 @@ class MetricsEngine:
 
         by_geo = _compute_geo_allocation(df, self.holdings)
         by_sector = pd.DataFrame(columns=["category", "weight_pct"])
-        if not df.empty and "sector" in df.columns:
-            by_sector = df.groupby("sector")["weight_pct"].sum().reset_index()
-            by_sector.columns = ["category", "weight_pct"]
+        if not df.empty and invested_value > 0 and "sector" in df.columns:
+            eligible = df[df["asset_class"] != cash_class].copy()
+            if not eligible.empty:
+                eligible["sector"] = eligible["sector"].fillna("Unknown").replace("", "Unknown")
+                by_sector = (
+                    eligible.groupby("sector", dropna=False)["weight_of_invested_pctg"]
+                    .sum()
+                    .reset_index()
+                )
+                by_sector.columns = ["category", "weight_pct"]
+                by_sector = by_sector.sort_values(
+                    ["weight_pct", "category"], ascending=[False, True]
+                ).reset_index(drop=True)
         top_10 = (
             df.nlargest(10, "weight_pct")[
                 ["ticker", "name", "isin", "current_value", "weight_pct", "gain_pct"]
@@ -715,6 +725,18 @@ class MetricsEngine:
         if self.config is None:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
+            return
+        if not self.planning_eligible:
+            ctx["rebalancing_suggestions"] = None
+            ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_plans"] = None
+            from tarzan.runtime import data_quality as dq
+            dq.error(
+                "rebalancing",
+                "planning is Unavailable because valuation completeness policy "
+                "did not establish a trustworthy portfolio total",
+                context="valuation_completeness",
+            )
             return
         from tarzan.engine.rebalancer import compute_unified_rebalancing
         lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
@@ -885,7 +907,7 @@ class MetricsEngine:
         # 1D stays on the reproducible end-of-day close (a live quote would
         # differ run-to-run). The close-based 1D computed upstream is kept.
         from tarzan import runtime
-        if runtime.is_deterministic():
+        if not runtime.allows_live_transport():
             return
         hp = ctx.get("holding_performance")
         if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
@@ -1115,8 +1137,24 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _build_result(self, ctx: dict) -> PortfolioMetrics:
         cash_target = float(self.config.target_cash_buffer_eur) if self.config else 0.0
+        assessment = self.valuation_assessment
+        computed_total = ctx.get("total_value", 0.0)
         return PortfolioMetrics(
-            total_value=ctx.get("total_value", 0.0),
+            total_value=computed_total,
+            valuation_availability=(
+                assessment.availability.value if assessment is not None else "AVAILABLE"
+            ),
+            trustworthy_total_value_eur=(
+                assessment.trustworthy_total_eur
+                if assessment is not None else computed_total
+            ),
+            known_valuation_subtotal_eur=(
+                assessment.known_subtotal_eur
+                if assessment is not None else computed_total
+            ),
+            valuation_evidence=(
+                assessment.evidence if assessment is not None else ()
+            ),
             invested_value=ctx.get("invested_value", 0.0),
             cash_value=ctx.get("cash_value", 0.0),
             cash_target_eur=cash_target,

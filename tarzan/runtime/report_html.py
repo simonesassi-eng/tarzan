@@ -20,9 +20,12 @@ CSS only, no JS, so it opens anywhere offline.
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 import logging
 import os
+import tempfile
 from typing import Optional
 
 from tarzan.runtime import data_quality
@@ -67,27 +70,90 @@ def _keep(rec: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def _issues_html() -> str:
-    """Tarzan data-quality issues, each with the actionable message that says
-    how it was handled (the messages already carry the resolution)."""
+    """Project every legacy issue into a complete, stable failure record."""
     issues = data_quality.issues()
     if not issues:
         return ('<p class="ok">No data-quality issues — every input parsed and '
                 "priced cleanly this run.</p>")
     order = {"ERROR": 0, "WARNING": 1, "INFO": 2}
-    rows = "".join(
-        f"<tr>"
-        f'<td class="sev" style="color:{_SEV_COLOR.get(i.severity, "#334155")}">{_esc(i.severity)}</td>'
-        f"<td>{_esc(i.source)}</td>"
-        f"<td>{_esc(i.message)}</td>"
-        f'<td class="ctx">{_esc(i.context)}</td>'
-        "</tr>"
-        for i in sorted(issues, key=lambda i: order.get(i.severity, 9))
-    )
-    return (
-        '<table class="tbl"><thead><tr><th>Severity</th><th>Where</th>'
-        "<th>What happened &amp; how it was handled</th><th>Context</th>"
-        "</tr></thead><tbody>" + rows + "</tbody></table>"
-    )
+    records = []
+    for ordinal, issue in enumerate(sorted(issues, key=lambda i: order.get(i.severity, 9)), 1):
+        raw_id = f"failure-v1|{issue.source}|{issue.context or ''}|{issue.message}|{ordinal}"
+        failure_id = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16]
+        lower = issue.message.lower()
+        fallback = issue.message if any(word in lower for word in ("fallback", "selected", "cached", "using")) else "None"
+        corrected = fallback != "None" and issue.severity != "ERROR"
+        availability = "Degraded" if corrected or issue.severity == "WARNING" else (
+            "Unavailable" if issue.severity == "ERROR" else "Available"
+        )
+        publication = "Block normal and notify failure" if issue.severity == "ERROR" else "Degrade/disclose"
+        records.append(
+            '<section class="failure-record">'
+            f'<h3>Failure ID: <span class="mono">{_esc(failure_id)}</span></h3>'
+            f'<p><b>Stage:</b> {_esc(issue.source)} · <b>Severity:</b> {_esc(issue.severity)}</p>'
+            f'<p><b>Original failure:</b> {_esc(issue.message)}</p>'
+            f'<p><b>Remedies:</b> {_esc(issue.message if corrected else "No successful automatic remedy recorded")}</p>'
+            f'<p><b>Selected fallback:</b> {_esc(fallback)}</p>'
+            f'<p><b>Provenance:</b> {_esc(issue.source)} / {_esc(issue.context or "run")}</p>'
+            f'<p><b>Automatically corrected:</b> {"Yes" if corrected else "No"}</p>'
+            f'<p><b>Availability:</b> {_esc(availability)}</p>'
+            f'<p><b>Affected section:</b> {_esc(issue.source)}</p>'
+            f'<p><b>Analytical impact:</b> {_esc("Result may use fallback evidence" if corrected else "Affected result is not trustworthy")}</p>'
+            f'<p><b>Publication impact:</b> {_esc(publication)}</p>'
+            '</section>'
+        )
+    return "".join(records)
+
+
+def _ledger_issues_html(ledger) -> str:
+    """Render the authoritative append-only failure projection when present."""
+    failures = tuple(ledger.failure_records()) if ledger is not None else ()
+    if not failures:
+        return _issues_html()
+
+    corrected = sum(1 for item in failures if item.automatically_corrected)
+    unavailable = sum(1 for item in failures if item.availability.value == "UNAVAILABLE")
+    uncorrected = sum(1 for item in failures if not item.automatically_corrected)
+    records = [
+        '<p class="note"><b>Failure summary:</b> '
+        f'{len(failures)} total · {corrected} automatically corrected · '
+        f'{unavailable} unavailable · {uncorrected} uncorrected.</p>'
+    ]
+    for failure in failures:
+        remedy_rows = []
+        for remedy in failure.remedies:
+            remedy_rows.append(
+                f"#{_esc(remedy.get('ordinal'))} "
+                f"{_esc(remedy.get('remedy_id'))}: "
+                f"{_esc(remedy.get('action'))} → {_esc(remedy.get('outcome'))} "
+                f"({_esc(remedy.get('availability'))})"
+            )
+        remedies = "<br>".join(remedy_rows) if remedy_rows else "No remedy completed"
+        original = json.dumps(
+            failure.original_failure,
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+        records.append(
+            '<section class="failure-record">'
+            f'<h3>Failure ID: <span class="mono">{_esc(failure.failure_id)}</span></h3>'
+            f'<p><b>Stage:</b> {_esc(failure.stage)} · '
+            f'<b>Code:</b> {_esc(failure.stable_code)} · '
+            f'<b>Severity:</b> {_esc(failure.severity)}</p>'
+            f'<p><b>Original failure:</b> {_esc(original)}</p>'
+            f'<p><b>Remedies:</b> {remedies}</p>'
+            f'<p><b>Selected resolution:</b> {_esc(failure.selected_resolution or "None")}</p>'
+            f'<p><b>Provenance:</b> {_esc(", ".join(failure.provenance) or "None")}</p>'
+            f'<p><b>Automatically corrected:</b> {"Yes" if failure.automatically_corrected else "No"}</p>'
+            f'<p><b>Lifecycle closed:</b> {"Yes" if failure.closed else "No"}</p>'
+            f'<p><b>Availability:</b> {_esc(failure.availability.value.title())}</p>'
+            f'<p><b>Affected sections:</b> {_esc(", ".join(failure.affected_outputs) or "None")}</p>'
+            f'<p><b>Analytical impact:</b> {_esc(failure.analytical_impact)}</p>'
+            f'<p><b>Publication impact:</b> {_esc(failure.publication_impact)}</p>'
+            '</section>'
+        )
+    return "".join(records)
 
 
 def _thirdparty_note(records) -> str:
@@ -163,12 +229,32 @@ table.tbl{border-collapse:collapse;width:100%;font-size:12.5px;}
 .ctx{color:#94A3B8;white-space:nowrap;}
 .log th{position:sticky;top:0;}
 footer{color:#94A3B8;font-size:11px;margin-top:16px;}
+.status{padding:8px 10px;background:#F8FAFC;border-left:4px solid #475569;
+  font-weight:700;margin:8px 0 12px;}
+.failure-record{border:1px solid #E2E8F0;border-radius:4px;padding:8px 10px;
+  margin:8px 0;background:#FFF;}.failure-record h3{font-size:12px;margin:0 0 5px;}
+.failure-record p{margin:3px 0;}
 """
 
 
-def render(generated_at: str, log_records: Optional[list] = None) -> str:
-    """Render the run report (summary + lean log table) as one HTML string."""
+def render(
+    generated_at: str,
+    log_records: Optional[list] = None,
+    *,
+    ledger=None,
+    publication_state: Optional[str] = None,
+    storage_scope: str = "local",
+    automation_local_ephemeral: bool = False,
+    retention_guarantee: str = "none",
+) -> str:
+    """Render the complete ledger-backed run report as one HTML string."""
     records = log_records or []
+    state = publication_state or "NOT_EVALUATED"
+    storage_note = (
+        f"storage_scope={storage_scope}; "
+        f"automation_local_ephemeral={str(automation_local_ephemeral).lower()}; "
+        f"retention_guarantee={retention_guarantee}"
+    )
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -176,12 +262,13 @@ def render(generated_at: str, log_records: Optional[list] = None) -> str:
         f"<style>{_CSS}</style></head><body>"
         "<h1>Tarzan — Run Report</h1>"
         f"<p class='sub'>Generated {_esc(generated_at)}.</p>"
+        f"<div class='status'>Publication status: {_esc(state)}</div>"
         "<h2>Issues &amp; how they were handled</h2>"
-        f"{_issues_html()}"
+        f"{_ledger_issues_html(ledger)}"
         f"{_thirdparty_note(records)}"
         "<h2>Run log</h2>"
         f"{_log_table_html(records)}"
-        "<footer>Tarzan run report · regenerated every run.</footer>"
+        f"<footer>Tarzan run report · {_esc(storage_note)}.</footer>"
         "</body></html>"
     )
 
@@ -189,13 +276,27 @@ def render(generated_at: str, log_records: Optional[list] = None) -> str:
 def write_report(output_dir: str, generated_at: str,
                  log_records: Optional[list] = None,
                  filename: str = "report.html") -> Optional[str]:
-    """Write the single HTML run report. Best-effort — None on I/O error."""
+    """Atomically publish the report; retain the last committed file on error."""
+    temporary = None
     try:
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(render(generated_at, log_records))
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{filename}.", suffix=".tmp", dir=output_dir
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(render(generated_at, log_records))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
         return path
     except Exception as e:  # noqa: BLE001
-        logger.debug("Run report write failed: %s", e)
+        logger.error("Run report write failed: %s", e)
         return None
+    finally:
+        if temporary and os.path.exists(temporary):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass

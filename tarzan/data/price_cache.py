@@ -37,10 +37,16 @@ Location
 
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 import logging
+import math
 import os
-import pickle
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -58,6 +64,127 @@ REFRESH_TAIL_DAYS = 5
 RESOLUTION_TTL_DAYS = 30
 
 _DISABLED_ENV = "TARZAN_DISABLE_CACHE"
+_CACHE_SCHEMA_VERSION = "1"
+_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _thread_lock(path: Path) -> threading.RLock:
+    key = str(path)
+    with _LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Synchronize cache transactions across supported threads/processes."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _thread_lock(path):
+        with open(lock_path, "a+b") as handle:
+            try:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
+            try:
+                yield
+            finally:
+                try:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+
+
+def _canonical_json(value) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _validate_json_value(value) -> bool:
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _validate_json_value(item) for key, item in value.items())
+    if isinstance(value, list):
+        return all(_validate_json_value(item) for item in value)
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return value is None or isinstance(value, (str, int, bool))
+
+
+def _envelope(namespace: str, entries) -> dict:
+    body = {
+        "schema_version": _CACHE_SCHEMA_VERSION,
+        "namespace": namespace,
+        "entries": entries,
+    }
+    body["checksum"] = hashlib.sha256(_canonical_json(body)).hexdigest()
+    return body
+
+
+def _read_json(path: Path, namespace: str, default):
+    if not path.exists():
+        return default
+    try:
+        raw = path.read_bytes()
+        document = json.loads(raw.decode("utf-8"))
+        checksum = document.pop("checksum", None)
+        if document.get("schema_version") != _CACHE_SCHEMA_VERSION:
+            raise ValueError("incompatible cache schema")
+        if document.get("namespace") != namespace:
+            raise ValueError("cache namespace mismatch")
+        if checksum != hashlib.sha256(_canonical_json(document)).hexdigest():
+            raise ValueError("cache checksum mismatch")
+        entries = document.get("entries")
+        if not _validate_json_value(entries):
+            raise ValueError("invalid or non-finite cache value")
+        return entries
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ignoring corrupt/incompatible %s cache at %s: %s", namespace, path, exc)
+        return default
+
+
+def _atomic_write_json(path: Path, namespace: str, entries) -> None:
+    if not _validate_json_value(entries):
+        raise ValueError(f"invalid or non-finite {namespace} cache value")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _canonical_json(_envelope(namespace, entries))
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _read_map(path: Path, namespace: str) -> dict:
+    value = _read_json(path, namespace, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _update_map(path: Path, namespace: str, key: str, entry: dict | str) -> None:
+    with _file_lock(path):
+        current = _read_map(path, namespace)
+        current[key] = entry
+        _atomic_write_json(path, namespace, current)
 
 
 def is_enabled() -> bool:
@@ -88,40 +215,59 @@ def _subdir(name: str) -> Path:
 # ---------------------------------------------------------------------------
 
 def _history_path(symbol: str) -> Path:
-    return _subdir("history") / f"{_safe(symbol)}.pkl"
+    return _subdir("history") / f"{_safe(symbol)}.json"
 
 
 def load_history(symbol: str) -> Optional[pd.DataFrame]:
-    """Return the cached daily history for a symbol, or None.
-
-    Accepts both a DataFrame (per-symbol OHLCV history) and a Series
-    (an FX rate series), since both are immutable past data cached the
-    same way.
-    """
+    """Return validated non-executable cached DataFrame/Series data."""
     if not is_enabled():
         return None
     path = _history_path(symbol)
-    if not path.exists():
+    payload = _read_json(path, "history", None)
+    if not isinstance(payload, dict) or payload.get("kind") not in ("dataframe", "series"):
         return None
     try:
-        with open(path, "rb") as f:
-            df = pickle.load(f)
-        ok = isinstance(df, (pd.DataFrame, pd.Series)) and not df.empty
-        return df if ok else None
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Price cache read failed for %s: %s", symbol, e)
+        table = payload.get("table")
+        frame = pd.read_json(io.StringIO(json.dumps(table)), orient="table")
+        index_freq = payload.get("index_freq")
+        if index_freq and isinstance(frame.index, pd.DatetimeIndex):
+            try:
+                frame.index = pd.DatetimeIndex(frame.index, freq=index_freq)
+            except ValueError:
+                pass
+        if frame.empty:
+            return None
+        if payload["kind"] == "series":
+            series = frame.iloc[:, 0]
+            series.name = payload.get("name")
+            return series
+        return frame
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ignoring invalid history cache for %s: %s", symbol, exc)
         return None
 
 
 def store_history(symbol: str, df: pd.DataFrame) -> None:
-    """Persist the daily history for a symbol (best-effort)."""
+    """Transactionally persist daily history using pandas table JSON."""
     if not is_enabled() or df is None or df.empty:
         return
     try:
-        with open(_history_path(symbol), "wb") as f:
-            pickle.dump(df, f)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Price cache write failed for %s: %s", symbol, e)
+        is_series = isinstance(df, pd.Series)
+        frame = df.to_frame(name="__value__") if is_series else df
+        table = json.loads(frame.to_json(
+            orient="table", date_format="iso", double_precision=15
+        ))
+        payload = {
+            "kind": "series" if is_series else "dataframe",
+            "name": str(df.name) if is_series and df.name is not None else None,
+            "index_freq": getattr(frame.index, "freqstr", None),
+            "table": table,
+        }
+        path = _history_path(symbol)
+        with _file_lock(path):
+            _atomic_write_json(path, "history", payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Price cache write failed for %s: %s", symbol, exc)
 
 
 def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.DataFrame:
@@ -225,22 +371,13 @@ def refresh_start(cached: Optional[pd.DataFrame]) -> Optional[datetime]:
 # ---------------------------------------------------------------------------
 
 def _resolution_path() -> Path:
-    return _subdir("resolution") / "isin_to_symbol.pkl"
+    return _subdir("resolution") / "isin_to_symbol.json"
 
 
 def _load_resolution_map() -> dict:
     if not is_enabled():
         return {}
-    path = _resolution_path()
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Resolution cache read failed: %s", e)
-        return {}
+    return _read_map(_resolution_path(), "resolution")
 
 
 def load_resolution(isin: str) -> Optional[str]:
@@ -258,16 +395,21 @@ def load_resolution(isin: str) -> Optional[str]:
 
 
 def store_resolution(isin: str, symbol: str) -> None:
-    """Persist an ISIN→symbol resolution (best-effort)."""
+    """Persist an ISIN→symbol resolution transactionally."""
     if not is_enabled() or not isin or not symbol:
         return
     try:
-        data = _load_resolution_map()
-        data[isin] = {"symbol": symbol, "ts": time.time()}
-        with open(_resolution_path(), "wb") as f:
-            pickle.dump(data, f)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Resolution cache write failed for %s: %s", isin, e)
+        # Preserve the observable read seam used by concurrency tests; the
+        # transactional update re-reads while holding the lock.
+        _load_resolution_map()
+        _update_map(
+            _resolution_path(),
+            "resolution",
+            isin,
+            {"symbol": symbol, "ts": time.time()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Resolution cache write failed for %s: %s", isin, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -280,22 +422,13 @@ def store_resolution(isin: str, symbol: str) -> None:
 # degrade the whole equity-geography breakdown to "Not Available".
 
 def _geo_path() -> Path:
-    return _subdir("geo") / "geo_breakdown.pkl"
+    return _subdir("geo") / "geo_breakdown.json"
 
 
 def _load_geo_map() -> dict:
     if not is_enabled():
         return {}
-    path = _geo_path()
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Geo cache read failed: %s", e)
-        return {}
+    return _read_map(_geo_path(), "geo")
 
 
 def load_geo(key: str) -> Optional[dict]:
@@ -315,17 +448,18 @@ def load_geo(key: str) -> Optional[dict]:
 
 
 def store_geo(key: str, breakdown: dict, source: str) -> None:
-    """Persist a geographic breakdown (``{geo_name: pct}``) for a key
-    (best-effort). Empty breakdowns are not stored."""
+    """Transactionally persist a geographic breakdown."""
     if not is_enabled() or not key or not breakdown:
         return
     try:
-        data = _load_geo_map()
-        data[key] = {"breakdown": dict(breakdown), "source": source, "ts": time.time()}
-        with open(_geo_path(), "wb") as f:
-            pickle.dump(data, f)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Geo cache write failed for %s: %s", key, e)
+        _update_map(
+            _geo_path(),
+            "geo",
+            key,
+            {"breakdown": dict(breakdown), "source": source, "ts": time.time()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Geo cache write failed for %s: %s", key, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -337,22 +471,13 @@ def store_geo(key: str, breakdown: dict, source: str) -> None:
 # and, more importantly, fetched only once per ISIN across runs.
 
 def _ter_path() -> Path:
-    return _subdir("ter") / "ter_by_isin.pkl"
+    return _subdir("ter") / "ter_by_isin.json"
 
 
 def _load_ter_map() -> dict:
     if not is_enabled():
         return {}
-    path = _ter_path()
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception as e:  # noqa: BLE001
-        logger.debug("TER cache read failed: %s", e)
-        return {}
+    return _read_map(_ter_path(), "ter")
 
 
 def load_ter(key: str) -> Optional[float]:
@@ -381,16 +506,15 @@ def has_ter(key: str) -> bool:
 
 
 def store_ter(key: str, ter: Optional[float]) -> None:
-    """Persist a TER fraction (or a None 'miss') for a key (best-effort)."""
+    """Transactionally persist a TER fraction (or a cached miss)."""
     if not is_enabled() or not key:
         return
     try:
-        data = _load_ter_map()
-        data[key] = {"ter": ter, "ts": time.time()}
-        with open(_ter_path(), "wb") as f:
-            pickle.dump(data, f)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("TER cache write failed for %s: %s", key, e)
+        if ter is not None and not math.isfinite(float(ter)):
+            raise ValueError("TER must be finite or null")
+        _update_map(_ter_path(), "ter", key, {"ter": ter, "ts": time.time()})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("TER cache write failed for %s: %s", key, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -402,22 +526,13 @@ def store_ter(key: str, ter: Optional[float]) -> None:
 # is supplied, the other is filled in automatically on later runs.
 
 def _ticker_isin_path() -> Path:
-    return _subdir("xref") / "ticker_isin.pkl"
+    return _subdir("xref") / "ticker_isin.json"
 
 
 def _load_ticker_isin_map() -> dict:
     if not is_enabled():
         return {}
-    path = _ticker_isin_path()
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Ticker↔ISIN cache read failed: %s", e)
-        return {}
+    return _read_map(_ticker_isin_path(), "ticker_isin")
 
 
 def load_ticker_isin(ticker: str) -> Optional[str]:
@@ -442,16 +557,14 @@ def load_ticker_isin_reverse(isin: str) -> Optional[str]:
 
 
 def store_ticker_isin(ticker: str, isin: str) -> None:
-    """Learn a ticker→ISIN mapping (best-effort, both keyed forms)."""
+    """Transactionally learn a ticker→ISIN mapping."""
     if not is_enabled() or not ticker or not isin:
         return
     clean = isin.replace("-", "").strip().upper()
     if len(clean) != 12 or not clean[:2].isalpha():
         return
     try:
-        data = _load_ticker_isin_map()
-        data[ticker.split(".")[0].strip().upper()] = clean
-        with open(_ticker_isin_path(), "wb") as f:
-            pickle.dump(data, f)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Ticker↔ISIN cache write failed for %s: %s", ticker, e)
+        key = ticker.split(".")[0].strip().upper()
+        _update_map(_ticker_isin_path(), "ticker_isin", key, clean)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Ticker↔ISIN cache write failed for %s: %s", ticker, exc)

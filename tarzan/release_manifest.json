@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "application_version": "3.0.0",
+  "python_version": "3.12",
+  "provider_pins": {
+    "gemini_api": "v1beta",
+    "gemini_model": "gemini-2.5-flash"
+  },
+  "schema_versions": {
+    "input": "1",
+    "summary": "1",
+    "ledger": "1.0",
+    "manifest": "1.0",
+    "cache": "1",
+    "exposure": "1.0",
+    "capability": "1.0",
+    "provider_policy": "1.0",
+    "delivery_identity": "1.0",
+    "delivery_state": "1.0"
+  },
+  "pin_review": {
+    "reviewed_on": "2026-07-17",
+    "review_due_on": "2026-08-17",
+    "policy": "monthly_or_immediate_for_applicable_critical_advisories"
+  },
+  "positive_scope": {
+    "package_entries": [
+      "tarzan/__init__.py",
+      "tarzan/version.py",
+      "tarzan/main.py",
+      "tarzan/orchestrator.py",
+      "tarzan/backtest.py",
+      "tarzan/contracts",
+      "tarzan/config",
+      "tarzan/data",
+      "tarzan/delivery",
+      "tarzan/engine",
+      "tarzan/export",
+      "tarzan/instruments",
+      "tarzan/models",
+      "tarzan/runtime",
+      "tarzan/release_manifest.json"
+    ],
+    "test_roots": [
+      "tarzan/tests"
+    ],
+    "script_roots": [
+      "scripts/"
+    ],
+    "named_release_files": [
+      ".github/workflows/newsletter.yml",
+      "README.md",
+      "tarzan/README.md",
+      "requirements.in",
+      "requirements.txt"
+    ]
+  },
+  "validation_commands": [
+    "python scripts/validate_release.py --manifest tarzan/release_manifest.json",
+    "python -m compileall -q tarzan scripts",
+    "python -m pytest tarzan/tests -q"
+  ]
+}
