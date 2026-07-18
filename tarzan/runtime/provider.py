@@ -167,16 +167,22 @@ class ValuationCompletenessEvaluator:
         return resolution.kind.value if resolution.kind is not None else "UNKNOWN"
 
     def evaluate(self, holdings: list[object], ledger) -> ValuationCompletenessAssessment:
-        from datetime import datetime, timezone
+        from datetime import datetime, time, timezone
 
+        from tarzan import runtime
         from tarzan.runtime.ledger import LedgerEntryType
         from tarzan.runtime.session import current_session
 
         session = current_session()
+        run_context = session.context if session is not None else runtime.context()
         captured_at = (
-            session.context.captured_at
-            if session is not None
-            else datetime.now(timezone.utc)
+            datetime.combine(
+                run_context.effective_date,
+                time.min,
+                tzinfo=timezone.utc,
+            )
+            if run_context.effective_date is not None
+            else run_context.captured_at
         )
         rows: list[dict[str, object]] = []
         total_basis = 0.0
@@ -201,7 +207,10 @@ class ValuationCompletenessEvaluator:
             quantity_value = self._finite(getattr(holding, "quantity", None))
             quantity = abs(quantity_value) if quantity_value is not None else None
             current_price = self._finite(getattr(holding, "current_price", None))
-            has_primary_price = current_price is not None
+            has_price = current_price is not None
+            price_is_fallback = bool(
+                getattr(holding, "price_is_fallback", False)
+            )
 
             # Zero storage anchors on a nonzero position do not prove zero
             # materiality. Order-derived holdings use 0.0 when exact mechanics
@@ -210,7 +219,7 @@ class ValuationCompletenessEvaluator:
             basis_candidates = (
                 anchor_value,
                 cost_basis,
-                current_value if has_primary_price else None,
+                current_value if has_price else None,
             )
             basis = next(
                 (abs(value) for value in basis_candidates
@@ -222,26 +231,45 @@ class ValuationCompletenessEvaluator:
             if basis is not None:
                 total_basis += basis
 
+            # Freshness follows the selected market observation, not when the
+            # request happened. Fetch time is a fallback clock only for a
+            # non-fallback quote that has no distinct observation timestamp.
+            observed = getattr(holding, "price_observation_timestamp", None)
+            evidence_time = observed
+            if evidence_time is None and has_price and not price_is_fallback:
+                evidence_time = getattr(holding, "fetch_timestamp", None)
+
             age_seconds = None
-            fetched = getattr(holding, "fetch_timestamp", None)
-            if fetched is not None:
-                if fetched.tzinfo is None:
-                    fetched = fetched.replace(tzinfo=timezone.utc)
-                age_seconds = max(0.0, (captured_at - fetched).total_seconds())
-            stale = age_seconds is not None and age_seconds > policy.freshness_seconds
+            if evidence_time is not None:
+                if evidence_time.tzinfo is None:
+                    evidence_time = evidence_time.replace(tzinfo=timezone.utc)
+                if captured_at.tzinfo is None:
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+                age_seconds = max(
+                    0.0,
+                    (captured_at - evidence_time).total_seconds(),
+                )
+            stale = (
+                age_seconds is not None
+                and age_seconds > policy.freshness_seconds
+            )
 
             if kind == "UNKNOWN":
                 state = ValuationEvidenceState.UNSUPPORTED
                 selected = None
                 accepted = False
-            elif has_primary_price and current_value is not None and not stale:
-                state = ValuationEvidenceState.PRIMARY
-                selected = current_value
-                accepted = True
-            elif stale and current_value is not None:
+            elif has_price and current_value is not None and stale:
                 state = ValuationEvidenceState.STALE
                 selected = current_value if policy.allow_fallback else None
                 accepted = policy.allow_fallback
+            elif has_price and current_value is not None and price_is_fallback:
+                state = ValuationEvidenceState.FALLBACK
+                selected = current_value if policy.allow_fallback else None
+                accepted = policy.allow_fallback
+            elif has_price and current_value is not None:
+                state = ValuationEvidenceState.PRIMARY
+                selected = current_value
+                accepted = True
             elif anchor_value is not None and (anchor_value != 0.0 or quantity == 0.0):
                 state = ValuationEvidenceState.FALLBACK
                 selected = anchor_value if policy.allow_fallback else None

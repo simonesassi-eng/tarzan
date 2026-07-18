@@ -6,11 +6,28 @@ import io
 
 import pytest
 
-from tarzan.data.loader import load_config
+from tarzan.data.loader import load_config, load_orders
 
 
 def _csv_bytesio(content: str) -> io.BytesIO:
     return io.BytesIO(content.encode("utf-8"))
+
+
+class TestOrderLoader:
+    def test_explicit_instrument_equivalence_group_is_preserved(self):
+        source = _csv_bytesio(
+            "date,type,isin,quantity,gross_eur,net_eur,instrument_kind,"
+            "instrument_equivalence_group\n"
+            "2025-01-01,transfer_in,IT0005565392,20000,20000,0,BOND,"
+            "BTP-VALORE-2028-CUM-EX\n"
+        )
+
+        orders = load_orders(source, filename="order_list.csv", strict=True)
+
+        assert len(orders) == 1
+        assert orders[0].instrument_equivalence_group == (
+            "BTP-VALORE-2028-CUM-EX"
+        )
 
 
 class TestConfigLoader:

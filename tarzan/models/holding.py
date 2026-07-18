@@ -104,8 +104,13 @@ class Holding:
     # Seeded target instrument not currently held (quantity 0), added so the
     # optimizer can open a new position toward its target_portfolio weight.
     is_seeded_target: bool = False
+    # Fetch time records when the provider attempt completed. Price evidence
+    # carries its own observation time because a newly fetched cache row may
+    # still describe an old market close.
     fetch_timestamp: Optional[datetime] = None
     price_history: Optional[pd.Series] = field(default=None, repr=False)
+    price_observation_timestamp: Optional[datetime] = None
+    price_is_fallback: bool = False
 
     def __post_init__(self) -> None:
         """Enforce the required-field integrity contract at construction.
