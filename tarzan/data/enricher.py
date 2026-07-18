@@ -7,12 +7,11 @@ This module handles the Data Enrichment layer:
 - Asset class and geography classification
 - Multi-geography breakdown via geo_scraper
 
-Caching policy: only the *immutable* past is cached on disk (see
-``tarzan.data.price_cache``). Daily closes up to yesterday, FX history and
-the deterministic ISIN→symbol resolution never change, so they are reused
-across runs; only the recent tail (last few days, including today) is
-re-fetched, so today's price is always fresh and never served stale. The
-``info`` blob (which carries today's quote) is never cached.
+Caching policy: historical rows are cached on disk (see
+``tarzan.data.price_cache``), while the recent tail is fetched on every run.
+When a live tail is unavailable, cached closes remain usable only with their
+original observation time and explicit fallback provenance; a recent fetch
+attempt never makes an old close fresh.
 
 Architecture note: enrichment is parallelized via ThreadPoolExecutor.
 Each holding is enriched independently, with per-holding error isolation
@@ -27,7 +26,7 @@ import random
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime as dt
+from datetime import datetime as dt, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
 
@@ -73,12 +72,11 @@ def _backtest_period() -> str:
 #     this never serves stale data; it only stops the parallel pipeline
 #     from hammering the same endpoint (the main source of HTTP 429 noise).
 #
-#   * cross-run immutable disk cache (tarzan.data.price_cache) — the
-#     multi-year price/FX history and the deterministic ISIN→symbol
-#     resolution are persisted to ~/.cache/tarzan and reused across runs.
-#     Only the recent tail (last few days, incl. today) is re-fetched, so
-#     today's close is always fresh. Today's live quote travels in the
-#     ``info`` blob, which is NOT cached.
+#   * cross-run disk cache (tarzan.data.price_cache) — multi-year price/FX
+#     history and deterministic ISIN→symbol resolution are persisted to
+#     ~/.cache/tarzan. The recent tail is re-fetched, while any retained cache
+#     rows keep explicit origin and observation time for policy evaluation.
+#     The ``info`` blob is not cached.
 #
 # All in-memory stores are guarded by a lock because enrichment runs under
 # a ThreadPoolExecutor.
@@ -89,9 +87,18 @@ _OPENFIGI_MIN_INTERVAL = 0.3     # spacing between OpenFIGI calls (~25/min cap)
 _net_lock = threading.Lock()
 _openfigi_memo: dict[str, list] = {}
 _ticker_info_memo: dict[str, dict] = {}
-_history_memo: dict[str, pd.Series] = {}
+_history_memo: dict[str, pd.DataFrame] = {}
 _benchmark_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
+
+# DataFrame attrs carry per-run provenance without entering the immutable disk
+# cache. Origin is assigned per row so an invalid fresh tail cannot relabel an
+# older selected cache close as primary evidence.
+_HISTORY_ORIGINS_ATTR = "tarzan_price_origins"
+_HISTORY_SYMBOL_ATTR = "tarzan_price_symbol"
+_HISTORY_ORIGIN_PRIMARY = "primary"
+_HISTORY_ORIGIN_CACHE = "cache"
+_FX_EVIDENCE_ATTR = "tarzan_fx_evidence"
 
 
 def reset_run_caches() -> None:
@@ -140,14 +147,23 @@ def _get_fx_series(currency: str) -> pd.Series:
     return _fetch_fx_pair(currency)
 
 
-def _fetch_fx_pair(currency: str) -> pd.Series:
-    """Fetch FX pair from yfinance, trying direct and inverse.
+def _usable_fx_series(series: Optional[pd.Series]) -> pd.Series:
+    """Return finite positive FX rows while preserving transient provenance."""
+    if series is None or series.empty:
+        return pd.Series(dtype=float)
+    attrs = dict(series.attrs)
+    numeric = pd.to_numeric(series, errors="coerce")
+    usable = numeric.replace(
+        [float("inf"), float("-inf")],
+        float("nan"),
+    ).dropna()
+    usable = usable[usable > 0]
+    usable.attrs.update(attrs)
+    return usable
 
-    FX history is immutable past data, so it is disk-cached per currency
-    (``FX_<ccy>``) and only the recent tail is re-fetched on later runs.
-    A throttled fetch falls back to the cached series rather than the
-    rate=1.0 sentinel, so coverage does not silently degrade.
-    """
+
+def _fetch_fx_pair(currency: str) -> pd.Series:
+    """Fetch FX history with row-level live/cache provenance."""
     cache_key = f"FX_{currency}"
     cached = price_cache.load_history(cache_key)
     start = price_cache.refresh_start(cached)
@@ -160,25 +176,38 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
                 return ticker.history(start=s, interval="1d")
             return ticker.history(period=_backtest_period(), interval="1d")
 
-        hist = _retry(_call, what=f"FX {pair}")
-        if hist is not None and not hist.empty:
-            fresh = 1.0 / hist["Close"] if invert else hist["Close"]
+        history = _retry(_call, what=f"FX {pair}")
+        if history is not None and not history.empty:
+            fresh = 1.0 / history["Close"] if invert else history["Close"]
+            fresh = _usable_fx_series(fresh)
+            if fresh.empty:
+                continue
             merged = price_cache.merge_history(cached, fresh)
             result = merged if merged is not None and not merged.empty else fresh
+            result.attrs[_HISTORY_ORIGINS_ATTR] = _history_origins(
+                cached,
+                fresh,
+                result,
+            )
+            result.attrs[_HISTORY_SYMBOL_ATTR] = cache_key
             price_cache.store_history(cache_key, result)
             return result
 
     if cached is not None and not cached.empty:
         logger.debug("FX %s fetch failed; using cached history", currency)
+        cached.attrs[_HISTORY_ORIGINS_ATTR] = {
+            _history_timestamp_key(index): _HISTORY_ORIGIN_CACHE
+            for index in cached.index
+        }
+        cached.attrs[_HISTORY_SYMBOL_ATTR] = cache_key
         return cached
     # Total FX failure (both pairs throttled AND no disk cache). Return the
-    # EUR sentinel (empty series) rather than the old rate=1.0 fabrication:
-    # a 1.0 rate silently values a non-EUR holding 1:1 as EUR (e.g. $500 → €500,
-    # ~15-40% overstatement). An empty series tells convert_to_eur/_set_price_data
-    # that conversion is impossible, so no live EUR price is built and the
-    # holding falls back to its last-known EUR anchor (which uses the order's
-    # real recorded fx_rate), disclosed via data_source / coverage.
-    logger.warning("No FX data for %s; conversion unavailable (holding valued from last-known EUR anchor)", currency)
+    # EUR sentinel (empty series) rather than fabricating a 1.0 rate.
+    logger.warning(
+        "No FX data for %s; conversion unavailable "
+        "(holding valued from last-known EUR anchor)",
+        currency,
+    )
     dq.warning(
         "enricher",
         f"FX rate for {currency}→EUR unavailable (both pairs failed, no cache); "
@@ -248,25 +277,66 @@ def _as_fraction(value) -> Optional[float]:
 
 
 def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
-    """Convert a price series to EUR using the FX rate.
-
-    For EUR input, returns prices unchanged. Aligns by date with forward-fill.
-    """
+    """Convert prices to EUR and attach the FX evidence used for each row."""
     prices, currency = _normalize_minor_currency(prices, currency)
     if currency == "EUR":
         return prices
-    fx = _get_fx_series(currency)
+    fx = _usable_fx_series(_get_fx_series(currency))
     if fx.empty:
-        # No FX rate available for a non-EUR currency: conversion is
-        # impossible. Return an empty series (not the native prices) so the
-        # caller does NOT mislabel native-currency prices as EUR — the
-        # holding then falls back to its last-known EUR anchor. (For EUR,
-        # _get_fx_series never reaches here — the currency=="EUR" guard above
-        # returns first.)
         return pd.Series(dtype=float)
+
     combined = pd.DataFrame({"price": prices, "fx": fx})
     combined["fx"] = combined["fx"].ffill().bfill()
-    return (combined["price"] * combined["fx"]).dropna()
+
+    fx_origins = fx.attrs.get(_HISTORY_ORIGINS_ATTR, {})
+    origin_markers = pd.Series(
+        [
+            fx_origins.get(
+                _history_timestamp_key(index),
+                _HISTORY_ORIGIN_PRIMARY,
+            )
+            for index in fx.index
+        ],
+        index=fx.index,
+        dtype=object,
+    ).reindex(combined.index).ffill().bfill()
+    observation_markers = pd.Series(
+        [
+            pd.Timestamp(index).isoformat()
+            if isinstance(fx.index, pd.DatetimeIndex)
+            else None
+            for index in fx.index
+        ],
+        index=fx.index,
+        dtype=object,
+    ).reindex(combined.index).ffill().bfill()
+
+    converted = (combined["price"] * combined["fx"]).dropna()
+    evidence: dict[str, dict[str, object]] = {}
+    for index in converted.index:
+        observation_value = observation_markers.loc[index]
+        observation = _info_observation_time(observation_value)
+        origin_value = origin_markers.loc[index]
+        origin = (
+            str(origin_value)
+            if origin_value is not None and not pd.isna(origin_value)
+            else _HISTORY_ORIGIN_PRIMARY
+        )
+        evidence[_history_timestamp_key(index)] = {
+            "observation_time": observation,
+            "is_fallback": (
+                origin == _HISTORY_ORIGIN_CACHE or observation is None
+            ),
+            "source": (
+                "price_cache:FX"
+                if origin == _HISTORY_ORIGIN_CACHE
+                else "FX (undated)"
+                if observation is None
+                else None
+            ),
+        }
+    converted.attrs[_FX_EVIDENCE_ATTR] = evidence
+    return converted
 
 
 # ---------------------------------------------------------------------------
@@ -606,16 +676,50 @@ def _fetch_ticker_info(symbol: str) -> dict:
     return info
 
 
-def _fetch_history(symbol: str) -> pd.DataFrame:
-    """yfinance price history for a symbol, retried on throttle, memoized
-    for the run, and backed by the immutable disk cache.
+def _history_timestamp_key(value: object) -> str:
+    """Normalize an index value for transient row-provenance lookup."""
+    try:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.tz_convert("UTC")
+        return timestamp.isoformat()
+    except (TypeError, ValueError):
+        return str(value)
 
-    The heavy multi-year download happens once: on subsequent runs the
-    cached history is loaded and only the recent tail (from
-    ``price_cache.refresh_start``) is re-fetched and merged, so historical
-    closes are reused while the last few sessions stay fresh. A throttled
-    tail fetch degrades gracefully to the cached history rather than
-    dropping the instrument.
+
+def _history_origins(
+    cached: Optional[pd.DataFrame],
+    fresh: pd.DataFrame,
+    result: pd.DataFrame,
+) -> dict[str, str]:
+    """Classify each merged row by the source that won for its timestamp."""
+    fresh_keys = {
+        _history_timestamp_key(index)
+        for index in fresh.index
+    } if fresh is not None else set()
+    cached_keys = {
+        _history_timestamp_key(index)
+        for index in cached.index
+    } if cached is not None else set()
+    origins: dict[str, str] = {}
+    for index in result.index:
+        key = _history_timestamp_key(index)
+        if key in fresh_keys:
+            origins[key] = _HISTORY_ORIGIN_PRIMARY
+        elif key in cached_keys:
+            origins[key] = _HISTORY_ORIGIN_CACHE
+        else:
+            origins[key] = _HISTORY_ORIGIN_PRIMARY
+    return origins
+
+
+def _fetch_history(symbol: str) -> pd.DataFrame:
+    """Fetch and merge daily history while preserving row-level provenance.
+
+    Cached rows remain available when the recent provider tail fails, but each
+    row retains cache/live origin in transient DataFrame metadata. Downstream
+    selection can therefore classify the actual last valid close rather than
+    treating the whole merged frame as fresh because a request just ran.
     """
     with _net_lock:
         if symbol in _history_memo:
@@ -637,36 +741,35 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
 
     merged = price_cache.merge_history(cached, fresh)
     result = merged if merged is not None and not merged.empty else fresh
-    # Staleness signal: if the tail fetch brought nothing fresh (throttle /
-    # persistent 429) the newest row may be days/weeks old, yet downstream
-    # uses result.iloc[-1] as "today's price". The module promises today's
-    # price is never served stale, so warn when the last close is older than
-    # the refresh tail — the figure is then a stale close, not a live quote.
-    if (fresh is None or fresh.empty) and result is not None and not result.empty:
+    if fresh.empty and result is not None and not result.empty:
         try:
-            last_ts = pd.Timestamp(result.index.max())
-            if last_ts.tz is not None:
-                last_ts = last_ts.tz_convert("UTC").tz_localize(None)
-            age_days = (pd.Timestamp.now() - last_ts).days
+            last_timestamp = pd.Timestamp(result.index.max())
+            if last_timestamp.tz is not None:
+                last_timestamp = last_timestamp.tz_convert("UTC").tz_localize(None)
+            age_days = (pd.Timestamp.now() - last_timestamp).days
             if age_days > price_cache.REFRESH_TAIL_DAYS:
                 logger.warning(
                     "%s: live fetch returned no data; newest close is %d day(s) "
-                    "old (%s) — using a STALE close as the current price.",
-                    symbol, age_days, last_ts.date(),
+                    "old (%s) — retaining explicitly stale cache evidence.",
+                    symbol,
+                    age_days,
+                    last_timestamp.date(),
                 )
                 dq.warning(
                     "market_data",
                     f"live fetch returned no data; newest close is {age_days} day(s) "
-                    f"old ({last_ts.date()}) — using a STALE close as the current price",
+                    f"old ({last_timestamp.date()}) — retaining explicitly stale "
+                    "cache evidence",
                     context=symbol,
                 )
-        except Exception:  # noqa: BLE001 — never let a diagnostic break the fetch
+        except Exception:  # noqa: BLE001 — diagnostics cannot break fetching
             pass
-    # Back-adjust any unadjusted split/denomination jump (e.g. Yahoo's
-    # CL2.MI) so multi-period returns are correct, and persist the cleaned
-    # series so the disk cache self-heals on the next run.
+
+    origins = _history_origins(cached, fresh, result)
     result = price_cache.repair_split_jumps(result)
     if result is not None and not result.empty:
+        result.attrs[_HISTORY_ORIGINS_ATTR] = origins
+        result.attrs[_HISTORY_SYMBOL_ATTR] = symbol
         price_cache.store_history(symbol, result)
 
     with _net_lock:
@@ -1176,9 +1279,10 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
 
         holding.name = info.get("longName") or info.get("shortName") or info.get("name") or ticker
         holding.instrument_type = _infer_instrument_type(info, holding)
-        holding.fetch_timestamp = dt.now()
+        holding.fetch_timestamp = dt.now(timezone.utc)
 
-        # Price history and current price
+        # Price history and current price. Selection records the actual close
+        # observation and whether the chosen value came from non-primary data.
         currency = info.get("currency", holding.currency or "EUR")
         _set_price_data(holding, history, info, currency)
 
@@ -1216,7 +1320,10 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                 if holding.price_history is not None and len(holding.price_history) > 0:
                     holding.price_history = holding.price_history / 100.0
                 holding.current_price = holding.current_price / 100.0
-            holding.data_source = data_source
+            if not holding.price_is_fallback:
+                holding.data_source = data_source
+            elif not holding.data_source:
+                holding.data_source = f"{data_source} (fallback price)"
         elif has_price:
             holding.current_value = holding.market_value_eur or 0.0
             holding.data_source = "last-known (instrument kind unavailable)"
@@ -1309,57 +1416,237 @@ def _clip_to_as_of(prices: pd.Series) -> pd.Series:
         return prices
 
 
+def _history_observation_time(
+    history: pd.DataFrame,
+    index_value: object,
+) -> Optional[dt]:
+    """Convert a genuine datetime history index value to a Python datetime."""
+    if not isinstance(history.index, pd.DatetimeIndex):
+        return None
+    try:
+        return pd.Timestamp(index_value).to_pydatetime()
+    except (TypeError, ValueError):
+        return None
+
+
+def _info_observation_time(value: object) -> Optional[dt]:
+    """Parse a provider quote timestamp when one accompanies a live quote."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            timestamp = pd.to_datetime(value, unit="s", utc=True)
+        else:
+            timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            return None
+        return timestamp.to_pydatetime()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _composite_observation_time(
+    price_time: Optional[dt],
+    fx_time: Optional[dt],
+) -> Optional[dt]:
+    """Return the older observation governing a converted price."""
+    if price_time is None or fx_time is None:
+        return None
+    price_timestamp = pd.Timestamp(price_time)
+    fx_timestamp = pd.Timestamp(fx_time)
+    if price_timestamp.tzinfo is not None:
+        price_timestamp = price_timestamp.tz_convert("UTC").tz_localize(None)
+    if fx_timestamp.tzinfo is not None:
+        fx_timestamp = fx_timestamp.tz_convert("UTC").tz_localize(None)
+    return price_time if price_timestamp <= fx_timestamp else fx_time
+
+
 def _set_price_data(
     holding: Holding, history: pd.DataFrame, info: dict, currency: str
 ) -> None:
-    """Set price_history and current_price (EUR), robust to data gaps.
+    """Select the best valid EUR price and retain observation provenance.
 
-    Prefers the price history's last *valid* close — which on later runs is
-    served from the immutable cache, so a throttled live quote does not
-    blank the holding (the user's "use the last cached close" requirement).
-    Falls back to the live info quote, and otherwise leaves current_price
-    None so the caller's seed/last-known fallback applies. NaN or
-    non-positive closes are never propagated as a price (that NaN would
-    otherwise slip past the ``is not None`` checks and poison the value).
+    In live mode, a timestamped ``regularMarketPrice`` may supersede history
+    when it is at least as recent as the selected close. A history close keeps
+    the origin of its exact row, so cached evidence remains fallback. Undated
+    quotes and ``previousClose`` are fallback-only. Pinned as-of runs use only
+    history clipped to the reporting date and never consume a current quote.
     """
-    current_price = None
+    quote_currency = currency
+    current_price: Optional[float] = None
+    observation_time: Optional[dt] = None
+    is_fallback = False
+    selected_source: Optional[str] = None
+    holding.price_observation_timestamp = None
+    holding.price_is_fallback = False
 
-    if not history.empty and "Close" in history:
+    if history is not None and not history.empty and "Close" in history:
         prices = history["Close"].copy()
-        # Normalize minor-unit quotes (e.g. GBp → GBP) before FX conversion.
-        prices, currency = _normalize_minor_currency(prices, currency)
-        if currency != "EUR":
-            prices = convert_to_eur(prices, currency)
+        prices, history_currency = _normalize_minor_currency(prices, currency)
+        fx_evidence: dict[str, dict[str, object]] = {}
+        if history_currency != "EUR":
+            prices = convert_to_eur(prices, history_currency)
+            fx_evidence = prices.attrs.get(_FX_EVIDENCE_ATTR, {})
         prices = prices.dropna()
         prices = prices[prices > 0]
         prices = _clip_to_as_of(prices)
         if len(prices) > 0:
             holding.price_history = prices
+            selected_index = prices.index[-1]
+            selected_key = _history_timestamp_key(selected_index)
             current_price = float(prices.iloc[-1])
+            observation_time = _history_observation_time(history, selected_index)
+            origins = history.attrs.get(_HISTORY_ORIGINS_ATTR, {})
+            selected_origin = origins.get(selected_key)
+            if selected_origin == _HISTORY_ORIGIN_CACHE:
+                is_fallback = True
+                symbol = history.attrs.get(_HISTORY_SYMBOL_ATTR)
+                selected_source = (
+                    f"price_cache:{symbol}" if symbol else "price_cache"
+                )
+            selected_fx = fx_evidence.get(selected_key)
+            if selected_fx is not None:
+                fx_time = selected_fx.get("observation_time")
+                observation_time = _composite_observation_time(
+                    observation_time,
+                    fx_time if isinstance(fx_time, dt) else None,
+                )
+                if selected_fx.get("is_fallback") or observation_time is None:
+                    is_fallback = True
+                    selected_source = str(
+                        selected_fx.get("source") or "FX (fallback evidence)"
+                    )
 
-    if current_price is None:
-        price = info.get("regularMarketPrice") or info.get("previousClose")
+    def _valid_quote(value: object) -> Optional[float]:
         try:
-            price = float(price) if price is not None else None
+            numeric = float(value) if value is not None else None
         except (TypeError, ValueError):
-            price = None
-        if price is not None and price == price and price > 0:  # not None/NaN/≤0
-            scalar = pd.Series([price])
-            scalar, currency = _normalize_minor_currency(scalar, currency)
-            price = float(scalar.iloc[0])
-            if currency != "EUR":
-                fx = _get_fx_series(currency)
-                if fx.empty:
-                    # No FX rate: cannot convert this native quote to EUR.
-                    # Leave current_price None so the caller's last-known EUR
-                    # anchor applies, rather than booking a native price as EUR.
-                    price = None
-                else:
-                    price = price * float(fx.iloc[-1])
-            if price is not None:
-                current_price = float(price)
+            return None
+        if numeric is None or numeric != numeric or numeric <= 0:
+            return None
+        return numeric
+
+    def _quote_to_eur(
+        value: float,
+    ) -> tuple[Optional[float], Optional[dict[str, object]]]:
+        scalar = pd.Series([value])
+        scalar, normalized_currency = _normalize_minor_currency(
+            scalar,
+            quote_currency,
+        )
+        converted = float(scalar.iloc[0])
+        if normalized_currency == "EUR":
+            return converted, None
+        fx = _usable_fx_series(_get_fx_series(normalized_currency))
+        if fx.empty:
+            return None, None
+        selected_index = fx.index[-1]
+        origins = fx.attrs.get(_HISTORY_ORIGINS_ATTR, {})
+        origin = origins.get(
+            _history_timestamp_key(selected_index),
+            _HISTORY_ORIGIN_PRIMARY,
+        )
+        fx_time = (
+            pd.Timestamp(selected_index).to_pydatetime()
+            if isinstance(fx.index, pd.DatetimeIndex)
+            else None
+        )
+        return converted * float(fx.iloc[-1]), {
+            "observation_time": fx_time,
+            "is_fallback": origin == _HISTORY_ORIGIN_CACHE or fx_time is None,
+            "source": (
+                "price_cache:FX"
+                if origin == _HISTORY_ORIGIN_CACHE
+                else "FX (undated)"
+                if fx_time is None
+                else None
+            ),
+        }
+
+    def _not_older(candidate: dt, selected: Optional[dt]) -> bool:
+        if selected is None:
+            return True
+        try:
+            candidate_ts = pd.Timestamp(candidate)
+            selected_ts = pd.Timestamp(selected)
+            if candidate_ts.tzinfo is not None:
+                candidate_ts = candidate_ts.tz_convert("UTC").tz_localize(None)
+            if selected_ts.tzinfo is not None:
+                selected_ts = selected_ts.tz_convert("UTC").tz_localize(None)
+            return candidate_ts >= selected_ts
+        except (TypeError, ValueError):
+            return True
+
+    try:
+        from tarzan import runtime
+
+        pinned_as_of = runtime.as_of() is not None
+    except Exception:  # noqa: BLE001 — provenance must not break enrichment
+        pinned_as_of = False
+
+    if not pinned_as_of:
+        regular = _valid_quote(info.get("regularMarketPrice"))
+        regular_time = _info_observation_time(info.get("regularMarketTime"))
+        if regular is not None:
+            regular_eur, regular_fx = _quote_to_eur(regular)
+            candidate_time = regular_time
+            candidate_fallback = regular_time is None
+            candidate_source = (
+                "yfinance:regularMarketPrice (undated)"
+                if regular_time is None
+                else None
+            )
+            if regular_fx is not None:
+                fx_time = regular_fx.get("observation_time")
+                candidate_time = _composite_observation_time(
+                    regular_time,
+                    fx_time if isinstance(fx_time, dt) else None,
+                )
+                if regular_fx.get("is_fallback"):
+                    candidate_fallback = True
+                    candidate_source = str(
+                        regular_fx.get("source") or "FX (fallback evidence)"
+                    )
+                elif candidate_time is None:
+                    candidate_fallback = True
+            if (
+                regular_eur is not None
+                and candidate_time is not None
+                and _not_older(candidate_time, observation_time)
+            ):
+                current_price = regular_eur
+                observation_time = candidate_time
+                is_fallback = candidate_fallback
+                selected_source = candidate_source
+            elif regular_eur is not None and current_price is None:
+                current_price = regular_eur
+                observation_time = candidate_time
+                is_fallback = True
+                selected_source = candidate_source or (
+                    "yfinance:regularMarketPrice (undated)"
+                )
+
+        if current_price is None:
+            previous_close = _valid_quote(info.get("previousClose"))
+            if previous_close is not None:
+                previous_eur, previous_fx = _quote_to_eur(previous_close)
+                if previous_eur is not None:
+                    current_price = previous_eur
+                    observation_time = None
+                    is_fallback = True
+                    selected_source = (
+                        str(previous_fx.get("source"))
+                        if previous_fx is not None
+                        and previous_fx.get("is_fallback")
+                        and previous_fx.get("source")
+                        else "yfinance:previousClose"
+                    )
 
     holding.current_price = current_price
+    holding.price_observation_timestamp = observation_time
+    holding.price_is_fallback = is_fallback
+    if selected_source is not None:
+        holding.data_source = selected_source
 
 
 def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
@@ -1387,6 +1674,11 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
 
         result = fetch_bond_price(isin)
         if result:
+            # This provider is the explicit secondary rung after yfinance.
+            # It remains usable when policy allows fallback, but never becomes
+            # primary merely because the scrape happened during this run.
+            holding.price_is_fallback = True
+            holding.price_observation_timestamp = None
             # Borsa quote: clean price per 100 nominal, in the native currency.
             price_native = result["price"]
             currency = holding.currency or "EUR"
@@ -1396,7 +1688,7 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
             price_eur_per_100 = price_native
             fx_unavailable = False
             if currency != "EUR":
-                fx = _get_fx_series(currency)
+                fx = _usable_fx_series(_get_fx_series(currency))
                 if not fx.empty:
                     price_eur_per_100 = price_native * float(fx.iloc[-1])
                 else:

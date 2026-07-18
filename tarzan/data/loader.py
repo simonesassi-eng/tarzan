@@ -296,6 +296,9 @@ def _parse_order_row(
             isin=isin,
             strict=strict,
         ),
+        instrument_equivalence_group=(
+            _clean_str(row.get("instrument_equivalence_group")) or None
+        ),
     )
 
 

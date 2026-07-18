@@ -636,6 +636,103 @@ class TestGeoBreakdownDiskCache:
         assert enricher.get_geo_breakdown("ZZZ.MI", "ZZ0000000000") is None
 
 
+class TestFetchHistoryProvenance:
+    def _patch_history_sources(self, monkeypatch, cached, fresh):
+        enricher._history_memo.clear()
+        monkeypatch.setattr(enricher.price_cache, "load_history", lambda symbol: cached)
+        monkeypatch.setattr(enricher, "_retry", lambda fn, *, what: fresh)
+        monkeypatch.setattr(enricher.price_cache, "store_history", lambda *args: None)
+
+    def test_failed_live_tail_keeps_selected_cache_row_provenance(
+        self, monkeypatch
+    ):
+        cached_day = pd.Timestamp.now().normalize() - pd.Timedelta(days=10)
+        fresh_day = pd.Timestamp.now().normalize()
+        cached = pd.DataFrame({"Close": [100.0]}, index=[cached_day])
+        fresh = pd.DataFrame({"Close": [float("nan")]}, index=[fresh_day])
+        self._patch_history_sources(monkeypatch, cached, fresh)
+
+        history = enricher._fetch_history("CACHE-STALE")
+        holding = TestSetPriceDataRobustness()._holding()
+        enricher._set_price_data(holding, history, {}, "EUR")
+
+        assert holding.current_price == 100.0
+        assert holding.price_observation_timestamp == cached_day.to_pydatetime()
+        assert holding.price_is_fallback is True
+        assert holding.data_source == "price_cache:CACHE-STALE"
+
+    def test_valid_fresh_tail_remains_primary(self, monkeypatch):
+        cached_day = pd.Timestamp.now().normalize() - pd.Timedelta(days=2)
+        fresh_day = pd.Timestamp.now().normalize()
+        cached = pd.DataFrame({"Close": [100.0]}, index=[cached_day])
+        fresh = pd.DataFrame({"Close": [101.0]}, index=[fresh_day])
+        self._patch_history_sources(monkeypatch, cached, fresh)
+
+        history = enricher._fetch_history("LIVE-FRESH")
+        holding = TestSetPriceDataRobustness()._holding()
+        enricher._set_price_data(holding, history, {}, "EUR")
+
+        assert holding.current_price == 101.0
+        assert holding.price_observation_timestamp == fresh_day.to_pydatetime()
+        assert holding.price_is_fallback is False
+        assert holding.data_source is None
+
+    def test_timestamped_live_quote_supersedes_older_cache(
+        self, monkeypatch
+    ):
+        from tarzan import runtime
+
+        monkeypatch.setattr(runtime, "as_of", lambda: None)
+        cached_day = pd.Timestamp.now().normalize() - pd.Timedelta(days=10)
+        quote_time = pd.Timestamp.now(tz="UTC").floor("s")
+        history = pd.DataFrame({"Close": [100.0]}, index=[cached_day])
+        history.attrs[enricher._HISTORY_ORIGINS_ATTR] = {
+            enricher._history_timestamp_key(cached_day): (
+                enricher._HISTORY_ORIGIN_CACHE
+            )
+        }
+        history.attrs[enricher._HISTORY_SYMBOL_ATTR] = "CACHE-WITH-LIVE"
+        holding = TestSetPriceDataRobustness()._holding()
+
+        enricher._set_price_data(
+            holding,
+            history,
+            {
+                "regularMarketPrice": 105.0,
+                "regularMarketTime": int(quote_time.timestamp()),
+            },
+            "EUR",
+        )
+
+        assert holding.current_price == 105.0
+        assert holding.price_observation_timestamp == quote_time.to_pydatetime()
+        assert holding.price_is_fallback is False
+        assert holding.data_source is None
+
+    def test_pinned_as_of_ignores_current_quote(self, monkeypatch):
+        import datetime
+
+        from tarzan import runtime
+
+        monkeypatch.setattr(runtime, "as_of", lambda: datetime.date(2025, 1, 2))
+        history_day = pd.Timestamp("2025-01-02")
+        history = pd.DataFrame({"Close": [100.0]}, index=[history_day])
+        holding = TestSetPriceDataRobustness()._holding()
+
+        enricher._set_price_data(
+            holding,
+            history,
+            {
+                "regularMarketPrice": 105.0,
+                "regularMarketTime": int(pd.Timestamp("2025-01-03", tz="UTC").timestamp()),
+            },
+            "EUR",
+        )
+
+        assert holding.current_price == 100.0
+        assert holding.price_observation_timestamp == history_day.to_pydatetime()
+
+
 class TestSetPriceDataRobustness:
     """_set_price_data must never propagate a NaN/non-positive close as a
     price. A throttled live quote (yfinance returning NaN) previously slipped
@@ -659,11 +756,114 @@ class TestSetPriceDataRobustness:
         enricher._set_price_data(h, hist, {}, "EUR")
         assert h.current_price == 101.0
 
-    def test_all_nan_history_falls_back_to_info(self):
+    def test_all_nan_history_uses_undated_info_only_as_fallback(self):
         h = self._holding()
         hist = pd.DataFrame({"Close": [float("nan"), float("nan")]})
-        enricher._set_price_data(h, hist, {"regularMarketPrice": 99.5}, "EUR")
+        enricher._set_price_data(
+            h,
+            hist,
+            {
+                "regularMarketPrice": 99.5,
+                "regularMarketTime": float("nan"),
+            },
+            "EUR",
+        )
         assert h.current_price == 99.5
+        assert h.price_observation_timestamp is None
+        assert h.price_is_fallback is True
+        assert h.data_source == "yfinance:regularMarketPrice (undated)"
+
+    def test_previous_close_is_explicit_fallback(self):
+        h = self._holding()
+        enricher._set_price_data(
+            h,
+            pd.DataFrame(),
+            {"previousClose": 98.5},
+            "EUR",
+        )
+        assert h.current_price == 98.5
+        assert h.price_is_fallback is True
+        assert h.data_source == "yfinance:previousClose"
+
+    def test_cached_fx_degrades_timestamped_live_quote(self, monkeypatch):
+        quote_time = pd.Timestamp.now(tz="UTC").floor("s")
+        fx_time = quote_time - pd.Timedelta(days=10)
+        fx = pd.Series(
+            [0.9, float("nan")],
+            index=pd.DatetimeIndex([fx_time, quote_time]),
+        )
+        fx.attrs[enricher._HISTORY_ORIGINS_ATTR] = {
+            enricher._history_timestamp_key(fx_time): (
+                enricher._HISTORY_ORIGIN_CACHE
+            ),
+            enricher._history_timestamp_key(quote_time): (
+                enricher._HISTORY_ORIGIN_PRIMARY
+            ),
+        }
+        monkeypatch.setattr(enricher, "_get_fx_series", lambda currency: fx)
+        h = self._holding()
+
+        enricher._set_price_data(
+            h,
+            pd.DataFrame(),
+            {
+                "regularMarketPrice": 100.0,
+                "regularMarketTime": int(quote_time.timestamp()),
+            },
+            "USD",
+        )
+
+        assert h.current_price == pytest.approx(90.0)
+        assert h.price_observation_timestamp == fx_time.to_pydatetime()
+        assert h.price_is_fallback is True
+        assert h.data_source == "price_cache:FX"
+
+    def test_previous_close_preserves_cached_fx_source(self, monkeypatch):
+        fx_time = pd.Timestamp.now(tz="UTC").floor("s") - pd.Timedelta(days=2)
+        fx = pd.Series([0.9], index=pd.DatetimeIndex([fx_time]))
+        fx.attrs[enricher._HISTORY_ORIGINS_ATTR] = {
+            enricher._history_timestamp_key(fx_time): (
+                enricher._HISTORY_ORIGIN_CACHE
+            )
+        }
+        monkeypatch.setattr(enricher, "_get_fx_series", lambda currency: fx)
+        h = self._holding()
+
+        enricher._set_price_data(
+            h,
+            pd.DataFrame(),
+            {"previousClose": 100.0},
+            "USD",
+        )
+
+        assert h.current_price == pytest.approx(90.0)
+        assert h.price_is_fallback is True
+        assert h.data_source == "price_cache:FX"
+
+    def test_undated_quote_with_fresh_fx_keeps_quote_provenance(
+        self, monkeypatch
+    ):
+        fx_time = pd.Timestamp.now(tz="UTC").floor("s")
+        fx = pd.Series([0.9], index=pd.DatetimeIndex([fx_time]))
+        fx.attrs[enricher._HISTORY_ORIGINS_ATTR] = {
+            enricher._history_timestamp_key(fx_time): (
+                enricher._HISTORY_ORIGIN_PRIMARY
+            )
+        }
+        monkeypatch.setattr(enricher, "_get_fx_series", lambda currency: fx)
+        h = self._holding()
+
+        enricher._set_price_data(
+            h,
+            pd.DataFrame(),
+            {"regularMarketPrice": 100.0},
+            "USD",
+        )
+
+        assert h.current_price == pytest.approx(90.0)
+        assert h.price_observation_timestamp is None
+        assert h.price_is_fallback is True
+        assert h.data_source == "yfinance:regularMarketPrice (undated)"
 
     def test_no_price_anywhere_leaves_none(self):
         # All-NaN history and no usable info quote → current_price stays None

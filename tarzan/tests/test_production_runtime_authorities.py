@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,11 @@ from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.runtime.artifacts import LocalArtifactWriter, LocalOnlyWorkbook, StorageDescriptor
 from tarzan.runtime.ledger import Availability, RunLedger
-from tarzan.runtime.provider import ProviderQualityPolicy, ValuationCompletenessEvaluator
+from tarzan.runtime.provider import (
+    ProviderQualityPolicy,
+    ValuationCompletenessEvaluator,
+    ValuationEvidenceState,
+)
 from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
 from tarzan.runtime.session import RunResult
 from tarzan.runtime.summary import SummaryProjector
@@ -37,14 +42,19 @@ def _result(metrics: PortfolioMetrics, ledger: RunLedger, attempt: str = "attemp
     )
 
 
-def _policy(policy_id: str, materiality_pct: float) -> ProviderQualityPolicy:
+def _policy(
+    policy_id: str,
+    materiality_pct: float,
+    *,
+    allow_fallback: bool = False,
+) -> ProviderQualityPolicy:
     return ProviderQualityPolicy(
         policy_id=policy_id,
         freshness_seconds=3600.0,
         minimum_coverage_pct=100.0,
         timeout_seconds=5.0,
         retry_budget=0,
-        allow_fallback=False,
+        allow_fallback=allow_fallback,
         valuation_materiality_pct=materiality_pct,
         publication_materiality_pct=materiality_pct,
     )
@@ -105,6 +115,134 @@ def test_critical_valuation_gap_blocks_summary_planning_and_publication():
     assert summary.sections["portfolio"]["known_subtotal_eur"] == 90.0
     assert summary.sections["planning"]["value"] is None
     assert summary.publication_state == "BLOCK_NORMAL_AND_NOTIFY_FAILURE"
+
+
+def test_valuation_uses_observation_age_and_explicit_fallback_quality():
+    now = datetime.now(timezone.utc)
+
+    def holdings() -> list[Holding]:
+        return [
+            Holding(
+                isin="FRESH-PRIMARY",
+                ticker="FRESH",
+                quantity=1.0,
+                cost_basis_eur=100.0,
+                market_value_eur=100.0,
+                currency="EUR",
+                security_type="STOCK",
+                current_price=100.0,
+                current_value=100.0,
+                fetch_timestamp=now,
+                price_observation_timestamp=now,
+                price_is_fallback=False,
+                data_source="yfinance:FRESH",
+            ),
+            Holding(
+                isin="RECENT-CACHE",
+                ticker="CACHE",
+                quantity=1.0,
+                cost_basis_eur=90.0,
+                market_value_eur=90.0,
+                currency="EUR",
+                security_type="STOCK",
+                current_price=90.0,
+                current_value=90.0,
+                fetch_timestamp=now,
+                price_observation_timestamp=now,
+                price_is_fallback=True,
+                data_source="price_cache:CACHE",
+            ),
+            Holding(
+                isin="STALE-CACHE",
+                ticker="STALE",
+                quantity=1.0,
+                cost_basis_eur=80.0,
+                market_value_eur=80.0,
+                currency="EUR",
+                security_type="STOCK",
+                current_price=80.0,
+                current_value=80.0,
+                fetch_timestamp=now,
+                price_observation_timestamp=now - timedelta(hours=2),
+                price_is_fallback=True,
+                data_source="price_cache:STALE",
+            ),
+        ]
+
+    accepting = ValuationCompletenessEvaluator({
+        "STOCK:current_valuation": _policy(
+            "stock-current-fallback",
+            100.0,
+            allow_fallback=True,
+        ),
+    }).evaluate(holdings(), RunLedger("valuation-provenance-accepted"))
+
+    assert [item.state for item in accepting.evidence] == [
+        ValuationEvidenceState.PRIMARY,
+        ValuationEvidenceState.FALLBACK,
+        ValuationEvidenceState.STALE,
+    ]
+    assert [item.accepted_by_policy for item in accepting.evidence] == [
+        True,
+        True,
+        True,
+    ]
+    assert accepting.known_subtotal_eur == pytest.approx(270.0)
+    assert accepting.evidence[2].age_seconds > 3600.0
+
+    rejecting = ValuationCompletenessEvaluator({
+        "STOCK:current_valuation": _policy(
+            "stock-current-primary-only",
+            100.0,
+            allow_fallback=False,
+        ),
+    }).evaluate(holdings(), RunLedger("valuation-provenance-rejected"))
+
+    assert [item.state for item in rejecting.evidence] == [
+        ValuationEvidenceState.PRIMARY,
+        ValuationEvidenceState.FALLBACK,
+        ValuationEvidenceState.STALE,
+    ]
+    assert [item.accepted_by_policy for item in rejecting.evidence] == [
+        True,
+        False,
+        False,
+    ]
+    assert rejecting.known_subtotal_eur == pytest.approx(100.0)
+
+
+def test_point_in_time_freshness_uses_effective_date_not_wall_clock():
+    from tarzan import runtime
+
+    runtime.configure(as_of=date(2025, 1, 2))
+    try:
+        holding = Holding(
+            isin="AS-OF-PRIMARY",
+            ticker="ASOF",
+            quantity=1.0,
+            cost_basis_eur=100.0,
+            market_value_eur=100.0,
+            currency="EUR",
+            security_type="STOCK",
+            current_price=100.0,
+            current_value=100.0,
+            price_observation_timestamp=datetime(2025, 1, 2, tzinfo=timezone.utc),
+            price_is_fallback=False,
+            data_source="historical-close",
+        )
+        assessment = ValuationCompletenessEvaluator({
+            "STOCK:current_valuation": _policy(
+                "stock-point-in-time",
+                100.0,
+                allow_fallback=False,
+            ),
+        }).evaluate([holding], RunLedger("valuation-point-in-time"))
+
+        assert assessment.evidence[0].state is ValuationEvidenceState.PRIMARY
+        assert assessment.evidence[0].accepted_by_policy is True
+        assert assessment.evidence[0].age_seconds == 0.0
+    finally:
+        runtime.reset()
 
 
 # **Validates: Requirements 2.11, 2.14, 3.11, 3.14**

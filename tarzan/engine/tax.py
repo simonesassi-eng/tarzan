@@ -1,33 +1,11 @@
-"""Estimate Italian capital-gains tax (CGT) on *realized* gains.
+"""Estimate Italian capital-gains tax (CGT) on realized gains.
 
-This is an **estimate** used to present net-of-tax money-weighted figures
-(XIRR, lifetime PnL) alongside the gross ones. It is NOT a tax return and
-deliberately keeps the headline gross metrics untouched.
-
-Scope and method (all disclosed to the user in the report):
-
-  * Only **realized capital gains** are taxed — sells, not transfers,
-    coupons or dividends (income withholding is a separate matter).
-  * **Average-cost basis**: the cost removed by a sell is the running
-    weighted-average cost of the units held, matching how the rest of
-    Tarzan computes cost basis. (Italian brokers may use LIFO, so the
-    estimate can differ from the broker's exact figure.)
-  * **Rates**: ``gov_rate`` for government bonds (BTP, US Treasury and
-    similar state issuers — Italy taxes these at 12.5%), ``std_rate``
-    (26%) for everything else.
-  * **Loss offset ("zainetto fiscale")**: realized losses are carried
-    forward and offset later realized gains, but only where the law
-    allows it. Gains on harmonized ETFs/funds (OICR) are *redditi di
-    capitale* and CANNOT be reduced by capital losses; gains on single
-    bonds, stocks, ETCs and certificates are *redditi diversi* and CAN.
-    Every realized loss (including ETF losses) feeds the carryforward,
-    which expires four years after the year it arose.
-  * Tax is attributed to the **trade date** of the sell (when the broker
-    withholds it in regime amministrato), so it lands as a negative cash
-    flow at that date for the net-of-tax XIRR.
-
-The result is a list of ``(date, -tax_eur)`` cash flows plus a summary
-breakdown for disclosure.
+This estimate presents net-of-tax money-weighted figures alongside the gross
+ones; it is not a tax return. Realizations use running average cost, sells are
+taxable while transfers are not, and losses offset only eligible capital gains.
+Exact instrument-kind evidence selects tax mechanics. Full ISIN is the default
+cost-basis identity, and cross-ISIN pooling requires an explicit equivalence
+group on the source orders.
 """
 
 from __future__ import annotations
@@ -37,25 +15,29 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from tarzan.instruments.registry import (
+    InstrumentKind,
+    TypeEvidenceGateway,
+    TypeResolutionState,
+)
 from tarzan.models.holding import Holding
 from tarzan.models.order import Order, OrderType
 
-# Two ISINs whose first 9 characters match are cum/ex variants of the same
-# Italian retail BTP (sold under one ISIN, transferred in under a sibling).
-# Cost basis must be tracked per prefix group, or the realized gain on the
-# rotation is lost (cost on one leg, proceeds on the other).
-_CUM_EX_PREFIX_LEN = 9
-
-# Fineco short-name / description markers for state-issued bonds that get
-# the reduced (12.5%) rate. Matched case-insensitively on the order name.
+# Fineco short-name / description markers for state-issued bonds that get the
+# reduced rate. Names may distinguish sovereign from corporate debt only after
+# exact evidence has resolved the instrument mechanics to BOND.
 _GOV_BOND_NAME = re.compile(
     r"\b(BTP|BOT|CCT|CTZ|BUND|OAT|BONOS?|GILT|TREASUR|T-?NOTE|T-?BOND)\b"
-    r"|^USA-",  # Fineco labels US Treasuries like "USA-31GE30 3,5%"
+    r"|^USA-",
     re.IGNORECASE,
 )
 
 # How many years a realized loss stays usable (year of realization + 4).
 _LOSS_CARRY_YEARS = 4
+
+
+class TaxEvidenceUnavailable(ValueError):
+    """Raised when exact evidence cannot support an authoritative tax estimate."""
 
 
 @dataclass
@@ -66,61 +48,101 @@ class CgtEstimate:
     total_tax_eur: float = 0.0
     total_realized_gain_eur: float = 0.0
     total_realized_loss_eur: float = 0.0
-    taxable_base_eur: float = 0.0  # gains actually taxed, after offsets/rules
+    taxable_base_eur: float = 0.0
 
 
 @dataclass
 class _Realization:
     date: datetime.date
     isin: str
-    pnl: float          # realized result (proceeds − avg cost), signed
-    rate: float         # tax rate that applies to a gain on this instrument
-    is_capital_income: bool  # True = OICR/ETF gain → not offsettable by losses
+    pnl: float
+    rate: float
+    is_capital_income: bool
+
+
+_IdentityKey = tuple[str, str]
+
+
+def _cost_basis_key(order: Order) -> _IdentityKey:
+    """Return explicit equivalence identity or the complete normalized ISIN."""
+    group = str(order.instrument_equivalence_group or "").strip()
+    if group:
+        return "equivalence", group.casefold()
+    return "isin", str(order.isin or "").strip().upper()
+
+
+def _identity_orders(orders: list[Order], key: _IdentityKey) -> list[Order]:
+    return [order for order in orders if _cost_basis_key(order) == key]
 
 
 def _classify(
-    isin: str,
-    name: str,
-    enriched: Optional[Holding],
+    order: Order,
+    enriched_by_isin: dict[str, Holding],
     orders: list[Order],
+    identity_key: _IdentityKey,
 ) -> tuple[bool, bool]:
-    """Return ``(is_government_bond, is_capital_income)`` for an ISIN.
+    """Return ``(is_government_bond, is_capital_income)`` from exact evidence.
 
-    * ``is_government_bond`` selects the reduced rate.
-    * ``is_capital_income`` is True for harmonized ETF/fund (OICR) gains,
-      which cannot be offset by carried-forward losses.
-
-    Uses the enriched ``instrument_type`` when available, falling back to
-    the Fineco order name and the shared bond heuristic for positions that
-    are already closed (and therefore never enriched).
+    Order and holding declarations for the same explicit identity are resolved
+    together. Unknown, ambiguous, or unsupported kinds make the estimate
+    unavailable instead of selecting financial behavior from names or prices.
+    Once BOND mechanics are established, provider subtype and issuer-name
+    markers may distinguish sovereign debt for the reduced rate.
     """
-    it = (getattr(enriched, "instrument_type", None) or "").lower()
-    nm = (name or "").lower()
+    related_orders = _identity_orders(orders, identity_key)
+    related_isins = {related.isin for related in related_orders}
+    holdings = [
+        enriched_by_isin[isin]
+        for isin in related_isins
+        if isin in enriched_by_isin
+    ]
 
-    is_gov = (
-        "govern" in it or "govt" in it or bool(_GOV_BOND_NAME.search(name or ""))
-    )
-    if is_gov:
-        # Single government bond → redditi diversi (offsettable), gov rate.
-        return True, False
+    assertions: list[str] = [
+        related.instrument_kind.value
+        for related in related_orders
+        if related.instrument_kind is not None
+    ]
+    for holding in holdings:
+        assertions.extend(
+            value
+            for value in (
+                holding.security_type,
+                holding.instrument_type,
+                *tuple(holding.instrument_kind_evidence or ()),
+            )
+            if value
+        )
 
-    is_etf = "etf" in it or "fund" in it
-    if is_etf:
-        return False, True  # OICR gain = reddito di capitale, no offset
+    resolution = TypeEvidenceGateway().resolve(*assertions)
+    if resolution.state is not TypeResolutionState.RESOLVED:
+        raise TaxEvidenceUnavailable(
+            f"tax classification unavailable for {order.isin}: "
+            f"instrument kind is {resolution.state.value.lower()} "
+            f"from evidence {resolution.evidence!r}"
+        )
 
-    # Bond (corporate/other) or single equity → redditi diversi.
-    from tarzan.engine.returns_builder import _order_bond_flag
-    is_bondish = "bond" in it or _order_bond_flag(orders, isin)
-    if is_bondish:
+    if resolution.kind is InstrumentKind.ETF:
+        return False, True
+    if resolution.kind is InstrumentKind.STOCK:
         return False, False
-    if enriched is not None:
-        # Enriched, not a bond, not flagged ETF → treat single share as
-        # redditi diversi.
-        return False, False
-    # Closed position with no enrichment and not a bond: the portfolio is
-    # ETF-based, so default to capital income (the conservative choice —
-    # it does not let losses wrongly shelter the gain).
-    return False, True
+    if resolution.kind is not InstrumentKind.BOND:
+        raise TaxEvidenceUnavailable(
+            f"tax classification unavailable for {order.isin}: "
+            f"unsupported instrument kind {resolution.kind.value}"
+        )
+
+    provider_subtypes = [
+        str(value)
+        for holding in holdings
+        for value in (holding.instrument_type, holding.security_type)
+        if value
+    ]
+    names = [related.name for related in related_orders if related.name]
+    is_government_bond = any(
+        "govern" in subtype.casefold() or "govt" in subtype.casefold()
+        for subtype in provider_subtypes
+    ) or any(_GOV_BOND_NAME.search(name) for name in names)
+    return is_government_bond, False
 
 
 def _realizations(
@@ -129,64 +151,83 @@ def _realizations(
     std_rate: float,
     gov_rate: float,
 ) -> list[_Realization]:
-    """Walk position-changing orders in trade-date order, tracking running
-    average cost per ISIN, and emit one ``_Realization`` per *sell*.
-
-    Transfers (in/out) move cost but are not taxable events; only ``SELL``
-    realizes a gain/loss for tax.
-    """
-    pos = sorted(
-        (o for o in orders if o.is_position_change()),
-        key=lambda o: o.trade_date,
+    """Emit sell realizations using average cost per authoritative identity."""
+    position_orders = sorted(
+        (order for order in orders if order.is_position_change()),
+        key=lambda order: order.trade_date,
     )
-    name_by_isin: dict[str, str] = {}
-    for o in orders:
-        if o.name and o.isin not in name_by_isin:
-            name_by_isin[o.isin] = o.name
+    quantity: dict[_IdentityKey, float] = {}
+    cost: dict[_IdentityKey, float] = {}
+    basis_complete: dict[_IdentityKey, bool] = {}
+    realizations: list[_Realization] = []
 
-    qty: dict[str, float] = {}
-    cost: dict[str, float] = {}
-    out: list[_Realization] = []
-
-    for o in pos:
-        # Track cost basis per cum/ex prefix group so a BTP sold under its
-        # "ex" ISIN draws down the cost transferred in under its "cum"
-        # sibling. For ordinary instruments the 9-char prefix is unique to
-        # the ISIN, so this is a no-op.
-        key = o.isin[:_CUM_EX_PREFIX_LEN]
-        q = qty.get(key, 0.0)
-        c = cost.get(key, 0.0)
-        if o.quantity > 0:  # buy / transfer_in
-            committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
-            qty[key] = q + o.quantity
-            cost[key] = c + committed
-            continue
-        if o.quantity >= 0:
-            continue
-        # sell / transfer_out
-        units = min(abs(o.quantity), q) if q > 0 else 0.0
-        avg = (c / q) if q > 0 else 0.0
-        cost_removed = avg * units
-        if o.type == OrderType.SELL and units > 0:
-            # Proceeds for the units actually held (prorate if the order
-            # nominally sells more than we tracked as held).
-            frac = units / abs(o.quantity) if o.quantity else 1.0
-            proceeds = (o.net_eur or 0.0) * frac
-            pnl = proceeds - cost_removed
-            is_gov, is_cap = _classify(
-                o.isin, name_by_isin.get(o.isin, ""),
-                enriched_by_isin.get(o.isin), orders,
+    for order in position_orders:
+        key = _cost_basis_key(order)
+        held_quantity = quantity.get(key, 0.0)
+        held_cost = cost.get(key, 0.0)
+        if order.quantity > 0:
+            # BUY net cash includes acquisition fees. TRANSFER_IN has no cash
+            # purchase; only an explicit gross amount is transferred basis,
+            # while a nonzero net amount may be a fee and cannot prove basis.
+            committed = (
+                abs(order.gross_eur or 0.0)
+                if order.type is OrderType.TRANSFER_IN
+                else abs(order.net_eur)
+                if order.net_eur
+                else abs(order.gross_eur or 0.0)
             )
-            out.append(_Realization(
-                date=o.trade_date, isin=o.isin, pnl=pnl,
-                rate=(gov_rate if is_gov else std_rate),
-                is_capital_income=is_cap,
-            ))
-        cost[key] = max(c - cost_removed, 0.0)
-        qty[key] = max(q - units, 0.0)
+            quantity[key] = held_quantity + order.quantity
+            cost[key] = held_cost + committed
+            basis_complete[key] = (
+                basis_complete.get(key, True) and committed > 0
+            )
+            continue
+        if order.quantity >= 0:
+            continue
 
-    out.sort(key=lambda r: r.date)
-    return out
+        requested_units = abs(order.quantity)
+        tolerance = max(1e-9, requested_units * 1e-9)
+        if order.type is OrderType.SELL and (
+            held_quantity + tolerance < requested_units
+            or held_cost <= 0
+            or not basis_complete.get(key, True)
+        ):
+            raise TaxEvidenceUnavailable(
+                f"tax cost basis unavailable for {order.isin}: sell requests "
+                f"{requested_units:g} units but authoritative identity "
+                f"{key!r} has {held_quantity:g} units and EUR {held_cost:.2f} cost"
+            )
+
+        units = min(requested_units, held_quantity) if held_quantity > 0 else 0.0
+        average_cost = held_cost / held_quantity if held_quantity > 0 else 0.0
+        cost_removed = average_cost * units
+        if order.type is OrderType.SELL and units > 0:
+            fraction = units / abs(order.quantity) if order.quantity else 1.0
+            proceeds = (order.net_eur or 0.0) * fraction
+            pnl = proceeds - cost_removed
+            is_government, is_capital_income = _classify(
+                order,
+                enriched_by_isin,
+                orders,
+                key,
+            )
+            realizations.append(
+                _Realization(
+                    date=order.trade_date,
+                    isin=order.isin,
+                    pnl=pnl,
+                    rate=gov_rate if is_government else std_rate,
+                    is_capital_income=is_capital_income,
+                )
+            )
+        remaining_quantity = max(held_quantity - units, 0.0)
+        cost[key] = max(held_cost - cost_removed, 0.0)
+        quantity[key] = remaining_quantity
+        if remaining_quantity <= tolerance:
+            basis_complete[key] = True
+
+    realizations.sort(key=lambda realization: realization.date)
+    return realizations
 
 
 def estimate_realized_cgt(
@@ -195,52 +236,55 @@ def estimate_realized_cgt(
     std_rate_pctg: float,
     gov_rate_pctg: float,
 ) -> CgtEstimate:
-    """Estimate CGT on realized gains; return the tax cash flows + summary.
+    """Estimate CGT on realized gains; return dated tax cash flows and summary.
 
-    ``std_rate_pctg`` / ``gov_rate_pctg`` are percentages (e.g. 26, 12.5).
-    With both rates 0 the estimate is empty (net == gross).
+    Rates are percentages such as 26 and 12.5. With both rates zero, tax is
+    disabled and no classification evidence is required.
     """
     std_rate = max(0.0, float(std_rate_pctg or 0.0)) / 100.0
     gov_rate = max(0.0, float(gov_rate_pctg or 0.0)) / 100.0
-    est = CgtEstimate()
+    estimate = CgtEstimate()
     if not orders or (std_rate <= 0 and gov_rate <= 0):
-        return est
+        return estimate
 
     realizations = _realizations(orders, enriched_by_isin, std_rate, gov_rate)
 
-    # Loss carryforward entries: (year, remaining_loss_eur). Gains that are
-    # redditi diversi consume them (most recent first is irrelevant; FIFO by
-    # year keeps the 4-year expiry simple); ETF gains never do.
-    carry: list[list] = []  # [year, remaining]
+    # Loss carryforward entries are [year, remaining_loss_eur]. ETF gains do
+    # not consume them; eligible gains consume still-valid entries by year.
+    carry: list[list[float | int]] = []
     tax_by_date: dict[datetime.date, float] = {}
 
-    for r in realizations:
-        if r.pnl < 0:
-            est.total_realized_loss_eur += -r.pnl
-            carry.append([r.date.year, -r.pnl])
+    for realization in realizations:
+        if realization.pnl < 0:
+            estimate.total_realized_loss_eur += -realization.pnl
+            carry.append([realization.date.year, -realization.pnl])
             continue
-        if r.pnl <= 0:
+        if realization.pnl <= 0:
             continue
-        est.total_realized_gain_eur += r.pnl
+        estimate.total_realized_gain_eur += realization.pnl
 
-        taxable = r.pnl
-        if not r.is_capital_income:
-            # Offset against still-valid carried-forward losses (year of
-            # the loss within the gain's year − 4 .. gain's year).
-            min_year = r.date.year - _LOSS_CARRY_YEARS
+        taxable = realization.pnl
+        if not realization.is_capital_income:
+            minimum_year = realization.date.year - _LOSS_CARRY_YEARS
             for entry in carry:
                 if taxable <= 0:
                     break
-                if entry[1] <= 0 or entry[0] < min_year:
+                entry_year = int(entry[0])
+                remaining_loss = float(entry[1])
+                if remaining_loss <= 0 or entry_year < minimum_year:
                     continue
-                used = min(taxable, entry[1])
+                used = min(taxable, remaining_loss)
                 taxable -= used
-                entry[1] -= used
+                entry[1] = remaining_loss - used
         if taxable > 0:
-            tax = taxable * r.rate
-            est.taxable_base_eur += taxable
-            est.total_tax_eur += tax
-            tax_by_date[r.date] = tax_by_date.get(r.date, 0.0) + tax
+            tax = taxable * realization.rate
+            estimate.taxable_base_eur += taxable
+            estimate.total_tax_eur += tax
+            tax_by_date[realization.date] = (
+                tax_by_date.get(realization.date, 0.0) + tax
+            )
 
-    est.tax_flows = [(d, -tax) for d, tax in sorted(tax_by_date.items())]
-    return est
+    estimate.tax_flows = [
+        (date, -tax) for date, tax in sorted(tax_by_date.items())
+    ]
+    return estimate

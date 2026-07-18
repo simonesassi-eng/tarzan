@@ -98,6 +98,10 @@ class Order:
     # Exact instrument mechanics authority. Category, name, price, quantity,
     # and identifier shape may never substitute for this kind declaration.
     instrument_kind: Optional[InstrumentKind] = None
+    # Explicit identity authority for mechanically equivalent identifiers, such
+    # as documented cum/ex variants. Blank means the full ISIN is the identity;
+    # identifier prefixes are never treated as equivalence evidence.
+    instrument_equivalence_group: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.instrument_kind is not None and not isinstance(
@@ -111,6 +115,9 @@ class Order:
                 raise ValueError(
                     f"unsupported instrument kind: {self.instrument_kind!r}"
                 ) from error
+        if self.instrument_equivalence_group is not None:
+            group = str(self.instrument_equivalence_group).strip()
+            self.instrument_equivalence_group = group or None
         if not self.order_id:
             self.order_id = self.natural_key()
 

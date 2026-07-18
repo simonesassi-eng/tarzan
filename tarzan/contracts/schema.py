@@ -93,6 +93,10 @@ ORDER_LIST_SCHEMA = FileSchema(
                    "never substitute for it.",
                    enum_values=("STOCK", "ETF", "BOND", "CASH"),
                    example="ETF"),
+        ColumnSpec("instrument_equivalence_group", False, "string",
+                   "Explicit shared identity for documented equivalent identifiers "
+                   "such as cum/ex variants. Blank keeps cost basis isolated by full ISIN.",
+                   example="BTP-VALORE-2028-CUM-EX"),
         ColumnSpec("trade_date", False, "date",
                    "Order/market-exposure date; defaults to `date` if absent.",
                    example="2025-01-13"),
