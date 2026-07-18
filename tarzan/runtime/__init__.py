@@ -41,14 +41,15 @@ def _build_context(
         captured_at=datetime.datetime.now(datetime.timezone.utc),
         invocation_source=invocation_source,
         schema_versions={
-            "input": "1",
-            "summary": "1",
+            "input": "2",
+            "summary": "2",
             "ledger": "1.0",
             "manifest": "1.0",
             "cache": "1",
             "exposure": "1.0",
             "capability": "1.0",
             "provider_policy": "1.0",
+            "telemetry": "1.0",
             "delivery_identity": "1.0",
             "delivery_state": "1.0",
         },
@@ -123,6 +124,6 @@ def now_stamp(fmt: str = "%d %b %Y, %H:%M") -> str:
     stamp = (
         datetime.datetime.combine(value.effective_date, datetime.time.min)
         if value.effective_date is not None
-        else value.captured_at
+        else value.captured_at.astimezone()
     )
     return stamp.strftime(fmt)

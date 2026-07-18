@@ -39,9 +39,16 @@ class TestInputSchema:
         assert set(ORDER_REQUIRED_COLUMNS) == sch.ORDER_LIST_SCHEMA.required_columns()
 
     def test_schema_has_version_and_markdown(self):
-        assert sch.SCHEMA_VERSION >= 1
+        assert sch.SCHEMA_VERSION >= 2
         md = sch.ORDER_LIST_SCHEMA.to_markdown()
         assert "order_list.csv" in md and "date" in md and "Required" in md
+        assert "instrument_kind" in md
+        kind = next(
+            column for column in sch.ORDER_LIST_SCHEMA.columns
+            if column.name == "instrument_kind"
+        )
+        assert kind.required is False
+        assert kind.enum_values == ("STOCK", "ETF", "BOND", "CASH")
         # full reference renders all files
         assert "targets_per_holding.csv" in sch.schemas_markdown()
 
@@ -89,6 +96,26 @@ class TestLoaderStrictGate:
     def test_strict_accepts_clean_file(self):
         orders = load_orders(self._csv(), "x.csv", strict=True)
         assert len(orders) == 1
+        assert orders[0].instrument_kind is None
+
+    def test_exact_instrument_kind_is_parsed(self):
+        payload = io.BytesIO(
+            b"date,type,isin,quantity,gross_eur,net_eur,instrument_kind\n"
+            b"2025-01-01,buy,IE00B4L5Y983,10,1000,-1000,ETF\n"
+        )
+        orders = load_orders(payload, "x.csv", strict=True)
+        from tarzan.instruments.registry import InstrumentKind
+        assert orders[0].instrument_kind is InstrumentKind.ETF
+
+    def test_invalid_instrument_kind_is_unavailable_lenient_and_rejected_strict(self):
+        raw = (
+            b"date,type,isin,quantity,gross_eur,net_eur,instrument_kind\n"
+            b"2025-01-01,buy,IE00B4L5Y983,10,1000,-1000,Fixed Income\n"
+        )
+        orders = load_orders(io.BytesIO(raw), "x.csv")
+        assert orders[0].instrument_kind is None
+        with pytest.raises(DataIngestionError, match="unsupported instrument_kind"):
+            load_orders(io.BytesIO(raw), "x.csv", strict=True)
 
 
 # --- External output contract ----------------------------------------------
@@ -128,4 +155,35 @@ class TestSummaryContract:
         json.dumps(m.to_summary_dict(), allow_nan=False)  # must not raise
 
     def test_schema_version_in_summary(self):
-        assert PortfolioMetrics().to_summary_dict()["schema_version"] >= 1
+        assert PortfolioMetrics().to_summary_dict()["schema_version"] == 2
+
+    def test_unavailable_valuation_never_labels_known_subtotal_as_total(self):
+        summary = PortfolioMetrics(
+            total_value=90.0,
+            invested_value=90.0,
+            valuation_availability="UNAVAILABLE",
+            trustworthy_total_value_eur=None,
+            known_valuation_subtotal_eur=90.0,
+        ).to_summary_dict()
+
+        assert summary["valuation_availability"] == "UNAVAILABLE"
+        assert summary["total_value_eur"] is None
+        assert summary["trustworthy_total_value_eur"] is None
+        assert summary["known_valuation_subtotal_eur"] == 90.0
+        assert summary["invested_value_eur"] is None
+        assert summary["cash_value_eur"] is None
+
+    def test_unavailable_history_serializes_nullable_sections(self):
+        summary = PortfolioMetrics(
+            history_availability="UNAVAILABLE",
+            history_unavailable_instruments=("CONFLICTING-HISTORY",),
+            performance={"1d": 1.0},
+            risk={"volatility": 2.0},
+        ).to_summary_dict()
+
+        assert summary["history_availability"] == "UNAVAILABLE"
+        assert summary["history_unavailable_instruments"] == [
+            "CONFLICTING-HISTORY"
+        ]
+        assert summary["performance"] is None
+        assert summary["risk"] is None

@@ -457,7 +457,11 @@ def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, An
         "effective_date": (
             context.effective_date.isoformat() if context.effective_date else None
         ),
-        "schema_versions": dict(context.schema_versions),
+        "schema_versions": {
+            key: value
+            for key, value in context.schema_versions.items()
+            if key != "telemetry"
+        },
         "policy_versions": dict(context.policy_versions),
         "config": dict(session.config_snapshot),
         "effective_orders": session.memo.get("effective_orders"),
@@ -481,15 +485,17 @@ def _record_terminal_result(
 ) -> RunResult:
     analysis_id = canonical_analysis_id(_analysis_evidence(session, metrics))
     session.analysis_id = analysis_id
-    session.ledger.append(LedgerEntryType.TELEMETRY, {
-        "schema_version": "1.0",
-        "stage": "orchestration",
-        "outcome": outcome,
-        "duration_ms": round((time.perf_counter() - started_at) * 1000.0, 3),
-        "dimensions": dict(session.memo.get("workload", {})),
-        "bounded": True,
-        "truncated": False,
-    })
+    from tarzan.runtime.workload import build_workload_observation
+
+    session.ledger.append(
+        LedgerEntryType.TELEMETRY,
+        build_workload_observation(
+            session,
+            metrics,
+            outcome=outcome,
+            duration_ms=(time.perf_counter() - started_at) * 1000.0,
+        ),
+    )
     session.ledger.append(LedgerEntryType.STAGE, {
         "stage": "run",
         "outcome": outcome,

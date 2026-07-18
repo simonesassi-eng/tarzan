@@ -54,13 +54,15 @@ class TestReturnsHonorAsOf:
     def test_build_series_uses_runtime_today_when_no_explicit_today(self):
         import datetime as _dt
         from tarzan.engine.returns_builder import build_order_derived_series
+        from tarzan.instruments.registry import InstrumentKind
         from tarzan.models.order import Order, OrderType
 
         def _o(d):
             return Order(date=d, trade_date=d, type=OrderType.BUY, isin="IE00TEST0001",
                          name="x", ticker="", quantity=10.0, currency="EUR",
                          price_native=100.0, fx_rate=1.0, gross_eur=1000.0,
-                         fees_eur=0.0, net_eur=-1000.0, source="t")
+                         fees_eur=0.0, net_eur=-1000.0, source="t",
+                         instrument_kind=InstrumentKind.STOCK)
         orders = [_o(_dt.date(2026, 1, 5))]
 
         runtime.configure(as_of=_dt.date(2026, 6, 30))

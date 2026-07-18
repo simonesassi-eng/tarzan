@@ -98,9 +98,9 @@ def test_order_only_derives_snapshot(tmp_path, monkeypatch):
 
     orders_csv = tmp_path / "order_list.csv"
     orders_csv.write_text(
-        "date,type,isin,quantity,gross_eur,net_eur\n"
-        "2025-01-02,buy,IE00BL25JP72,100,1000,-1000\n"
-        "2025-02-02,buy,IE00BL25JP72,50,600,-600\n"
+        "date,type,isin,quantity,gross_eur,net_eur,instrument_kind\n"
+        "2025-01-02,buy,IE00BL25JP72,100,1000,-1000,ETF\n"
+        "2025-02-02,buy,IE00BL25JP72,50,600,-600,ETF\n"
     )
     targets_csv = tmp_path / "targets_per_holding.csv"
     targets_csv.write_text(TARGETS_CSV)
@@ -128,8 +128,8 @@ def test_run_without_per_holding_targets(tmp_path, monkeypatch):
     _stub_benchmarks(monkeypatch)
     orders_csv = tmp_path / "order_list.csv"
     orders_csv.write_text(
-        "date,type,isin,quantity,gross_eur,net_eur\n"
-        "2025-01-02,buy,IE00BL25JP72,100,1000,-1000\n"
+        "date,type,isin,quantity,gross_eur,net_eur,instrument_kind\n"
+        "2025-01-02,buy,IE00BL25JP72,100,1000,-1000,ETF\n"
     )
     # Order list alone (no per-holding targets) must still run end to end.
     metrics, _ = orchestrator.run(

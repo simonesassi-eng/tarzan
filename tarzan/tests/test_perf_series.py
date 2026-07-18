@@ -117,10 +117,10 @@ from tarzan import orchestrator  # noqa: E402
 
 _C_AS_OF = _dt.date(2026, 7, 13)
 _C_ORDERS = (
-    "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate\n"
-    "2025-07-01,buy,IE00B4L5Y983,100,10000,-10000,EUR,100,1.0\n"
-    "2025-07-01,buy,IE00B4WXJJ64,50,5000,-5000,EUR,100,1.0\n"
-    "2026-01-05,buy,IE00B4L5Y983,20,2400,-2400,EUR,120,1.0\n"
+    "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate,instrument_kind\n"
+    "2025-07-01,buy,IE00B4L5Y983,100,10000,-10000,EUR,100,1.0,ETF\n"
+    "2025-07-01,buy,IE00B4WXJJ64,50,5000,-5000,EUR,100,1.0,ETF\n"
+    "2026-01-05,buy,IE00B4L5Y983,20,2400,-2400,EUR,120,1.0,ETF\n"
 )
 
 

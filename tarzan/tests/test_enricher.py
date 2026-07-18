@@ -510,6 +510,9 @@ class TestYfCallSpacing:
         assert _yf_net._last_call[0] == 0.0
 
 
+from tarzan.instruments.registry import InstrumentKind  # noqa: E402
+
+
 class TestBondFxConversion:
     """The Borsa Italiana bond fallback must convert the native clean
     price to EUR for ANY currency (USD Treasury, ZAR note, GBP gilt),
@@ -525,7 +528,7 @@ class TestBondFxConversion:
         monkeypatch.setattr(bf, "fetch_bond_price",
                             lambda isin: {"price": 103.84, "source": "borsa_italiana/mot/btp"})
         h = self._holding("IT0005542359", qty=4000.0, currency="EUR", market_value=4150.0)
-        enricher._try_terrapin_fallback(h)
+        enricher._try_terrapin_fallback(h, InstrumentKind.BOND)
         # 4000 * 103.84 / 100 = 4153.60, current_price EUR-per-unit = 1.0384
         assert h.current_value == pytest.approx(4153.60)
         assert h.current_price == pytest.approx(1.0384)
@@ -539,7 +542,7 @@ class TestBondFxConversion:
         monkeypatch.setattr(enricher, "_get_fx_series",
                             lambda ccy: pd.Series([1.0 / 19.2]))
         h = self._holding("XS2105803527", qty=110000.0, currency="ZAR", market_value=5624.0)
-        enricher._try_terrapin_fallback(h)
+        enricher._try_terrapin_fallback(h, InstrumentKind.BOND)
         # 110000 * (98.14/19.2) / 100 ≈ 5623 EUR — NOT 110000*98.14/100 = 107954
         assert h.current_value == pytest.approx(110000 * (98.14 / 19.2) / 100.0, rel=1e-6)
         assert 4000 < h.current_value < 8000
@@ -554,9 +557,49 @@ class TestBondFxConversion:
         monkeypatch.setattr(enricher, "_get_fx_series",
                             lambda ccy: pd.Series([0.92]))
         h = self._holding("US91282CGJ45", qty=2800.0, currency="USD", market_value=2170.0)
-        enricher._try_terrapin_fallback(h)
+        enricher._try_terrapin_fallback(h, InstrumentKind.BOND)
         # 2800 * (84.25*0.92) / 100 ≈ 2170 EUR
         assert h.current_value == pytest.approx(2800 * (84.25 * 0.92) / 100.0, rel=1e-6)
+
+
+class TestFixedIncomeEtfCurrentValuation:
+    """Exposure labels cannot select bond per-100 valuation mechanics."""
+
+    def test_fixed_income_etf_uses_unit_pricing(self, monkeypatch):
+        from tarzan.models.holding import AssetClass, Holding
+
+        history = pd.DataFrame(
+            {"Close": [105.25]},
+            index=pd.to_datetime(["2025-06-29"]),
+        )
+        monkeypatch.setattr(
+            enricher,
+            "_fetch_ticker_data",
+            lambda ticker: {
+                "info": {
+                    "category": "Fixed Income",
+                    "currency": "EUR",
+                    "longName": "Bond Strategy Fixed Income ETF",
+                },
+                "history": history,
+            },
+        )
+        holding = Holding(
+            isin="ETF-FI-TEST",
+            ticker="FIETF",
+            quantity=10.0,
+            cost_basis_eur=1000.0,
+            market_value_eur=999.0,
+            currency="EUR",
+            security_type=InstrumentKind.ETF.value,
+            asset_class=AssetClass.FIXED_INCOME,
+        )
+
+        enriched, _ = enricher._enrich_single(holding)
+
+        assert enriched.current_price == pytest.approx(105.25)
+        assert enriched.current_value == pytest.approx(1052.50)
+        assert enriched.security_type == InstrumentKind.ETF.value
 
 
 class TestGeoBreakdownDiskCache:
@@ -659,3 +702,50 @@ class TestEnrichSingleSafetyNet:
         assert out.current_value is not None
         assert out.current_value == out.current_value  # not NaN
         assert out.current_value == pytest.approx(1234.0)
+
+
+class TestExactKindEvidenceConflicts:
+    def test_provider_cannot_override_conflicting_order_kinds(self, monkeypatch):
+        from tarzan.models.holding import Holding
+
+        history = pd.DataFrame(
+            {"Close": [105.25]},
+            index=pd.to_datetime(["2025-06-29"]),
+        )
+        monkeypatch.setattr(
+            enricher,
+            "_fetch_ticker_data",
+            lambda ticker: {
+                "info": {"quoteType": "ETF", "currency": "EUR"},
+                "history": history,
+            },
+        )
+        holding = Holding(
+            isin="KIND-CONFLICT",
+            ticker="KIND-CONFLICT",
+            quantity=10.0,
+            cost_basis_eur=1000.0,
+            market_value_eur=999.0,
+            currency="EUR",
+            instrument_kind_evidence=("BOND", "ETF"),
+        )
+
+        enriched, _ = enricher._enrich_single(holding)
+
+        assert enriched.security_type is None
+        assert enriched.current_value == pytest.approx(999.0)
+        assert enriched.data_source == "last-known (instrument kind unavailable)"
+
+    def test_openfigi_etf_kind_does_not_fabricate_equity_category(self):
+        classified = enricher._classify_figi_item(
+            sec_type="etf",
+            market_sector="equity",
+            name="Fixed Income ETF",
+            kw={},
+            figi_fi=[],
+            figi_eq=[],
+            figi_etf=["etf"],
+        )
+
+        assert classified["instrument_type"] == "ETF"
+        assert "asset_class" not in classified

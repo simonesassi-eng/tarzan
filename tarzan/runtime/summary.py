@@ -13,7 +13,7 @@ from tarzan.runtime.publication import PublicationEvaluator, PublicationOutcome
 from tarzan.runtime.session import RunResult
 
 
-RUN_SUMMARY_SCHEMA_VERSION = "1"
+RUN_SUMMARY_SCHEMA_VERSION = "2"
 
 
 def _freeze(value: Any) -> Any:

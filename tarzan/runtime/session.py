@@ -56,7 +56,15 @@ class RunContext:
 
     @property
     def analysis_date(self) -> date:
-        return self.effective_date or self.captured_at.date()
+        if self.effective_date is not None:
+            return self.effective_date
+        # Operational capture is stored in UTC, but LIVE analysis follows the
+        # host-local calendar used by the established CLI/newsletter contract.
+        # Convert before taking the date so a run near local midnight cannot
+        # be attributed to yesterday's UTC date.
+        if self.captured_at.tzinfo is not None:
+            return self.captured_at.astimezone().date()
+        return self.captured_at.date()
 
     @property
     def allows_live_transport(self) -> bool:

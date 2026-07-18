@@ -1,21 +1,11 @@
-"""Append-only rebalancing audit trail.
+"""Run-owned rebalancing audit compatibility projection.
 
-A durable, machine-readable record of every rebalancing plan the engine
-produced in a run — the inputs it saw (per-holding value + target, config
-knobs, lump sum) and the outputs it emitted (the buy/sell actions and the
-post-trade verification per ambit). Today Tarzan keeps no trace of *why* a
-given buy/sell was suggested once the report is closed; this gives that
-traceability (a MiFID-style "reconstruct the decision" record).
-
-Design mirrors ``tarzan.data_quality``:
-  * process-global collector, reset at the top of ``orchestrator.run``;
-  * **best-effort** — recording or writing must never raise into the
-    pipeline (an audit trail that breaks the run is worse than none);
-  * written by the CLI after the run as JSON Lines (one record per plan),
-    so it is greppable and appendable without parsing the whole file.
-
-The rebalancer is deterministic given identical inputs (fixed
-``LSParams.seed``), so a record fully determines the plan it describes.
+The active :class:`RunSession` and append-only :class:`RunLedger` are the
+production authorities for every deterministic plan input, final action, and
+verification. A context-local list preserves the established read/render API
+for versioned consumers and tests; initialized CLI/email runs publish it only
+through ``LocalArtifactWriter``. Recording remains best-effort so evidence
+collection cannot alter optimizer behavior.
 """
 
 from __future__ import annotations

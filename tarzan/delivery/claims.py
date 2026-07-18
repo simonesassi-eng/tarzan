@@ -33,6 +33,21 @@ class DeliveryState(str, Enum):
     UNCERTAIN = "UNCERTAIN"
 
 
+_ALLOWED_DELIVERY_TRANSITIONS: dict[DeliveryState, frozenset[DeliveryState]] = {
+    DeliveryState.CLAIMED: frozenset({
+        DeliveryState.SMTP_INVOCATION_STARTED,
+        DeliveryState.DEFINITE_PRE_SEND_FAILURE,
+    }),
+    DeliveryState.SMTP_INVOCATION_STARTED: frozenset({
+        DeliveryState.ACKNOWLEDGED_SUCCESS,
+        DeliveryState.UNCERTAIN,
+    }),
+    DeliveryState.ACKNOWLEDGED_SUCCESS: frozenset(),
+    DeliveryState.DEFINITE_PRE_SEND_FAILURE: frozenset(),
+    DeliveryState.UNCERTAIN: frozenset(),
+}
+
+
 @dataclass(frozen=True)
 class DeliveryIntent:
     stable_event_id: str
@@ -70,6 +85,27 @@ class ClaimResult:
 
 
 class DeliveryClaimStore:
+    @staticmethod
+    def _validate_transition_request(
+        expected: tuple[DeliveryState, ...],
+        target: DeliveryState,
+    ) -> None:
+        """Reject any CAS request that could authorize an illegal edge.
+
+        Validation belongs to the store contract rather than one adapter so a
+        permissive or stale remote endpoint cannot bypass the local state
+        machine. Every state accepted by the CAS request must legally reach
+        the requested target.
+        """
+        if not expected or any(
+            target not in _ALLOWED_DELIVERY_TRANSITIONS[state]
+            for state in expected
+        ):
+            expected_names = ",".join(state.value for state in expected) or "<empty>"
+            raise ValueError(
+                f"invalid delivery transition {expected_names} -> {target.value}"
+            )
+
     def claim(self, intent: DeliveryIntent) -> ClaimResult:
         raise NotImplementedError
 
@@ -169,6 +205,7 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
         expected: tuple[DeliveryState, ...],
         target: DeliveryState,
     ) -> DeliveryState:
+        self._validate_transition_request(expected, target)
         with self._lock():
             document = self._read()
             record = document["claims"].get(logical_id)
@@ -271,6 +308,7 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         expected: tuple[DeliveryState, ...],
         target: DeliveryState,
     ) -> DeliveryState:
+        self._validate_transition_request(expected, target)
         document = self._call({
             "action": "transition",
             "state_schema_version": DELIVERY_STATE_SCHEMA_VERSION,
@@ -279,6 +317,11 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
             "target": target.value,
         })
         try:
-            return DeliveryState(document["state"])
+            returned = DeliveryState(document["state"])
         except (KeyError, ValueError, TypeError):
             raise RuntimeError("delivery claim service returned an invalid transition result") from None
+        if returned is not target:
+            raise RuntimeError(
+                "delivery claim service did not apply the requested transition"
+            )
+        return returned

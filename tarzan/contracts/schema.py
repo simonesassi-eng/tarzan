@@ -23,7 +23,7 @@ from typing import Optional
 
 # Bump when an input file's column contract changes in a way that affects how
 # a user must format their file. Surfaced in docs and (optionally) checked.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,12 @@ ORDER_LIST_SCHEMA = FileSchema(
                    "Signed gross amount in EUR before fees.", example="10000"),
         ColumnSpec("net_eur", True, "number",
                    "Signed net bank cash flow in EUR (− for buys).", example="-10000"),
+        ColumnSpec("instrument_kind", False, "enum",
+                   "Exact mechanics kind. Required for order-derived valuation "
+                   "when provider evidence is unavailable; category/name/price "
+                   "never substitute for it.",
+                   enum_values=("STOCK", "ETF", "BOND", "CASH"),
+                   example="ETF"),
         ColumnSpec("trade_date", False, "date",
                    "Order/market-exposure date; defaults to `date` if absent.",
                    example="2025-01-13"),

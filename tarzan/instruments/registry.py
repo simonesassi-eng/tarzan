@@ -69,6 +69,79 @@ class TypeResolution:
 
 
 @dataclass(frozen=True)
+class CategoryResolution:
+    state: TypeResolutionState
+    category: Optional[str]
+    evidence: tuple[str, ...]
+
+
+class TrackedCategoryEvidenceGateway:
+    """Resolve only exact declared category labels/aliases, never substrings."""
+
+    _MAPPING = {
+        "EQUITIES": "Equities",
+        "EQUITY": "Equities",
+        "STOCK": "Equities",
+        "SHARE": "Equities",
+        "EQUITYETF": "Equities",
+        "ETFEQUITY": "Equities",
+        "AZIONARIO": "Equities",
+        "AZIONE": "Equities",
+        "FIXEDINCOME": "Fixed Income",
+        "BOND": "Fixed Income",
+        "BONDETF": "Fixed Income",
+        "ETFBOND": "Fixed Income",
+        "OBBLIGAZ": "Fixed Income",
+        "BTP": "Fixed Income",
+        "TREASURY": "Fixed Income",
+        "GOVT": "Fixed Income",
+        "CASHCASHEQUIVALENTS": "Cash & Cash Equivalents",
+        "CASH": "Cash & Cash Equivalents",
+        "MONEYMARKET": "Cash & Cash Equivalents",
+        "MONEYMARKETETF": "Cash & Cash Equivalents",
+        "TBILL": "Cash & Cash Equivalents",
+        "GOLD": "Gold",
+        "GOLDETC": "Gold",
+        "ORO": "Gold",
+        "COMMODITIES": "Commodities",
+        "COMMODITY": "Commodities",
+        "ETFCOMMODITIES": "Commodities",
+        "PRECIOUSMETALSETF": "Commodities",
+        "SILVER": "Commodities",
+        "PRECIOUSMETALS": "Commodities",
+        "CRYPTO": "Crypto",
+        "CRYPTOCURRENCY": "Crypto",
+        "BITCOIN": "Crypto",
+        "ETHEREUM": "Crypto",
+        "ALTERNATIVE": "Alternative",
+        "ETN": "Alternative",
+    }
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return "".join(character for character in value.upper() if character.isalnum())
+
+    def resolve(self, *assertions: Optional[str]) -> CategoryResolution:
+        evidence = tuple(
+            str(item).strip() for item in assertions if str(item or "").strip()
+        )
+        resolved = {
+            self._MAPPING[normalized]
+            for item in evidence
+            if (normalized := self._normalize(item)) in self._MAPPING
+        }
+        if len(resolved) == 1:
+            return CategoryResolution(
+                TypeResolutionState.RESOLVED,
+                next(iter(resolved)),
+                evidence,
+            )
+        if len(resolved) > 1:
+            return CategoryResolution(TypeResolutionState.AMBIGUOUS, None, evidence)
+        return CategoryResolution(TypeResolutionState.UNKNOWN, None, evidence)
+
+
+@dataclass(frozen=True)
 class InstrumentAdapter:
     kind: InstrumentKind
     capabilities: Mapping[InstrumentCapability, SupportState]
@@ -126,11 +199,29 @@ class TypeEvidenceGateway:
     _MAPPING = {
         "STOCK": InstrumentKind.STOCK,
         "EQUITY": InstrumentKind.STOCK,
+        "SHARE": InstrumentKind.STOCK,
+        "COMMONSTOCK": InstrumentKind.STOCK,
         "ETF": InstrumentKind.ETF,
+        "EQUITYETF": InstrumentKind.ETF,
+        "ETFEQUITY": InstrumentKind.ETF,
+        "BONDETF": InstrumentKind.ETF,
+        "ETFBOND": InstrumentKind.ETF,
+        "MONEYMARKETETF": InstrumentKind.ETF,
+        "GOLDETC": InstrumentKind.ETF,
+        "ETFCOMMODITIES": InstrumentKind.ETF,
+        "PRECIOUSMETALSETF": InstrumentKind.ETF,
         "BOND": InstrumentKind.BOND,
-        "FIXEDINCOME": InstrumentKind.BOND,
+        "GOVERNMENTBOND": InstrumentKind.BOND,
+        "CORPORATEBOND": InstrumentKind.BOND,
+        "NOTE": InstrumentKind.BOND,
+        # Exact OpenFIGI marketSector declarations for fixed-income records.
+        "GOVT": InstrumentKind.BOND,
+        "CORP": InstrumentKind.BOND,
+        "MTGE": InstrumentKind.BOND,
+        "MUNI": InstrumentKind.BOND,
         "CASH": InstrumentKind.CASH,
         "MONEYMARKET": InstrumentKind.CASH,
+        "MONEYMARKETINSTRUMENT": InstrumentKind.CASH,
     }
 
     def resolve(self, *assertions: Optional[str]) -> TypeResolution:
