@@ -37,15 +37,13 @@ from typing import Optional
 
 import pandas as pd
 
-from tarzan.data.bond_fetcher import (
-    is_bond,
-    looks_like_bond_from_orders,
-    value_position,
-)
+from tarzan.data.bond_fetcher import value_position
 from tarzan.engine import allocations as _alloc
+from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
 from tarzan.runtime import data_quality as dq
+from tarzan.runtime.ledger import Availability
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +87,8 @@ class OrderDerivedSeries:
     coverage_pct: float
     provenance: dict[str, list[str]]
     span_days: int
+    history_availability: Availability = Availability.AVAILABLE
+    unavailable_instruments: tuple[str, ...] = ()
     daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     actual_value_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     pnl_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
@@ -130,32 +130,44 @@ def _open_isins(qty_by_isin: dict[str, float]) -> set[str]:
     return open_isins
 
 
-def _order_bond_flag(orders: list[Order], isin: str) -> bool:
-    """Bond detection from order data alone (for ISINs that never reach
-    yfinance), via the shared order heuristic."""
-    sub = [o for o in orders if o.isin == isin and o.price_native is not None]
-    if not sub:
-        return False
-    avg_price = sum(o.price_native for o in sub) / len(sub)
-    avg_qty = sum(abs(o.quantity) for o in sub) / len(sub) if sub else 0.0
-    return looks_like_bond_from_orders(avg_price, avg_qty)
+def _order_instrument_kind_resolution(orders: list[Order], isin: str):
+    """Resolve and retain every exact kind assertion for ``isin``."""
+    assertions = tuple(
+        order.instrument_kind.value
+        for order in orders
+        if order.isin == isin and order.instrument_kind is not None
+    )
+    return TypeEvidenceGateway().resolve(*assertions)
+
+
+def _order_instrument_kind(
+    orders: list[Order], isin: str
+) -> Optional[InstrumentKind]:
+    """Return one unambiguous exact kind declared by orders for ``isin``."""
+    return _order_instrument_kind_resolution(orders, isin).kind
 
 
 def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
-    """Rough current-value seed from the latest order price, scaled by
-    the bond convention via ``value_position``. Replaced by a real quote
-    during enrichment whenever one is available; only a floor so an
-    unpriceable holding does not collapse to zero (Req 8.3)."""
+    """Seed from the latest order price only when exact mechanics are known.
+
+    The seed is replaced by an admissible provider quote during enrichment.
+    Missing or conflicting order kinds produce no seed instead of treating an
+    unknown instrument as a unit-priced stock/ETF.
+    """
     priced = sorted(
         (o for o in orders if o.isin == isin and o.price_native is not None),
         key=lambda o: o.trade_date,
     )
-    if not priced or qty == 0:
+    kind = _order_instrument_kind(orders, isin)
+    if not priced or qty == 0 or kind is None:
         return 0.0
     last = priced[-1]
     fx = last.fx_rate or 1.0
-    bond = _order_bond_flag(orders, isin)
-    return value_position(abs(qty), last.price_native, bond=bond) / (fx if fx > 0 else 1.0)
+    return value_position(
+        abs(qty),
+        last.price_native,
+        instrument_kind=kind,
+    ) / (fx if fx > 0 else 1.0)
 
 
 def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
@@ -186,6 +198,8 @@ def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
     # run, defeating reproducibility. A stable ISIN sort fixes it at the root.
     for isin in sorted(open_isins):
         qty = qty_by_isin[isin]
+        kind_resolution = _order_instrument_kind_resolution(orders, isin)
+        kind = kind_resolution.kind
         holdings.append(Holding(
             isin=isin,
             ticker=isin,
@@ -194,6 +208,8 @@ def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
             market_value_eur=_seed_market_value(orders, isin, qty),
             currency=ccy_by_isin.get(isin, "EUR"),
             name=name_by_isin.get(isin, ""),
+            security_type=kind.value if kind is not None else None,
+            instrument_kind_evidence=kind_resolution.evidence,
         ))
     return holdings
 
@@ -390,24 +406,35 @@ class PriceResolver:
         self._enriched = enriched_by_isin
         self._today = today
         self._synth: dict[str, Optional[pd.Series]] = {}
-        self._is_bond: dict[str, bool] = {}
+        self._instrument_kinds: dict[str, Optional[InstrumentKind]] = {}
 
     def _synthetic(self, isin: str) -> Optional[pd.Series]:
         if isin not in self._synth:
             self._synth[isin] = _build_synthetic_history(self._orders, isin)
         return self._synth[isin]
 
-    def is_bond(self, isin: str) -> bool:
-        if isin not in self._is_bond:
-            h = self._enriched.get(isin)
-            flag = is_bond(
-                asset_class=getattr(h, "asset_class", None) if h else None,
-                instrument_type=getattr(h, "instrument_type", None) if h else None,
+    def instrument_kind(self, isin: str) -> Optional[InstrumentKind]:
+        """Resolve one exact, non-conflicting mechanics kind for an ISIN."""
+        if isin not in self._instrument_kinds:
+            holding = self._enriched.get(isin)
+            order_resolution = _order_instrument_kind_resolution(
+                self._orders, isin
             )
-            if not flag:
-                flag = _order_bond_flag(self._orders, isin)
-            self._is_bond[isin] = flag
-        return self._is_bond[isin]
+            holding_evidence = tuple(
+                getattr(holding, "instrument_kind_evidence", ()) or ()
+            ) if holding else ()
+            resolution = TypeEvidenceGateway().resolve(
+                getattr(holding, "security_type", None) if holding else None,
+                getattr(holding, "instrument_type", None) if holding else None,
+                *holding_evidence,
+                *order_resolution.evidence,
+            )
+            self._instrument_kinds[isin] = resolution.kind
+        return self._instrument_kinds[isin]
+
+    def is_bond(self, isin: str) -> bool:
+        """Compatibility predicate backed only by exact kind evidence."""
+        return self.instrument_kind(isin) is InstrumentKind.BOND
 
     def _borsa_price(self, isin: str) -> Optional[float]:
         """Borsa Italiana today-price for a bond as EUR-per-unit, if the
@@ -444,6 +471,8 @@ class PriceResolver:
         prices (already FX-converted to EUR) that still need the /100 via
         value_position. The returned source disambiguates which.
         """
+        if self.instrument_kind(isin) is None:
+            return None, "excluded"
         h = self._enriched.get(isin)
         ph = getattr(h, "price_history", None) if h else None
         if ph is not None and len(ph) > 0:
@@ -522,6 +551,22 @@ def build_order_derived_series(
             today = last_trade_date
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
+    unavailable_instruments = tuple(sorted(
+        isin for isin in timeline.isins()
+        if resolver.instrument_kind(isin) is None
+    ))
+    history_availability = (
+        Availability.UNAVAILABLE
+        if unavailable_instruments
+        else Availability.AVAILABLE
+    )
+    if unavailable_instruments:
+        dq.error(
+            "instrument_capability",
+            "Order-derived return history is unavailable because exact "
+            "instrument mechanics are missing or conflicting.",
+            context=",".join(unavailable_instruments),
+        )
 
     # Per-build memo for the cum/ex closed-prefix set. It is a pure function
     # of (timeline, date) and the timeline is immutable for this build, so we
@@ -555,7 +600,10 @@ def build_order_derived_series(
         # prices are not.
         if source in ("yfinance", "borsa_italiana"):
             return price
-        return value_position(1.0, price, bond=resolver.is_bond(isin))
+        kind = resolver.instrument_kind(isin)
+        if kind is None:
+            return None
+        return value_position(1.0, price, instrument_kind=kind)
 
     def value_on(d: datetime.date, record_source: bool = False) -> float:
         """Total EUR portfolio value on day ``d``.
@@ -593,7 +641,10 @@ def build_order_derived_series(
             if source in ("yfinance", "borsa_italiana"):
                 total += qty * price
             else:
-                total += value_position(qty, price, bond=resolver.is_bond(isin))
+                kind = resolver.instrument_kind(isin)
+                if kind is None:
+                    continue
+                total += value_position(qty, price, instrument_kind=kind)
         return total
 
     # TWROR external flow per date, valued at MARKET price (same basis as
@@ -746,6 +797,8 @@ def build_order_derived_series(
         coverage_pct=coverage_pct,
         provenance=provenance,
         span_days=span_days,
+        history_availability=history_availability,
+        unavailable_instruments=unavailable_instruments,
         daily_series=daily_series,
         actual_value_series=actual_value_series,
         pnl_series=pnl_series,
@@ -889,7 +942,10 @@ def _build_daily_series(
             if source in ("yfinance", "borsa_italiana"):
                 total += qty * price
             else:
-                total += value_position(qty, price, bond=resolver.is_bond(isin))
+                kind = resolver.instrument_kind(isin)
+                if kind is None:
+                    continue
+                total += value_position(qty, price, instrument_kind=kind)
         return total
 
     raw = [(ts.date(), raw_value(ts.date())) for ts in days]
@@ -999,50 +1055,50 @@ def build_allocation_timeline(
 
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
+    unresolved_mechanics = sorted(
+        isin for isin in timeline.isins()
+        if resolver.instrument_kind(isin) is None
+    )
+    if unresolved_mechanics:
+        dq.error(
+            "instrument_capability",
+            "Historical allocation is unavailable because exact instrument "
+            "mechanics are missing or conflicting.",
+            context=",".join(unresolved_mechanics),
+        )
+        return None
     cash_class = AssetClass.CASH_EQUIVALENTS.value
 
-    # Asset-class resolution for EVERY traded ISIN — including positions
-    # already sold/rotated out, which are absent from ``enriched_by_isin``.
-    # Without this they used to fall to a hard-coded "Alternative" default,
-    # inflating that class's history (e.g. sold BTPs showing up as
-    # Alternative). Resolution is network-free: enriched snapshot → curated
-    # taxonomy (by ISIN) → name/price heuristics (bonds, gold) → "Other".
+    # Asset-class resolution for every traded ISIN, including positions no
+    # longer in the enriched current snapshot. Enriched/taxonomy category
+    # declarations remain authoritative; intrinsic categories may be derived
+    # only from an exact instrument kind. ETF category is never inferred from
+    # names, prices, quantities, or bond-like wording.
     from tarzan import config as _cfg
     _taxonomy = _cfg.instrument_taxonomy()
     _exp_lut = _cfg.class_exposure_lookup()
-    _name_by_isin: dict[str, str] = {}
-    for o in orders:
-        if getattr(o, "isin", None) and o.isin not in _name_by_isin and getattr(o, "name", None):
-            _name_by_isin[o.isin] = o.name
-    _BOND_KW = ("btp", "bond", "treasury", "bund", "oat", "gilt", "govt",
-                "government", "bono", "obliga", "note", "schatz", "bobl",
-                "aggregate", "fixed income", "t-bill", "bill")
 
-    def _class_for(isin: str) -> str:
-        h = enriched_by_isin.get(isin)
-        if h and h.asset_class:
-            return h.asset_class.value
+    def _class_for(isin: str) -> Optional[str]:
+        holding = enriched_by_isin.get(isin)
+        if holding and holding.asset_class:
+            return holding.asset_class.value
         hit = _taxonomy.get(isin.upper()) or _taxonomy.get(isin.upper().split(".")[0])
         if hit and hit[0]:
             return hit[0]
-        nm = (_name_by_isin.get(isin, "") or "").lower()
-        if "gold" in nm:
-            return AssetClass.GOLD.value
-        # Bond keywords, or a coupon rate in the name (broker names bonds as
-        # "USA-31GE30 3,5%" / "EIB-23GE30 7,25%" — a "%" coupon that funds and
-        # equities never carry), classify as Fixed Income.
-        if any(k in nm for k in _BOND_KW) or "%" in nm:
-            return AssetClass.FIXED_INCOME.value
-        # Unknown: a neutral bucket that still counts toward the invested
-        # denominator but is never shown as its own class — so it dilutes
-        # proportionally rather than mislabelling a tracked class.
-        return "Other"
+        intrinsic = {
+            InstrumentKind.STOCK: AssetClass.EQUITIES.value,
+            InstrumentKind.BOND: AssetClass.FIXED_INCOME.value,
+            InstrumentKind.CASH: AssetClass.CASH_EQUIVALENTS.value,
+        }
+        return intrinsic.get(resolver.instrument_kind(isin))
 
     def _breakdown_for(isin: str) -> dict[str, float]:
         """Notional asset-class exposure {class: pct} for an ISIN — the same
         basis as the live snapshot's ``class_breakdown``. Explicit exp_*
         override (enriched holding, else taxonomy by ISIN/bare ticker), else
-        100% of the single class from ``_class_for``. May sum to >100%."""
+        100% of an exact intrinsic category. An ETF without explicit tracked
+        category evidence remains unavailable instead of becoming equities,
+        alternative, or an ``Other`` allocation."""
         h = enriched_by_isin.get(isin)
         if h is not None and getattr(h, "class_breakdown", None):
             return {(k.value if hasattr(k, "value") else str(k)): v
@@ -1050,7 +1106,8 @@ def build_allocation_timeline(
         ov = _exp_lut.get(isin.upper()) or _exp_lut.get(isin.upper().split(".")[0])
         if ov:
             return dict(ov)
-        return {_class_for(isin): 100.0}
+        category = _class_for(isin)
+        return {category: 100.0} if category is not None else {}
 
     # Cum/ex ISIN variants share a 9-char prefix. The prefix group is used
     # ONLY to (a) detect a fully rotated/closed position — a group whose held
@@ -1092,7 +1149,10 @@ def build_allocation_timeline(
             return 0.0
         if source in ("yfinance", "borsa_italiana"):
             return qty * price
-        return value_position(qty, price, bond=resolver.is_bond(isin))
+        kind = resolver.instrument_kind(isin)
+        if kind is None:
+            return 0.0
+        return value_position(qty, price, instrument_kind=kind)
 
     def _per_isin_values(d: datetime.date) -> dict[str, float]:
         """{isin: eur_value} valuing each held ISIN individually, with cum/ex
@@ -1113,6 +1173,7 @@ def build_allocation_timeline(
 
     asset_series: list[dict[str, float]] = []
     geo_series: list[dict[str, float]] = []
+    classification_unavailable = False
     # Per-holding weight as % of its own asset class (parallel to dates),
     # keyed by ISIN and derived from the SAME per-ISIN valuation as the
     # aggregates, so the asset/geo trend lines and the by-holding trends all
@@ -1138,7 +1199,10 @@ def build_allocation_timeline(
         geo_pairs: list = []             # (equity €, per-holding normalised geo)
         for isin, v in iso_val.items():
             bd = _breakdown_for(isin)
-            prim = max(bd, key=bd.get) if bd else "Other"
+            if not bd:
+                classification_unavailable = True
+                continue
+            prim = max(bd, key=bd.get)
             iso_ac[isin] = prim
             if prim == cash_class:
                 continue
@@ -1170,13 +1234,22 @@ def build_allocation_timeline(
         holding_series.append({
             isin: (v / class_val[iso_ac[isin]] * 100.0)
             for isin, v in iso_val.items()
-            if class_val.get(iso_ac[isin], 0.0) > 0
+            if isin in iso_ac and class_val.get(iso_ac[isin], 0.0) > 0
         })
         holding_invested_series.append({
             isin: (v / invested * 100.0)
             for isin, v in iso_val.items()
-            if invested > 0 and iso_ac[isin] != cash_class
+            if invested > 0 and isin in iso_ac and iso_ac[isin] != cash_class
         })
+
+    if classification_unavailable:
+        dq.error(
+            "instrument_capability",
+            "Historical allocation is unavailable because at least one valued "
+            "instrument lacks an exact tracked category.",
+            context="allocation_timeline",
+        )
+        return None
 
     return {"dates": dates, "asset": asset_series, "geo": geo_series,
             "holding": holding_series,

@@ -17,6 +17,7 @@ from typing import Optional, Union
 import pandas as pd
 
 from tarzan.runtime import data_quality as dq
+from tarzan.instruments.registry import InstrumentKind
 from tarzan.models.order import Order, OrderType
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.contracts.exceptions import DataIngestionError
@@ -121,7 +122,7 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "",
     skipped = 0
     for idx, row in df.iterrows():
         try:
-            order = _parse_order_row(idx, row)
+            order = _parse_order_row(idx, row, strict=strict)
             if order is not None:
                 orders.append(order)
             elif strict:
@@ -182,7 +183,38 @@ def _assign_order_ids(orders: list[Order]) -> None:
         dq.warning(_DQ_SOURCE, msg, context=o.isin)
 
 
-def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
+def _parse_instrument_kind(
+    raw: object,
+    *,
+    idx: int,
+    isin: str,
+    strict: bool,
+) -> Optional[InstrumentKind]:
+    """Parse the optional exact mechanics kind without heuristic fallback."""
+    value = _clean_str(raw).upper()
+    if not value:
+        return None
+    try:
+        return InstrumentKind(value)
+    except ValueError:
+        message = (
+            f"row {idx} ({isin}): unsupported instrument_kind {value!r}; "
+            "order-derived valuation remains unavailable unless an exact "
+            "provider kind is resolved"
+        )
+        if strict:
+            raise DataIngestionError(message)
+        logger.warning("Order %s", message)
+        dq.warning(_DQ_SOURCE, message, context=isin)
+        return None
+
+
+def _parse_order_row(
+    idx: int,
+    row: pd.Series,
+    *,
+    strict: bool = False,
+) -> Optional[Order]:
     """Parse one order-list row into an Order, or None to skip it.
 
     Validation policy (see ``tarzan.contracts.validation``): structural failures
@@ -258,6 +290,12 @@ def _parse_order_row(idx: int, row: pd.Series) -> Optional[Order]:
         fees_eur=_parse_number_safe(row.get("fees_eur"), "fees_eur", idx) or 0.0,
         net_eur=net_eur,
         source=_clean_str(row.get("source")) or "fineco",
+        instrument_kind=_parse_instrument_kind(
+            row.get("instrument_kind"),
+            idx=idx,
+            isin=isin,
+            strict=strict,
+        ),
     )
 
 

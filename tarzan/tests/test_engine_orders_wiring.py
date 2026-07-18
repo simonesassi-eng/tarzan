@@ -17,6 +17,7 @@ import pytest
 from tarzan.engine.metrics import MetricsEngine
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.order import Order, OrderType
+from tarzan.instruments.registry import InstrumentKind
 
 
 def _order(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 2)):
@@ -24,7 +25,7 @@ def _order(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 2))
         date=datetime.date(*d), trade_date=datetime.date(*d), type=otype,
         isin=isin, name="X", ticker="", quantity=qty, currency="EUR",
         price_native=price, fx_rate=1.0, gross_eur=gross, fees_eur=0.0,
-        net_eur=net, source="fineco",
+        net_eur=net, source="fineco", instrument_kind=InstrumentKind.STOCK,
     )
 
 

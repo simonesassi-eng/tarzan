@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from tarzan.instruments.registry import InstrumentKind
+
 
 class OrderType(str, Enum):
     """The kind of movement an order represents.
@@ -93,8 +95,22 @@ class Order:
     # append-only and identical events are legitimate) — only to reference,
     # dedup-detect, and audit a specific entry.
     order_id: str = ""
+    # Exact instrument mechanics authority. Category, name, price, quantity,
+    # and identifier shape may never substitute for this kind declaration.
+    instrument_kind: Optional[InstrumentKind] = None
 
     def __post_init__(self) -> None:
+        if self.instrument_kind is not None and not isinstance(
+            self.instrument_kind, InstrumentKind
+        ):
+            try:
+                self.instrument_kind = InstrumentKind(
+                    str(self.instrument_kind).strip().upper()
+                )
+            except ValueError as error:
+                raise ValueError(
+                    f"unsupported instrument kind: {self.instrument_kind!r}"
+                ) from error
         if not self.order_id:
             self.order_id = self.natural_key()
 

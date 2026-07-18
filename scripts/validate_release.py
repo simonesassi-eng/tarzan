@@ -132,6 +132,7 @@ def _validate_versions(root: Path, manifest: dict[str, Any]) -> None:
         "exposure": ("tarzan/engine/allocations.py", "CANONICAL_EXPOSURE_SCHEMA_VERSION"),
         "capability": ("tarzan/instruments/registry.py", "CAPABILITY_SCHEMA_VERSION"),
         "provider_policy": ("tarzan/runtime/provider.py", "PROVIDER_POLICY_SCHEMA_VERSION"),
+        "telemetry": ("tarzan/runtime/workload.py", "WORKLOAD_TELEMETRY_SCHEMA_VERSION"),
         "delivery_identity": ("tarzan/delivery/claims.py", "DELIVERY_IDENTITY_SCHEMA_VERSION"),
         "delivery_state": ("tarzan/delivery/claims.py", "DELIVERY_STATE_SCHEMA_VERSION"),
     }

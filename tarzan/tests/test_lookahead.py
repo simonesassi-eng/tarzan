@@ -23,10 +23,10 @@ from tarzan import orchestrator
 
 _AS_OF = datetime.date(2025, 6, 29)
 _ORDERS_CSV = (
-    "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate\n"
-    "2025-01-01,buy,IE00B4L5Y983,100,10000,-10000,EUR,100,1.0\n"
-    "2025-01-01,buy,IE00B4WXJJ64,50,5000,-5000,EUR,100,1.0\n"
-    "2025-03-01,buy,IE00B4L5Y983,20,2200,-2200,EUR,110,1.0\n"
+    "date,type,isin,quantity,gross_eur,net_eur,currency,price_native,fx_rate,instrument_kind\n"
+    "2025-01-01,buy,IE00B4L5Y983,100,10000,-10000,EUR,100,1.0,ETF\n"
+    "2025-01-01,buy,IE00B4WXJJ64,50,5000,-5000,EUR,100,1.0,ETF\n"
+    "2025-03-01,buy,IE00B4L5Y983,20,2200,-2200,EUR,110,1.0,ETF\n"
 )
 
 

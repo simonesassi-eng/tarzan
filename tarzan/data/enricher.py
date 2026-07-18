@@ -840,30 +840,13 @@ def _classify_figi_item(
         info["asset_class"] = AssetClass.EQUITIES
         info["instrument_type"] = "Stock"
     elif sec_type in figi_etf:
-        info["asset_class"] = AssetClass.EQUITIES
-        info["instrument_type"] = "ETF Equity"
-    elif "bond" in sec_type or "fixed" in sec_type:
-        info["asset_class"] = AssetClass.FIXED_INCOME
-        info["instrument_type"] = "Bond"
-    elif "money market" in sec_type:
+        # OpenFIGI's security type resolves ETF mechanics only. It does not
+        # identify the tracked exposure category: fixed-income, commodity,
+        # gold, equity, and multi-asset ETFs share the same mechanics kind.
+        info["instrument_type"] = "ETF"
+    elif sec_type == "money market":
         info["asset_class"] = AssetClass.CASH_EQUIVALENTS
         info["instrument_type"] = "Money Market"
-
-    # Name-based fallback
-    if not info.get("asset_class"):
-        name_lower = name.lower()
-        if any(k in name_lower for k in kw.get("name_fixed_income", [])):
-            info["asset_class"] = AssetClass.FIXED_INCOME
-            info["instrument_type"] = info.get("instrument_type", "Bond")
-        elif any(k in name_lower for k in kw.get("name_gold", [])):
-            info["asset_class"] = AssetClass.GOLD
-            info["instrument_type"] = "Gold ETC"
-        elif any(k in name_lower for k in kw.get("name_commodities", [])):
-            info["asset_class"] = AssetClass.COMMODITIES
-            info["instrument_type"] = "ETC"
-        elif any(k in name_lower for k in kw.get("name_crypto", [])):
-            info["asset_class"] = AssetClass.CRYPTO
-            info["instrument_type"] = "Crypto"
 
     return info
 
@@ -873,191 +856,140 @@ def _classify_figi_item(
 # ---------------------------------------------------------------------------
 
 def _infer_instrument_type(info: dict, holding: Holding) -> str:
-    """Infer a human-readable instrument type from yfinance info and holding hints."""
-    qt = info.get("quoteType", "").upper()
-    cat = (info.get("category") or "").lower()
-    hint = (holding.asset_type or "").lower()
-    name = (info.get("longName") or info.get("shortName") or holding.name or "").lower()
-    kw = cfg.classification()
+    """Resolve a display kind from exact declared evidence only."""
+    from tarzan.instruments.registry import TypeEvidenceGateway
 
-    if qt == "ETF":
-        return _classify_etf_subtype(cat, name, kw)
-    if qt == "EQUITY":
-        if any(k in name for k in ("etf", "ucits")):
-            return _classify_etf_subtype(cat, name, kw)
-        return "Stock"
-    if qt == "ETN":
-        return "ETN"
-    if qt == "MUTUALFUND":
-        return "Fund Bond" if ("bond" in cat or "fixed" in cat) else "Fund"
-    if any(k in name for k in kw.get("name_fixed_income", [])):
-        return "Bond"
-    if any(k in hint for k in kw.get("asset_type_fixed_income", [])):
-        return "Bond"
-    if "etn" in hint:
-        return "ETN"
-    if any(k in hint for k in kw.get("asset_type_gold", [])):
-        return "Gold ETC"
-    if any(k in hint for k in kw.get("asset_type_commodities", [])):
-        return "Precious Metals ETF"
-    return "Other"
-
-
-def _classify_etf_subtype(cat: str, name: str, kw: dict) -> str:
-    """Classify an ETF into a specific subtype based on category and name."""
-    if any(k in cat for k in kw.get("instrument_bond_etf", [])) or any(k in name for k in kw.get("instrument_bond_etf", [])):
-        return "ETF Bond"
-    if any(k in cat for k in kw.get("instrument_money_market", [])) or any(k in name for k in kw.get("instrument_money_market", [])):
-        return "ETF Money Market"
-    if any(k in name for k in kw.get("instrument_gold_etc", [])):
-        return "Gold ETC"
-    if any(k in cat for k in kw.get("instrument_commodities_etf", [])):
-        return "ETF Commodities"
-    if any(k in name for k in kw.get("instrument_precious_etc", [])):
-        return "ETC"
-    return "ETF Equity"
+    resolution = TypeEvidenceGateway().resolve(
+        info.get("quoteType"),
+        info.get("instrumentType"),
+        info.get("securityType"),
+        holding.security_type,
+        holding.instrument_type,
+        *holding.instrument_kind_evidence,
+    )
+    if resolution.kind is None:
+        return "Other"
+    return {
+        "STOCK": "Stock",
+        "ETF": "ETF",
+        "BOND": "Bond",
+        "CASH": "Cash",
+    }[resolution.kind.value]
 
 
 def _derive_security_type(holding: Holding) -> str:
-    """Derive a standardized security type from asset_class and instrument_type."""
-    it = (holding.instrument_type or "").lower()
-    ac = holding.asset_class
+    """Return the exact registered kind or ``UNKNOWN``; never infer from category."""
+    from tarzan.instruments.registry import TypeEvidenceGateway
 
-    type_map = {
-        AssetClass.EQUITIES: "Equity ETF" if "etf" in it else "Share",
-        AssetClass.FIXED_INCOME: (
-            "Bond ETF" if "etf" in it
-            else "Government Bond" if "government" in it or "govt" in it
-            else "Corporate Bond" if "corporate" in it
-            else "Bond"
-        ),
-        AssetClass.CASH_EQUIVALENTS: "Money Market ETF" if "etf" in it else "Money Market Instrument",
-        AssetClass.GOLD: "Gold ETC",
-        AssetClass.COMMODITIES: "ETC" if "etc" in it else "Commodity",
-        AssetClass.CRYPTO: "Crypto",
-    }
-    return type_map.get(ac, "Alternative") if ac else "Alternative"
+    resolution = TypeEvidenceGateway().resolve(
+        holding.security_type,
+        holding.instrument_type,
+        *holding.instrument_kind_evidence,
+    )
+    return resolution.kind.value if resolution.kind is not None else "UNKNOWN"
+
+
+def _resolve_instrument_kind(
+    info: dict,
+    holding: Holding,
+    *,
+    figi_market_sector: Optional[str] = None,
+    figi_security_type: Optional[str] = None,
+):
+    """Resolve exact mechanics from declared provider/input kind evidence."""
+    from tarzan.instruments.registry import TypeEvidenceGateway
+
+    return TypeEvidenceGateway().resolve(
+        info.get("quoteType"),
+        info.get("instrumentType"),
+        info.get("securityType"),
+        info.get("typeDisp"),
+        figi_market_sector,
+        figi_security_type,
+        holding.security_type,
+        holding.instrument_type,
+        *holding.instrument_kind_evidence,
+    ).kind
 
 
 def classify_asset_class(info: dict, ticker: str, holding: Holding):
-    """Determine asset class from yfinance info and ticker patterns.
+    """Resolve tracked category from exact, provenance-bearing evidence only.
 
-    Classification priority:
-    1. Explicit hint from input (asset_type column)
-    2. yfinance quoteType
-    3. Category/sector keywords
-    4. Long name keywords
-    5. Default to Alternative
+    Ticker/name/price/quantity and substring matches are intentionally absent.
+    Stock, Bond, and Cash kinds have intrinsic category declarations; an ETF
+    requires an explicit category assertion or curated taxonomy row.
     """
-    kw = cfg.classification()
-
-    # 1. Explicit hint
-    if holding.asset_type:
-        result = _classify_from_hint(holding.asset_type, kw)
-        if result:
-            return result
-
-    qt = info.get("quoteType", "").upper()
-    cat = (info.get("category") or "").lower()
-    sector = (info.get("sector") or "").lower()
-    long_name = (info.get("longName") or "").lower()
-
-    # 2. quoteType-based
-    if qt == "EQUITY":
-        # Crypto/gold/commodity ETPs are often listed as "EQUITY" on yfinance,
-        # so check their long name first to avoid bucketing them as equities.
-        if any(k in long_name for k in kw.get("name_crypto", [])):
-            return AssetClass.CRYPTO
-        if any(k in long_name for k in kw.get("name_gold", [])):
-            return AssetClass.GOLD
-        if any(k in long_name for k in kw.get("name_commodities", [])):
-            return AssetClass.COMMODITIES
-        if any(k in long_name for k in kw.get("name_cash", [])):
-            return AssetClass.CASH_EQUIVALENTS
-        if any(k in long_name for k in kw.get("name_fixed_income", [])):
-            return AssetClass.FIXED_INCOME
-        return AssetClass.EQUITIES
-
-    # 3. Category/sector keywords
-    result = _classify_from_category(cat, sector)
-    if result:
-        return result
-
-    # 4. Long name keywords
-    if any(k in long_name for k in kw.get("name_gold", [])):
-        return AssetClass.GOLD
-    if any(k in long_name for k in kw.get("name_commodities", [])):
-        return AssetClass.COMMODITIES
-    if any(k in long_name for k in kw.get("name_crypto", [])):
-        return AssetClass.CRYPTO
-    if any(k in long_name for k in kw.get("name_fixed_income", [])):
-        return AssetClass.FIXED_INCOME
-
-    # 5. ETF with equity-like category
-    if qt == "ETF":
-        if any(k in cat for k in kw.get("instrument_equity_category", [])):
-            return AssetClass.EQUITIES
-        if any(k in long_name for k in kw.get("name_equity_etf", [])):
-            return AssetClass.EQUITIES
-        return AssetClass.EQUITIES
-
-    if qt == "ETN":
-        return AssetClass.ALTERNATIVE
-    if qt == "CRYPTOCURRENCY":
-        return AssetClass.CRYPTO
-
     from tarzan.instruments import CapabilityResult, SupportState
+    from tarzan.instruments.registry import (
+        InstrumentKind,
+        TrackedCategoryEvidenceGateway,
+        TypeEvidenceGateway,
+        TypeResolutionState,
+    )
     from tarzan.runtime.ledger import Availability
 
-    evidence = tuple(
-        value for value in (
-            str(info.get("quoteType") or "").strip(),
-            str(holding.instrument_type or holding.security_type or holding.asset_type or "").strip(),
-        ) if value
+    declared = info.get("asset_class")
+    if declared is not None:
+        try:
+            return declared if isinstance(declared, AssetClass) else AssetClass(str(declared))
+        except ValueError:
+            pass
+
+    quote_type = str(info.get("quoteType") or "").strip().upper()
+    provider_category = quote_type if quote_type in {"CRYPTOCURRENCY", "ETN"} else None
+    category = TrackedCategoryEvidenceGateway().resolve(
+        holding.asset_type,
+        info.get("assetClass"),
+        info.get("category"),
+        provider_category,
     )
+    kind = TypeEvidenceGateway().resolve(
+        info.get("quoteType"),
+        info.get("instrumentType"),
+        info.get("securityType"),
+        holding.security_type,
+        holding.instrument_type,
+    )
+
+    if category.state is TypeResolutionState.RESOLVED:
+        return AssetClass(category.category)
+    if category.state is not TypeResolutionState.AMBIGUOUS:
+        intrinsic = {
+            InstrumentKind.STOCK: AssetClass.EQUITIES,
+            InstrumentKind.BOND: AssetClass.FIXED_INCOME,
+            InstrumentKind.CASH: AssetClass.CASH_EQUIVALENTS,
+        }
+        if kind.kind in intrinsic:
+            return intrinsic[kind.kind]
+
+    evidence = tuple(dict.fromkeys(category.evidence + kind.evidence))
     return CapabilityResult(
         support=SupportState.UNSUPPORTED,
         availability=Availability.UNAVAILABLE,
         value=None,
         provenance=evidence,
-        analytical_impact="asset classification and dependent capabilities unavailable",
+        analytical_impact=(
+            "asset classification and dependent capabilities are unavailable "
+            "without one exact tracked-category declaration"
+        ),
         publication_impact="DEGRADE",
     )
 
 
 def _classify_from_hint(hint: str, kw: dict) -> Optional[AssetClass]:
-    """Classify from the asset_type hint column."""
-    hint_lower = hint.lower()
-    mapping = [
-        ("asset_type_equities", AssetClass.EQUITIES),
-        ("asset_type_fixed_income", AssetClass.FIXED_INCOME),
-        ("asset_type_cash", AssetClass.CASH_EQUIVALENTS),
-        ("asset_type_gold", AssetClass.GOLD),
-        ("asset_type_commodities", AssetClass.COMMODITIES),
-        ("asset_type_crypto", AssetClass.CRYPTO),
-        ("asset_type_alternative", AssetClass.ALTERNATIVE),
-    ]
-    for key, ac in mapping:
-        if any(k in hint_lower for k in kw.get(key, [])):
-            return ac
-    return None
+    """Resolve an input hint only when it exactly matches a declared alias."""
+    from tarzan.instruments.registry import TrackedCategoryEvidenceGateway
+
+    resolution = TrackedCategoryEvidenceGateway().resolve(hint)
+    return AssetClass(resolution.category) if resolution.category is not None else None
 
 
 def _classify_from_category(cat: str, sector: str) -> Optional[AssetClass]:
-    """Classify from yfinance category and sector strings."""
-    if any(k in cat for k in ("bond", "fixed income", "treasury", "government")):
-        return AssetClass.FIXED_INCOME
-    if "money market" in cat:
-        return AssetClass.CASH_EQUIVALENTS
-    if any(k in cat for k in ("crypto", "bitcoin", "ethereum")) or any(k in sector for k in ("crypto",)):
-        return AssetClass.CRYPTO
-    if any(k in cat for k in ("gold",)) or any(k in sector for k in ("gold",)):
-        return AssetClass.GOLD
-    if any(k in cat for k in ("precious metal", "silver", "commodit")):
-        return AssetClass.COMMODITIES
-    if any(k in sector for k in ("precious metal",)):
-        return AssetClass.COMMODITIES
-    return None
+    """Resolve exact declared category evidence; sector does not select behavior."""
+    from tarzan.instruments.registry import TrackedCategoryEvidenceGateway
+
+    resolution = TrackedCategoryEvidenceGateway().resolve(cat)
+    return AssetClass(resolution.category) if resolution.category is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -1250,48 +1182,58 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         currency = info.get("currency", holding.currency or "EUR")
         _set_price_data(holding, history, info, currency)
 
-        # Value and gain. For bonds resolved via yfinance the
-        # ``current_price`` is a clean quote per 100 of face value
-        # (the same convention Borsa Italiana uses for our bond
-        # fallback). The holding's ``quantity`` is the bond's
-        # nominal amount, not a unit count, so the EUR value is
-        # ``quantity × price / 100``. Bond detection and the /100
-        # convention are centralized in bond_fetcher so the current
-        # and historical valuation paths agree exactly.
-        # A valid price is not just "not None": a NaN or non-positive close
-        # slips past ``is not None`` and would make ``value_position`` return
-        # NaN, which then poisons the portfolio total (the whole sum becomes
-        # NaN and collapses). Require a real, positive number here.
+        # Value and gain use one exact InstrumentKind. Exposure category,
+        # display text, names, prices, and quantities never select the bond
+        # per-100 convention. Conflicting or absent kind evidence leaves the
+        # current valuation on its labeled EUR anchor for the completeness
+        # evaluator to reject rather than guessing unit mechanics.
+        figi_sector, figi_sec_type = (None, None)
+        if is_valid_isin:
+            figi_sector, figi_sec_type = _openfigi_bond_signals(clean_isin)
+        instrument_kind = _resolve_instrument_kind(
+            info,
+            holding,
+            figi_market_sector=figi_sector,
+            figi_security_type=figi_sec_type,
+        )
+        if instrument_kind is not None:
+            holding.security_type = instrument_kind.value
+
         cp = holding.current_price
         has_price = cp is not None and cp == cp and cp > 0
-        if has_price:
-            from tarzan.data.bond_fetcher import is_bond, value_position
-            # OpenFIGI's authoritative classification (memoized, no extra
-            # network call) reliably catches bonds yfinance mislabels.
-            figi_sector, figi_sec_type = (None, None)
-            if is_valid_isin:
-                figi_sector, figi_sec_type = _openfigi_bond_signals(clean_isin)
-            bond = is_bond(
-                quote_type=info.get("quoteType"),
-                sec_type=info.get("typeDisp"),
-                market_sector=figi_sector,
-                figi_sec_type=figi_sec_type,
-            )
+        if has_price and instrument_kind is not None:
+            from tarzan.data.bond_fetcher import value_position
+            from tarzan.instruments.registry import InstrumentKind
+
             holding.current_value = value_position(
-                holding.quantity, holding.current_price, bond=bond
+                holding.quantity,
+                holding.current_price,
+                instrument_kind=instrument_kind,
             )
-            if bond:
-                # Rescale the price history and unit price the same way
-                # so downstream code that multiplies price_history by
-                # ``quantity`` (e.g. the rebalancer's drift simulation,
-                # the order-derived historical series) reads correct EUR.
+            if instrument_kind is InstrumentKind.BOND:
+                # Store all downstream history/current prices as EUR-per-unit;
+                # the clean-price /100 conversion is applied exactly once.
                 if holding.price_history is not None and len(holding.price_history) > 0:
                     holding.price_history = holding.price_history / 100.0
                 holding.current_price = holding.current_price / 100.0
             holding.data_source = data_source
+        elif has_price:
+            holding.current_value = holding.market_value_eur or 0.0
+            holding.data_source = "last-known (instrument kind unavailable)"
+            dq.error(
+                "instrument_capability",
+                "Current price was not valued because exact instrument-kind "
+                "evidence is missing or conflicting.",
+                context=holding.isin or holding.ticker,
+            )
         else:
-            # Fallback: try Terrapin Finance API for bonds
-            _try_terrapin_fallback(holding)
+            from tarzan.instruments.registry import InstrumentKind
+
+            if instrument_kind is InstrumentKind.BOND:
+                _try_terrapin_fallback(holding, instrument_kind)
+            else:
+                holding.current_value = holding.market_value_eur or 0.0
+                holding.data_source = "input_csv (no market data)"
 
         # Safety net: never let a holding carry a None/NaN current_value into
         # the portfolio total. A single NaN propagates through the sum and
@@ -1420,8 +1362,8 @@ def _set_price_data(
     holding.current_price = current_price
 
 
-def _try_terrapin_fallback(holding: Holding) -> None:
-    """Try Borsa Italiana scraping as fallback for bonds without yfinance data.
+def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
+    """Try Borsa Italiana only for an explicitly resolved bond kind.
 
     Borsa Italiana quotes the clean price per 100 of nominal in the bond's
     *native* currency. We convert that to an EUR-per-unit ``current_price``
@@ -1432,6 +1374,10 @@ def _try_terrapin_fallback(holding: Holding) -> None:
     """
     try:
         from tarzan.data.bond_fetcher import fetch_bond_price, value_position
+        from tarzan.instruments.registry import InstrumentKind
+
+        if instrument_kind is not InstrumentKind.BOND:
+            raise ValueError("Borsa fallback requires explicit BOND kind")
 
         isin = holding.isin
         if not isin or len(isin.replace("-", "")) != 12:
@@ -1474,7 +1420,11 @@ def _try_terrapin_fallback(holding: Holding) -> None:
                 )
                 return
 
-            value = value_position(holding.quantity, price_eur_per_100, bond=True)
+            value = value_position(
+                holding.quantity,
+                price_eur_per_100,
+                instrument_kind=instrument_kind,
+            )
 
             # Sanity net: if the EUR value is still wildly off the known CSV
             # value (e.g. a non-standard nominal/quantity convention), fall
@@ -1571,51 +1521,37 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
 
 
 def _enrich_and_classify(holding: Holding) -> Holding:
-    """Enrich a holding with market data and then classify it.
+    """Enrich, then resolve category/kind from explicit evidence only.
 
-    Classification order:
-    1. yfinance metadata → asset class
-    2. Enriched name → reclassification signal
-    3. OpenFIGI fallback for unclassified instruments
-    4. Geography via geo_breakdown or single-country
+    Resolution order is curated taxonomy, exact provider/input declarations,
+    exact OpenFIGI security-type mappings, then typed unavailability. Names,
+    tickers, prices, and quantities never select financial behavior.
     """
     holding, info = _enrich_single(holding)
 
-    # Priority 0 — curated taxonomy override (deterministic, by ISIN then
-    # ticker). A hit in instrument_taxonomy.csv pins asset_class + role and
-    # skips the auto-classification/reclassification/OpenFIGI chain, which
-    # would otherwise mis-bucket names like an efficient-core "government bond
-    # overlay" (→ Fixed Income) or a commodity-carry ETF (→ Alternative).
+    # Curated taxonomy is the deterministic category authority when present.
     curated = _apply_taxonomy_override(holding)
 
-    if not curated:
-        unresolved_kind = False
-        if holding.asset_class is None:
-            classification = classify_asset_class(info, holding.ticker, holding)
-            if isinstance(classification, AssetClass):
-                holding.asset_class = classification
-            else:
-                unresolved_kind = True
+    if not curated and holding.asset_class is None:
+        classification = classify_asset_class(info, holding.ticker, holding)
+        if isinstance(classification, AssetClass):
+            holding.asset_class = classification
+        else:
+            # OpenFIGI may supply an exact, configured security-type mapping.
+            # It is not allowed to classify from instrument names.
+            _apply_openfigi_fallback(holding)
+            if holding.asset_class is None:
                 dq.error(
                     "instrument_capability",
-                    "Explicit instrument kind is unknown or ambiguous; asset classification, "
-                    "sector, and rebalancing capabilities are unavailable and no default "
-                    "adapter was selected.",
+                    "Explicit instrument kind/category is unknown or ambiguous; asset "
+                    "classification, sector, and rebalancing capabilities are unavailable "
+                    "and no default adapter was selected.",
                     context=holding.isin or holding.ticker,
                 )
 
-        # Heuristic/name/OpenFIGI fallbacks are retained only for legacy
-        # recognized evidence. An explicitly unknown kind may not borrow a
-        # tracked category's behavior.
-        if not unresolved_kind:
-            _reclassify_by_name(holding)
-
-            if holding.asset_class == AssetClass.ALTERNATIVE or holding.instrument_type in (None, "Other"):
-                _apply_openfigi_fallback(holding)
-
         logger.debug(
-            "No curated taxonomy for %s / %s → auto-classified %s (role unset). "
-            "Add a row to instrument_taxonomy.csv to pin it.",
+            "No curated taxonomy for %s / %s → explicit classification %s "
+            "(role unset). Add a taxonomy row to pin it.",
             holding.isin, holding.ticker, holding.asset_class,
         )
 
@@ -1625,10 +1561,7 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     if holding.geography is None:
         holding.geography = classify_geography(info, holding.ticker, holding)
 
-    # Multi-geography breakdown
     _apply_geo_breakdown(holding)
-
-    # Notional asset-class breakdown (exp_* override, else {asset_class:100}).
     _apply_class_breakdown(holding)
 
     return holding
@@ -1672,29 +1605,11 @@ def _is_valid_asset_class(value: str) -> bool:
         return False
 
 
-def _reclassify_by_name(holding: Holding) -> None:
-    """Reclassify a holding based on its enriched name if currently ambiguous."""
-    if not holding.name or holding.asset_class not in (AssetClass.ALTERNATIVE, AssetClass.EQUITIES):
-        return
-    name_lower = holding.name.lower()
-    kw = cfg.classification()
-    if any(k in name_lower for k in kw.get("name_fixed_income", [])):
-        holding.asset_class = AssetClass.FIXED_INCOME
-    elif any(k in name_lower for k in kw.get("name_cash", [])):
-        holding.asset_class = AssetClass.CASH_EQUIVALENTS
-    elif any(k in name_lower for k in kw.get("name_gold", [])):
-        holding.asset_class = AssetClass.GOLD
-    elif any(k in name_lower for k in kw.get("name_commodities", [])):
-        holding.asset_class = AssetClass.COMMODITIES
-    elif any(k in name_lower for k in kw.get("name_crypto", [])):
-        holding.asset_class = AssetClass.CRYPTO
-
-
 def _apply_openfigi_fallback(holding: Holding) -> None:
     """Apply OpenFIGI classification as a last resort."""
     try:
         figi_info = openfigi_classify(holding.isin)
-        if figi_info.get("asset_class") and holding.asset_class == AssetClass.ALTERNATIVE:
+        if figi_info.get("asset_class") and holding.asset_class is None:
             holding.asset_class = figi_info["asset_class"]
             ac_value = holding.asset_class.value if holding.asset_class else "Unknown"
             logger.info("OpenFIGI classified %s → %s", holding.ticker, ac_value)

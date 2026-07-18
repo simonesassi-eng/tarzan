@@ -1,30 +1,13 @@
-"""Per-run data-quality report.
+"""Run-owned data-quality compatibility projection.
 
-A single, skimmable place for everything the pipeline *skipped, coerced, or
-fell back on* during one run — the events that would otherwise be scattered
-across the verbose ``analyzer.log`` (loader row skips, input-validation
-failures, FX/price fallbacks, stale quotes, degraded metric computers).
+The authoritative evidence is appended to the active :class:`RunLedger` and
+the same issue object is mirrored into :class:`RunSession.diagnostics`.
+A context-local report preserves established helper APIs for renderers,
+pre-session errors, and versioned consumers; it is not an independent
+production artifact authority. Initialized CLI/email runs publish diagnostics
+only through ``LocalArtifactWriter``.
 
-Design
-------
-* Process-global collector, reset at the start of every ``orchestrator.run``
-  (mirrors the config / geo-resolver cache resets) and written out by the
-  CLI after the run.
-* **Best-effort**: recording an issue or writing the report must never raise
-  into the pipeline — a diagnostic that breaks the run defeats its purpose.
-* The report is **always** produced, even on a clean run ("No issues"), so a
-  user can trust that an absent/empty section means "nothing happened", not
-  "the reporter silently failed".
-
-Format (``output/data_quality.log``)
-------------------------------------
-A summary header with counts by severity and category, then the issues
-grouped by ``source`` (the pipeline stage), one issue per line::
-
-    [WARNING][order_load] row 42: ISIN 'IE00XYZ' invalid format ... — skipped
-
-Lines are prefixed ``[SEVERITY][source]`` so the file is greppable
-(``grep ERROR``, ``grep order_load``) as well as readable top-to-bottom.
+Recording is best-effort so diagnostics cannot break financial execution.
 """
 
 from __future__ import annotations

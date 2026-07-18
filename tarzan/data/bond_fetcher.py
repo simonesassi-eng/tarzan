@@ -13,6 +13,8 @@ import re
 from typing import Optional
 from urllib.request import Request, urlopen
 
+from tarzan.instruments.registry import InstrumentKind
+
 logger = logging.getLogger(__name__)
 
 # Borsa Italiana segments to search (in priority order)
@@ -94,111 +96,35 @@ def _extract_price(html: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# Shared position valuation + bond classification
+# Shared position valuation
 # ---------------------------------------------------------------------------
-# These three helpers are the single source of truth for the bond
-# per-100-nominal convention. Both the current-value path (enricher) and
-# the historical order-derived path use them, so a bond is valued the
-# same way everywhere (design Property 2: valuation consistency).
 
-# Keywords in instrument_type that indicate the per-100-nominal bond
-# convention applies. Matched as whole words (case-insensitive) so a
-# substring like "NOTE" inside an unrelated name does not false-positive.
-_BOND_INSTRUMENT_KEYWORDS = ("BOND", "TREASURY", "GOVT", "GOVERNMENT",
-                             "CORP", "CORPORATE", "NOTE", "BTP", "BUND", "GILT")
 
-# OpenFIGI marketSector values that denote fixed income (authoritative).
-_FIGI_BOND_MARKET_SECTORS = ("GOVT", "CORP", "MTGE", "MUNI")
+def is_bond(instrument_kind: Optional[InstrumentKind]) -> bool:
+    """Return whether the exact registered mechanics kind is ``BOND``.
 
-# OpenFIGI securityType2 fragments that denote a bond/note.
-_FIGI_BOND_SEC_TYPES = ("BOND", "NOTE", "BILL", "DEBENTURE", "SOVEREIGN",
-                        "TREASURY", "FIXED")
-
-# Order-list bond heuristic thresholds: a clean bond price is quoted per
-# 100 of face value (typically 50–150), and retail bond face amounts are
-# at least ~1,000, whereas ETF/equity unit prices in the 50–150 range
-# come with much smaller share counts.
-_ORDER_BOND_PRICE_MIN = 50.0
-_ORDER_BOND_PRICE_MAX = 150.0
-_ORDER_BOND_MIN_QTY = 1000.0
+    Asset category, display strings, names, identifiers, prices, and quantities
+    are intentionally not accepted. They describe exposure or appearance, not
+    the valuation convention.
+    """
+    return instrument_kind is InstrumentKind.BOND
 
 
 def value_position(
-    quantity: float, price_eur_per_unit: float, bond: bool
+    quantity: float,
+    price_eur_per_unit: float,
+    *,
+    instrument_kind: InstrumentKind,
 ) -> float:
-    """EUR market value of a position, applying the bond convention once.
+    """EUR value under the convention declared by ``instrument_kind``.
 
-    Bonds quote a clean price per 100 of face value, and ``quantity`` is
-    the nominal amount, so the value is ``quantity * price / 100``.
-    Non-bonds use ``quantity * price`` directly.
-
-    This is the ONLY place the ``/100`` is applied, so the current and
-    historical valuation paths agree by construction.
+    Bonds quote a clean price per 100 of face value and ``quantity`` is nominal,
+    so their value is ``quantity * price / 100``. Stock, ETF, and cash prices
+    are per unit. Unknown mechanics are rejected instead of being guessed as a
+    non-bond.
     """
-    if bond:
+    if not isinstance(instrument_kind, InstrumentKind):
+        raise ValueError("explicit InstrumentKind is required for valuation")
+    if instrument_kind is InstrumentKind.BOND:
         return quantity * price_eur_per_unit / 100.0
     return quantity * price_eur_per_unit
-
-
-def _has_word(text: str, words) -> bool:
-    """True if any of ``words`` appears as a whole token in ``text``
-    (case-insensitive). Avoids substring false-positives."""
-    tokens = re.findall(r"[A-Z]+", str(text).upper())
-    token_set = set(tokens)
-    return any(w in token_set for w in words)
-
-
-def is_bond(
-    *,
-    asset_class=None,
-    instrument_type: Optional[str] = None,
-    quote_type: Optional[str] = None,
-    sec_type: Optional[str] = None,
-    market_sector: Optional[str] = None,
-    figi_sec_type: Optional[str] = None,
-) -> bool:
-    """Single source of truth for the bond classification that triggers
-    the per-100-nominal convention.
-
-    Accepts whatever evidence the caller has — the enricher passes
-    yfinance ``quote_type``/``sec_type`` plus OpenFIGI's authoritative
-    ``market_sector``/``figi_sec_type``; the orders path passes the
-    holding's ``asset_class``/``instrument_type``. Any one positive
-    signal is enough.
-
-    OpenFIGI's ``marketSector`` ("Govt"/"Corp"/…) and ``securityType2``
-    are the most reliable signals (they classify the instrument itself,
-    not a display string), so they are checked first.
-    """
-    # 1. OpenFIGI authoritative classification.
-    if market_sector and str(market_sector).strip().upper() in _FIGI_BOND_MARKET_SECTORS:
-        return True
-    if figi_sec_type and _has_word(figi_sec_type, _FIGI_BOND_SEC_TYPES):
-        return True
-
-    # 2. AssetClass enum or its string value "Fixed Income".
-    if asset_class is not None:
-        ac_value = getattr(asset_class, "value", asset_class)
-        if str(ac_value).strip().lower() == "fixed income":
-            return True
-
-    # 3. yfinance / instrument-type keyword evidence (whole-word match).
-    for field in (instrument_type, quote_type, sec_type):
-        if field and _has_word(field, _BOND_INSTRUMENT_KEYWORDS):
-            return True
-    return False
-
-
-def looks_like_bond_from_orders(avg_price: float, avg_qty: float) -> bool:
-    """Heuristic bond detection from order-list data alone.
-
-    Used only for ISINs that never reach yfinance (so we lack
-    ``quote_type``). A clean bond price sits in ``[50, 150]`` and the
-    nominal quantity is at least ``1000``; ETF/equity unit prices in
-    that band come with far smaller share counts. Deliberately distinct
-    from :func:`is_bond` — different evidence, same module.
-    """
-    return (
-        _ORDER_BOND_PRICE_MIN <= avg_price <= _ORDER_BOND_PRICE_MAX
-        and avg_qty >= _ORDER_BOND_MIN_QTY
-    )

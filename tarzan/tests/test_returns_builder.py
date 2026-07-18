@@ -16,12 +16,13 @@ from tarzan.engine.returns_builder import (
     _open_isins,
     _net_qty_by_isin,
 )
+from tarzan.instruments.registry import InstrumentKind
 from tarzan.models.holding import Holding, AssetClass, Geography
 from tarzan.models.order import Order, OrderType
 
 
 def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
-       td=None):
+       td=None, kind=InstrumentKind.STOCK):
     return Order(
         date=datetime.date(*d),
         trade_date=datetime.date(*td) if td is not None else datetime.date(*d),
@@ -37,6 +38,7 @@ def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
         fees_eur=0.0,
         net_eur=net,
         source="fineco",
+        instrument_kind=kind,
     )
 
 
@@ -84,11 +86,21 @@ class TestBuildHoldings:
     def test_bond_seed_uses_per_100(self):
         orders = [
             _o(OrderType.TRANSFER_IN, "IT0005542359", qty=4000.0,
-               gross=4000.0, price=100.0),
+               gross=4000.0, price=100.0, kind=InstrumentKind.BOND),
         ]
         holdings = build_holdings_from_orders(orders)
         # bond seed = qty * price / 100 = 4000 * 100 / 100 = 4000
         assert holdings[0].market_value_eur == pytest.approx(4000.0)
+        assert holdings[0].security_type == "BOND"
+
+    def test_unknown_order_kind_has_no_guessed_seed(self):
+        orders = [
+            _o(OrderType.BUY, "UNKNOWN", qty=1000.0, net=-1000.0,
+               price=100.0, kind=None),
+        ]
+        holdings = build_holdings_from_orders(orders)
+        assert holdings[0].market_value_eur == 0.0
+        assert holdings[0].security_type is None
 
 
 class TestCostBasis:
@@ -255,6 +267,34 @@ class TestFallbackLadder:
             orders, enriched_by_isin={}, today=datetime.date(2025, 6, 1))
         assert "DDD" in res.provenance["excluded"]
 
+    def test_fixed_income_etf_uses_unit_pricing_not_bond_per_100(self):
+        orders = [
+            _o(OrderType.BUY, "FI-ETF", qty=1000.0, net=-100000.0,
+               price=100.0, d=(2025, 1, 1), kind=InstrumentKind.ETF),
+        ]
+        holding = Holding(
+            isin="FI-ETF", ticker="FI-ETF", quantity=1000.0,
+            cost_basis_eur=100000.0, market_value_eur=100000.0,
+            currency="EUR", security_type="ETF",
+            asset_class=AssetClass.FIXED_INCOME,
+        )
+        res = build_order_derived_series(
+            orders, {"FI-ETF": holding}, today=datetime.date(2025, 6, 1)
+        )
+        assert res.valuations[-1][1] == pytest.approx(100000.0)
+        assert "FI-ETF" in res.provenance["carry_flat"]
+
+    def test_unknown_order_kind_is_excluded_instead_of_guessed(self):
+        orders = [
+            _o(OrderType.BUY, "UNKNOWN-KIND", qty=1000.0, net=-100000.0,
+               price=100.0, d=(2025, 1, 1), kind=None),
+        ]
+        res = build_order_derived_series(
+            orders, enriched_by_isin={}, today=datetime.date(2025, 6, 1)
+        )
+        assert res.valuations[-1][1] == 0.0
+        assert "UNKNOWN-KIND" in res.provenance["excluded"]
+
 
 def _enriched_borsa_bond(isin, current_price, qty=0.0, market_value=0.0):
     """An enriched bond Holding priced ONLY by Borsa Italiana: no yfinance
@@ -283,7 +323,7 @@ class TestBorsaItalianaRung:
         # 1.0384 EUR-per-unit → terminal value 4000 * 1.0384 = 4153.60.
         isin = "IT0005542359"
         orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
-                     price=100.0, d=(2025, 1, 1))]
+                     price=100.0, d=(2025, 1, 1), kind=InstrumentKind.BOND)]
         enriched = {isin: _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)}
         res = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 6, 1))
@@ -299,7 +339,8 @@ class TestBorsaItalianaRung:
         # 108900 (the bug that came from skipping the FX conversion).
         isin = "XS2105803527"
         orders = [_o(OrderType.TRANSFER_IN, isin, qty=110000.0,
-                     gross=5624.0, price=98.14, d=(2025, 1, 1))]
+                     gross=5624.0, price=98.14, d=(2025, 1, 1),
+                     kind=InstrumentKind.BOND)]
         # EUR-per-unit after the enricher's FX + /100 conversion.
         eur_per_unit = 0.05159
         enriched = {isin: _enriched_borsa_bond(isin, current_price=eur_per_unit,
@@ -313,7 +354,7 @@ class TestBorsaItalianaRung:
     def test_historical_dates_still_use_carry_flat(self):
         isin = "IT0005542359"
         orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
-                     price=100.0, d=(2025, 1, 1))]
+                     price=100.0, d=(2025, 1, 1), kind=InstrumentKind.BOND)]
         enriched = {isin: _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)}
         res = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 6, 1))
@@ -325,7 +366,7 @@ class TestBorsaItalianaRung:
     def test_borsa_price_ignored_without_borsa_source(self):
         isin = "IT0005542359"
         orders = [_o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0,
-                     price=100.0, d=(2025, 1, 1))]
+                     price=100.0, d=(2025, 1, 1), kind=InstrumentKind.BOND)]
         h = _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)
         h.data_source = "input_csv (no market data)"
         res = build_order_derived_series(
@@ -561,8 +602,8 @@ class TestDailySeries:
             }
             def price_on(self, isin, d):
                 return self._px.get(d, 100.0), "yfinance"
-            def is_bond(self, isin):
-                return False
+            def instrument_kind(self, isin):
+                return InstrumentKind.STOCK
 
         monkeypatch.setattr(rb, "_closed_cum_ex_prefixes", lambda tl, d: set())
         nav, actual = rb._build_daily_series(
@@ -585,8 +626,10 @@ class TestIncomeInTwror:
         prices = [100.0] * 60
         enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
         orders = [
-            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
-            _o(OrderType.COUPON, "BTP", qty=0.0, net=20.0, d=(2025, 2, 1)),
+            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0,
+               d=(2025, 1, 1), kind=InstrumentKind.BOND),
+            _o(OrderType.COUPON, "BTP", qty=0.0, net=20.0, d=(2025, 2, 1),
+               kind=InstrumentKind.BOND),
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 28))
@@ -603,7 +646,8 @@ class TestIncomeInTwror:
         prices = [100.0] * 60
         enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
         orders = [
-            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0,
+               d=(2025, 1, 1), kind=InstrumentKind.BOND),
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 28))
@@ -766,3 +810,364 @@ def test_c4_history_and_optimizer_share_90_60_notional_exposure(capital_eur):
         "historical analysis and planning disagree for the same 90/60 holding: "
         f"history={historical}, optimizer={optimizer}"
     )
+
+
+class TestConflictingOrderKindEvidence:
+    def _conflicting_orders(self):
+        return [
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-KIND",
+                qty=5.0,
+                net=-500.0,
+                price=100.0,
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-KIND",
+                qty=5.0,
+                net=-500.0,
+                price=100.0,
+                d=(2025, 1, 2),
+                kind=InstrumentKind.ETF,
+            ),
+        ]
+
+    def test_synthetic_holding_preserves_every_conflicting_assertion(self):
+        holding = build_holdings_from_orders(self._conflicting_orders())[0]
+
+        assert holding.security_type is None
+        assert holding.instrument_kind_evidence == ("BOND", "ETF")
+        assert holding.market_value_eur == 0.0
+
+    def test_provider_kind_cannot_override_conflicting_order_evidence(self):
+        orders = self._conflicting_orders()
+        holding = build_holdings_from_orders(orders)[0]
+        # Simulate a later provider declaring ETF. The original BOND/ETF
+        # conflict remains authoritative and keeps mechanics unavailable.
+        holding.security_type = "ETF"
+        holding.instrument_type = "ETF"
+        holding.price_history = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02"]),
+        )
+
+        result = build_order_derived_series(
+            orders,
+            {holding.isin: holding},
+            today=datetime.date(2025, 1, 3),
+        )
+
+        assert result.valuations[-1][1] == 0.0
+        assert holding.isin in result.provenance["excluded"]
+
+
+class TestUnclassifiedEtfHistory:
+    def test_allocation_timeline_is_unavailable_without_tracked_category(self):
+        orders = [
+            _o(
+                OrderType.BUY,
+                "UNCLASSIFIED-ETF",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.ETF,
+            )
+        ]
+        holding = Holding(
+            isin="UNCLASSIFIED-ETF",
+            ticker="UNCLASSIFIED-ETF",
+            quantity=10.0,
+            cost_basis_eur=1000.0,
+            market_value_eur=1000.0,
+            currency="EUR",
+            security_type="ETF",
+            instrument_kind_evidence=("ETF",),
+        )
+        holding.price_history = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2025-01-01", "2025-06-01"]),
+        )
+
+        assert build_allocation_timeline(
+            orders,
+            {holding.isin: holding},
+            months=3,
+            today=datetime.date(2025, 6, 1),
+        ) is None
+
+
+class TestUnavailableOrderHistory:
+    def test_mixed_valid_and_conflicting_history_is_typed_unavailable(self):
+        from tarzan.runtime.ledger import Availability
+
+        valid_orders = [
+            _o(
+                OrderType.BUY,
+                "VALID-STOCK",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.STOCK,
+            )
+        ]
+        conflicting_orders = [
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-HISTORY",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-HISTORY",
+                qty=1.0,
+                net=-100.0,
+                price=100.0,
+                d=(2025, 1, 2),
+                kind=InstrumentKind.ETF,
+            ),
+        ]
+        orders = valid_orders + conflicting_orders
+        valid = _enriched_with_history("VALID-STOCK", [100.0, 101.0])
+        valid.security_type = "STOCK"
+        conflict = build_holdings_from_orders(conflicting_orders)[0]
+        conflict.security_type = "ETF"
+        conflict.price_history = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02"]),
+        )
+
+        result = build_order_derived_series(
+            orders,
+            {"VALID-STOCK": valid, "CONFLICTING-HISTORY": conflict},
+            today=datetime.date(2025, 1, 3),
+        )
+
+        assert result.history_availability is Availability.UNAVAILABLE
+        assert result.unavailable_instruments == ("CONFLICTING-HISTORY",)
+
+    def test_metrics_null_history_dependent_outputs_when_mechanics_unavailable(self):
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        orders = [
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-METRICS",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-METRICS",
+                qty=1.0,
+                net=-100.0,
+                price=100.0,
+                d=(2025, 1, 2),
+                kind=InstrumentKind.ETF,
+            ),
+        ]
+        holding = build_holdings_from_orders(orders)[0]
+        holding.security_type = "ETF"
+        holding.price_history = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02"]),
+        )
+        engine = MetricsEngine([holding], InvestorConfig(), orders=orders)
+        context: dict = {}
+
+        engine._portfolio_history_from_orders(context)
+        engine._performance(context)
+        engine._risk(context)
+        engine._returns(context)
+
+        assert context["_order_history_unavailable"] == [
+            "CONFLICTING-METRICS"
+        ]
+        assert context["portfolio_history"].empty
+        assert context["performance"] is None
+        assert context["risk"] is None
+        assert context["xirr_pct"] is None
+        assert context["twror_pct"] is None
+        assert context["pnl_eur"] is None
+        assert set(context["_degraded"]) == {
+            "_portfolio_history_from_orders",
+            "_returns",
+        }
+
+    def test_compute_all_preserves_valid_rows_without_recreating_portfolio_history(
+        self, monkeypatch
+    ):
+        from tarzan import runtime
+        import tarzan.engine.metrics as metrics_module
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        valid_orders = [
+            _o(
+                OrderType.BUY,
+                "VALID-STOCK",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.STOCK,
+            )
+        ]
+        conflicting_orders = [
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-HISTORY",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.BUY,
+                "CONFLICTING-HISTORY",
+                qty=1.0,
+                net=-100.0,
+                price=100.0,
+                d=(2025, 1, 2),
+                kind=InstrumentKind.ETF,
+            ),
+        ]
+        valid = build_holdings_from_orders(valid_orders)[0]
+        valid.name = "Valid stock"
+        valid.instrument_type = "STOCK"
+        valid.asset_class = AssetClass.EQUITIES
+        valid.current_price = 100.0
+        valid.current_value = 1000.0
+        valid.market_value_eur = 1000.0
+        valid.price_history = pd.Series(
+            [100.0, 110.0, 121.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02", "2025-01-03"]),
+        )
+
+        conflicting = build_holdings_from_orders(conflicting_orders)[0]
+        # A provider may supply a plausible current classification and value,
+        # but it cannot erase the two contradictory order-kind assertions.
+        conflicting.name = "Conflicting history"
+        conflicting.security_type = "ETF"
+        conflicting.instrument_type = "ETF"
+        conflicting.asset_class = AssetClass.FIXED_INCOME
+        conflicting.current_price = 100.0
+        conflicting.current_value = 1000.0
+        conflicting.market_value_eur = 1000.0
+        conflicting.price_history = pd.Series(
+            [100.0, 50.0, 25.0],
+            index=pd.to_datetime(["2025-01-01", "2025-01-02", "2025-01-03"]),
+        )
+
+        # Exercise the complete MetricsEngine pipeline without network or
+        # optimizer side effects. Live 1D is deliberately simulated even in a
+        # reproducible context to prove it cannot recreate a null portfolio
+        # performance section after typed history unavailability is known.
+        monkeypatch.setattr(metrics_module, "BENCHMARKS", {})
+        monkeypatch.setattr(
+            metrics_module,
+            "_fetch_benchmark_history",
+            lambda _ticker: pd.Series(dtype=float),
+        )
+        monkeypatch.setattr(
+            "tarzan.data.geo_resolver.lookup_geo_by_index_name",
+            lambda _name: None,
+        )
+        monkeypatch.setattr(
+            "tarzan.engine.rebalancer.compute_unified_rebalancing",
+            lambda *_args, **_kwargs: pytest.fail(
+                "unavailable instrument mechanics reached executable planning"
+            ),
+        )
+        monkeypatch.setattr(
+            "tarzan.runtime.audit.record_rebalancing_plan",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "tarzan.data.price_cache.load_resolution",
+            lambda key: key,
+        )
+        live_requests = []
+
+        def _broker_1d(symbols):
+            live_requests.extend(symbols)
+            return {
+                symbol: {"pct": 3.25, "live": True}
+                for symbol in symbols
+            }
+
+        monkeypatch.setattr("tarzan.data.market_quotes.broker_1d", _broker_1d)
+        runtime.configure(
+            deterministic=True,
+            as_of=datetime.date(2025, 1, 3),
+            attempt_id="mixed-unavailable-history",
+            invocation_source="test",
+        )
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        try:
+            result = MetricsEngine(
+                [valid, conflicting],
+                InvestorConfig(),
+                orders=valid_orders + conflicting_orders,
+            ).compute_all()
+        finally:
+            runtime.reset()
+
+        assert result.history_availability == "UNAVAILABLE"
+        assert result.history_unavailable_instruments == (
+            "CONFLICTING-HISTORY",
+        )
+        assert result.portfolio_history is None
+        assert result.performance is None
+        assert result.performance_full is None
+        assert result.risk is None
+        assert result.xirr_pct is None
+        assert result.twror_pct is None
+        assert result.twror_annualized_pct is None
+        assert result.returns_coverage_pct is None
+        assert result.pnl_eur is None
+        assert result.pnl_pct is None
+        assert result.invested_capital_eur is None
+        assert result.allocation_timeline is None
+        assert result.rebalancing_suggestions is None
+        assert result.rebalancing_verifications is None
+        assert result.rebalancing_plans is None
+        # Exact current valuation and tracked-category evidence are an
+        # independent point-in-time capability; history unavailability must
+        # not erase those valid rows or silently renormalize them away.
+        current_allocation = {
+            str(row.category): float(row.weight_pct)
+            for row in result.allocation_by_class.itertuples()
+        }
+        assert current_allocation == pytest.approx(
+            {"Equities": 50.0, "Fixed Income": 50.0}
+        )
+
+        performance_tickers = set(result.holding_performance["ticker"])
+        assert "CONFLICTING-HISTORY" not in performance_tickers
+        assert "VALID-STOCK" in performance_tickers
+        assert set(result.holding_histories) == {"VALID-STOCK"}
+        assert live_requests == ["VALID-STOCK"]
+        valid_row = result.holding_performance.set_index("ticker").loc[
+            "VALID-STOCK"
+        ]
+        assert valid_row["1d"] == pytest.approx(3.25)
+        assert bool(valid_row["live_1d"]) is True
+        # The valid holding remains usable in the independent static
+        # backtest, while the conflicting -50% series is excluded. If it
+        # leaked into the equal-value candidate set, this would be -20%.
+        historical = result.historical_risk
+        assert historical is not None
+        assert historical["portfolio"] is not None
+        assert historical["portfolio"]["metrics"]["1d"] == pytest.approx(10.0)
+        assert "unavailable order history" in historical["portfolio"]["note"]
+        assert set(result.degraded_computers) == {
+            "_portfolio_history_from_orders",
+            "_returns",
+        }

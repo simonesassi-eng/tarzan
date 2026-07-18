@@ -2,11 +2,13 @@
 
 from .registry import (
     CapabilityResult,
+    CategoryResolution,
     InstrumentAdapterRegistry,
     InstrumentCapability,
     InstrumentKind,
     ResolvedInstrumentProfile,
     SupportState,
+    TrackedCategoryEvidenceGateway,
     TrackedCategoryRegistry,
     TypeEvidenceGateway,
     TypeResolutionState,
@@ -16,11 +18,13 @@ from .registry import (
 
 __all__ = [
     "CapabilityResult",
+    "CategoryResolution",
     "InstrumentAdapterRegistry",
     "InstrumentCapability",
     "InstrumentKind",
     "ResolvedInstrumentProfile",
     "SupportState",
+    "TrackedCategoryEvidenceGateway",
     "TrackedCategoryRegistry",
     "TypeEvidenceGateway",
     "TypeResolutionState",

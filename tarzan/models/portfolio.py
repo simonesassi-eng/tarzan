@@ -27,7 +27,7 @@ def _round_or_none(value, ndigits: int):
 # (newsletter, report, to_summary_dict) must be aware of — a renamed or
 # removed field, or a changed field meaning. Consumers can assert this to fail
 # loudly on a mismatch instead of silently reading a stale/renamed field.
-PORTFOLIO_METRICS_SCHEMA_VERSION = 1
+PORTFOLIO_METRICS_SCHEMA_VERSION = 2
 
 # The stable EXTERNAL output contract: the keys ``to_summary_dict`` always
 # emits, regardless of run mode. This is the narrow, versioned surface any
@@ -38,6 +38,9 @@ PORTFOLIO_METRICS_SCHEMA_VERSION = 1
 # caught before it breaks a consumer.
 SUMMARY_CONTRACT_KEYS = frozenset({
     "schema_version",
+    "valuation_availability", "trustworthy_total_value_eur",
+    "known_valuation_subtotal_eur", "history_availability",
+    "history_unavailable_instruments",
     "total_value_eur", "invested_value_eur", "cash_value_eur", "cash_target_eur",
     "performance", "risk", "weighted_yield", "avg_ter",
     "num_holdings", "num_rebalancing_actions",
@@ -107,9 +110,9 @@ class PortfolioMetrics:
     allocation_by_geo: pd.DataFrame = field(default_factory=pd.DataFrame)
     allocation_by_sector: pd.DataFrame = field(default_factory=pd.DataFrame)
     top_10: pd.DataFrame = field(default_factory=pd.DataFrame)
-    performance: dict = field(default_factory=dict)
-    performance_full: dict = field(default_factory=dict)  # Full 5y window (not inception-filtered)
-    risk: dict = field(default_factory=dict)
+    performance: Optional[dict] = field(default_factory=dict)
+    performance_full: Optional[dict] = field(default_factory=dict)  # Full 5y window (not inception-filtered)
+    risk: Optional[dict] = field(default_factory=dict)
     weighted_yield: float = 0.0
     avg_ter: float = 0.0
     goal_deltas: Optional[pd.DataFrame] = None
@@ -120,6 +123,8 @@ class PortfolioMetrics:
     # {"label", "no_sell", "suggestions", "verifications"}.
     rebalancing_plans: Optional[list] = None
     benchmark_comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
+    history_availability: str = "AVAILABLE"
+    history_unavailable_instruments: tuple[str, ...] = ()
     portfolio_history: Optional[pd.Series] = None
     benchmark_histories: dict = field(default_factory=dict)
     acwi_geo: dict = field(default_factory=dict)
@@ -218,20 +223,55 @@ class PortfolioMetrics:
         # (e.g. Sharpe when volatility==0, or any risk metric on an empty
         # history) becomes JSON ``null`` instead of a bare NaN/Infinity token
         # that breaks strict parsers and downstream databases.
+        valuation_available = self.valuation_availability != "UNAVAILABLE"
+        trustworthy_total = self.trustworthy_total_value_eur
+        if trustworthy_total is None and self.valuation_availability == "AVAILABLE":
+            trustworthy_total = self.total_value
+        known_subtotal = self.known_valuation_subtotal_eur
+        if known_subtotal is None and self.valuation_availability == "AVAILABLE":
+            known_subtotal = self.total_value
+        history_available = self.history_availability != "UNAVAILABLE"
+        performance = (
+            {k: _round_or_none(v, 6) for k, v in (self.performance or {}).items()}
+            if history_available and self.performance is not None
+            else None
+        )
+        risk = (
+            {k: _round_or_none(v, 6) for k, v in (self.risk or {}).items()}
+            if history_available and self.risk is not None
+            else None
+        )
         summary = {
             "schema_version": self.schema_version,
-            "total_value_eur": _round_or_none(self.total_value, 2),
-            "invested_value_eur": _round_or_none(self.invested_value, 2),
-            "cash_value_eur": _round_or_none(self.cash_value, 2),
+            "valuation_availability": self.valuation_availability,
+            "trustworthy_total_value_eur": _round_or_none(trustworthy_total, 2),
+            "known_valuation_subtotal_eur": _round_or_none(known_subtotal, 2),
+            "history_availability": self.history_availability,
+            "history_unavailable_instruments": list(
+                self.history_unavailable_instruments
+            ),
+            # Compatibility name now projects only the trustworthy total. A
+            # partial known subtotal is exposed solely under its labeled key.
+            "total_value_eur": _round_or_none(trustworthy_total, 2),
+            "invested_value_eur": (
+                _round_or_none(self.invested_value, 2)
+                if valuation_available else None
+            ),
+            "cash_value_eur": (
+                _round_or_none(self.cash_value, 2)
+                if valuation_available else None
+            ),
             "cash_target_eur": _round_or_none(self.cash_target_eur, 2),
-            "performance": {
-                k: _round_or_none(v, 6) for k, v in self.performance.items()
-            },
-            "risk": {
-                k: _round_or_none(v, 6) for k, v in self.risk.items()
-            },
-            "weighted_yield": _round_or_none(self.weighted_yield, 6),
-            "avg_ter": _round_or_none(self.avg_ter, 6),
+            "performance": performance,
+            "risk": risk,
+            "weighted_yield": (
+                _round_or_none(self.weighted_yield, 6)
+                if valuation_available else None
+            ),
+            "avg_ter": (
+                _round_or_none(self.avg_ter, 6)
+                if valuation_available else None
+            ),
             "num_holdings": len(self.holdings_df),
             "num_rebalancing_actions": (
                 len(self.rebalancing_suggestions) if self.rebalancing_suggestions else 0

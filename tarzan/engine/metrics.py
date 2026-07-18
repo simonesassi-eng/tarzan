@@ -107,6 +107,44 @@ class MetricsEngine:
         """Append a custom metric computer to the pipeline."""
         self._computers.append(fn)
 
+    def _current_valuation_holdings(self) -> list[Holding]:
+        """Project only policy-accepted holdings at their selected EUR value.
+
+        The valuation assessment is the authority for every current snapshot,
+        allocation, and planning consumer. Rejected evidence is omitted rather
+        than silently restored from ``market_value_eur``; accepted fallback or
+        stale evidence uses the exact value selected by policy. Historical
+        computations retain the original holdings and their provenance.
+        """
+        assessment = self.valuation_assessment
+        if assessment is None:
+            return list(self.holdings)
+
+        from dataclasses import replace
+
+        from tarzan.models.instrument_key import instrument_key
+
+        selected_by_key = {
+            evidence.instrument_key: float(evidence.value_eur)
+            for evidence in assessment.evidence
+            if evidence.accepted_by_policy and evidence.value_eur is not None
+        }
+        projected: list[Holding] = []
+        for holding in self.holdings:
+            key = instrument_key(holding.isin, holding.ticker) or "UNKNOWN"
+            if key not in selected_by_key:
+                continue
+            selected = selected_by_key[key]
+            quantity = float(holding.quantity or 0.0)
+            selected_price = selected / quantity if quantity != 0.0 else 0.0
+            projected.append(replace(
+                holding,
+                market_value_eur=selected,
+                current_value=selected,
+                current_price=selected_price,
+            ))
+        return projected
+
     def compute_all(self) -> PortfolioMetrics:
         """Run all computers and return a populated PortfolioMetrics.
 
@@ -134,6 +172,9 @@ class MetricsEngine:
                     "defaults (blank/zero) and should NOT be read as a real result",
                     context=name,
                 )
+        degraded = list(dict.fromkeys(
+            degraded + list(ctx.get("_degraded", []))
+        ))
         if degraded:
             logger.warning(
                 "Report is DEGRADED — %d computer(s) failed: %s. "
@@ -149,7 +190,9 @@ class MetricsEngine:
     def _valuation(self, ctx: dict) -> None:
         rows = []
         cash_class = AssetClass.CASH_EQUIVALENTS.value
-        for h in self.holdings:
+        for h in self._current_valuation_holdings():
+            # ``_current_valuation_holdings`` has already applied the exact
+            # policy-selected value and excluded every rejected evidence row.
             value = h.current_value if h.current_value is not None else h.market_value_eur
             cost = h.cost_basis_eur
             gain = _safe_pct_change(cost, value)
@@ -164,7 +207,7 @@ class MetricsEngine:
                 "current_price": h.current_price or (value / h.quantity if h.quantity > 0 else 0),
                 "current_value": value, "cost_basis_eur": cost,
                 "gain_pct": gain, "gain_eur": value - cost,
-                "asset_class": h.asset_class.value if h.asset_class else AssetClass.ALTERNATIVE.value,
+                "asset_class": h.asset_class.value if h.asset_class else None,
                 "geography": geo_str, "sector": h.sector or "Unknown", "currency": h.currency,
                 "ter": h.ter, "yield_pct": h.yield_pct,
                 "data_source": h.data_source or "",
@@ -339,6 +382,36 @@ class MetricsEngine:
                     enriched_by_isin[h.isin] = h
 
         series = build_order_derived_series(self.orders, enriched_by_isin)
+        ctx["_order_series"] = series
+        ctx["_enriched_by_isin"] = enriched_by_isin
+        ctx["history_availability"] = series.history_availability.value
+        ctx["history_unavailable_instruments"] = tuple(
+            series.unavailable_instruments
+        )
+
+        from tarzan.runtime import data_quality as dq
+        from tarzan.runtime.ledger import Availability
+        if series.history_availability is Availability.UNAVAILABLE:
+            unavailable = list(series.unavailable_instruments)
+            empty = pd.Series(dtype=float)
+            ctx["_order_history_unavailable"] = unavailable
+            ctx["portfolio_history"] = empty
+            ctx["portfolio_history_full"] = empty
+            ctx["excluded_short_tenure"] = [
+                {"ticker": isin, "name": isin, "value_eur": None,
+                 "weight_pct": None, "span_days": 0}
+                for isin in unavailable
+            ]
+            ctx.setdefault("_degraded", []).append(
+                "_portfolio_history_from_orders"
+            )
+            dq.error(
+                "returns",
+                "Portfolio return history is Unavailable because exact "
+                "instrument mechanics are missing or conflicting.",
+                context=",".join(unavailable),
+            )
+            return
 
         # Risk and period-return metrics must read the dense, daily,
         # flow-adjusted NAV index — not the sparse trade-date valuations.
@@ -385,6 +458,36 @@ class MetricsEngine:
     def _returns(self, ctx: dict) -> None:
         series = ctx.get("_order_series")
         if series is None:
+            return
+        from tarzan.runtime.ledger import Availability
+        if series.history_availability is Availability.UNAVAILABLE:
+            for field in (
+                "xirr_pct",
+                "twror_pct",
+                "twror_annualized_pct",
+                "returns_coverage_pct",
+                "returns_period_debug",
+                "pnl_eur",
+                "pnl_pct",
+                "invested_capital_eur",
+                "estimated_cgt_eur",
+                "pnl_eur_net_tax",
+                "pnl_pct_net_tax",
+                "xirr_net_tax_pct",
+                "actual_value_series",
+                "pnl_series",
+                "unrealized_series",
+                "external_flows",
+            ):
+                ctx[field] = None
+            ctx["returns_provenance"] = series.provenance
+            ctx.setdefault("_degraded", []).append("_returns")
+            order_dates = [
+                o.trade_date for o in (self.orders or [])
+                if o.is_position_change()
+            ]
+            if order_dates:
+                ctx["inception_date"] = min(order_dates).strftime("%Y-%m-%d")
             return
         rate = xirr(series.xirr_cashflows)
         ctx["xirr_pct"] = rate * 100.0 if not _is_nan(rate) else None
@@ -494,6 +597,17 @@ class MetricsEngine:
         enriched = ctx.get("_enriched_by_isin")
         if not self.orders or not enriched:
             return
+        # The point-in-time allocation can remain independently available from
+        # exact current valuation/category evidence, but no historical
+        # allocation may be reconstructed once any order mechanics are
+        # ambiguous. Guard here as well as in the builder so a future partial
+        # implementation cannot silently emit a valid-subset portfolio trend.
+        if ctx.get("_order_history_unavailable"):
+            ctx["allocation_timeline"] = None
+            return
+        if not ctx.get("classification_available", True):
+            ctx["allocation_timeline"] = None
+            return
         from tarzan.engine.returns_builder import build_allocation_timeline
 
         tl = build_allocation_timeline(self.orders, enriched, months=3)
@@ -520,6 +634,10 @@ class MetricsEngine:
     # Performance
     # ------------------------------------------------------------------
     def _performance(self, ctx: dict) -> None:
+        if ctx.get("_order_history_unavailable"):
+            ctx["performance"] = None
+            ctx["performance_full"] = None
+            return
         ph = ctx.get("portfolio_history", pd.Series(dtype=float))
         if ph.empty:
             ctx["performance"] = {"cagr": 0.0, "ytd": None, "1d": None, "1w": None,
@@ -549,6 +667,9 @@ class MetricsEngine:
     # Risk
     # ------------------------------------------------------------------
     def _risk(self, ctx: dict) -> None:
+        if ctx.get("_order_history_unavailable"):
+            ctx["risk"] = None
+            return
         ph = ctx.get("portfolio_history", pd.Series(dtype=float))
         result = {"volatility": 0.0, "sharpe": float("nan"), "max_drawdown": 0.0,
                   "sortino": float("nan"), "var_95": float("nan"), "cvar_95": float("nan"),
@@ -595,13 +716,31 @@ class MetricsEngine:
         # economic exposure and can sum to more than 100% of invested capital.
         from tarzan.engine import allocations as alloc
 
+        current_holdings = self._current_valuation_holdings()
         bd_by_isin: dict[str, dict] = {
             h.isin: alloc.holding_class_breakdown(h)
-            for h in self.holdings
+            for h in current_holdings
             if h.isin
         }
+        unresolved_categories = sorted(
+            h.isin or h.ticker
+            for h in current_holdings
+            if float(h.current_value or h.market_value_eur or 0.0) > 0
+            and not alloc.holding_class_breakdown(h)
+        )
+        classification_available = not unresolved_categories
+        ctx["classification_available"] = classification_available
+        ctx["classification_unavailable_instruments"] = unresolved_categories
+        if not classification_available:
+            from tarzan.runtime import data_quality as dq
+            dq.error(
+                "instrument_capability",
+                "Allocation, goals, and rebalancing are unavailable because "
+                "one or more valued instruments lack an exact tracked category.",
+                context=",".join(unresolved_categories),
+            )
         notional: dict[str, float] = {}
-        if not df.empty and invested_value > 0:
+        if classification_available and not df.empty and invested_value > 0:
             # Distribute each non-cash holding's value across its class
             # breakdown and sum — the shared notional-aggregation primitive,
             # so the live portfolio and the backtest aggregate identically.
@@ -621,9 +760,14 @@ class MetricsEngine:
         else:
             by_class = pd.DataFrame(columns=["category", "weight_pct"])
 
-        by_geo = _compute_geo_allocation(df, self.holdings)
+        by_geo = (
+            _compute_geo_allocation(df, current_holdings)
+            if classification_available
+            else pd.DataFrame(columns=["category", "weight_pct"])
+        )
         by_sector = pd.DataFrame(columns=["category", "weight_pct"])
-        if not df.empty and invested_value > 0 and "sector" in df.columns:
+        if (classification_available and not df.empty and invested_value > 0
+                and "sector" in df.columns):
             eligible = df[df["asset_class"] != cash_class].copy()
             if not eligible.empty:
                 eligible["sector"] = eligible["sector"].fillna("Unknown").replace("", "Unknown")
@@ -666,6 +810,9 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _goals(self, ctx: dict) -> None:
         if self.config is None:
+            ctx["goal_deltas"] = None
+            return
+        if not ctx.get("classification_available", True):
             ctx["goal_deltas"] = None
             return
         by_class = ctx["allocation_by_class"]
@@ -726,6 +873,22 @@ class MetricsEngine:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
             return
+        if ctx.get("_order_history_unavailable"):
+            # Current allocation analytics may use independently established
+            # valuation/category evidence, but executable planning requires an
+            # exact instrument-kind adapter. Conflicting or missing order
+            # mechanics therefore cannot reach the optimizer.
+            ctx["rebalancing_suggestions"] = None
+            ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_plans"] = None
+            from tarzan.runtime import data_quality as dq
+            dq.error(
+                "rebalancing",
+                "planning is Unavailable because exact instrument mechanics "
+                "are missing or conflicting",
+                context=",".join(ctx["_order_history_unavailable"]),
+            )
+            return
         if not self.planning_eligible:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
@@ -738,6 +901,18 @@ class MetricsEngine:
                 context="valuation_completeness",
             )
             return
+        if not ctx.get("classification_available", True):
+            ctx["rebalancing_suggestions"] = None
+            ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_plans"] = None
+            from tarzan.runtime import data_quality as dq
+            dq.error(
+                "rebalancing",
+                "planning is Unavailable because tracked-category evidence "
+                "is missing for a valued instrument",
+                context="instrument_capability",
+            )
+            return
         from tarzan.engine.rebalancer import compute_unified_rebalancing
         lump = self.config.rebalancing_lump_sum_amount_eur if self.config.rebalancing_lump_sum_amount_eur > 0 else None
 
@@ -748,10 +923,10 @@ class MetricsEngine:
         # tolerance, lump sum) is identical.
         import dataclasses
 
-        # The rebalancer sees the real holdings PLUS any seeded (not-held)
-        # target instruments, so it can buy positions the user does not hold
-        # yet. Seeds never enter the snapshot elsewhere.
-        rebal_holdings = list(self.holdings) + list(self.rebalance_seeds)
+        # The rebalancer sees only policy-accepted current holdings, projected
+        # at their selected values, plus any seeded (not-held) targets. Rejected
+        # valuation evidence cannot re-enter planning through the raw models.
+        rebal_holdings = self._current_valuation_holdings() + list(self.rebalance_seeds)
 
         def _plan(no_sell: bool):
             cfg2 = dataclasses.replace(self.config, rebalancing_no_sell=no_sell)
@@ -863,7 +1038,10 @@ class MetricsEngine:
         except Exception as e:
             logger.warning("Alpha/Beta benchmark fetch failed: %s", e)
 
+        unavailable = set(ctx.get("_order_history_unavailable", []))
         for h in self.holdings:
+            if h.isin in unavailable:
+                continue
             if h.price_history is None or len(h.price_history) < 2:
                 continue
             # Cap all metrics at max 5 years
@@ -985,7 +1163,10 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _holding_histories(self, ctx: dict) -> None:
         hh = {}
+        unavailable = set(ctx.get("_order_history_unavailable", []))
         for h in self.holdings:
+            if h.isin in unavailable:
+                continue
             if h.price_history is not None and len(h.price_history) > 1:
                 hh[h.ticker] = {"name": h.name or h.ticker, "history": h.price_history}
         ctx["holding_histories"] = hh
@@ -1040,8 +1221,16 @@ class MetricsEngine:
             logger.warning("Historical risk α/β benchmark fetch failed: %s", e)
 
         # ---- Portfolio: current-weight static backtest (common window) ----
+        unavailable = set(ctx.get("_order_history_unavailable", []))
         candidates = []  # (ticker, weight_value, daily_returns Series, span_days)
         for h in self.holdings:
+            # A holding whose exact order mechanics are missing or conflicting
+            # cannot participate in any history-derived portfolio number. Keep
+            # independently valid holdings available, but never let the
+            # unavailable instrument's price series leak back into this
+            # separate historical-risk reconstruction.
+            if h.isin in unavailable:
+                continue
             ph = h.price_history
             if ph is None or len(ph) < 2:
                 continue
@@ -1073,14 +1262,20 @@ class MetricsEngine:
                 first_day = ret_df.index[0] - pd.Timedelta(days=1)
                 nav = pd.concat([pd.Series([100.0], index=[first_day]), nav])
                 metrics = _compute_single_benchmark_metrics(nav, ab_bench)
-                note = None
+                notes = []
+                if unavailable:
+                    notes.append(
+                        f"{len(unavailable)} holding(s) with unavailable order "
+                        "history excluded from the backtest."
+                    )
                 if n_excluded > 0:
-                    note = (
+                    notes.append(
                         f"{n_excluded} holding(s) with under 1Y of history "
                         "excluded from the backtest; weights renormalized "
                         "over the rest. Before the common start date not all "
                         "instruments existed."
                     )
+                note = " ".join(notes) or None
                 portfolio_block = {
                     "label": "Your portfolio",
                     "ticker": None,
@@ -1173,7 +1368,15 @@ class MetricsEngine:
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
             rebalancing_plans=ctx.get("rebalancing_plans"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
-            portfolio_history=ctx.get("portfolio_history"),
+            history_availability=ctx.get("history_availability", "AVAILABLE"),
+            history_unavailable_instruments=tuple(
+                ctx.get("history_unavailable_instruments", ())
+            ),
+            portfolio_history=(
+                None
+                if ctx.get("history_availability") == "UNAVAILABLE"
+                else ctx.get("portfolio_history")
+            ),
             benchmark_histories=ctx.get("benchmark_histories", {}),
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),
             holding_histories=ctx.get("holding_histories", {}),

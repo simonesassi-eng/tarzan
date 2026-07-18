@@ -68,6 +68,10 @@ class Holding:
     name: Optional[str] = None
     instrument_type: Optional[str] = None
     security_type: Optional[str] = None
+    # Exact mechanics assertions inherited from source orders. Retaining every
+    # assertion keeps conflicting declarations ambiguous even when a provider
+    # later supplies one plausible kind; no later source may erase a conflict.
+    instrument_kind_evidence: tuple[str, ...] = ()
     asset_type: Optional[str] = None
     current_price: Optional[float] = None
     current_value: Optional[float] = None
