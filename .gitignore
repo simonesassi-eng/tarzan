@@ -44,14 +44,14 @@ input/fineco_raw/
 input/*.bak.*
 build.log
 analyzer.log
-# Per-run reports now live under output/<YYYY-MM-DD>/ (already covered by
-# output/* above); the flat legacy path is kept ignored for older runs.
+# Per-run reports live under output/<YYYY-MM-DD>/<attempt-id>/ (already
+# covered by output/* above); flat legacy paths remain ignored for older runs.
 output/report.html
 output/*/report.html
 
 # Personal inputs are NEVER committed — even to a private repo. The
-# automation pulls them from the configured Google Drive folder via
-# scripts/drive_loader.py at workflow runtime.
+# automation pulls them from the configured Google Drive folder through
+# tarzan/delivery/drive_loader.py at workflow runtime.
 .private/
 
 # Per-holding rebalancing targets (personal data, joined by ISIN to the

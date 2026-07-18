@@ -1,7 +1,7 @@
-"""Portfolio-level metrics container.
+"""Versioned portfolio metrics shared by analytics and presentation.
 
-PortfolioMetrics is the single output object produced by the Calculator layer.
-It aggregates all computed data needed by the Reporting layer (the newsletter).
+:class:`PortfolioMetrics` is built by the metrics engine and consumed by the
+summary, artifact, newsletter, and local-export boundaries.
 """
 
 from __future__ import annotations
@@ -52,10 +52,10 @@ SUMMARY_CONTRACT_OPTIONAL_KEYS = frozenset({
 
 @dataclass
 class PortfolioMetrics:
-    """Aggregated portfolio metrics produced by the Calculator.
+    """Aggregated portfolio metrics produced by :class:`MetricsEngine`.
 
-    This is the canonical data transfer object between the Calculation
-    and Reporting layers. All fields are populated by ``calculate_metrics()``.
+    This is the canonical transfer object between portfolio analytics and
+    output projection. Fields are populated incrementally by the metrics engine.
 
     Deliberately NOT frozen: it is a wide report cube built incrementally
     (by MetricsEngine and, in tests, field-by-field), so immutability would

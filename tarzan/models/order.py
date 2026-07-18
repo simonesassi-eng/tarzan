@@ -115,10 +115,12 @@ class Order:
             self.order_id = self.natural_key()
 
     def natural_key(self) -> str:
-        """A short, deterministic fingerprint of the fields that define the
-        economic event (date, instrument, type, quantity, cash). Two rows with
-        the same natural key describe the same movement — the signal the loader
-        uses to flag an accidentally duplicated input block."""
+        """Return a deterministic fingerprint for the economic event.
+
+        The fingerprint uses trade date, instrument, movement type, quantity,
+        cash amounts, and source. Matching fingerprints let the loader flag an
+        accidentally duplicated input block without merging valid ledger rows.
+        """
         raw = "|".join(str(x) for x in (
             self.trade_date, self.isin, self.type.value,
             f"{self.quantity:.6f}", f"{self.net_eur:.2f}",

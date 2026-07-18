@@ -1,6 +1,8 @@
 """Explicit instrument-kind and tracked-category capability contracts."""
 
-from .registry import (
+from __future__ import annotations
+
+from tarzan.instruments.registry import (
     CapabilityResult,
     CategoryResolution,
     InstrumentAdapterRegistry,

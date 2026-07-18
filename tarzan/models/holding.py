@@ -50,7 +50,7 @@ class Holding:
     Attributes:
         isin: 12-character International Securities Identification Number.
         ticker: Yahoo Finance-compatible ticker symbol.
-        quantity: Number of units held (must be > 0).
+        quantity: Number of units held; zero is valid for a target seed.
         cost_basis_eur: Total acquisition cost in EUR.
         market_value_eur: Current market value in EUR (from input or enriched).
         currency: Original instrument currency code (e.g. "USD", "EUR").

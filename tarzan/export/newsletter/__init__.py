@@ -1,11 +1,7 @@
-"""Newsletter package — HTML email digest from a PortfolioMetrics.
+"""Build and render the HTML portfolio digest.
 
-Split from a single 3,500-line module into cohesive submodules
-(_constants, _format, _charts, _sections_alloc, _sections_perf) with this
-package __init__ as the orchestrator + public API. Import surface is
-unchanged: ``from tarzan.export.newsletter import render_newsletter`` etc.
-still work, and the _perf_series re-exports keep their object identity for
-the audit identity test.
+Section builders live in focused newsletter modules; this package module owns
+the public context/rendering API and compatibility re-exports.
 """
 
 from __future__ import annotations
@@ -73,6 +69,7 @@ from tarzan.export._perf_series import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+
 def build_context(
     metrics: PortfolioMetrics,
     config: InvestorConfig,
@@ -90,6 +87,8 @@ def build_context(
         issue_number: Sequential issue number for branding.
         benchmark_alpha_beta: Display name of α/β benchmark (from constants.yaml).
         benchmark_geo: Display name of geographic allocation benchmark.
+        ai_summary: Optional precomputed market-context narrative.
+        backtest_portfolios: Optional candidate portfolios for the backtest section.
 
     Returns:
         A dict with all keys consumed by ``portfolio_digest.html.j2``.
@@ -138,6 +137,7 @@ def build_context(
             "version": "v2.0",
         },
     }
+
 
 def render_newsletter(
     metrics: PortfolioMetrics,
@@ -203,6 +203,7 @@ def render_newsletter(
         ai_summary=ai_summary, backtest_portfolios=backtest_portfolios,
     )
     return template.render(**context)
+
 
 def generate_newsletter(
     metrics: PortfolioMetrics,

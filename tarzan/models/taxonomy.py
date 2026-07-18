@@ -1,21 +1,8 @@
-"""Single source of truth for asset-class / geography display order.
+"""Canonical asset-class and geography display ordering.
 
-Historically each surface kept its own hardcoded ordered list of asset
-classes, and they had drifted into FOUR different orders (the engine groups
-Cash with the invested classes; the newsletter shows Gold before Cash; the
-performance table shows Commodities before Gold; the what-if workbook puts
-Cash last). Adding a new asset class meant editing ~7 files.
-
-This module centralizes those orders as *named variants* so there is one
-place to change. It deliberately **preserves** each surface's existing
-sequence rather than unifying them — unifying would visibly reorder rows in
-reports the user files, which is a separate, sign-off-gated decision. The
-variants are asserted against their historical literals in the tests, so an
-accidental reorder is caught.
-
-Lives in the models layer (not export/_format) so the engine, config and
-export can all import it without a layering cycle — the engine must not
-import from export/.
+Every presentation surface uses :data:`CANONICAL_ORDER`. Named aliases keep
+call sites explicit while preserving one membership and ordering authority in
+the models layer, below both computation and presentation.
 """
 
 from __future__ import annotations
