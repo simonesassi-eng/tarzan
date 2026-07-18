@@ -404,10 +404,9 @@ function _ensureLabel_(name) {
 }
 
 /**
- * Returns true if any message in the thread (other than the original
- * Tarzan newsletter) contains the trigger word in its plain-text body.
- * This filters out the original outbound newsletters (which contain
- * neither "Update" body nor are addressed to Tarzan from the user).
+ * Returns the newest matching message ID sent by the active user, or null when
+ * no such reply contains the trigger word. The original Tarzan newsletter is
+ * excluded from the scan.
  */
 function _matchingUpdateMessageId_(thread, wordMatch) {
   const messages = thread.getMessages();

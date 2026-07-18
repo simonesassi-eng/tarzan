@@ -1,9 +1,8 @@
 {# ─── HOLDINGS (grouped by class + role, unified table) ────── #}
-{# Extracted to a partial so the section can be ordered after the
-   Performance ("Returns vs benchmarks") table via {% include %}. The
-   table itself is pre-rendered by newsletter.py::_build_holdings through
-   the shared unified-table renderer, so it matches Returns / Performance /
-   Risk / Optimizer exactly. #}
+{# Kept in a partial so section ordering stays explicit. The table is
+   pre-rendered by newsletter/_sections_alloc.py::_build_holdings through the
+   shared unified-table renderer used by Returns, Performance, Risk, and the
+   Optimizer. #}
           {% if holdings.table_html %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">

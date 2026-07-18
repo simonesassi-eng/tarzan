@@ -1,19 +1,8 @@
-"""Explicit, versioned input schemas — the single source of truth for the
-CSV files Tarzan ingests.
+"""Versioned executable contracts for Tarzan input files.
 
-Historically the "schema" for each input lived implicitly in the loader
-(a required-columns frozenset + case-insensitive `row.get(...)` calls +
-tolerant parsing). That is fine for one expert user feeding known-good Fineco
-exports, but for a product other people feed data into, the contract must be
-**explicit** (one place that *is* the format), **versioned** (so it can evolve
-with a migration story), **self-documenting** (users get a column reference),
-and **validatable at the boundary** (so a bad file is rejected with an
-actionable message, not silently coerced).
-
-This module is intentionally dependency-free (no pydantic) — the schema is a
-small declarative structure so the GitHub Actions newsletter runner needs no
-extra install. Validation logic that consumes these specs lives in
-``tarzan.validation``.
+The dependency-free declarations in this module are the format authority for
+CSV and spreadsheet inputs. Boundary enforcement lives in
+:mod:`tarzan.contracts.validation`.
 """
 
 from __future__ import annotations

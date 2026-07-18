@@ -1,4 +1,6 @@
-"""Export layer: HTML newsletter generation (Tarzan's primary artifact)."""
+"""Public rendering and export interfaces."""
+
+from __future__ import annotations
 
 from tarzan.export.newsletter import (
     build_context,

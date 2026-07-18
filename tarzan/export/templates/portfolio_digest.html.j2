@@ -2,41 +2,15 @@
    Tarzan — Portfolio Digest (email-safe HTML, Jinja2 template)
    =============================================================================
 
-   Context shape (see tarzan/export/newsletter.py::build_context):
-     palette          dict of CSS hex colors
-     header           {date_short, issue_number, inception_date}
-     hero             {total_value, total_pnl_eur, total_pnl_pct,
-                       total_pnl_is_positive, unrealized_eur,
-                       unrealized_pct, unrealized_is_positive,
-                       has_total_pnl, inception_label, gain_pct, twror_pct,
-                       twror_is_positive, invested_value, invested_pct,
-                       cash_value, cash_msg, cash_msg_color,
-                       week_pnl_eur, week_pnl_pct, week_pnl_is_positive,
-                       week_twror_pct, week_twror_is_positive}
-     ai_summary       optional AI-generated market-context note (string);
-                      renders below the Performance section (the only
-                      market-context surface — there is no rule-based fallback)
-     movers           {available, best, worst, benchmark_name}
-     allocation       {rows[], stacked[], tolerance}  (consumed internally by
-                      diversification; not referenced directly in the template)
-     geography        {rows[], stacked[], benchmark_name}  (ditto)
-     diversification  {available, html} — pre-rendered tile dashboard
-                      (asset class + geography + by-holding), injected as
-                      safe HTML; see newsletter.py::_build_diversification
-     holdings         {groups[], summary[], total_count}
-     performance      {portfolio_row, benchmark_rows[],
-                       benchmark_alpha_beta, benchmark_geo}
-     risk_profile     {available, headers[], rows[],
-                       benchmark_alpha_beta, benchmark_geo}
-     optimizer        {available, direction, name, ticker, ...}
-     return_contrib   {winners[], laggards[]}
-     methodology      {available, html} — actual return-window spans, at the bottom
-     tax_note         {available, html} — net-of-tax estimate, rendered at
-                      the very bottom (above the footer)
-     preheader        str
-     footer           {generated_at, version}
+   Context authority: tarzan.export.newsletter.build_context.
 
-   All values are pre-formatted strings so the template is purely presentational.
+   The context contains palette/header/hero data plus the preformatted
+   performance, market, diversification, holdings, risk, optimizer, backtest,
+   contribution, tax, and methodology sections consumed below. Section HTML
+   is built by the focused newsletter modules before template rendering.
+
+   Display values are preformatted; section mappings remain structured so the
+   template can control availability and layout without recomputing analytics.
 ============================================================================= #}
 <!DOCTYPE html>
 <html lang="en">

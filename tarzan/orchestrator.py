@@ -11,20 +11,18 @@ import time
 from dataclasses import asdict
 from typing import Any, Optional, Union
 
+from tarzan.contracts.exceptions import DataIngestionError
 from tarzan.data.loader import (
     load_config,
     load_orders,
     load_targets_per_holding,
 )
-from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.engine.metrics import MetricsEngine
-from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.models.investor_config import InvestorConfig
+from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.runtime.effective_orders import EffectiveOrderSnapshot
 
 logger = logging.getLogger(__name__)
-
-
-from tarzan.models.investor_config import InvestorConfig
 
 
 def _apply_per_holding_targets(holdings, targets: dict) -> None:
