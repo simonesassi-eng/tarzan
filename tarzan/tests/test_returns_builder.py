@@ -9,10 +9,12 @@ import pytest
 from hypothesis import given, strategies as st
 
 from tarzan.engine.returns_builder import (
+    InstrumentIdentityConflict,
     QuantityTimeline,
     build_holdings_from_orders,
     build_order_derived_series,
     build_allocation_timeline,
+    _instrument_identity_by_isin,
     _open_isins,
     _net_qty_by_isin,
 )
@@ -22,7 +24,7 @@ from tarzan.models.order import Order, OrderType
 
 
 def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
-       td=None, kind=InstrumentKind.STOCK):
+       td=None, kind=InstrumentKind.STOCK, equivalence_group=None):
     return Order(
         date=datetime.date(*d),
         trade_date=datetime.date(*td) if td is not None else datetime.date(*d),
@@ -39,33 +41,78 @@ def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
         net_eur=net,
         source="fineco",
         instrument_kind=kind,
+        instrument_equivalence_group=equivalence_group,
+    )
+
+
+def _open_from_orders(orders):
+    return _open_isins(
+        _net_qty_by_isin(orders),
+        _instrument_identity_by_isin(orders),
     )
 
 
 class TestCumExNetting:
-    def test_cum_ex_pair_nets_to_closed(self):
-        # Same 9-char prefix, opposite quantities → both closed.
+    def test_explicit_cum_ex_pair_nets_to_closed(self):
         orders = [
-            _o(OrderType.TRANSFER_IN, "IT0005565392", qty=20000.0, gross=20000.0),
-            _o(OrderType.SELL, "IT0005565400", qty=-20000.0, net=20100.0),
+            _o(
+                OrderType.TRANSFER_IN,
+                "IT0005565392",
+                qty=20000.0,
+                gross=20000.0,
+                equivalence_group="btp-italia-2028",
+            ),
+            _o(
+                OrderType.SELL,
+                "IT0005565400",
+                qty=-20000.0,
+                net=20100.0,
+                equivalence_group="BTP-ITALIA-2028",
+            ),
         ]
-        assert _open_isins(_net_qty_by_isin(orders)) == set()
+        assert _open_from_orders(orders) == set()
 
     def test_distinct_isins_both_open(self):
         orders = [
             _o(OrderType.BUY, "IE0006WW1TQ4", qty=100.0, net=-3500.0),
             _o(OrderType.BUY, "IT0005542359", qty=4000.0, net=-4000.0),
         ]
-        assert _open_isins(_net_qty_by_isin(orders)) == {"IE0006WW1TQ4", "IT0005542359"}
+        assert _open_from_orders(orders) == {"IE0006WW1TQ4", "IT0005542359"}
 
-    def test_partial_prefix_group_stays_open(self):
-        # Three variants of one prefix that net to non-zero → the
-        # non-zero ones stay open.
+    def test_ungrouped_same_prefix_positions_stay_open(self):
         orders = [
             _o(OrderType.BUY, "IE00BL25JL35", qty=157.0, net=-1000.0),
             _o(OrderType.BUY, "IE00BL25JM42", qty=165.0, net=-1000.0),
         ]
-        assert _open_isins(_net_qty_by_isin(orders)) == {"IE00BL25JL35", "IE00BL25JM42"}
+        assert _open_from_orders(orders) == {"IE00BL25JL35", "IE00BL25JM42"}
+
+    def test_equal_opposite_ungrouped_same_prefix_stay_separate(self):
+        orders = [
+            _o(OrderType.BUY, "IE00BL25JL35", qty=100.0, net=-5000.0),
+            _o(OrderType.SELL, "IE00BL25JM42", qty=-100.0, net=3000.0),
+        ]
+        assert _open_from_orders(orders) == {"IE00BL25JL35", "IE00BL25JM42"}
+
+    def test_conflicting_explicit_groups_fail_closed(self):
+        orders = [
+            _o(
+                OrderType.BUY,
+                "IT0005565392",
+                qty=100.0,
+                equivalence_group="document-a",
+            ),
+            _o(
+                OrderType.SELL,
+                "IT0005565392",
+                qty=-100.0,
+                equivalence_group="document-b",
+            ),
+        ]
+        with pytest.raises(
+            InstrumentIdentityConflict,
+            match="IT0005565392: document-a, document-b",
+        ):
+            build_holdings_from_orders(orders)
 
 
 class TestBuildHoldings:
@@ -381,41 +428,121 @@ class TestCumExConservationProperty:
         price=st.floats(min_value=80.0, max_value=120.0),
     )
     def test_cum_ex_contributes_zero_principal(self, face, price):
-        # Property 5: a transfer-in "cum" later sold "ex" with equal face
-        # nets to a closed position → not valued at all.
+        # Property 5: explicitly equivalent cum/ex legs with equal face net
+        # to a closed position and are not valued.
         orders = [
-            _o(OrderType.TRANSFER_IN, "IT0005565392", qty=face,
-               gross=face * price / 100.0, price=price, d=(2025, 1, 1)),
-            _o(OrderType.SELL, "IT0005565400", qty=-face,
-               net=face * price / 100.0, price=price, d=(2025, 6, 1)),
+            _o(
+                OrderType.TRANSFER_IN,
+                "IT0005565392",
+                qty=face,
+                gross=face * price / 100.0,
+                price=price,
+                d=(2025, 1, 1),
+                equivalence_group="btp-italia-2028",
+            ),
+            _o(
+                OrderType.SELL,
+                "IT0005565400",
+                qty=-face,
+                net=face * price / 100.0,
+                price=price,
+                d=(2025, 6, 1),
+                equivalence_group="BTP-ITALIA-2028",
+            ),
         ]
-        assert _open_isins(_net_qty_by_isin(orders)) == set()
+        assert _open_from_orders(orders) == set()
         res = build_order_derived_series(
             orders, enriched_by_isin={}, today=datetime.date(2025, 12, 1))
         # No open ISIN → terminal valuation is zero principal.
         assert res.valuations[-1][1] == pytest.approx(0.0)
 
     def test_cum_ex_with_different_leg_prices_nets_to_zero(self):
-        # Regression: the cum leg arrives at 100 and the ex leg is sold at
-        # 105 (the real BTP reclassification case). The group nets to zero
-        # quantity, so the terminal valuation must be exactly 0 — pricing
-        # each leg at its own carry-flat price would otherwise leave a
-        # spurious residual (here -1,000) that desynced the returns-path
-        # valuation from the snapshot and pushed coverage above 100%.
+        # Regression: explicit cum/ex equivalents net to zero quantity even
+        # when their separate carry-flat prices differ. Without group closure,
+        # separate valuation would leave a spurious residual (here -1,000).
+        opened = datetime.date(2025, 1, 1)
+        closed = datetime.date(2025, 6, 1)
         orders = [
-            _o(OrderType.TRANSFER_IN, "IT0005565392", qty=20000.0,
-               gross=20000.0, price=100.0, d=(2025, 1, 1)),
-            _o(OrderType.SELL, "IT0005565400", qty=-20000.0,
-               net=21000.0, price=105.0, d=(2025, 6, 1)),
+            _o(
+                OrderType.TRANSFER_IN,
+                "IT0005565392",
+                qty=20000.0,
+                gross=20000.0,
+                price=100.0,
+                d=(2025, 1, 1),
+                kind=InstrumentKind.BOND,
+                equivalence_group="btp-italia-2028",
+            ),
+            _o(
+                OrderType.SELL,
+                "IT0005565400",
+                qty=-20000.0,
+                net=21000.0,
+                price=105.0,
+                d=(2025, 6, 1),
+                kind=InstrumentKind.BOND,
+                equivalence_group="btp-italia-2028",
+            ),
         ]
         res = build_order_derived_series(
             orders, enriched_by_isin={}, today=datetime.date(2025, 12, 1))
+        sparse = dict(res.valuations)
+
+        assert sparse[opened] == pytest.approx(20000.0)
+        assert sparse[closed] == pytest.approx(0.0)
         assert res.valuations[-1][1] == pytest.approx(0.0)
+        assert res.actual_value_series.loc[pd.Timestamp(opened)] == pytest.approx(20000.0)
+        assert res.actual_value_series.loc[pd.Timestamp(closed)] == pytest.approx(0.0)
+        # Full liquidation carries the flow-adjusted NAV flat; it must not
+        # leave a residual or fabricate a permanent -100% return.
+        assert res.daily_series.loc[pd.Timestamp(closed)] == pytest.approx(
+            res.daily_series.loc[pd.Timestamp(closed - datetime.timedelta(days=1))]
+        )
         # The closed legs must not be disclosed as fallback-priced, and
         # coverage must never exceed 100%.
         assert "IT0005565392" not in res.provenance["carry_flat"]
         assert "IT0005565400" not in res.provenance["carry_flat"]
         assert res.coverage_pct <= 100.0
+
+    def test_ungrouped_same_prefix_legs_remain_in_sparse_and_dense_history(self):
+        long_isin, short_isin = "IE00BL25JL35", "IE00BL25JM42"
+        opened = datetime.date(2025, 1, 1)
+        shorted = datetime.date(2025, 1, 3)
+        orders = [
+            _o(
+                OrderType.BUY,
+                long_isin,
+                qty=100.0,
+                net=-105.0,
+                price=105.0,
+                d=(2025, 1, 1),
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.SELL,
+                short_isin,
+                qty=-100.0,
+                net=100.0,
+                price=100.0,
+                d=(2025, 1, 3),
+                kind=InstrumentKind.BOND,
+            ),
+        ]
+
+        result = build_order_derived_series(
+            orders,
+            enriched_by_isin={},
+            today=datetime.date(2025, 1, 4),
+        )
+        sparse = dict(result.valuations)
+
+        assert sparse[opened] == pytest.approx(105.0)
+        assert sparse[shorted] == pytest.approx(5.0)
+        assert result.valuations[-1][1] == pytest.approx(5.0)
+        assert result.actual_value_series.loc[pd.Timestamp(opened)] == pytest.approx(105.0)
+        assert result.actual_value_series.loc[pd.Timestamp(shorted)] == pytest.approx(5.0)
+        assert result.daily_series.loc[pd.Timestamp(shorted)] > 0.0
+        assert result.provenance["carry_flat"] == [long_isin, short_isin]
 
 
 class TestMarketPricedFlowsNoJump:
@@ -471,7 +598,7 @@ class TestRoundTripInclusion:
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 10))
         # The position is closed today…
-        assert _open_isins(_net_qty_by_isin(orders)) == set()
+        assert _open_from_orders(orders) == set()
         # …yet its buy and sell are recorded as external flows.
         assert datetime.date(2025, 1, 1) in series.external_flows
         assert datetime.date(2025, 1, 31) in series.external_flows
@@ -605,7 +732,11 @@ class TestDailySeries:
             def instrument_kind(self, isin):
                 return InstrumentKind.STOCK
 
-        monkeypatch.setattr(rb, "_closed_cum_ex_prefixes", lambda tl, d: set())
+        monkeypatch.setattr(
+            rb,
+            "_closed_identity_groups",
+            lambda timeline, day, identity_by_isin=None: set(),
+        )
         nav, actual = rb._build_daily_series(
             _TL(), _Res(), {}, [datetime.date(2024, 1, 1)], datetime.date(2024, 1, 5))
         vals = [round(v, 2) for v in nav.values]
@@ -656,10 +787,12 @@ class TestIncomeInTwror:
 
 
 class TestAllocationTimelinePerHolding:
-    """The per-holding ``holding`` series feeds the newsletter Diversification
-    by-holding trends. It must attribute weight PER ISIN (% of its own class),
-    even when two distinct instruments share a 9-char cum/ex prefix — a real
-    case with Xtrackers MSCI World factor ETFs (IE00BL25J…)."""
+    """Per-holding trends retain exact-ISIN attribution.
+
+    Explicit equivalence evidence may control closure and quote borrowing, but
+    unrelated instruments remain isolated even when their identifiers happen
+    to share leading characters.
+    """
 
     def _enriched(self, isin):
         return Holding(isin=isin, ticker=isin, quantity=100.0,
@@ -713,6 +846,109 @@ class TestAllocationTimelinePerHolding:
         geo = tl["geo"][-1]
         assert geo.get(Geography.USA.value) == pytest.approx(62.5, abs=0.5)
         assert geo.get(Geography.JAPAN.value) == pytest.approx(37.5, abs=0.5)
+
+    def test_explicit_equivalence_allows_quote_borrowing(self):
+        unpriced, priced = "IT0005565392", "IT0005565400"
+        group = "btp-italia-2028"
+        orders = [
+            _o(
+                OrderType.TRANSFER_IN,
+                unpriced,
+                qty=100.0,
+                gross=100.0,
+                price=None,
+                d=(2025, 4, 1),
+                equivalence_group=group,
+            ),
+            _o(
+                OrderType.TRANSFER_IN,
+                priced,
+                qty=100.0,
+                gross=100.0,
+                price=30.0,
+                d=(2025, 4, 1),
+                equivalence_group=group.upper(),
+            ),
+        ]
+
+        timeline = build_allocation_timeline(
+            orders,
+            {unpriced: self._enriched(unpriced), priced: self._enriched(priced)},
+            months=1,
+            today=datetime.date(2025, 6, 1),
+        )
+
+        assert timeline is not None
+        assert timeline["holding"][-1][unpriced] == pytest.approx(50.0)
+        assert timeline["holding"][-1][priced] == pytest.approx(50.0)
+
+    def test_ungrouped_same_prefix_never_borrows_quote(self):
+        unpriced, priced = "IE00BL25JL35", "IE00BL25JM42"
+        orders = [
+            _o(
+                OrderType.BUY,
+                unpriced,
+                qty=100.0,
+                net=-5000.0,
+                price=None,
+                d=(2025, 4, 1),
+            ),
+            _o(
+                OrderType.BUY,
+                priced,
+                qty=100.0,
+                net=-3000.0,
+                price=30.0,
+                d=(2025, 4, 1),
+            ),
+        ]
+
+        timeline = build_allocation_timeline(
+            orders,
+            {unpriced: self._enriched(unpriced), priced: self._enriched(priced)},
+            months=1,
+            today=datetime.date(2025, 6, 1),
+        )
+
+        assert timeline is not None
+        assert unpriced not in timeline["holding"][-1]
+        assert timeline["holding"][-1][priced] == pytest.approx(100.0)
+
+    def test_explicit_equivalence_net_flat_group_contributes_nothing(self):
+        cum, ex = "IT0005565392", "IT0005565400"
+        group = "btp-italia-2028"
+        orders = [
+            _o(
+                OrderType.TRANSFER_IN,
+                cum,
+                qty=100.0,
+                gross=100.0,
+                price=100.0,
+                d=(2025, 4, 1),
+                equivalence_group=group,
+            ),
+            _o(
+                OrderType.SELL,
+                ex,
+                qty=-100.0,
+                net=105.0,
+                price=105.0,
+                d=(2025, 4, 15),
+                equivalence_group=group.upper(),
+            ),
+        ]
+
+        timeline = build_allocation_timeline(
+            orders,
+            {cum: self._enriched(cum), ex: self._enriched(ex)},
+            months=1,
+            today=datetime.date(2025, 6, 1),
+        )
+
+        assert timeline is not None
+        assert all(not bucket for bucket in timeline["holding"])
+        assert all(not bucket for bucket in timeline["holding_invested"])
+        assert all(not bucket for bucket in timeline["asset"])
 
     def test_closed_cum_ex_pair_contributes_nothing(self):
         # A true cum/ex rotation that fully nets out (cum sold, ex never held

@@ -47,11 +47,67 @@ from tarzan.runtime.ledger import Availability
 
 logger = logging.getLogger(__name__)
 
-# Two ISINs whose first 9 characters match are treated as cum/ex variants
-# of the same security (Italian retail BTPs). When their net quantities
-# cancel, the pair is closed and contributes nothing.
-_CUM_EX_PREFIX_LEN = 9
 _QTY_EPS = 0.01
+_IdentityKey = tuple[str, str]
+
+
+class InstrumentIdentityConflict(ValueError):
+    """Raised when one ISIN asserts multiple explicit identity groups."""
+
+
+def _normalized_isin(isin: str) -> str:
+    """Return the complete normalized identifier used by identity keys."""
+    return str(isin or "").strip().upper()
+
+
+def _instrument_identity_by_isin(orders: list[Order]) -> dict[str, _IdentityKey]:
+    """Resolve one explicit identity for every ISIN in ``orders``.
+
+    A documented equivalence group is the only authority that may connect
+    different ISINs. Otherwise the complete normalized ISIN is its own
+    identity. Multiple explicit groups for one ISIN are contradictory input;
+    fail closed instead of selecting one based on row order.
+    """
+    explicit_groups: dict[str, set[str]] = {}
+    isins: set[str] = set()
+    for order in orders:
+        isin = _normalized_isin(order.isin)
+        isins.add(isin)
+        group = str(order.instrument_equivalence_group or "").strip()
+        if group:
+            explicit_groups.setdefault(isin, set()).add(group.casefold())
+
+    conflicts = {
+        isin: groups
+        for isin, groups in explicit_groups.items()
+        if len(groups) > 1
+    }
+    if conflicts:
+        detail = "; ".join(
+            f"{isin}: {', '.join(sorted(groups))}"
+            for isin, groups in sorted(conflicts.items())
+        )
+        raise InstrumentIdentityConflict(
+            "conflicting instrument_equivalence_group assertions for " + detail
+        )
+
+    return {
+        isin: (
+            ("equivalence", next(iter(explicit_groups[isin])))
+            if isin in explicit_groups
+            else ("isin", isin)
+        )
+        for isin in isins
+    }
+
+
+def _identity_key(
+    isin: str,
+    identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
+) -> _IdentityKey:
+    """Look up an ISIN's resolved identity, defaulting to that full ISIN."""
+    normalized = _normalized_isin(isin)
+    return (identity_by_isin or {}).get(normalized, ("isin", normalized))
 
 
 @dataclass
@@ -110,21 +166,27 @@ def _net_qty_by_isin(orders: list[Order]) -> dict[str, float]:
     return qty
 
 
-def _open_isins(qty_by_isin: dict[str, float]) -> set[str]:
-    """Return the ISINs that represent open positions, applying cum/ex
-    prefix netting: when all variants sharing a 9-char prefix net to
-    zero, the whole group is closed (Property 5)."""
-    prefix_totals: dict[str, float] = {}
-    for isin, q in qty_by_isin.items():
-        prefix_totals[isin[:_CUM_EX_PREFIX_LEN]] = (
-            prefix_totals.get(isin[:_CUM_EX_PREFIX_LEN], 0.0) + q
-        )
+def _open_isins(
+    qty_by_isin: dict[str, float],
+    identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
+) -> set[str]:
+    """Return open ISINs after explicit-equivalence closure.
+
+    Different ISINs net together only when orders explicitly assign them the
+    same equivalence group. Every ungrouped instrument retains its complete
+    normalized ISIN as an isolated identity.
+    """
+    identity_totals: dict[_IdentityKey, float] = {}
+    for isin, quantity in qty_by_isin.items():
+        key = _identity_key(isin, identity_by_isin)
+        identity_totals[key] = identity_totals.get(key, 0.0) + quantity
+
     open_isins: set[str] = set()
-    for isin, q in qty_by_isin.items():
-        prefix = isin[:_CUM_EX_PREFIX_LEN]
-        if abs(prefix_totals[prefix]) < _QTY_EPS:
-            continue  # cum/ex pair fully nets out → closed
-        if abs(q) < _QTY_EPS:
+    for isin, quantity in qty_by_isin.items():
+        key = _identity_key(isin, identity_by_isin)
+        if abs(identity_totals[key]) < _QTY_EPS:
+            continue  # explicitly equivalent variants net flat → closed
+        if abs(quantity) < _QTY_EPS:
             continue  # individually closed
         open_isins.add(isin)
     return open_isins
@@ -173,13 +235,14 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
 def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
     """Aggregate orders into synthetic Holdings for the open positions.
 
-    Net quantity per ISIN, cum/ex prefix netting, a seeded market value,
-    and the average-cost basis of the units still held. The returned
+    Net quantity per exact ISIN, explicit-equivalence closure, a seeded market
+    value, and the average-cost basis of the units still held. The returned
     Holdings carry only what the enricher needs; enrichment fills in price
     history, asset class, etc.
     """
     qty_by_isin = _net_qty_by_isin(orders)
-    open_isins = _open_isins(qty_by_isin)
+    identity_by_isin = _instrument_identity_by_isin(orders)
+    open_isins = _open_isins(qty_by_isin, identity_by_isin)
     cost_by_isin = cost_basis_by_isin(orders)
 
     name_by_isin: dict[str, str] = {}
@@ -499,26 +562,27 @@ class PriceResolver:
 # Main: build the dated value series + cash flows + provenance
 # ---------------------------------------------------------------------------
 
-def _closed_cum_ex_prefixes(
-    timeline: "QuantityTimeline", d: datetime.date
-) -> set[str]:
-    """Prefixes whose cum/ex group nets to ~0 held quantity as of ``d``.
+def _closed_identity_groups(
+    timeline: "QuantityTimeline",
+    d: datetime.date,
+    identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
+) -> set[_IdentityKey]:
+    """Explicit identity groups with approximately zero quantity on ``d``.
 
-    Mirrors ``_open_isins`` but as-of a date: Italian retail BTPs are
-    reclassified cum→ex coupon, which appears in the order list as a sell
-    of one ISIN and a transfer-in of a sibling sharing the 9-char prefix.
-    When the group's net quantity is ~0 on ``d`` the position is closed,
-    so it must contribute nothing to that day's valuation — even though
-    each leg individually still shows a non-zero quantity. Pricing the
-    legs separately (often by different carry-flat prices) would otherwise
-    leave a spurious residual and desync the historical valuation from the
-    order-derived snapshot.
+    This is the dated form of :func:`_open_isins`. A cum/ex reclassification
+    is collapsed only when its orders carry the same explicit equivalence
+    group; identifier shape never supplies that evidence.
     """
-    prefix_totals: dict[str, float] = {}
+    identity_totals: dict[_IdentityKey, float] = {}
     for isin in timeline.isins():
-        prefix = isin[:_CUM_EX_PREFIX_LEN]
-        prefix_totals[prefix] = prefix_totals.get(prefix, 0.0) + timeline.qty_at(isin, d)
-    return {p for p, t in prefix_totals.items() if abs(t) < _QTY_EPS}
+        key = _identity_key(isin, identity_by_isin)
+        identity_totals[key] = (
+            identity_totals.get(key, 0.0) + timeline.qty_at(isin, d)
+        )
+    return {
+        key for key, total in identity_totals.items()
+        if abs(total) < _QTY_EPS
+    }
 
 
 def build_order_derived_series(
@@ -549,6 +613,7 @@ def build_order_derived_series(
         last_trade_date = max((o.trade_date for o in orders), default=today)
         if last_trade_date > today:
             today = last_trade_date
+    identity_by_isin = _instrument_identity_by_isin(orders)
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
     unavailable_instruments = tuple(sorted(
@@ -568,16 +633,15 @@ def build_order_derived_series(
             context=",".join(unavailable_instruments),
         )
 
-    # Per-build memo for the cum/ex closed-prefix set. It is a pure function
-    # of (timeline, date) and the timeline is immutable for this build, so we
-    # cache it by date — otherwise it is recomputed (a full per-ISIN timeline
-    # scan) on every calendar day of both value_on and the daily series.
-    _closed_cache: dict[datetime.date, set[str]] = {}
+    # Per-build memo for the closed explicit-identity set. It is a pure
+    # function of (timeline, date, identity evidence), and the inputs are
+    # immutable for this build, so compute it only once per calendar day.
+    _closed_cache: dict[datetime.date, set[_IdentityKey]] = {}
 
-    def closed_prefixes(d: datetime.date) -> set[str]:
+    def closed_identity_groups(d: datetime.date) -> set[_IdentityKey]:
         cached = _closed_cache.get(d)
         if cached is None:
-            cached = _closed_cum_ex_prefixes(timeline, d)
+            cached = _closed_identity_groups(timeline, d, identity_by_isin)
             _closed_cache[d] = cached
         return cached
 
@@ -615,20 +679,20 @@ def build_order_derived_series(
         invisible to TWROR. The cum/ex ``open_isins`` gate is only used
         for the "what is open now" coverage snapshot, not for history.
 
-        Cum/ex pairs that net to ~0 quantity as of ``d`` are the one
-        exception: they are a single bond reclassified across coupon
-        events, so the group is treated as closed (contributes 0),
-        consistent with the order-derived snapshot. Valuing each leg at
-        its own carry-flat price would otherwise leave a spurious residual.
+        Explicitly equivalent variants that net to ~0 quantity as of ``d``
+        are the one exception: they are one instrument reclassified across
+        identifiers, so the group is treated as closed (contributes 0),
+        consistent with the order-derived snapshot. Valuing each leg at its
+        own carry-flat price would otherwise leave a spurious residual.
         """
         total = 0.0
-        closed = closed_prefixes(d)
+        closed = closed_identity_groups(d)
         for isin in timeline.isins():
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
                 continue
-            if isin[:_CUM_EX_PREFIX_LEN] in closed:
-                continue  # cum/ex group nets flat → closed, contributes 0
+            if _identity_key(isin, identity_by_isin) in closed:
+                continue  # explicitly equivalent group nets flat → closed
             price, source = resolver.price_on(isin, d)
             if record_source:
                 provenance[source].append(isin)
@@ -692,7 +756,8 @@ def build_order_derived_series(
     # newsletter mountain chart.
     daily_series, actual_value_series = _build_daily_series(
         timeline, resolver, external_flows, cf_dates, today,
-        closed_prefixes=closed_prefixes,
+        identity_by_isin=identity_by_isin,
+        closed_identity_groups=closed_identity_groups,
     )
 
     # Trim the trailing carried-forward tail. The daily calendar runs to
@@ -891,7 +956,8 @@ def _build_daily_series(
     external_flows: dict[datetime.date, float],
     cf_dates: list[datetime.date],
     today: datetime.date,
-    closed_prefixes=None,
+    identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
+    closed_identity_groups=None,
 ) -> tuple[pd.Series, pd.Series]:
     """Dense daily NAV index + raw actual-value series, first trade → today.
 
@@ -922,10 +988,12 @@ def _build_daily_series(
 
     days = pd.date_range(start=cf_dates[0], end=today, freq="D")
     isins = timeline.isins()
-    # Reuse the caller's date-memoized cum/ex prefix cache when provided (so
-    # the set is computed once per date across value_on AND the daily loop);
-    # fall back to the direct call for standalone/monkeypatched use.
-    _closed = closed_prefixes or (lambda d: _closed_cum_ex_prefixes(timeline, d))
+    # Reuse the caller's date-memoized identity-closure cache when provided
+    # (so the set is computed once per date across value_on and this loop);
+    # fall back to direct explicit-identity resolution for standalone use.
+    _closed = closed_identity_groups or (
+        lambda d: _closed_identity_groups(timeline, d, identity_by_isin)
+    )
 
     def raw_value(d: datetime.date) -> float:
         total = 0.0
@@ -934,8 +1002,8 @@ def _build_daily_series(
             qty = timeline.qty_at(isin, d)
             if abs(qty) < _QTY_EPS:
                 continue
-            if isin[:_CUM_EX_PREFIX_LEN] in closed:
-                continue  # cum/ex group nets flat → closed, contributes 0
+            if _identity_key(isin, identity_by_isin) in closed:
+                continue  # explicitly equivalent group nets flat → closed
             price, source = resolver.price_on(isin, d)
             if price is None:
                 continue
@@ -1018,10 +1086,10 @@ def build_allocation_timeline(
 
     The reconstruction reuses the same primitives as the value series —
     ``QuantityTimeline`` for as-of held quantity, ``PriceResolver`` for the
-    EUR price ladder, and 9-char cum/ex prefix netting so a BTP rotated
-    across coupon events nets to zero rather than lingering as a phantom
-    leg. Asset class and equity geo come from the already-enriched
-    holdings (constant per instrument), so this adds no network calls.
+    EUR price ladder, and explicit equivalence evidence so a documented BTP
+    rotation nets to zero rather than lingering as a phantom leg. Asset class
+    and equity geo come from the already-enriched holdings (constant per
+    instrument), so this adds no network calls.
 
     Output (or ``None`` when there is no order history):
         ``{"dates": [date, ...],
@@ -1053,6 +1121,7 @@ def build_allocation_timeline(
     if dates[-1] != today:
         dates.append(today)
 
+    identity_by_isin = _instrument_identity_by_isin(orders)
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
     unresolved_mechanics = sorted(
@@ -1109,21 +1178,19 @@ def build_allocation_timeline(
         category = _class_for(isin)
         return {category: 100.0} if category is not None else {}
 
-    # Cum/ex ISIN variants share a 9-char prefix. The prefix group is used
-    # ONLY to (a) detect a fully rotated/closed position — a group whose held
-    # quantity nets to ~0 contributes nothing, avoiding a spurious residual
-    # from legs priced differently — and (b) let a priced leg stand in for a
-    # sibling that has no quote on a given day. Each held ISIN is still valued
-    # individually, so two *distinct* instruments that merely share a prefix
-    # (e.g. the Xtrackers MSCI World factor ETFs IE00BL25J…) are never merged.
-    groups: dict[str, list[str]] = {}
+    # Identity groups are used only to (a) suppress a documented equivalent
+    # rotation whose held quantity nets flat and (b) let a priced equivalent
+    # identifier stand in for an unpriced sibling. Each exact ISIN is still
+    # valued and attributed individually. Without an explicit group, the full
+    # normalized ISIN forms a singleton, regardless of identifier shape.
+    groups: dict[_IdentityKey, list[str]] = {}
     for isin in timeline.isins():
-        groups.setdefault(isin[:_CUM_EX_PREFIX_LEN], []).append(isin)
+        groups.setdefault(_identity_key(isin, identity_by_isin), []).append(isin)
 
     def _price_for(isin: str, members: list[str],
                    d: datetime.date) -> tuple[Optional[float], str]:
         """(price, source) for an ISIN, borrowing the best-priced sibling in
-        its cum/ex group when the ISIN itself has no quote on ``d``."""
+        its explicit equivalence group when the ISIN has no quote on ``d``."""
         price, source = resolver.price_on(isin, d)
         if price is not None:
             return price, source
@@ -1155,9 +1222,11 @@ def build_allocation_timeline(
         return value_position(qty, price, instrument_kind=kind)
 
     def _per_isin_values(d: datetime.date) -> dict[str, float]:
-        """{isin: eur_value} valuing each held ISIN individually, with cum/ex
-        safety: a prefix group whose held quantity nets to ~0 (a rotated or
-        closed position) contributes nothing."""
+        """{isin: eur_value} valuing each held ISIN individually.
+
+        An explicit identity group whose held quantity nets to approximately
+        zero contributes nothing; ungrouped ISINs remain singleton groups.
+        """
         out: dict[str, float] = {}
         for members in groups.values():
             if abs(sum(timeline.qty_at(i, d) for i in members)) < _QTY_EPS:
