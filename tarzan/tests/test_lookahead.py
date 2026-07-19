@@ -146,6 +146,584 @@ def test_asof_valuation_uses_asof_not_last_price(monkeypatch, tmp_path):
     )
 
 
+def test_returns_builder_asof_matches_truncated_order_ledger():
+    """The builder itself must apply the as-of boundary before all evidence.
+
+    The future row deliberately conflicts on both kind and equivalence group;
+    a causal build ignores it rather than allowing it to alter or invalidate
+    the pinned result.
+    """
+    from tarzan.engine.returns_builder import build_order_derived_series
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.order import Order, OrderType
+
+    def order(d, *, quantity, price, kind, group):
+        return Order(
+            date=d,
+            trade_date=d,
+            type=OrderType.BUY,
+            isin="ASOF-ORDER",
+            name="As-of order",
+            ticker="",
+            quantity=quantity,
+            currency="EUR",
+            price_native=price,
+            fx_rate=1.0,
+            gross_eur=abs(quantity * price),
+            fees_eur=0.0,
+            net_eur=-abs(quantity * price),
+            instrument_kind=kind,
+            instrument_equivalence_group=group,
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            quantity=10.0,
+            price=100.0,
+            kind=InstrumentKind.STOCK,
+            group="documented-prefix",
+        )
+    ]
+    future = order(
+        datetime.date(2025, 7, 1),
+        quantity=1.0,
+        price=1000.0,
+        kind=InstrumentKind.BOND,
+        group="conflicting-future-group",
+    )
+
+    baseline = build_order_derived_series(prefix, {}, today=_AS_OF)
+    with_future = build_order_derived_series(prefix + [future], {}, today=_AS_OF)
+
+    assert with_future.valuations == baseline.valuations
+    assert with_future.external_flows == baseline.external_flows
+    assert with_future.xirr_cashflows == baseline.xirr_cashflows
+    assert with_future.provenance == baseline.provenance
+    assert with_future.history_availability is baseline.history_availability
+    pd.testing.assert_series_equal(
+        with_future.daily_series,
+        baseline.daily_series,
+    )
+    pd.testing.assert_series_equal(
+        with_future.actual_value_series,
+        baseline.actual_value_series,
+    )
+
+
+def test_returns_builder_rejects_future_only_kind_from_holding():
+    """The builder must sanitize enriched evidence as well as order rows."""
+    from tarzan.engine.returns_builder import (
+        build_holdings_from_orders,
+        build_order_derived_series,
+    )
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.order import Order, OrderType
+
+    def order(d, *, quantity, kind):
+        return Order(
+            date=d,
+            trade_date=d,
+            type=OrderType.BUY,
+            isin="DIRECT-FUTURE-KIND",
+            name="Direct future kind",
+            ticker="",
+            quantity=quantity,
+            currency="EUR",
+            price_native=100.0,
+            fx_rate=1.0,
+            gross_eur=abs(quantity * 100.0),
+            fees_eur=0.0,
+            net_eur=-abs(quantity * 100.0),
+            instrument_kind=kind,
+            instrument_equivalence_group="same-instrument",
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            quantity=10.0,
+            kind=None,
+        )
+    ]
+    future = [
+        order(
+            datetime.date(2025, 7, 1),
+            quantity=1.0,
+            kind=InstrumentKind.BOND,
+        ),
+        order(
+            datetime.date(2025, 7, 2),
+            quantity=1.0,
+            kind=InstrumentKind.ETF,
+        ),
+    ]
+    history = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2025-01-01", _AS_OF.isoformat()]),
+    )
+    prefix_holding = build_holdings_from_orders(prefix)[0]
+    prefix_holding.price_history = history
+    full_holding = build_holdings_from_orders(prefix + future)[0]
+    full_holding.instrument_type = "Bond"
+    full_holding.price_history = history
+
+    baseline = build_order_derived_series(
+        prefix,
+        {prefix_holding.isin: prefix_holding},
+        today=_AS_OF,
+    )
+    with_future = build_order_derived_series(
+        prefix + future,
+        {full_holding.isin: full_holding},
+        today=_AS_OF,
+    )
+
+    assert with_future.history_availability is baseline.history_availability
+    assert with_future.mechanics_unavailable_instruments == (
+        "DIRECT-FUTURE-KIND",
+    )
+    assert with_future.unavailable_instruments == baseline.unavailable_instruments
+    assert with_future.provenance == baseline.provenance
+    assert with_future.valuations == baseline.valuations
+    pd.testing.assert_series_equal(
+        with_future.daily_series,
+        baseline.daily_series,
+    )
+
+
+def test_metrics_history_filters_future_orders_before_enrichment(monkeypatch):
+    """Metrics history must establish its effective ledger before enrichment.
+
+    The future sale conflicts on both kind and equivalence group, while the
+    supplied holding carries the kind conflict a full-ledger derivation would
+    have retained. Neither can alter mechanics, history, tax, or inception for
+    a run pinned before that sale.
+    """
+    from dataclasses import replace
+
+    from tarzan.engine.metrics import MetricsEngine
+    from tarzan.engine.returns_builder import (
+        build_allocation_timeline,
+        build_holdings_from_orders,
+    )
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.holding import AssetClass
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.order import Order, OrderType
+
+    monkeypatch.setattr("tarzan.runtime.today", lambda: _AS_OF)
+
+    def order(d, *, order_type, quantity, price, kind, group):
+        cash = abs(quantity * price)
+        return Order(
+            date=d,
+            trade_date=d,
+            type=order_type,
+            isin="ASOF-METRICS",
+            name="As-of metrics",
+            ticker="ASOF-METRICS",
+            quantity=quantity,
+            currency="EUR",
+            price_native=price,
+            fx_rate=1.0,
+            gross_eur=cash,
+            fees_eur=0.0,
+            net_eur=-cash if quantity > 0 else cash,
+            instrument_kind=kind,
+            instrument_equivalence_group=group,
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            order_type=OrderType.BUY,
+            quantity=10.0,
+            price=100.0,
+            kind=InstrumentKind.STOCK,
+            group="documented-prefix",
+        ),
+        order(
+            datetime.date(2025, 3, 1),
+            order_type=OrderType.SELL,
+            quantity=-2.0,
+            price=200.0,
+            kind=InstrumentKind.STOCK,
+            group="documented-prefix",
+        ),
+    ]
+    future = order(
+        datetime.date(2025, 7, 1),
+        order_type=OrderType.SELL,
+        quantity=-1.0,
+        price=1000.0,
+        kind=InstrumentKind.BOND,
+        group="conflicting-future-group",
+    )
+
+    baseline_holding = build_holdings_from_orders(prefix)[0]
+    baseline_holding.instrument_type = "Stock"
+    baseline_holding.asset_class = AssetClass.EQUITIES
+    baseline_holding.class_breakdown = {AssetClass.EQUITIES: 100.0}
+    baseline_holding.price_history = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2025-01-01", _AS_OF.isoformat()]),
+    )
+    contaminated_holding = replace(
+        baseline_holding,
+        security_type=None,
+        instrument_kind_evidence=("STOCK", "BOND"),
+        asset_class=AssetClass.EQUITIES,
+        class_breakdown={AssetClass.FIXED_INCOME: 100.0},
+    )
+
+    def history_context(orders, holding):
+        config = InvestorConfig()
+        config.rebalancing_capital_gains_tax_standard_pctg = 26.0
+        engine = MetricsEngine([holding], config, orders=orders)
+        context = {}
+        engine._portfolio_history_from_orders(context)
+        engine._returns(context)
+        context["_allocation"] = build_allocation_timeline(
+            context["_effective_orders"],
+            context["_enriched_by_isin"],
+            months=6,
+            today=_AS_OF,
+        )
+        current_category = next(iter(
+            holding.class_breakdown or {holding.asset_class: 100.0}
+        ))
+        context["allocation_by_class"] = pd.DataFrame([
+            {
+                "category": (
+                    current_category.value
+                    if hasattr(current_category, "value")
+                    else str(current_category)
+                ),
+                "weight_pct": 100.0,
+            }
+        ])
+        context["allocation_by_geo"] = pd.DataFrame()
+        engine._allocation_timeline(context)
+        context["_engine_allocation"] = context.get("allocation_timeline")
+        return context
+
+    baseline = history_context(prefix, baseline_holding)
+    with_future = history_context(prefix + [future], contaminated_holding)
+
+    assert with_future["_effective_orders"] == prefix
+    assert with_future["_historical_classification_projected"] is True
+    assert with_future["history_availability"] == baseline["history_availability"]
+    assert with_future["history_unavailable_instruments"] == baseline[
+        "history_unavailable_instruments"
+    ]
+    assert baseline["estimated_cgt_eur"] > 0.0
+    assert with_future["estimated_cgt_eur"] == baseline["estimated_cgt_eur"]
+    assert with_future["inception_date"] == baseline["inception_date"]
+    assert with_future["_order_series"].valuations == baseline[
+        "_order_series"
+    ].valuations
+    assert with_future["_order_series"].external_flows == baseline[
+        "_order_series"
+    ].external_flows
+    assert with_future["_allocation"] is not None
+    assert with_future["_allocation"]["asset"] == baseline["_allocation"]["asset"]
+    assert with_future["_allocation"]["holding"] == baseline["_allocation"][
+        "holding"
+    ]
+    assert with_future["_engine_allocation"] is not None
+    assert with_future["_engine_allocation"]["asset"] == baseline[
+        "_engine_allocation"
+    ]["asset"]
+    pd.testing.assert_series_equal(
+        with_future["portfolio_history"],
+        baseline["portfolio_history"],
+    )
+
+
+def test_metrics_history_rejects_future_only_kind_from_holding(monkeypatch):
+    """A future order cannot backfill missing mechanics through its holding."""
+    from dataclasses import replace
+
+    from tarzan.engine.metrics import MetricsEngine
+    from tarzan.engine.returns_builder import build_holdings_from_orders
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.order import Order, OrderType
+
+    monkeypatch.setattr("tarzan.runtime.today", lambda: _AS_OF)
+
+    def order(d, *, quantity, kind, group):
+        return Order(
+            date=d,
+            trade_date=d,
+            type=OrderType.BUY,
+            isin="FUTURE-ONLY-KIND",
+            name="Future-only kind",
+            ticker="FUTURE-ONLY-KIND",
+            quantity=quantity,
+            currency="EUR",
+            price_native=100.0,
+            fx_rate=1.0,
+            gross_eur=abs(quantity * 100.0),
+            fees_eur=0.0,
+            net_eur=-abs(quantity * 100.0),
+            instrument_kind=kind,
+            instrument_equivalence_group=group,
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            quantity=10.0,
+            kind=None,
+            group="effective-group",
+        )
+    ]
+    future = [
+        order(
+            datetime.date(2025, 7, 1),
+            quantity=1.0,
+            kind=InstrumentKind.BOND,
+            group="future-conflicting-group",
+        ),
+        order(
+            datetime.date(2025, 7, 2),
+            quantity=1.0,
+            kind=InstrumentKind.ETF,
+            group="future-conflicting-group",
+        ),
+    ]
+    baseline_holding = build_holdings_from_orders(prefix)[0]
+    baseline_holding.price_history = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2025-01-01", _AS_OF.isoformat()]),
+    )
+    contaminated_holding = replace(
+        baseline_holding,
+        security_type="BOND",
+        instrument_type="Bond",
+        instrument_kind_evidence=("BOND", "ETF"),
+    )
+
+    def history_context(orders, holding):
+        engine = MetricsEngine([holding], InvestorConfig(), orders=orders)
+        context = {}
+        engine._portfolio_history_from_orders(context)
+        engine._returns(context)
+        return context
+
+    baseline = history_context(prefix, baseline_holding)
+    with_future = history_context(prefix + future, contaminated_holding)
+
+    assert with_future["_effective_orders"] == prefix
+    assert with_future["history_availability"] == baseline["history_availability"]
+    assert with_future["history_unavailable_instruments"] == baseline[
+        "history_unavailable_instruments"
+    ]
+    assert with_future["_order_series"].provenance == baseline[
+        "_order_series"
+    ].provenance
+    assert with_future["_order_series"].valuations == baseline[
+        "_order_series"
+    ].valuations
+    assert with_future["xirr_pct"] is baseline["xirr_pct"] is None
+    assert with_future["twror_pct"] is baseline["twror_pct"] is None
+    pd.testing.assert_series_equal(
+        with_future["_order_series"].daily_series,
+        baseline["_order_series"].daily_series,
+    )
+
+
+def test_asof_preserves_provider_kind_against_excluded_future_kind(monkeypatch):
+    """Independent provider mechanics survive removal of future order kind."""
+    from tarzan.engine.metrics import MetricsEngine
+    from tarzan.engine.returns_builder import (
+        build_holdings_from_orders,
+        build_order_derived_series,
+    )
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.holding import AssetClass
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.order import Order, OrderType
+    from tarzan.runtime.ledger import Availability
+
+    monkeypatch.setattr("tarzan.runtime.today", lambda: _AS_OF)
+
+    def order(d, *, order_type, quantity, price, kind):
+        cash = abs(quantity * price)
+        return Order(
+            date=d,
+            trade_date=d,
+            type=order_type,
+            isin="PROVIDER-KIND",
+            name="Provider kind",
+            ticker="PROVIDER-KIND",
+            quantity=quantity,
+            currency="EUR",
+            price_native=price,
+            fx_rate=1.0,
+            gross_eur=cash,
+            fees_eur=0.0,
+            net_eur=-cash if quantity > 0 else cash,
+            instrument_kind=kind,
+            instrument_equivalence_group="provider-kind-identity",
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            order_type=OrderType.BUY,
+            quantity=10.0,
+            price=100.0,
+            kind=None,
+        ),
+        order(
+            datetime.date(2025, 3, 1),
+            order_type=OrderType.SELL,
+            quantity=-2.0,
+            price=200.0,
+            kind=None,
+        ),
+    ]
+    future = order(
+        datetime.date(2025, 7, 1),
+        order_type=OrderType.BUY,
+        quantity=1.0,
+        price=100.0,
+        kind=InstrumentKind.BOND,
+    )
+    history = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2025-01-01", _AS_OF.isoformat()]),
+    )
+
+    def enrich(holding):
+        holding.instrument_type = "Stock"
+        holding.asset_class = AssetClass.EQUITIES
+        holding.class_breakdown = {AssetClass.EQUITIES: 100.0}
+        holding.price_history = history
+        return holding
+
+    prefix_holding = enrich(build_holdings_from_orders(prefix)[0])
+    full_holding = enrich(build_holdings_from_orders(prefix + [future])[0])
+    direct_baseline = build_order_derived_series(
+        prefix,
+        {prefix_holding.isin: prefix_holding},
+        today=_AS_OF,
+    )
+    direct_with_future = build_order_derived_series(
+        prefix + [future],
+        {full_holding.isin: full_holding},
+        today=_AS_OF,
+    )
+
+    def metrics_context(orders, holding):
+        config = InvestorConfig()
+        config.rebalancing_capital_gains_tax_standard_pctg = 26.0
+        engine = MetricsEngine([holding], config, orders=orders)
+        context = {}
+        engine._portfolio_history_from_orders(context)
+        engine._returns(context)
+        return context
+
+    metrics_baseline = metrics_context(prefix, prefix_holding)
+    metrics_with_future = metrics_context(prefix + [future], full_holding)
+
+    assert direct_baseline.history_availability is Availability.AVAILABLE
+    assert direct_with_future.history_availability is direct_baseline.history_availability
+    assert direct_with_future.provenance == direct_baseline.provenance
+    assert direct_with_future.valuations == direct_baseline.valuations
+    assert metrics_baseline["estimated_cgt_eur"] > 0.0
+    assert metrics_with_future["estimated_cgt_eur"] == metrics_baseline[
+        "estimated_cgt_eur"
+    ]
+    assert metrics_with_future["history_availability"] == metrics_baseline[
+        "history_availability"
+    ]
+    pd.testing.assert_series_equal(
+        metrics_with_future["portfolio_history"],
+        metrics_baseline["portfolio_history"],
+    )
+
+
+def test_asof_preserves_provider_etf_historical_classification():
+    """Provider ETF category survives a conflicting excluded future kind."""
+    from tarzan.engine.returns_builder import (
+        build_allocation_timeline,
+        build_holdings_from_orders,
+    )
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.holding import AssetClass
+    from tarzan.models.order import Order, OrderType
+
+    def order(d, *, quantity, kind):
+        return Order(
+            date=d,
+            trade_date=d,
+            type=OrderType.BUY,
+            isin="PROVIDER-ETF-CLASS",
+            name="Provider ETF class",
+            ticker="PROVIDER-ETF-CLASS",
+            quantity=quantity,
+            currency="EUR",
+            price_native=100.0,
+            fx_rate=1.0,
+            gross_eur=abs(quantity * 100.0),
+            fees_eur=0.0,
+            net_eur=-abs(quantity * 100.0),
+            instrument_kind=kind,
+            instrument_equivalence_group="provider-etf-identity",
+        )
+
+    prefix = [
+        order(
+            datetime.date(2025, 1, 1),
+            quantity=10.0,
+            kind=InstrumentKind.ETF,
+        )
+    ]
+    future = order(
+        datetime.date(2025, 7, 1),
+        quantity=1.0,
+        kind=InstrumentKind.BOND,
+    )
+    history = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2025-01-01", _AS_OF.isoformat()]),
+    )
+
+    def enrich(holding):
+        holding.instrument_type = "ETF"
+        holding.asset_class = AssetClass.EQUITIES
+        holding.class_breakdown = {AssetClass.EQUITIES: 100.0}
+        holding.price_history = history
+        return holding
+
+    prefix_holding = enrich(build_holdings_from_orders(prefix)[0])
+    full_holding = enrich(build_holdings_from_orders(prefix + [future])[0])
+    baseline = build_allocation_timeline(
+        prefix,
+        {prefix_holding.isin: prefix_holding},
+        months=6,
+        today=_AS_OF,
+    )
+    with_future = build_allocation_timeline(
+        prefix + [future],
+        {full_holding.isin: full_holding},
+        months=6,
+        today=_AS_OF,
+    )
+
+    assert baseline is not None
+    assert with_future is not None
+    assert with_future["asset"] == baseline["asset"]
+    assert all(
+        bucket == {AssetClass.EQUITIES.value: 100.0}
+        for bucket in with_future["asset"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Production-readiness bug exploration: C1 output invariance
 # ---------------------------------------------------------------------------

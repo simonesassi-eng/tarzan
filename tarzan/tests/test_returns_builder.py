@@ -21,6 +21,7 @@ from tarzan.engine.returns_builder import (
 from tarzan.instruments.registry import InstrumentKind
 from tarzan.models.holding import Holding, AssetClass, Geography
 from tarzan.models.order import Order, OrderType
+from tarzan.runtime.ledger import Availability
 
 
 def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
@@ -251,23 +252,39 @@ class TestPriceLookupBinarySearch:
                   datetime.date(2025, 4, 1)]:    # after last
             assert _price_at(s, d) == naive(s, d), d
 
-    def test_interp_synthetic_matches_linear_reference(self):
-        from tarzan.engine.returns_builder import _interp_synthetic
-        s = self._series()
-        # Midpoint between 2025-01-01 (100) and 2025-01-10 (110): 5 of 9 days.
-        price, src = _interp_synthetic(s, datetime.date(2025, 1, 6))
-        assert src == "synthetic"
-        assert price == pytest.approx(100.0 + (5.0 / 9.0) * 10.0)
-        # Exact sample point → the point's own value, tagged synthetic.
-        assert _interp_synthetic(s, datetime.date(2025, 2, 1)) == (90.0, "synthetic")
-        # Outside the range → carry-flat at the nearest end.
-        assert _interp_synthetic(s, datetime.date(2024, 1, 1)) == (100.0, "carry_flat")
-        assert _interp_synthetic(s, datetime.date(2026, 1, 1)) == (130.0, "carry_flat")
+    def test_causal_order_price_uses_only_exact_or_prior_observations(self):
+        from tarzan.engine.returns_builder import _causal_order_price
 
-    def test_interp_single_point_is_carry_flat(self):
-        from tarzan.engine.returns_builder import _interp_synthetic
-        s = pd.Series([42.0], index=pd.to_datetime(["2025-01-01"]))
-        assert _interp_synthetic(s, datetime.date(2025, 6, 1)) == (42.0, "carry_flat")
+        series = self._series()
+        assert _causal_order_price(
+            series, datetime.date(2024, 12, 31)
+        ) == (None, "excluded")
+        assert _causal_order_price(
+            series, datetime.date(2025, 1, 1)
+        ) == (100.0, "synthetic")
+        assert _causal_order_price(
+            series, datetime.date(2025, 1, 6)
+        ) == (100.0, "carry_flat")
+        assert _causal_order_price(
+            series, datetime.date(2025, 2, 1)
+        ) == (90.0, "synthetic")
+        assert _causal_order_price(
+            series, datetime.date(2026, 1, 1)
+        ) == (130.0, "carry_flat")
+
+    def test_causal_order_price_never_backfills_single_future_point(self):
+        from tarzan.engine.returns_builder import _causal_order_price
+
+        series = pd.Series([42.0], index=pd.to_datetime(["2025-06-01"]))
+        assert _causal_order_price(
+            series, datetime.date(2025, 5, 31)
+        ) == (None, "excluded")
+        assert _causal_order_price(
+            series, datetime.date(2025, 6, 1)
+        ) == (42.0, "synthetic")
+        assert _causal_order_price(
+            series, datetime.date(2025, 6, 2)
+        ) == (42.0, "carry_flat")
 
 
 def _enriched_with_history(isin, prices, start=(2025, 1, 1)):
@@ -287,18 +304,27 @@ class TestFallbackLadder:
             orders, enriched, today=datetime.date(2025, 1, 3))
         assert "AAA" in res.provenance["yfinance"]
         assert res.coverage_pct == pytest.approx(100.0, abs=1e-6)
+        assert res.history_availability is Availability.AVAILABLE
 
-    def test_synthetic_rung_when_no_history(self):
-        # No enriched history → must interpolate between two order prices.
+    def test_future_order_price_is_not_interpolated_into_history(self):
+        from tarzan.runtime.ledger import Availability
+
         orders = [
-            _o(OrderType.BUY, "BBB", qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
-            _o(OrderType.BUY, "BBB", qty=10.0, net=-1200.0, price=120.0, d=(2025, 3, 1)),
+            _o(OrderType.BUY, "BBB", qty=10.0, net=-1000.0, price=100.0,
+               d=(2025, 1, 1)),
+            _o(OrderType.BUY, "BBB", qty=10.0, net=-1200.0, price=120.0,
+               d=(2025, 3, 1)),
         ]
-        res = build_order_derived_series(
-            orders, enriched_by_isin={}, today=datetime.date(2025, 2, 1))
-        # Between Jan 1 (100) and Mar 1 (120), Feb 1 interpolates inside.
-        assert "BBB" in res.provenance["synthetic"]
-        assert res.coverage_pct == pytest.approx(0.0)  # no real market data
+        today = datetime.date(2025, 2, 1)
+        result = build_order_derived_series(
+            orders, enriched_by_isin={}, today=today
+        )
+
+        assert result.valuations[-1][1] == pytest.approx(1000.0)
+        assert result.provenance["synthetic"] == ["BBB"]
+        assert result.provenance["carry_flat"] == ["BBB"]
+        assert result.history_availability is Availability.DEGRADED
+        assert all(date <= today for date, _ in result.xirr_cashflows)
 
     def test_carry_flat_with_single_price(self):
         orders = [_o(OrderType.BUY, "CCC", qty=10.0, net=-1000.0, price=100.0,
@@ -306,6 +332,7 @@ class TestFallbackLadder:
         res = build_order_derived_series(
             orders, enriched_by_isin={}, today=datetime.date(2025, 6, 1))
         assert "CCC" in res.provenance["carry_flat"]
+        assert res.history_availability is Availability.DEGRADED
 
     def test_excluded_when_no_price(self):
         orders = [_o(OrderType.BUY, "DDD", qty=10.0, net=-1000.0, price=None,
@@ -313,6 +340,192 @@ class TestFallbackLadder:
         res = build_order_derived_series(
             orders, enriched_by_isin={}, today=datetime.date(2025, 6, 1))
         assert "DDD" in res.provenance["excluded"]
+        assert res.history_availability is Availability.UNAVAILABLE
+        assert res.unavailable_instruments == ("DDD",)
+
+    def test_same_day_round_trip_records_fallback_evidence(self):
+        orders = [
+            _o(
+                OrderType.BUY,
+                "SAME-DAY",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                d=(2025, 1, 1),
+            ),
+            _o(
+                OrderType.SELL,
+                "SAME-DAY",
+                qty=-10.0,
+                net=1100.0,
+                price=110.0,
+                d=(2025, 1, 1),
+            ),
+        ]
+
+        result = build_order_derived_series(
+            orders,
+            enriched_by_isin={},
+            today=datetime.date(2025, 1, 1),
+        )
+
+        assert result.provenance["synthetic"] == ["SAME-DAY"]
+        assert result.history_availability is Availability.DEGRADED
+
+    def test_same_day_unpriceable_round_trip_nulls_metrics(self, monkeypatch):
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        analysis_date = datetime.date(2025, 1, 1)
+        monkeypatch.setattr("tarzan.runtime.today", lambda: analysis_date)
+        orders = [
+            _o(
+                OrderType.BUY,
+                "SAME-DAY-MISSING",
+                qty=10.0,
+                net=-1000.0,
+                price=None,
+                d=(2025, 1, 1),
+            ),
+            _o(
+                OrderType.SELL,
+                "SAME-DAY-MISSING",
+                qty=-10.0,
+                net=1100.0,
+                price=None,
+                d=(2025, 1, 1),
+            ),
+        ]
+        engine = MetricsEngine([], InvestorConfig(), orders=orders)
+        context = {}
+
+        engine._portfolio_history_from_orders(context)
+        engine._returns(context)
+        metrics = engine._build_result(context)
+
+        assert context["_order_series"].provenance["excluded"] == [
+            "SAME-DAY-MISSING"
+        ]
+        assert metrics.history_availability == "UNAVAILABLE"
+        assert metrics.history_unavailable_instruments == (
+            "SAME-DAY-MISSING",
+        )
+        assert metrics.portfolio_history is None
+        assert metrics.xirr_pct is None
+        assert metrics.twror_pct is None
+        assert metrics.pnl_eur is None
+        assert metrics.estimated_cgt_eur is None
+
+    @pytest.mark.parametrize("invalid_price", [float("nan"), float("inf")])
+    def test_non_finite_prices_fail_closed_every_history_surface(
+        self,
+        monkeypatch,
+        invalid_price,
+    ):
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        analysis_date = datetime.date(2025, 1, 3)
+        monkeypatch.setattr("tarzan.runtime.today", lambda: analysis_date)
+        bad, good = "NON-FINITE", "GOOD-PRICE"
+        orders = [
+            _o(
+                OrderType.BUY,
+                bad,
+                qty=1000.0,
+                net=-1000.0,
+                price=invalid_price,
+                d=(2025, 1, 1),
+                kind=InstrumentKind.BOND,
+            ),
+            _o(
+                OrderType.BUY,
+                good,
+                qty=10.0,
+                net=-500.0,
+                price=50.0,
+                d=(2025, 1, 1),
+                kind=InstrumentKind.STOCK,
+            ),
+        ]
+        invalid_holding = _enriched_with_history(
+            bad,
+            [invalid_price, invalid_price, invalid_price],
+        )
+        invalid_holding.asset_class = AssetClass.FIXED_INCOME
+        invalid_holding.instrument_type = "Government Bond"
+        invalid_holding.current_price = invalid_price
+        invalid_holding.data_source = "borsa_italiana/mot/btp"
+        valid_holding = _enriched_with_history(good, [50.0, 51.0, 52.0])
+        valid_holding.asset_class = AssetClass.EQUITIES
+        enriched = {bad: invalid_holding, good: valid_holding}
+
+        series = build_order_derived_series(
+            orders,
+            enriched,
+            today=analysis_date,
+        )
+        allocation = build_allocation_timeline(
+            orders,
+            enriched,
+            months=1,
+            today=analysis_date,
+        )
+        engine = MetricsEngine(
+            [invalid_holding, valid_holding],
+            InvestorConfig(),
+            orders=orders,
+        )
+        context = {}
+        engine._portfolio_history_from_orders(context)
+        engine._returns(context)
+        metrics = engine._build_result(context)
+
+        assert series.history_availability is Availability.UNAVAILABLE
+        assert series.unavailable_instruments == (bad,)
+        assert series.provenance["excluded"] == [bad]
+        assert bad not in series.provenance["yfinance"]
+        assert bad not in series.provenance["borsa_italiana"]
+        assert bad not in series.provenance["synthetic"]
+        assert allocation is None
+        assert metrics.history_availability == "UNAVAILABLE"
+        assert metrics.portfolio_history is None
+        assert metrics.returns_coverage_pct is None
+        assert metrics.xirr_pct is None
+        assert metrics.twror_pct is None
+        assert metrics.pnl_eur is None
+
+    def test_terminal_price_does_not_hide_earlier_missing_history(self):
+        orders = [
+            _o(
+                OrderType.TRANSFER_IN,
+                "LATE-PRICE",
+                qty=10.0,
+                gross=1000.0,
+                price=None,
+                d=(2025, 1, 1),
+            ),
+            _o(
+                OrderType.BUY,
+                "LATE-PRICE",
+                qty=10.0,
+                net=-1000.0,
+                price=100.0,
+                d=(2025, 1, 10),
+            ),
+        ]
+
+        result = build_order_derived_series(
+            orders,
+            enriched_by_isin={},
+            today=datetime.date(2025, 1, 15),
+        )
+
+        assert result.valuations[-1][1] == pytest.approx(2000.0)
+        assert "LATE-PRICE" in result.provenance["excluded"]
+        assert "LATE-PRICE" in result.provenance["carry_flat"]
+        assert result.history_availability is Availability.UNAVAILABLE
+        assert result.unavailable_instruments == ("LATE-PRICE",)
 
     def test_fixed_income_etf_uses_unit_pricing_not_bond_per_100(self):
         orders = [
@@ -341,6 +554,7 @@ class TestFallbackLadder:
         )
         assert res.valuations[-1][1] == 0.0
         assert "UNKNOWN-KIND" in res.provenance["excluded"]
+        assert res.history_availability is Availability.UNAVAILABLE
 
 
 def _enriched_borsa_bond(isin, current_price, qty=0.0, market_value=0.0):
@@ -498,10 +712,15 @@ class TestCumExConservationProperty:
         assert res.daily_series.loc[pd.Timestamp(closed)] == pytest.approx(
             res.daily_series.loc[pd.Timestamp(closed - datetime.timedelta(days=1))]
         )
-        # The closed legs must not be disclosed as fallback-priced, and
-        # coverage must never exceed 100%.
-        assert "IT0005565392" not in res.provenance["carry_flat"]
+        # Whole-history provenance retains the fallback used while the cum leg
+        # was held and the exact observation used to value the closing ex-leg
+        # external flow. The closed group still contributes no terminal value,
+        # so terminal coverage remains bounded.
+        assert "IT0005565392" in res.provenance["synthetic"]
+        assert "IT0005565392" in res.provenance["carry_flat"]
+        assert "IT0005565400" in res.provenance["synthetic"]
         assert "IT0005565400" not in res.provenance["carry_flat"]
+        assert res.history_availability is Availability.DEGRADED
         assert res.coverage_pct <= 100.0
 
     def test_ungrouped_same_prefix_legs_remain_in_sparse_and_dense_history(self):
@@ -882,7 +1101,7 @@ class TestAllocationTimelinePerHolding:
         assert timeline["holding"][-1][unpriced] == pytest.approx(50.0)
         assert timeline["holding"][-1][priced] == pytest.approx(50.0)
 
-    def test_ungrouped_same_prefix_never_borrows_quote(self):
+    def test_ungrouped_same_prefix_missing_quote_fails_closed(self):
         unpriced, priced = "IE00BL25JL35", "IE00BL25JM42"
         orders = [
             _o(
@@ -910,9 +1129,45 @@ class TestAllocationTimelinePerHolding:
             today=datetime.date(2025, 6, 1),
         )
 
-        assert timeline is not None
-        assert unpriced not in timeline["holding"][-1]
-        assert timeline["holding"][-1][priced] == pytest.approx(100.0)
+        assert timeline is None
+
+    def test_later_closed_unpriceable_position_fails_closed(self):
+        unpriced, priced = "CLOSED-WITHOUT-PRICE", "PRICED-OPEN"
+        orders = [
+            _o(
+                OrderType.BUY,
+                unpriced,
+                qty=100.0,
+                net=-5000.0,
+                price=None,
+                d=(2025, 4, 1),
+            ),
+            _o(
+                OrderType.BUY,
+                priced,
+                qty=100.0,
+                net=-3000.0,
+                price=30.0,
+                d=(2025, 4, 1),
+            ),
+            _o(
+                OrderType.SELL,
+                unpriced,
+                qty=-100.0,
+                net=5500.0,
+                price=None,
+                d=(2025, 5, 15),
+            ),
+        ]
+
+        timeline = build_allocation_timeline(
+            orders,
+            {unpriced: self._enriched(unpriced), priced: self._enriched(priced)},
+            months=3,
+            today=datetime.date(2025, 6, 1),
+        )
+
+        assert timeline is None
 
     def test_explicit_equivalence_net_flat_group_contributes_nothing(self):
         cum, ex = "IT0005565392", "IT0005565400"
@@ -1236,6 +1491,130 @@ class TestUnavailableOrderHistory:
             "_portfolio_history_from_orders",
             "_returns",
         }
+
+    def test_metrics_null_history_outputs_when_causal_price_is_missing(self):
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        orders = [
+            _o(
+                OrderType.BUY,
+                "NO-CAUSAL-PRICE",
+                qty=10.0,
+                net=-1000.0,
+                price=None,
+                kind=InstrumentKind.STOCK,
+            )
+        ]
+        holding = build_holdings_from_orders(orders)[0]
+        engine = MetricsEngine([holding], InvestorConfig(), orders=orders)
+        context: dict = {}
+
+        engine._portfolio_history_from_orders(context)
+        engine._performance(context)
+        engine._risk(context)
+        engine._returns(context)
+
+        assert context["history_availability"] == Availability.UNAVAILABLE.value
+        assert context["_order_history_unavailable"] == ["NO-CAUSAL-PRICE"]
+        assert context["portfolio_history"].empty
+        assert context["performance"] is None
+        assert context["risk"] is None
+        assert context["xirr_pct"] is None
+        assert context["twror_pct"] is None
+        assert context["pnl_eur"] is None
+
+    def test_price_only_history_gap_preserves_current_rebalancing(
+        self,
+        monkeypatch,
+    ):
+        from tarzan import runtime
+        import tarzan.engine.metrics as metrics_module
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.investor_config import InvestorConfig
+
+        orders = [
+            _o(
+                OrderType.TRANSFER_IN,
+                "LATE-MARKET-HISTORY",
+                qty=10.0,
+                gross=1000.0,
+                price=None,
+                d=(2025, 1, 1),
+                kind=InstrumentKind.STOCK,
+            )
+        ]
+        holding = build_holdings_from_orders(orders)[0]
+        holding.name = "Late market history"
+        holding.instrument_type = "Stock"
+        holding.asset_class = AssetClass.EQUITIES
+        holding.class_breakdown = {AssetClass.EQUITIES: 100.0}
+        holding.current_price = 101.0
+        holding.current_value = 1010.0
+        holding.market_value_eur = 1010.0
+        holding.price_history = pd.Series(
+            [100.0, 101.0],
+            index=pd.to_datetime(["2025-01-02", "2025-01-03"]),
+        )
+
+        plan_calls = []
+
+        def _plan(_holdings, plan_config, _total_value, *, lump_sum=None):
+            plan_calls.append((plan_config.rebalancing_no_sell, lump_sum))
+            return [], []
+
+        monkeypatch.setattr(metrics_module, "BENCHMARKS", {})
+        monkeypatch.setattr(
+            metrics_module,
+            "_fetch_benchmark_history",
+            lambda _ticker: pd.Series(dtype=float),
+        )
+        monkeypatch.setattr(
+            "tarzan.data.geo_resolver.lookup_geo_by_index_name",
+            lambda _name: None,
+        )
+        monkeypatch.setattr(
+            "tarzan.engine.rebalancer.compute_unified_rebalancing",
+            _plan,
+        )
+        monkeypatch.setattr(
+            "tarzan.engine.rebalancer.plan_cost",
+            lambda *_args, **_kwargs: {"cgt_eur": 0.0, "fees_eur": 0.0},
+        )
+        monkeypatch.setattr(
+            "tarzan.runtime.audit.record_rebalancing_plan",
+            lambda *_args, **_kwargs: None,
+        )
+        runtime.configure(
+            deterministic=True,
+            as_of=datetime.date(2025, 1, 3),
+            attempt_id="price-only-history-gap",
+            invocation_source="test",
+        )
+        try:
+            result = MetricsEngine(
+                [holding],
+                InvestorConfig(),
+                orders=orders,
+            ).compute_all()
+        finally:
+            runtime.reset()
+
+        assert result.history_availability == "UNAVAILABLE"
+        assert result.history_unavailable_instruments == (
+            "LATE-MARKET-HISTORY",
+        )
+        assert result.portfolio_history is None
+        assert result.performance is None
+        assert result.risk is None
+        assert result.xirr_pct is None
+        assert result.twror_pct is None
+        assert result.allocation_timeline is None
+        assert sorted(no_sell for no_sell, _ in plan_calls) == [False, True]
+        assert result.rebalancing_suggestions == []
+        assert result.rebalancing_verifications == []
+        assert result.rebalancing_plans is not None
+        assert len(result.rebalancing_plans) == 2
 
     def test_compute_all_preserves_valid_rows_without_recreating_portfolio_history(
         self, monkeypatch
