@@ -17,14 +17,15 @@ Design: Option Y — when an order list is present it is the single source
 of truth for the historical series, and every history-dependent metric
 is computed on it.
 
-The fallback ladder for a missing yfinance history (the user's choice
-"(a) synthetic interpolation, made explicit when it happens"):
+The causal fallback ladder for missing market history:
 
-    1. yfinance     real daily series                       → "yfinance"
-    2. synthetic    linear interpolation between order       → "synthetic"
-                    price_native observations (≥2 points)
-    3. carry_flat   hold the single known price flat          → "carry_flat"
-    4. excluded     no price at all → drops out of valuation  → "excluded"
+    1. yfinance     last market observation at or before date → "yfinance"
+    2. synthetic    exact dated order-price observation       → "synthetic"
+    3. carry_flat   latest prior order price carried forward  → "carry_flat"
+    4. excluded     no causal price at or before date          → "excluded"
+
+Market-complete history is AVAILABLE, causal order-price fallback is
+DEGRADED, and any held-date exclusion makes history UNAVAILABLE.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ from __future__ import annotations
 import bisect
 import datetime
 import logging
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import pandas as pd
@@ -145,6 +147,8 @@ class OrderDerivedSeries:
     span_days: int
     history_availability: Availability = Availability.AVAILABLE
     unavailable_instruments: tuple[str, ...] = ()
+    mechanics_unavailable_instruments: tuple[str, ...] = ()
+    causal_price_unavailable_instruments: tuple[str, ...] = ()
     daily_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     actual_value_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     pnl_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
@@ -209,6 +213,118 @@ def _order_instrument_kind(
     return _order_instrument_kind_resolution(orders, isin).kind
 
 
+def _causal_enriched_by_isin(
+    orders: list[Order],
+    enriched_by_isin: dict[str, Holding],
+) -> dict[str, Holding]:
+    """Project enriched holdings onto the effective order authority.
+
+    ``Holding.instrument_kind_evidence`` is inherited from source orders. A
+    holding built from a larger ledger can therefore retain declarations that
+    were excluded by an as-of boundary. Replace those declarations before any
+    mechanics consumer runs, and clear derived fields when excluded evidence
+    may have selected them. Price history and independently fetched geography
+    remain usable; historical category is re-derived from taxonomy or the
+    effective intrinsic kind when inherited order evidence changed.
+    """
+    effective_evidence: dict[str, tuple[str, ...]] = {}
+    for order in orders:
+        if order.instrument_kind is not None:
+            effective_evidence.setdefault(order.isin, ())
+            effective_evidence[order.isin] += (order.instrument_kind.value,)
+
+    gateway = TypeEvidenceGateway()
+    projected: dict[str, Holding] = {}
+    for isin, holding in enriched_by_isin.items():
+        current_evidence = effective_evidence.get(isin, ())
+        inherited_evidence = tuple(holding.instrument_kind_evidence or ())
+        inherited_kinds = {value.strip().upper() for value in inherited_evidence}
+        current_kinds = {value.strip().upper() for value in current_evidence}
+        order_evidence_changed = bool(inherited_evidence) and (
+            inherited_kinds != current_kinds
+        )
+
+        security_type = holding.security_type
+        instrument_type = holding.instrument_type
+        provider_resolution = gateway.resolve(instrument_type)
+        inherited_resolved_kinds = {
+            resolution.kind
+            for value in inherited_evidence
+            if (resolution := gateway.resolve(value)).kind is not None
+        }
+        provider_corroborates_causal_kind = False
+        causal_kind: Optional[InstrumentKind] = None
+        if current_evidence:
+            resolution = gateway.resolve(*current_evidence)
+            causal_kind = resolution.kind
+            security_type = (
+                resolution.kind.value if resolution.kind is not None else None
+            )
+            provider_corroborates_causal_kind = (
+                resolution.kind is not None
+                and provider_resolution.kind is resolution.kind
+            )
+            if (
+                resolution.kind is None
+                or provider_resolution.kind is not None
+                and not provider_corroborates_causal_kind
+            ):
+                instrument_type = None
+        elif inherited_evidence:
+            # No order assertion survives the boundary. ``security_type`` may
+            # have been derived from the excluded declaration, but a provider
+            # ``instrument_type`` that resolves to a different kind is
+            # independent contradictory evidence and remains causal.
+            security_type = None
+            provider_corroborates_causal_kind = (
+                provider_resolution.kind is not None
+                and provider_resolution.kind not in inherited_resolved_kinds
+            )
+            if provider_corroborates_causal_kind:
+                causal_kind = provider_resolution.kind
+            else:
+                instrument_type = None
+
+        category_corroborated = provider_corroborates_causal_kind
+        intrinsic_category = {
+            InstrumentKind.STOCK: AssetClass.EQUITIES,
+            InstrumentKind.BOND: AssetClass.FIXED_INCOME,
+            InstrumentKind.CASH: AssetClass.CASH_EQUIVALENTS,
+        }.get(causal_kind)
+        if category_corroborated and intrinsic_category is not None:
+            if holding.asset_class not in (None, intrinsic_category):
+                category_corroborated = False
+            if holding.class_breakdown:
+                normalized_breakdown = {
+                    (
+                        key if isinstance(key, AssetClass) else AssetClass(str(key))
+                    ): float(value)
+                    for key, value in holding.class_breakdown.items()
+                }
+                category_corroborated = (
+                    category_corroborated
+                    and set(normalized_breakdown) == {intrinsic_category}
+                    and abs(normalized_breakdown[intrinsic_category] - 100.0)
+                    < 1e-9
+                )
+        clear_historical_category = (
+            order_evidence_changed and not category_corroborated
+        )
+        projected[isin] = replace(
+            holding,
+            security_type=security_type,
+            instrument_type=instrument_type,
+            instrument_kind_evidence=current_evidence,
+            asset_class=(
+                None if clear_historical_category else holding.asset_class
+            ),
+            class_breakdown=(
+                None if clear_historical_category else holding.class_breakdown
+            ),
+        )
+    return projected
+
+
 def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     """Seed from the latest order price only when exact mechanics are known.
 
@@ -217,19 +333,32 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     unknown instrument as a unit-priced stock/ETF.
     """
     priced = sorted(
-        (o for o in orders if o.isin == isin and o.price_native is not None),
+        (
+            o for o in orders
+            if o.isin == isin and _usable_price(o.price_native) is not None
+        ),
         key=lambda o: o.trade_date,
     )
     kind = _order_instrument_kind(orders, isin)
     if not priced or qty == 0 or kind is None:
         return 0.0
     last = priced[-1]
+    price = _usable_price(last.price_native)
+    if price is None:
+        return 0.0
     fx = last.fx_rate or 1.0
-    return value_position(
+    try:
+        fx_numeric = float(fx)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(fx_numeric):
+        return 0.0
+    seeded = value_position(
         abs(qty),
-        last.price_native,
+        price,
         instrument_kind=kind,
-    ) / (fx if fx > 0 else 1.0)
+    ) / (fx_numeric if fx_numeric > 0 else 1.0)
+    return seeded if math.isfinite(seeded) else 0.0
 
 
 def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
@@ -368,6 +497,24 @@ class QuantityTimeline:
 # Price lookup with explicit fallback ladder
 # ---------------------------------------------------------------------------
 
+def _usable_price(value: object) -> Optional[float]:
+    """Return a finite positive price, otherwise ``None``.
+
+    NaN and infinity are missing evidence, not market observations. Keeping
+    this check at the resolver boundary ensures every source either supplies a
+    usable price or falls through to the next causal rung.
+    """
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(numeric) or numeric <= 0.0:
+        return None
+    return numeric
+
+
 def _price_at(price_history: pd.Series, d: datetime.date) -> Optional[float]:
     """Last observed price at or before ``d`` in a tz-aware-safe way.
 
@@ -385,11 +532,17 @@ def _price_at(price_history: pd.Series, d: datetime.date) -> Optional[float]:
     threshold = pd.Timestamp(d)
     if idx_tz is not None:
         threshold = threshold.tz_localize(idx_tz)
-    # Rightmost position whose index value is <= threshold.
+    # Rightmost usable observation whose index value is <= threshold. Invalid
+    # rows from a provider do not become evidence and cannot poison valuation;
+    # continue to the previous causal market observation before falling
+    # through to the next resolver rung.
     pos = idx.searchsorted(threshold, side="right") - 1
-    if pos < 0:
-        return None
-    return float(price_history.iloc[pos])
+    while pos >= 0:
+        price = _usable_price(price_history.iloc[pos])
+        if price is not None:
+            return price
+        pos -= 1
+    return None
 
 
 def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Series]:
@@ -407,10 +560,26 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
     """
     obs = []
     for o in orders:
-        if o.isin == isin and o.price_native is not None:
-            fx = o.fx_rate or 1.0
-            eur_price = o.price_native / fx if fx > 0 else o.price_native
-            obs.append((o.trade_date, eur_price))
+        if o.isin != isin:
+            continue
+        native_price = _usable_price(o.price_native)
+        if native_price is None:
+            continue
+        fx = o.fx_rate or 1.0
+        try:
+            fx_numeric = float(fx)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(fx_numeric):
+            continue
+        eur_price = (
+            native_price / fx_numeric
+            if fx_numeric > 0.0
+            else native_price
+        )
+        usable_eur_price = _usable_price(eur_price)
+        if usable_eur_price is not None:
+            obs.append((o.trade_date, usable_eur_price))
     if not obs:
         return None
     s = pd.Series(
@@ -420,39 +589,29 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
     return s.groupby(s.index).mean()
 
 
-def _interp_synthetic(s: pd.Series, d: datetime.date) -> tuple[Optional[float], str]:
-    """Linear interpolation between order price points, or carry-flat
-    when only one point / outside the range. Returns (price, source).
+def _causal_order_price(
+    series: pd.Series,
+    d: datetime.date,
+) -> tuple[Optional[float], str]:
+    """Return the latest order-price observation at or before ``d``.
 
-    Locates the bracketing points with ``searchsorted`` (O(log n)) instead of
-    two full boolean scans (``index <= ts`` / ``index >= ts``), since this runs
-    per-(ISIN, day) for synthetically-priced instruments. ``s`` is sorted and
-    de-duplicated by ``_build_synthetic_history`` (``sort_index`` + groupby),
-    so the binary search reproduces the old bracket exactly.
+    An exact dated observation retains the ``synthetic`` provenance tag; a
+    prior observation carried forward is ``carry_flat``. A later order may
+    never value an earlier date, so dates before the first observation are
+    explicitly excluded instead of backward-filled or interpolated.
     """
+    if series is None or series.empty:
+        return None, "excluded"
     ts = pd.Timestamp(d)
-    idx = s.index
-    if len(s) == 1:
-        return float(s.iloc[0]), "carry_flat"
-    if ts <= idx[0]:
-        return float(s.iloc[0]), "carry_flat"
-    if ts >= idx[-1]:
-        return float(s.iloc[-1]), "carry_flat"
-    # ``before`` = last point with index <= ts; ``after`` = first with >= ts.
-    b_pos = idx.searchsorted(ts, side="right") - 1
-    bd = idx[b_pos]
-    bv = float(s.iloc[b_pos])
-    if bd == ts:
-        # Exact hit: bracket collapses to the point itself (old code returned
-        # this via ad == bd → "synthetic").
-        return bv, "synthetic"
-    a_pos = idx.searchsorted(ts, side="left")
-    ad = idx[a_pos]
-    av = float(s.iloc[a_pos])
-    if ad == bd:
-        return bv, "synthetic"
-    w = (ts - bd).days / (ad - bd).days
-    return bv + w * (av - bv), "synthetic"
+    position = series.index.searchsorted(ts, side="right") - 1
+    while position >= 0:
+        observation_date = series.index[position]
+        price = _usable_price(series.iloc[position])
+        if price is not None:
+            source = "synthetic" if observation_date == ts else "carry_flat"
+            return price, source
+        position -= 1
+    return None, "excluded"
 
 
 class PriceResolver:
@@ -465,7 +624,10 @@ class PriceResolver:
         enriched_by_isin: dict[str, Holding],
         today: Optional[datetime.date] = None,
     ):
-        self._orders = orders
+        self._orders = [
+            order for order in orders
+            if today is None or order.trade_date <= today
+        ]
         self._enriched = enriched_by_isin
         self._today = today
         self._synth: dict[str, Optional[pd.Series]] = {}
@@ -477,21 +639,29 @@ class PriceResolver:
         return self._synth[isin]
 
     def instrument_kind(self, isin: str) -> Optional[InstrumentKind]:
-        """Resolve one exact, non-conflicting mechanics kind for an ISIN."""
+        """Resolve one exact, non-conflicting mechanics kind for an ISIN.
+
+        Effective order declarations are the first authority. When they carry
+        kind evidence, provider/enrichment evidence must not reintroduce a
+        conflict derived from an order outside the as-of boundary. Provider
+        evidence remains the fallback for ledgers that declare no kind.
+        """
         if isin not in self._instrument_kinds:
             holding = self._enriched.get(isin)
             order_resolution = _order_instrument_kind_resolution(
                 self._orders, isin
             )
-            holding_evidence = tuple(
-                getattr(holding, "instrument_kind_evidence", ()) or ()
-            ) if holding else ()
-            resolution = TypeEvidenceGateway().resolve(
-                getattr(holding, "security_type", None) if holding else None,
-                getattr(holding, "instrument_type", None) if holding else None,
-                *holding_evidence,
-                *order_resolution.evidence,
-            )
+            if order_resolution.evidence:
+                resolution = order_resolution
+            else:
+                holding_evidence = tuple(
+                    getattr(holding, "instrument_kind_evidence", ()) or ()
+                ) if holding else ()
+                resolution = TypeEvidenceGateway().resolve(
+                    getattr(holding, "security_type", None) if holding else None,
+                    getattr(holding, "instrument_type", None) if holding else None,
+                    *holding_evidence,
+                )
             self._instrument_kinds[isin] = resolution.kind
         return self._instrument_kinds[isin]
 
@@ -520,9 +690,9 @@ class PriceResolver:
         if not src or not str(src).startswith("borsa_italiana"):
             return None
         price = getattr(h, "current_price", None)
-        if price is None or not self.is_bond(isin):
+        if not self.is_bond(isin):
             return None
-        return float(price)
+        return _usable_price(price)
 
     def price_on(self, isin: str, d: datetime.date) -> tuple[Optional[float], str]:
         """Return (price_eur_per_unit, source) for an ISIN on a date.
@@ -552,9 +722,9 @@ class PriceResolver:
             borsa = self._borsa_price(isin)
             if borsa is not None:
                 return borsa, "borsa_italiana"
-        s = self._synthetic(isin)
-        if s is not None and not s.empty:
-            return _interp_synthetic(s, d)
+        series = self._synthetic(isin)
+        if series is not None and not series.empty:
+            return _causal_order_price(series, d)
         return None, "excluded"
 
 
@@ -613,25 +783,18 @@ def build_order_derived_series(
         last_trade_date = max((o.trade_date for o in orders), default=today)
         if last_trade_date > today:
             today = last_trade_date
+    # An explicit as-of boundary applies to the complete order authority, not
+    # only price lookup. Future rows must not influence identity, mechanics,
+    # quantities, cash flows, cost basis, or historical provenance.
+    orders = [order for order in orders if order.trade_date <= today]
+    enriched_by_isin = _causal_enriched_by_isin(orders, enriched_by_isin)
     identity_by_isin = _instrument_identity_by_isin(orders)
     timeline = QuantityTimeline(orders)
     resolver = PriceResolver(orders, enriched_by_isin, today=today)
-    unavailable_instruments = tuple(sorted(
+    mechanics_unavailable = tuple(sorted(
         isin for isin in timeline.isins()
         if resolver.instrument_kind(isin) is None
     ))
-    history_availability = (
-        Availability.UNAVAILABLE
-        if unavailable_instruments
-        else Availability.AVAILABLE
-    )
-    if unavailable_instruments:
-        dq.error(
-            "instrument_capability",
-            "Order-derived return history is unavailable because exact "
-            "instrument mechanics are missing or conflicting.",
-            context=",".join(unavailable_instruments),
-        )
 
     # Per-build memo for the closed explicit-identity set. It is a pure
     # function of (timeline, date, identity evidence), and the inputs are
@@ -645,18 +808,30 @@ def build_order_derived_series(
             _closed_cache[d] = cached
         return cached
 
-    # Track which source priced each open ISIN at its latest valuation,
-    # for the coverage/provenance disclosure.
+    # Track source use across every held date. Terminal provenance remains
+    # separate because ``coverage_pct`` is explicitly a latest-value measure,
+    # while history availability must account for the entire held interval.
     provenance: dict[str, list[str]] = {
         "yfinance": [], "borsa_italiana": [], "synthetic": [],
         "carry_flat": [], "excluded": [],
     }
+    terminal_provenance: dict[str, list[str]] = {
+        source: [] for source in provenance
+    }
+
+    def record_history_source(isin: str, source: str) -> None:
+        provenance.setdefault(source, []).append(isin)
 
     def value_isin_on(isin: str, d: datetime.date) -> Optional[float]:
         """EUR value of one unit of ``isin`` on ``d`` at market price
         (None if unpriceable). Used to value quantity deltas for the
-        TWROR external flow at the same price basis as the series."""
+        TWROR external flow at the same price basis as the series.
+
+        Flow-date evidence is part of whole-history completeness even when
+        offsetting orders leave no end-of-day position to be valued.
+        """
         price, source = resolver.price_on(isin, d)
+        record_history_source(isin, source)
         if price is None:
             return None
         # 'yfinance' and 'borsa_italiana' prices are already EUR-per-unit
@@ -669,7 +844,11 @@ def build_order_derived_series(
             return None
         return value_position(1.0, price, instrument_kind=kind)
 
-    def value_on(d: datetime.date, record_source: bool = False) -> float:
+    def value_on(
+        d: datetime.date,
+        *,
+        record_terminal_source: bool = False,
+    ) -> float:
         """Total EUR portfolio value on day ``d``.
 
         Values *every* ISIN that had a non-zero held quantity on ``d``,
@@ -694,8 +873,9 @@ def build_order_derived_series(
             if _identity_key(isin, identity_by_isin) in closed:
                 continue  # explicitly equivalent group nets flat → closed
             price, source = resolver.price_on(isin, d)
-            if record_source:
-                provenance[source].append(isin)
+            record_history_source(isin, source)
+            if record_terminal_source:
+                terminal_provenance.setdefault(source, []).append(isin)
             if price is None:
                 continue
             # The enricher already applied /100 to bond price_history, so
@@ -741,11 +921,16 @@ def build_order_derived_series(
             external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) - o.net_eur
 
     cf_dates = sorted(external_flows.keys())
+    position_dates = sorted({
+        order.trade_date for order in orders if order.is_position_change()
+    })
+    history_dates = sorted(set(cf_dates) | set(position_dates))
     valuations: list[tuple[datetime.date, float]] = [
         (d, value_on(d)) for d in cf_dates
     ]
-    # Terminal valuation today, recording provenance for coverage.
-    current_value = value_on(today, record_source=True)
+    # Terminal valuation today, retaining a separate latest-value source set
+    # for coverage while also contributing to whole-history provenance.
+    current_value = value_on(today, record_terminal_source=True)
     valuations.append((today, current_value))
 
     # Dense daily value series for risk metrics (volatility, Sharpe, VaR,
@@ -755,9 +940,10 @@ def build_order_derived_series(
     # pass also yields the raw actual-value series (jumps kept in) for the
     # newsletter mountain chart.
     daily_series, actual_value_series = _build_daily_series(
-        timeline, resolver, external_flows, cf_dates, today,
+        timeline, resolver, external_flows, history_dates, today,
         identity_by_isin=identity_by_isin,
         closed_identity_groups=closed_identity_groups,
+        record_source=record_history_source,
     )
 
     # Trim the trailing carried-forward tail. The daily calendar runs to
@@ -773,6 +959,51 @@ def build_order_derived_series(
     daily_series = _trim_carried_tail(daily_series)
     actual_value_series = _trim_carried_tail(actual_value_series)
 
+    # Whole-history evidence authority. A terminal quote cannot erase a gap
+    # earlier in the held interval: missing causal evidence is unavailable,
+    # while explicit order-price fallback remains usable but degraded.
+    provenance = {key: sorted(set(values)) for key, values in provenance.items()}
+    excluded = set(provenance.get("excluded", ()))
+    causal_price_unavailable = tuple(sorted(
+        excluded.difference(mechanics_unavailable)
+    ))
+    fallback_instruments = tuple(sorted(
+        set(provenance.get("synthetic", ()))
+        | set(provenance.get("carry_flat", ()))
+    ))
+    unavailable_instruments = tuple(sorted(
+        set(mechanics_unavailable) | set(causal_price_unavailable)
+    ))
+    if unavailable_instruments:
+        history_availability = Availability.UNAVAILABLE
+    elif fallback_instruments:
+        history_availability = Availability.DEGRADED
+    else:
+        history_availability = Availability.AVAILABLE
+
+    if mechanics_unavailable:
+        dq.error(
+            "instrument_capability",
+            "Order-derived return history is unavailable because exact "
+            "instrument mechanics are missing or conflicting.",
+            context=",".join(mechanics_unavailable),
+        )
+    if causal_price_unavailable:
+        dq.error(
+            "returns",
+            "Order-derived return history is unavailable because at least "
+            "one held date lacks causal price evidence.",
+            context=",".join(causal_price_unavailable),
+        )
+    elif fallback_instruments:
+        dq.record(
+            dq.WARNING,
+            "returns",
+            "Order-derived return history is degraded because causal "
+            "order-price fallback was required.",
+            context=",".join(fallback_instruments),
+        )
+
     # Coverage: share of today's value priced by real market data. Use the
     # SAME value_position basis as value_on so bonds (priced /100) are
     # Coverage: share of today's value priced by real market data. Borsa
@@ -781,7 +1012,10 @@ def build_order_derived_series(
     # it counts alongside yfinance. Both are EUR-per-unit (no value_position)
     # so the ratio cannot exceed 100%.
     real_value = 0.0
-    real_isins = set(provenance["yfinance"]) | set(provenance["borsa_italiana"])
+    real_isins = (
+        set(terminal_provenance["yfinance"])
+        | set(terminal_provenance["borsa_italiana"])
+    )
     for isin in real_isins:
         qty = timeline.qty_at(isin, today)
         price, source = resolver.price_on(isin, today)
@@ -806,8 +1040,8 @@ def build_order_derived_series(
             # trend-only synthetic/carry-flat fill, so flag it as an ERROR.
             sev = dq.ERROR if source == "excluded" else dq.WARNING
             detail = {
-                "synthetic": "priced by SYNTHETIC interpolation (trend only, "
-                             "no real market history) — its return contribution is approximate",
+                "synthetic": "priced by an exact ORDER observation (no real "
+                             "market history) — its return contribution is approximate",
                 "carry_flat": "priced CARRY-FLAT (single known price held flat, "
                               "zero volatility contribution) — its return contribution is approximate",
                 "excluded": "had NO usable price and dropped out of the valuation "
@@ -820,9 +1054,6 @@ def build_order_derived_series(
             f"historical value series is {coverage_pct:.1f}% priced by real "
             "market data; the remainder used the synthetic/carry-flat fallback ladder",
         )
-    # Deduplicate provenance lists.
-    provenance = {k: sorted(set(v)) for k, v in provenance.items()}
-
     # XIRR cash flows (bank-account perspective): transfer_in is a
     # deposit at its market value; others use net_eur. Dated on the
     # trade date (when market exposure is taken on), consistent with
@@ -836,7 +1067,7 @@ def build_order_derived_series(
             xirr_cashflows.append((o.trade_date, o.net_eur))
     xirr_cashflows.append((today, current_value))
 
-    span_days = (today - cf_dates[0]).days if cf_dates else 0
+    span_days = (today - history_dates[0]).days if history_dates else 0
 
     # Daily cumulative P&L (realized + unrealized), net of contributed
     # capital: actual value + cumulative bank cash flows (deposits negative,
@@ -864,6 +1095,8 @@ def build_order_derived_series(
         span_days=span_days,
         history_availability=history_availability,
         unavailable_instruments=unavailable_instruments,
+        mechanics_unavailable_instruments=mechanics_unavailable,
+        causal_price_unavailable_instruments=causal_price_unavailable,
         daily_series=daily_series,
         actual_value_series=actual_value_series,
         pnl_series=pnl_series,
@@ -954,10 +1187,11 @@ def _build_daily_series(
     timeline: "QuantityTimeline",
     resolver: "PriceResolver",
     external_flows: dict[datetime.date, float],
-    cf_dates: list[datetime.date],
+    history_dates: list[datetime.date],
     today: datetime.date,
     identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
     closed_identity_groups=None,
+    record_source=None,
 ) -> tuple[pd.Series, pd.Series]:
     """Dense daily NAV index + raw actual-value series, first trade → today.
 
@@ -982,11 +1216,11 @@ def _build_daily_series(
     Both are anchored on the first strictly-positive value so leading
     zero-value days (before the first priced position) are dropped.
     """
-    if not cf_dates:
+    if not history_dates:
         empty = pd.Series(dtype=float)
         return empty, empty
 
-    days = pd.date_range(start=cf_dates[0], end=today, freq="D")
+    days = pd.date_range(start=history_dates[0], end=today, freq="D")
     isins = timeline.isins()
     # Reuse the caller's date-memoized identity-closure cache when provided
     # (so the set is computed once per date across value_on and this loop);
@@ -1005,6 +1239,8 @@ def _build_daily_series(
             if _identity_key(isin, identity_by_isin) in closed:
                 continue  # explicitly equivalent group nets flat → closed
             price, source = resolver.price_on(isin, d)
+            if record_source is not None:
+                record_source(isin, source)
             if price is None:
                 continue
             if source in ("yfinance", "borsa_italiana"):
@@ -1104,6 +1340,8 @@ def build_allocation_timeline(
     if today is None:
         from tarzan import runtime
         today = runtime.today()
+    orders = [order for order in orders if order.trade_date <= today]
+    enriched_by_isin = _causal_enriched_by_isin(orders, enriched_by_isin)
 
     pos_dates = [o.trade_date for o in orders if o.is_position_change()]
     if not pos_dates:
@@ -1205,27 +1443,39 @@ def build_allocation_timeline(
                 best_rank, best = rank, (p, src)
         return best if best is not None else (None, "excluded")
 
-    def _value_isin(isin: str, members: list[str], qty: float,
-                    d: datetime.date) -> float:
-        """EUR value of a single ISIN's held quantity on ``d``. Mirrors the
-        source-tag handling of the prices: quotes from yfinance/Borsa are
-        already EUR-per-unit (and bond-rescaled), while synthetic/carry-flat
-        order prices still need ``value_position`` to apply the bond /100."""
+    unpriceable_instruments: set[str] = set()
+
+    def _value_isin(
+        isin: str,
+        members: list[str],
+        qty: float,
+        d: datetime.date,
+    ) -> Optional[float]:
+        """EUR value of a single ISIN's held quantity on ``d``.
+
+        Mirrors the source-tag handling of the prices: quotes from
+        yfinance/Borsa are already EUR-per-unit (and bond-rescaled), while
+        synthetic/carry-flat order prices still need ``value_position`` to
+        apply the bond /100. ``None`` means the required snapshot cannot be
+        valued and therefore the complete allocation timeline is unavailable.
+        """
         price, source = _price_for(isin, members, d)
         if price is None:
-            return 0.0
+            return None
         if source in ("yfinance", "borsa_italiana"):
             return qty * price
         kind = resolver.instrument_kind(isin)
         if kind is None:
-            return 0.0
+            return None
         return value_position(qty, price, instrument_kind=kind)
 
     def _per_isin_values(d: datetime.date) -> dict[str, float]:
-        """{isin: eur_value} valuing each held ISIN individually.
+        """Return complete per-ISIN EUR values for one allocation snapshot.
 
         An explicit identity group whose held quantity nets to approximately
         zero contributes nothing; ungrouped ISINs remain singleton groups.
+        Missing evidence is retained separately so callers cannot silently
+        renormalize the priced subset to a valid-looking 100% allocation.
         """
         out: dict[str, float] = {}
         for members in groups.values():
@@ -1236,7 +1486,9 @@ def build_allocation_timeline(
                 if abs(q) < _QTY_EPS:
                     continue
                 v = _value_isin(isin, members, q, d)
-                if v > 0:
+                if v is None:
+                    unpriceable_instruments.add(isin)
+                elif v > 0:
                     out[isin] = out.get(isin, 0.0) + v
         return out
 
@@ -1310,6 +1562,15 @@ def build_allocation_timeline(
             for isin, v in iso_val.items()
             if invested > 0 and isin in iso_ac and iso_ac[isin] != cash_class
         })
+
+    if unpriceable_instruments:
+        dq.error(
+            "returns",
+            "Historical allocation is unavailable because at least one held "
+            "snapshot lacks causal price evidence.",
+            context=",".join(sorted(unpriceable_instruments)),
+        )
+        return None
 
     if classification_unavailable:
         dq.error(

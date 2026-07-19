@@ -359,19 +359,45 @@ class MetricsEngine:
         and provenance in ``ctx`` for the ``_returns`` computer.
         """
         from tarzan.engine.returns_builder import (
+            _causal_enriched_by_isin,
             build_holdings_from_orders,
             build_order_derived_series,
         )
+        from tarzan import runtime
 
-        # Enriched holdings keyed by ISIN. ``self.holdings`` is the
-        # order-derived, enriched snapshot; we defensively re-derive from
-        # the orders and enrich any ISIN not already present, so every
-        # order ISIN has yfinance history for returns (otherwise it would
-        # silently fall to the synthetic/carry_flat rung, making TWROR
-        # coverage differ from the standalone returns script).
-        enriched_by_isin = {h.isin: h for h in self.holdings if h.isin}
+        # Establish the as-of order authority before any full-ledger evidence
+        # can enter holding construction, enrichment, mechanics, tax, or
+        # inception. The effective list is retained for every later
+        # order-dependent computer in this run.
+        analysis_date = runtime.today()
+        effective_orders = [
+            order for order in (self.orders or [])
+            if order.trade_date <= analysis_date
+        ]
+        ctx["_effective_orders"] = effective_orders
+        ctx["_order_analysis_date"] = analysis_date
+
+        # Project supplied enrichment onto the same effective order authority
+        # used by the direct builders. This strips excluded order mechanics and
+        # any category fields derived from them before history, tax, or
+        # historical allocation consumes the map.
+        supplied_by_isin = {
+            holding.isin: holding for holding in self.holdings if holding.isin
+        }
+        enriched_by_isin = _causal_enriched_by_isin(
+            effective_orders,
+            supplied_by_isin,
+        )
+        ctx["_historical_classification_projected"] = any(
+            supplied_by_isin[isin].asset_class != holding.asset_class
+            or supplied_by_isin[isin].class_breakdown != holding.class_breakdown
+            for isin, holding in enriched_by_isin.items()
+        )
+        # Re-derive from effective orders and enrich any ISIN not already
+        # present, so every open order ISIN can use provider history rather
+        # than silently falling to synthetic/carry-flat pricing.
         missing = [
-            h for h in build_holdings_from_orders(self.orders)
+            h for h in build_holdings_from_orders(effective_orders)
             if h.isin and h.isin not in enriched_by_isin
         ]
         if missing:
@@ -381,12 +407,22 @@ class MetricsEngine:
                 if h.isin:
                     enriched_by_isin[h.isin] = h
 
-        series = build_order_derived_series(self.orders, enriched_by_isin)
+        series = build_order_derived_series(
+            effective_orders,
+            enriched_by_isin,
+            today=analysis_date,
+        )
         ctx["_order_series"] = series
         ctx["_enriched_by_isin"] = enriched_by_isin
         ctx["history_availability"] = series.history_availability.value
         ctx["history_unavailable_instruments"] = tuple(
             series.unavailable_instruments
+        )
+        ctx["_order_mechanics_unavailable"] = list(
+            series.mechanics_unavailable_instruments
+        )
+        ctx["_order_price_history_unavailable"] = list(
+            series.causal_price_unavailable_instruments
         )
 
         from tarzan.runtime import data_quality as dq
@@ -408,7 +444,8 @@ class MetricsEngine:
             dq.error(
                 "returns",
                 "Portfolio return history is Unavailable because exact "
-                "instrument mechanics are missing or conflicting.",
+                "instrument mechanics or causal historical price evidence "
+                "are missing or conflicting.",
                 context=",".join(unavailable),
             )
             return
@@ -459,6 +496,9 @@ class MetricsEngine:
         series = ctx.get("_order_series")
         if series is None:
             return
+        effective_orders = ctx.get("_effective_orders")
+        if effective_orders is None:
+            effective_orders = list(self.orders or [])
         from tarzan.runtime.ledger import Availability
         if series.history_availability is Availability.UNAVAILABLE:
             for field in (
@@ -483,7 +523,7 @@ class MetricsEngine:
             ctx["returns_provenance"] = series.provenance
             ctx.setdefault("_degraded", []).append("_returns")
             order_dates = [
-                o.trade_date for o in (self.orders or [])
+                o.trade_date for o in effective_orders
                 if o.is_position_change()
             ]
             if order_dates:
@@ -549,7 +589,7 @@ class MetricsEngine:
         from tarzan.engine.tax import estimate_realized_cgt
         enriched_by_isin = ctx.get("_enriched_by_isin", {})
         cgt = estimate_realized_cgt(
-            self.orders, enriched_by_isin,
+            effective_orders, enriched_by_isin,
             std_rate_pctg=self.config.rebalancing_capital_gains_tax_standard_pctg,
             gov_rate_pctg=self.config.rebalancing_capital_gains_tax_government_pctg,
         )
@@ -576,7 +616,7 @@ class MetricsEngine:
         # record, independent of any config value. Keyed on trade_date
         # (market-exposure date), consistent with the returns engine.
         order_dates = [
-            o.trade_date for o in (self.orders or []) if o.is_position_change()
+            o.trade_date for o in effective_orders if o.is_position_change()
         ]
         if order_dates:
             ctx["inception_date"] = min(order_dates).strftime("%Y-%m-%d")
@@ -590,12 +630,16 @@ class MetricsEngine:
 
         Reuses the enriched holdings stashed by
         ``_portfolio_history_from_orders`` (so it adds no network calls)
-        and anchors the final weekly bucket to the authoritative live
+        and, when the current snapshot shares the same causal classification
+        projection, anchors the final weekly bucket to the authoritative live
         allocation (``allocation_by_class`` / ``allocation_by_geo``) so the
         sparkline's endpoint matches the donut and metrics table exactly.
         """
         enriched = ctx.get("_enriched_by_isin")
-        if not self.orders or not enriched:
+        effective_orders = ctx.get("_effective_orders")
+        if effective_orders is None:
+            effective_orders = list(self.orders or [])
+        if not effective_orders or not enriched:
             return
         # The point-in-time allocation can remain independently available from
         # exact current valuation/category evidence, but no historical
@@ -610,24 +654,34 @@ class MetricsEngine:
             return
         from tarzan.engine.returns_builder import build_allocation_timeline
 
-        tl = build_allocation_timeline(self.orders, enriched, months=3)
+        tl = build_allocation_timeline(
+            effective_orders,
+            enriched,
+            months=3,
+            today=ctx.get("_order_analysis_date"),
+        )
         if not tl or len(tl.get("dates", [])) < 2:
             return
 
-        cash_class = AssetClass.CASH_EQUIVALENTS.value
-        by_class = ctx.get("allocation_by_class")
-        if by_class is not None and not by_class.empty and tl["asset"]:
-            tl["asset"][-1] = {
-                r["category"]: float(r["weight_pct"])
-                for _, r in by_class.iterrows()
-                if r["category"] != cash_class
-            }
-        by_geo = ctx.get("allocation_by_geo")
-        if by_geo is not None and not by_geo.empty and tl["geo"]:
-            tl["geo"][-1] = {
-                r["category"]: float(r["weight_pct"])
-                for _, r in by_geo.iterrows()
-            }
+        # Anchor to the current allocation only when it is based on the same
+        # causal classification projection. If excluded order evidence forced
+        # historical category fields to be replaced, the original snapshot is
+        # not a valid terminal authority for this as-of timeline.
+        if not ctx.get("_historical_classification_projected"):
+            cash_class = AssetClass.CASH_EQUIVALENTS.value
+            by_class = ctx.get("allocation_by_class")
+            if by_class is not None and not by_class.empty and tl["asset"]:
+                tl["asset"][-1] = {
+                    r["category"]: float(r["weight_pct"])
+                    for _, r in by_class.iterrows()
+                    if r["category"] != cash_class
+                }
+            by_geo = ctx.get("allocation_by_geo")
+            if by_geo is not None and not by_geo.empty and tl["geo"]:
+                tl["geo"][-1] = {
+                    r["category"]: float(r["weight_pct"])
+                    for _, r in by_geo.iterrows()
+                }
         ctx["allocation_timeline"] = tl
 
     # ------------------------------------------------------------------
@@ -873,11 +927,13 @@ class MetricsEngine:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
             return
-        if ctx.get("_order_history_unavailable"):
+        mechanics_unavailable = ctx.get("_order_mechanics_unavailable")
+        if mechanics_unavailable:
             # Current allocation analytics may use independently established
             # valuation/category evidence, but executable planning requires an
-            # exact instrument-kind adapter. Conflicting or missing order
-            # mechanics therefore cannot reach the optimizer.
+            # exact instrument-kind adapter. Historical price completeness is
+            # deliberately not a planning input and must not disable a plan
+            # based on trustworthy current valuation and classification.
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
             ctx["rebalancing_plans"] = None
@@ -886,7 +942,7 @@ class MetricsEngine:
                 "rebalancing",
                 "planning is Unavailable because exact instrument mechanics "
                 "are missing or conflicting",
-                context=",".join(ctx["_order_history_unavailable"]),
+                context=",".join(mechanics_unavailable),
             )
             return
         if not self.planning_eligible:
