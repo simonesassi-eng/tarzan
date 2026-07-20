@@ -26,6 +26,18 @@ def test_c13_provider_boundary_returns_structured_attempt_and_policy_evidence():
 # **Validates: Requirements 2.14**
 def test_c14_replayed_logical_event_invokes_smtp_only_once(monkeypatch, tmp_path):
     """Sequential replay is the minimal duplicate-send counterexample."""
+    # This test intentionally exercises the host-local claim store. GitHub's
+    # validate job has no production claim credentials and must remain isolated.
+    for key in (
+        "GITHUB_ACTIONS",
+        "DELIVERY_CLAIM_ENDPOINT",
+        "DELIVERY_CLAIM_TOKEN",
+        "DELIVERY_CLAIM_STORE_PATH",
+        "TARZAN_STABLE_EVENT_ID",
+        "AUTHORIZED_RESEND_TOKEN",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     for key, value in {
         "SMTP_USER": "sender@example.invalid",
         "SMTP_PASS": "not-a-real-secret",
