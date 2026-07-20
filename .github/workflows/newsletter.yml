@@ -52,7 +52,7 @@ jobs:
   send:
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
