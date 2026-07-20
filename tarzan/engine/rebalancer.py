@@ -749,9 +749,14 @@ def optimize_local_search(
     model = _ObjectiveModel(holdings, config, values)
     initial_cash = float(model.cash_mask @ values)
     protected_cash = max(float(config.target_cash_buffer_eur or 0.0), 0.0)
-    deployable_existing_cash = max(initial_cash - protected_cash, 0.0)
     external_contribution = max(float(lump_sum or 0.0), 0.0)
-    funding_budget = external_contribution + deployable_existing_cash
+    # Reserve the protected buffer against all cash sources before making any
+    # amount available to purchases. When current cash starts below target,
+    # the external contribution first closes that deficit.
+    funding_budget = max(
+        initial_cash + external_contribution - protected_cash,
+        0.0,
+    )
     cost = _Cost(model, values, config, funding_budget, params)
     lo, hi, tradeable = _bounds(
         holdings, values, bool(config.rebalancing_no_sell),
@@ -774,9 +779,10 @@ def optimize_local_search(
 
     best = _project_to_budget(best, cost, model, lo, hi, params)
 
-    # Apply the display threshold, serialize/round actions, then reconstruct
-    # positions and funding exclusively from that final action vector.
+    # Apply the display threshold, quantize to executable cents, then
+    # reconstruct positions and funding exclusively from that final vector.
     best = np.where(np.abs(best) >= params.min_trade_eur, best, 0.0)
+    best = np.round(best, 2)
 
     actions = _extract_actions(best, holdings, model, values)
     new_values, funding = _finalize_action_proof(
@@ -787,6 +793,46 @@ def optimize_local_search(
         external_contribution=external_contribution,
         protected_cash=protected_cash,
     )
+
+    # Independent cent rounding can make otherwise balanced buys exceed the
+    # raw budget by fractions of a cent per action. Keep the proof strict and
+    # reconcile that serialization residue by trimming buys in whole cents.
+    # If no buys can absorb it, the unchanged proof remains NON_EXECUTABLE.
+    if (
+        not funding["protected_cash_satisfied"]
+        and funding["position_invariants_satisfied"]
+        and funding["frozen_positions_satisfied"]
+    ):
+        cash_shortfall = protected_cash - float(model.cash_mask @ new_values)
+        remaining_cents = int(
+            np.ceil(max(round(cash_shortfall, 9), 0.0) * 100.0)
+        )
+        minimum_trade_cents = int(
+            np.ceil(max(params.min_trade_eur, 0.0) * 100.0)
+        )
+        for i in np.argsort(-best):
+            if remaining_cents <= 0:
+                break
+            if best[i] <= 0 or model.cash_mask[i] > 0:
+                continue
+            available_cents = int(round(float(best[i]) * 100.0))
+            trim_cents = min(available_cents, remaining_cents)
+            updated_cents = available_cents - trim_cents
+            if 0 < updated_cents < minimum_trade_cents:
+                updated_cents = 0
+                trim_cents = available_cents
+            best[i] = updated_cents / 100.0
+            remaining_cents = max(remaining_cents - trim_cents, 0)
+
+        actions = _extract_actions(best, holdings, model, values)
+        new_values, funding = _finalize_action_proof(
+            actions=actions,
+            holdings=holdings,
+            values=values,
+            config=config,
+            external_contribution=external_contribution,
+            protected_cash=protected_cash,
+        )
     verifications = _verify(new_values, holdings, config, model.geo_frac,
                             model.all_geos, float((model.fi_mask * values).sum()))
     verifications.append(funding)

@@ -47,7 +47,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +62,13 @@ REFRESH_TAIL_DAYS = 5
 # Resolution entries older than this are re-validated by a fresh probe, so
 # a delisted/renamed symbol self-heals over time.
 RESOLUTION_TTL_DAYS = 30
+
+# Instrument-profile observations retain history for point-in-time reads. Live
+# runs refresh an old observation, while pinned runs may only consume evidence
+# observed on or before their effective date.
+INSTRUMENT_PROFILE_TTL_DAYS = 30
+INSTRUMENT_PROFILE_HISTORY_LIMIT = 64
+_INSTRUMENT_PROFILE_NAMESPACE = "instrument_profiles_v1"
 
 _DISABLED_ENV = "TARZAN_DISABLE_CACHE"
 _CACHE_SCHEMA_VERSION = "1"
@@ -410,6 +417,201 @@ def store_resolution(isin: str, symbol: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("Resolution cache write failed for %s: %s", isin, exc)
+
+
+# ---------------------------------------------------------------------------
+# Versioned instrument profiles (ISIN → observed OpenFIGI evidence history)
+# ---------------------------------------------------------------------------
+
+def _instrument_profile_path() -> Path:
+    return _subdir("instrument_profiles") / "profiles_v1.json"
+
+
+def _load_instrument_profile_map() -> dict:
+    if not is_enabled():
+        return {}
+    return _read_map(_instrument_profile_path(), _INSTRUMENT_PROFILE_NAMESPACE)
+
+
+def _normalize_profile_isin(isin: str) -> str:
+    return "".join(
+        character
+        for character in str(isin or "").strip().upper()
+        if character.isalnum()
+    )
+
+
+def _parse_profile_observed_at(value: object) -> Optional[datetime]:
+    try:
+        text = str(value or "").strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        observed = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    return observed.astimezone(timezone.utc)
+
+
+def _profile_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    return sorted({str(item).strip() for item in values if str(item or "").strip()})
+
+
+def _normalize_instrument_profile(isin: str, profile: object) -> Optional[dict]:
+    """Return the canonical, non-executable profile representation."""
+    if not isinstance(profile, dict):
+        return None
+    normalized_isin = _normalize_profile_isin(isin)
+    profile_isin = _normalize_profile_isin(profile.get("isin", ""))
+    if not normalized_isin or (profile_isin and profile_isin != normalized_isin):
+        return None
+
+    observed = _parse_profile_observed_at(profile.get("observed_at"))
+    source = str(profile.get("source") or "").strip()
+    status = str(profile.get("status") or "").strip().upper()
+    kind_value = profile.get("kind")
+    kind = str(kind_value).strip().upper() if kind_value is not None else None
+    if observed is None or not source:
+        return None
+    if status not in {"VERIFIED", "CONFLICTING", "UNRESOLVED"}:
+        return None
+    if kind not in {None, "STOCK", "ETF", "BOND", "CASH"}:
+        return None
+    if (status == "VERIFIED") != (kind is not None):
+        return None
+
+    raw_identifiers = profile.get("identifiers")
+    if not isinstance(raw_identifiers, dict):
+        raw_identifiers = {}
+    identifiers = {
+        field: _profile_string_list(raw_identifiers.get(field))
+        for field in ("figi", "compositeFIGI", "shareClassFIGI")
+    }
+    provenance = profile.get("provenance")
+    if not isinstance(provenance, dict) or not _validate_json_value(provenance):
+        return None
+
+    return {
+        "isin": normalized_isin,
+        "kind": kind,
+        "identifiers": identifiers,
+        "securityType": _profile_string_list(profile.get("securityType")),
+        "securityType2": _profile_string_list(profile.get("securityType2")),
+        "marketSector": _profile_string_list(profile.get("marketSector")),
+        "names": _profile_string_list(profile.get("names")),
+        "tickers": _profile_string_list(profile.get("tickers")),
+        "source": source,
+        "provenance": provenance,
+        "resolver_version": str(profile.get("resolver_version") or "1"),
+        "observed_at": observed.isoformat(),
+        "status": status,
+        "confidence": str(profile.get("confidence") or "NONE").strip().upper(),
+    }
+
+
+def _profile_cutoff(as_of: Optional[date | datetime]) -> Optional[datetime]:
+    if as_of is None:
+        return datetime.fromtimestamp(time.time(), timezone.utc)
+    if isinstance(as_of, datetime):
+        cutoff = as_of
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        return cutoff.astimezone(timezone.utc)
+    if isinstance(as_of, date):
+        return datetime.combine(as_of, datetime.max.time(), tzinfo=timezone.utc)
+    return None
+
+
+def load_instrument_profile(
+    isin: str,
+    *,
+    as_of: Optional[date | datetime] = None,
+    allow_stale: bool = False,
+) -> Optional[dict]:
+    """Load the latest profile observation visible at ``as_of``.
+
+    A live read applies the refresh TTL unless ``allow_stale`` is true. Pinned
+    reads ignore wall-clock TTL but reject every observation made after the
+    effective boundary, preventing future metadata from leaking into a replay.
+    """
+    normalized_isin = _normalize_profile_isin(isin)
+    cutoff = _profile_cutoff(as_of)
+    if not normalized_isin or cutoff is None:
+        return None
+    raw_history = _load_instrument_profile_map().get(normalized_isin, [])
+    if isinstance(raw_history, dict):
+        raw_history = [raw_history]
+    if not isinstance(raw_history, list):
+        return None
+
+    visible: list[dict] = []
+    for raw_profile in raw_history:
+        profile = _normalize_instrument_profile(normalized_isin, raw_profile)
+        if profile is None:
+            continue
+        observed = _parse_profile_observed_at(profile["observed_at"])
+        if observed is not None and observed <= cutoff:
+            visible.append(profile)
+    if not visible:
+        return None
+
+    latest = max(
+        visible,
+        key=lambda profile: _parse_profile_observed_at(profile["observed_at"]),
+    )
+    observed = _parse_profile_observed_at(latest["observed_at"])
+    if (
+        as_of is None
+        and not allow_stale
+        and observed is not None
+        and time.time() - observed.timestamp() > INSTRUMENT_PROFILE_TTL_DAYS * 86400
+    ):
+        return None
+    return json.loads(_canonical_json(latest).decode("utf-8"))
+
+
+def store_instrument_profile(isin: str, profile: dict) -> None:
+    """Append one validated profile observation transactionally."""
+    if not is_enabled():
+        return
+    normalized_isin = _normalize_profile_isin(isin)
+    normalized = _normalize_instrument_profile(normalized_isin, profile)
+    if normalized is None:
+        logger.debug("Ignoring invalid instrument profile for %s", isin)
+        return
+    try:
+        path = _instrument_profile_path()
+        # Preserve the established observable read seam before the locked
+        # transaction; the transaction itself always re-reads current state.
+        _load_instrument_profile_map()
+        with _file_lock(path):
+            current = _read_map(path, _INSTRUMENT_PROFILE_NAMESPACE)
+            raw_history = current.get(normalized_isin, [])
+            if isinstance(raw_history, dict):
+                raw_history = [raw_history]
+            history = []
+            if isinstance(raw_history, list):
+                for candidate in raw_history:
+                    existing = _normalize_instrument_profile(
+                        normalized_isin, candidate
+                    )
+                    if existing is not None:
+                        history.append(existing)
+            history = [
+                candidate
+                for candidate in history
+                if candidate["observed_at"] != normalized["observed_at"]
+            ]
+            history.append(normalized)
+            history.sort(key=lambda candidate: candidate["observed_at"])
+            current[normalized_isin] = history[-INSTRUMENT_PROFILE_HISTORY_LIMIT:]
+            _atomic_write_json(path, _INSTRUMENT_PROFILE_NAMESPACE, current)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Instrument-profile cache write failed for %s: %s", isin, exc)
 
 
 # ---------------------------------------------------------------------------

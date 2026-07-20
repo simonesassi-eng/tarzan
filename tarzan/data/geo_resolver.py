@@ -179,6 +179,10 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
     via yfinance info, and aggregates into Geography buckets weighted
     by holding percentage.
     """
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     try:
         import yfinance as yf
         from tarzan.data import _yf_net
@@ -246,6 +250,10 @@ def justetf_index_name(isin: str) -> Optional[str]:
     """
     if not isin:
         return None
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     try:
         import requests as req
         url = f"https://www.justetf.com/en/etf-profile.html?isin={isin}"
@@ -278,6 +286,10 @@ def resolve_isin(symbol: str) -> Optional[str]:
     cached = price_cache.load_ticker_isin(symbol)
     if cached:
         return cached
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     try:
         import yfinance as yf
         from tarzan.data import _yf_net
@@ -306,6 +318,10 @@ def justetf_ter(isin: str) -> Optional[float]:
     from tarzan.data import price_cache
     if price_cache.has_ter(isin):
         return price_cache.load_ter(isin)
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     ter: Optional[float] = None
     try:
         import re
@@ -374,6 +390,14 @@ def resolve_geo(
     result = _lookup_asset_geo(isin, ticker)
     if result:
         return result
+
+    # Index-name discovery and top-holdings inspection are live provider
+    # transports. Point-in-time/reproducible runs may use only the local
+    # taxonomy result above (the caller can still fall back to disk cache).
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
 
     # Then try index name match via justETF
     index_name = justetf_index_name(isin)

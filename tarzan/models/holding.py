@@ -97,6 +97,20 @@ class Holding:
     yield_pct: Optional[float] = None
     duration: Optional[float] = None
     data_source: Optional[str] = None
+    # Canonical market-symbol decision. ``ticker`` remains the selected symbol
+    # used by existing consumers; these fields retain how Tarzan reached it and
+    # which feed each data class actually consumed for the instrument report.
+    ticker_requested: Optional[str] = None
+    ticker_selection_method: Optional[str] = None
+    ticker_selection_reason: Optional[str] = None
+    history_ticker: Optional[str] = None
+    current_ticker: Optional[str] = None
+    intraday_ticker: Optional[str] = None
+    intraday_ticker_reason: Optional[str] = None
+    # Timestamp of the last bar from the effective intraday feed. This remains
+    # separate from price_observation_timestamp because a sibling venue may
+    # supply intraday bars without replacing the canonical daily-data ticker.
+    intraday_observation_timestamp: Optional[datetime] = None
     target_equities: Optional[float] = None  # target weight as % of equity portion
     target_fixed_income: Optional[float] = None  # target weight as % of fixed income portion
     target_portfolio: Optional[float] = None  # target weight as % of the whole invested portfolio
@@ -104,6 +118,10 @@ class Holding:
     # Seeded target instrument not currently held (quantity 0), added so the
     # optimizer can open a new position toward its target_portfolio weight.
     is_seeded_target: bool = False
+    # Enrichment carrier for an instrument held in the past but closed at the
+    # analysis boundary. It may supply price_history/classification to returns,
+    # but must never enter current valuation, allocation or seed diagnostics.
+    is_historical_only: bool = False
     # Fetch time records when the provider attempt completed. Price evidence
     # carries its own observation time because a newly fetched cache row may
     # still describe an old market close.

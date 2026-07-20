@@ -116,7 +116,11 @@ class ValuationEvidence:
     source: Optional[str]
     policy_id: str
     accepted_by_policy: bool
+    # Wall-clock age is retained for audit; policy freshness may instead use
+    # completed market-session age for verified cash-market listings.
     age_seconds: Optional[float] = None
+    freshness_age_seconds: Optional[float] = None
+    freshness_basis: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +244,8 @@ class ValuationCompletenessEvaluator:
                 evidence_time = getattr(holding, "fetch_timestamp", None)
 
             age_seconds = None
+            freshness_age_seconds = None
+            session_adjusted = False
             if evidence_time is not None:
                 if evidence_time.tzinfo is None:
                     evidence_time = evidence_time.replace(tzinfo=timezone.utc)
@@ -249,9 +255,27 @@ class ValuationCompletenessEvaluator:
                     0.0,
                     (captured_at - evidence_time).total_seconds(),
                 )
+                freshness_age_seconds = age_seconds
+                try:
+                    from tarzan.data.market_quotes import market_session_age_seconds
+
+                    market_age = market_session_age_seconds(
+                        str(getattr(holding, "ticker", None) or ""),
+                        evidence_time,
+                        captured_at,
+                    )
+                    if market_age is not None:
+                        freshness_age_seconds = market_age
+                        session_adjusted = True
+                except Exception:  # noqa: BLE001 - freshness must fail closed
+                    pass
             stale = (
-                age_seconds is not None
-                and age_seconds > policy.freshness_seconds
+                freshness_age_seconds is not None
+                and (
+                    freshness_age_seconds >= policy.freshness_seconds
+                    if session_adjusted
+                    else freshness_age_seconds > policy.freshness_seconds
+                )
             )
 
             if kind == "UNKNOWN":
@@ -290,6 +314,14 @@ class ValuationCompletenessEvaluator:
                 policy_id=policy.policy_id,
                 accepted_by_policy=accepted,
                 age_seconds=age_seconds,
+                freshness_age_seconds=freshness_age_seconds,
+                freshness_basis=(
+                    "MARKET_SESSION"
+                    if session_adjusted
+                    else "WALL_CLOCK"
+                    if evidence_time is not None
+                    else None
+                ),
             )
             rows.append({"evidence": evidence, "policy": policy})
             if selected is not None and accepted:
@@ -303,6 +335,8 @@ class ValuationCompletenessEvaluator:
                 "accepted_by_policy": accepted,
                 "policy_id": policy.policy_id,
                 "age_seconds": age_seconds,
+                "freshness_age_seconds": freshness_age_seconds,
+                "freshness_basis": evidence.freshness_basis,
             })
             if state in (ValuationEvidenceState.FALLBACK, ValuationEvidenceState.STALE) and accepted:
                 failure_id = ledger.open_failure(

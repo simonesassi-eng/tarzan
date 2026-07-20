@@ -361,47 +361,57 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     return seeded if math.isfinite(seeded) else 0.0
 
 
-def build_holdings_from_orders(orders: list[Order]) -> list[Holding]:
-    """Aggregate orders into synthetic Holdings for the open positions.
+def build_holdings_from_orders(
+    orders: list[Order],
+    *,
+    include_closed: bool = False,
+) -> list[Holding]:
+    """Aggregate orders into enrichment carriers.
 
-    Net quantity per exact ISIN, explicit-equivalence closure, a seeded market
-    value, and the average-cost basis of the units still held. The returned
-    Holdings carry only what the enricher needs; enrichment fills in price
-    history, asset class, etc.
+    By default this returns the current open-position snapshot exactly as
+    before. ``include_closed=True`` additionally returns every exact ISIN that
+    had a position-changing order, marking closed instruments as
+    ``is_historical_only``. Those carriers exist solely to fetch classification
+    and price history for order-derived returns; they are never current
+    holdings and their zero terminal quantity/value cannot affect valuation.
     """
     qty_by_isin = _net_qty_by_isin(orders)
     identity_by_isin = _instrument_identity_by_isin(orders)
     open_isins = _open_isins(qty_by_isin, identity_by_isin)
+    selected_isins = set(qty_by_isin) if include_closed else open_isins
     cost_by_isin = cost_basis_by_isin(orders)
 
     name_by_isin: dict[str, str] = {}
     ccy_by_isin: dict[str, str] = {}
-    for o in orders:
-        if o.name and o.isin not in name_by_isin:
-            name_by_isin[o.isin] = o.name
-        if o.currency and o.isin not in ccy_by_isin:
-            ccy_by_isin[o.isin] = o.currency
+    for order in orders:
+        if order.name and order.isin not in name_by_isin:
+            name_by_isin[order.isin] = order.name
+        if order.currency and order.isin not in ccy_by_isin:
+            ccy_by_isin[order.isin] = order.currency
 
     holdings: list[Holding] = []
-    # Sort the open ISINs: ``_open_isins`` returns a set, whose iteration order
-    # is hash-randomized per process. Leaving it unsorted makes the derived
-    # holdings list — and everything downstream that preserves its order
-    # (Excel rows, newsletter sleeve tables, tie-broken sorts) — vary run to
-    # run, defeating reproducibility. A stable ISIN sort fixes it at the root.
-    for isin in sorted(open_isins):
-        qty = qty_by_isin[isin]
+    # Stable ISIN order keeps enrichment evidence and downstream projections
+    # reproducible even though the selected universe originates as a set.
+    for isin in sorted(selected_isins):
+        quantity = qty_by_isin[isin]
         kind_resolution = _order_instrument_kind_resolution(orders, isin)
         kind = kind_resolution.kind
+        historical_only = isin not in open_isins
         holdings.append(Holding(
             isin=isin,
             ticker=isin,
-            quantity=qty,
-            cost_basis_eur=cost_by_isin.get(isin, 0.0),
-            market_value_eur=_seed_market_value(orders, isin, qty),
+            quantity=(0.0 if historical_only else quantity),
+            cost_basis_eur=(0.0 if historical_only else cost_by_isin.get(isin, 0.0)),
+            market_value_eur=(
+                0.0
+                if historical_only
+                else _seed_market_value(orders, isin, quantity)
+            ),
             currency=ccy_by_isin.get(isin, "EUR"),
             name=name_by_isin.get(isin, ""),
             security_type=kind.value if kind is not None else None,
             instrument_kind_evidence=kind_resolution.evidence,
+            is_historical_only=historical_only,
         ))
     return holdings
 
@@ -996,11 +1006,13 @@ def build_order_derived_series(
             context=",".join(causal_price_unavailable),
         )
     elif fallback_instruments:
-        dq.record(
-            dq.WARNING,
+        # Availability already carries the portfolio-level DEGRADED state.
+        # Keep one informational summary, while the actionable lifecycle below
+        # is emitted once per economic identity rather than once per source.
+        dq.info(
             "returns",
-            "Order-derived return history is degraded because causal "
-            "order-price fallback was required.",
+            "Order-derived return history used accepted causal order-price "
+            "fallback for one or more economic identities.",
             context=",".join(fallback_instruments),
         )
 
@@ -1028,26 +1040,74 @@ def build_order_derived_series(
     # pricing edge case can never surface an impossible >100% figure.
     coverage_pct = max(0.0, min(coverage_pct, 100.0))
 
-    # Disclosure: warn once per instrument that fell back.
+    # Disclosure: one lifecycle per explicit economic identity, with every
+    # fallback rung aggregated into its context. This retains complete evidence
+    # without making SYNTHETIC + CARRY_FLAT look like independent problems.
+    identity_sources: dict[_IdentityKey, set[str]] = {}
+    identity_members: dict[_IdentityKey, set[str]] = {}
     for source in ("synthetic", "carry_flat", "excluded"):
-        for isin in sorted(set(provenance[source])):
-            logger.warning(
-                "TWROR/TWR: %s priced by %s (no full market history).",
-                isin, source.upper(),
+        for isin in set(provenance[source]):
+            identity = _identity_key(isin, identity_by_isin)
+            identity_sources.setdefault(identity, set()).add(source)
+            identity_members.setdefault(identity, set()).add(isin)
+
+    # Preserve complete equivalence membership even when only one sibling used
+    # a fallback rung. The lifecycle remains one per identity but still names
+    # every instrument whose evidence established that identity.
+    for isin, identity in identity_by_isin.items():
+        if identity in identity_sources:
+            identity_members.setdefault(identity, set()).add(isin)
+
+    for identity in sorted(identity_sources):
+        sources = identity_sources[identity]
+        members = sorted(identity_members[identity])
+        kinds = {
+            kind
+            for member in members
+            if (kind := resolver.instrument_kind(member)) is not None
+        }
+        kind_label = (
+            next(iter(kinds)).value if len(kinds) == 1 else "UNKNOWN"
+        )
+        source_label = "+".join(sorted(source.upper() for source in sources))
+        member_label = ",".join(members)
+        context = (
+            f"members={member_label}; kind={kind_label}; "
+            f"sources={source_label}"
+        )
+        logger.warning(
+            "TWROR/TWR: economic identity %s priced by %s "
+            "(no full market history).",
+            member_label,
+            source_label,
+        )
+        if "excluded" in sources:
+            dq.error(
+                "returns",
+                "An economic identity had no usable causal price on at least "
+                "one held date and was excluded from that valuation.",
+                context=context,
             )
-            # 'excluded' means the instrument had NO price at all and dropped
-            # out of the valuation on some dates — a heavier caveat than a
-            # trend-only synthetic/carry-flat fill, so flag it as an ERROR.
-            sev = dq.ERROR if source == "excluded" else dq.WARNING
-            detail = {
-                "synthetic": "priced by an exact ORDER observation (no real "
-                             "market history) — its return contribution is approximate",
-                "carry_flat": "priced CARRY-FLAT (single known price held flat, "
-                              "zero volatility contribution) — its return contribution is approximate",
-                "excluded": "had NO usable price and dropped out of the valuation "
-                            "on some dates — its market move is invisible to TWROR",
-            }[source]
-            dq.record(sev, "returns", f"{isin}: {detail}", context=isin)
+        elif kinds == {InstrumentKind.BOND}:
+            dq.accepted_warning(
+                "returns",
+                "Configured providers do not supply full bond price history; "
+                "causal order-price fallback was accepted for this economic "
+                "identity, so its return contribution remains approximate.",
+                context=context,
+                resolution="causal-order-price-fallback",
+                provenance=sorted(sources),
+            )
+        else:
+            dq.accepted_warning(
+                "returns",
+                "Full market price history was unavailable for this economic "
+                "identity; causal order-price fallback was accepted, so its "
+                "return contribution remains approximate.",
+                context=context,
+                resolution="causal-order-price-fallback",
+                provenance=sorted(sources),
+            )
     if coverage_pct < 100.0:
         dq.info(
             "returns",

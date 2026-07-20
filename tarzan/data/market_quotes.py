@@ -70,9 +70,13 @@ _SUFFIX_EXCHANGE: dict[str, str] = {
 
 
 def _exchange_for(ticker: str) -> Optional[str]:
-    """Map a Yahoo ticker to its exchange-session group, or None when it has
-    no fixed cash session (crypto/FX/futures)."""
-    t = (ticker or "").upper()
+    """Map a verified Yahoo listing to its exchange-session group.
+
+    A suffixless symbol is not inherently American. Curated taxonomy evidence
+    may promote a bare input to a full listing; otherwise ``None`` deliberately
+    delegates freshness to wall-clock age instead of fabricating a venue.
+    """
+    t = (ticker or "").strip().upper()
     if not t:
         return None
     if t.endswith("-USD") or t.endswith("=X") or t.endswith("=F"):
@@ -81,8 +85,17 @@ def _exchange_for(ticker: str) -> Optional[str]:
         return _INDEX_EXCHANGE.get(t)
     if "." in t:
         return _SUFFIX_EXCHANGE.get(t.rsplit(".", 1)[1])
-    # Bare ticker (no suffix, no caret) → assume a US listing.
-    return "US"
+
+    try:
+        from tarzan import config as cfg
+
+        _, resolved_ticker = cfg.resolve_taxonomy_identity("", t)
+        resolved = str(resolved_ticker or "").strip().upper()
+        if resolved != t and "." in resolved:
+            return _SUFFIX_EXCHANGE.get(resolved.rsplit(".", 1)[1])
+    except Exception:  # noqa: BLE001 - freshness must fail conservatively
+        pass
+    return None
 
 
 def is_continuous_market(ticker: str) -> bool:
@@ -122,6 +135,104 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     if n.weekday() >= 5:  # Saturday / Sunday
         return False
     return dtime(oh, om) <= n.time() <= dtime(ch, cm)
+
+
+def market_session_age_seconds(
+    ticker: str,
+    observed_at: datetime,
+    captured_at: datetime,
+) -> Optional[float]:
+    """Return freshness age measured in completed cash-market sessions.
+
+    Daily market bars are date-labelled (normally at midnight), so the bar for
+    Friday represents Friday's completed close. Closed weekend hours must not
+    age it. Every later completed weekday session counts as one policy day
+    (86,400 seconds); an in-progress current session contributes only elapsed
+    open time. Same-day evidence uses ordinary elapsed time so stale intraday
+    data remains detectable. ``None`` delegates to wall-clock freshness for
+    continuous or unknown markets. Holidays are not modelled because Tarzan
+    currently has no authoritative exchange calendar.
+    """
+    from datetime import timedelta
+
+    exchange = _exchange_for(ticker)
+    if exchange is None:
+        return None
+    # Daily bars retain a midnight date label even when timezone conversion
+    # moves that instant away from 00:00 in the venue timezone.
+    observed_is_date_label = (
+        observed_at.hour == 0
+        and observed_at.minute == 0
+        and observed_at.second == 0
+        and observed_at.microsecond == 0
+    )
+    # ISIN placeholders and cash labels are not exchange symbols. Treating
+    # them as bare US tickers would fabricate a session authority.
+    normalized = str(ticker or "").strip().upper()
+    if (
+        len(normalized.replace("-", "")) == 12
+        and normalized.replace("-", "")[:2].isalpha()
+        and normalized.replace("-", "").isalnum()
+    ):
+        return None
+
+    tzname, (open_hour, open_minute), (close_hour, close_minute) = _SESSIONS[exchange]
+    try:
+        from zoneinfo import ZoneInfo
+
+        zone = ZoneInfo(tzname)
+        # A naive daily-bar timestamp is a venue-local date label. Aware
+        # timestamps (for example regularMarketTime) carry a real instant.
+        observed = (
+            observed_at.replace(tzinfo=zone)
+            if observed_at.tzinfo is None
+            else observed_at.astimezone(zone)
+        )
+        captured = (
+            captured_at.replace(tzinfo=zone)
+            if captured_at.tzinfo is None
+            else captured_at.astimezone(zone)
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    if captured <= observed:
+        return 0.0
+    if captured.date() == observed.date():
+        return max(0.0, (captured - observed).total_seconds())
+
+    age = 0.0
+    # A non-date-label observation is intraday. If its own session
+    # subsequently completed, a newer close exists and consumes one policy day.
+    if not observed_is_date_label and observed.weekday() < 5:
+        observed_close = observed.replace(
+            hour=close_hour,
+            minute=close_minute,
+            second=0,
+            microsecond=0,
+        )
+        if captured >= observed_close and observed < observed_close:
+            age += 86400.0
+
+    day = observed.date() + timedelta(days=1)
+    while day <= captured.date():
+        if day.weekday() < 5:
+            session_open = datetime.combine(
+                day,
+                dtime(open_hour, open_minute),
+                tzinfo=zone,
+            )
+            session_close = datetime.combine(
+                day,
+                dtime(close_hour, close_minute),
+                tzinfo=zone,
+            )
+            if captured >= session_close:
+                age += 86400.0
+            elif captured > session_open:
+                age += (captured - session_open).total_seconds()
+        day += timedelta(days=1)
+    return max(0.0, age)
 
 # (display name, yfinance symbol, category), in display order. The strip
 # shows at most 2 rows per category (the newsletter caps it).
@@ -186,12 +297,13 @@ _MEMO_TTL_SECONDS = 900  # 15 minutes (≈ yfinance intraday lag)
 
 # Intraday-only sibling fallback. When a EUR listing has no intraday feed
 # (the classic Borsa Italiana ``.MI`` case, where Yahoo's Milan feed is often
-# stale/empty), we borrow the intraday series from a sibling listing of the
-# SAME instrument on another EUR venue (Xetra/Euronext). Only EUR venues are
-# used so the "vs previous close" % stays a faithful EUR proxy — London (.L,
-# often USD/GBP) is intentionally excluded to avoid FX-contaminated returns.
-# This affects ONLY the intraday sparkline / broker-1D path; EOD/daily history
-# (valuation, returns, risk) always stays on the instrument's primary listing.
+# stale/empty), we may borrow the intraday series from a same-root candidate on
+# another EUR venue (Xetra/Euronext), but only after the canonical listing was
+# attempted and its daily close passes the price-coherence guard below. Only
+# EUR venues are used so the "vs previous close" % stays a faithful EUR proxy
+# — London (.L, often USD/GBP) is intentionally excluded to avoid FX-contaminated
+# returns. This affects ONLY the intraday sparkline / broker-1D path; EOD/daily
+# history (valuation, returns, risk) always stays on the canonical listing.
 _SIBLING_SUFFIXES: dict[str, tuple[str, ...]] = {
     "MI": ("DE", "PA", "AS", "F"),   # Milan  → Xetra, Paris, Amsterdam, Frankfurt
     "PA": ("DE", "MI", "AS", "F"),   # Paris  → Xetra, Milan, ...
@@ -200,10 +312,10 @@ _SIBLING_SUFFIXES: dict[str, tuple[str, ...]] = {
     "DE": ("MI", "PA", "AS", "F"),   # Xetra   → Milan, Paris, ...
 }
 
-# A sibling listing is accepted only when its latest intraday price is within
-# this fraction of the primary listing's last known close. Same-instrument EUR
-# listings track within ~1-2%; a wider gap signals a same-root ticker on
-# another exchange is a DIFFERENT instrument (collision guard).
+# A venue candidate is accepted only when its latest intraday price is within
+# this fraction of the canonical listing's last known close. A wider gap
+# signals that the same-root ticker on another exchange may be a different
+# instrument and is rejected by the collision guard.
 _SIBLING_PRICE_TOLERANCE = 0.10
 
 
@@ -244,13 +356,14 @@ def _sibling_symbols(ticker: str) -> list[str]:
 
 
 def _resolve_intraday(symbols: list[str]) -> dict:
-    """Resolve an intraday close series per symbol, with EUR sibling fallback.
+    """Resolve an intraday close series per symbol, with guarded EUR fallback.
 
-    Returns ``{original_symbol: (series, source_symbol)}`` for every symbol
-    that has a usable intraday series (>=2 points) — either its own or a
-    sibling's. ``source_symbol`` is the listing the series actually came from,
-    so the caller can pull a *coherent* previous close from the same feed.
-    Best-effort: never raises."""
+    The canonical symbol is always fetched first. A same-root EUR-venue
+    candidate may supply the series only when its latest price is coherent
+    with the canonical listing's known daily close; without that comparison
+    evidence the canonical request remains unresolved. Returns
+    ``{original_symbol: (series, source_symbol)}`` and never raises.
+    """
     prim = _fetch_intraday(symbols)
     out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s))}
     missing = [s for s in symbols if s not in out]
@@ -269,7 +382,9 @@ def _resolve_intraday(symbols: list[str]) -> dict:
         _fetch_history = None  # type: ignore
 
     for s in missing:
-        # Primary listing's last known close, used as the collision guard.
+        # The canonical listing's last known close is mandatory evidence for
+        # the collision guard. An equal ticker root alone does not establish
+        # that another venue serves the same instrument.
         prim_close = None
         if _fetch_history is not None:
             try:
@@ -280,26 +395,43 @@ def _resolve_intraday(symbols: list[str]) -> dict:
                         prim_close = float(cl.iloc[-1])
             except Exception:  # noqa: BLE001
                 pass
+        if not prim_close:
+            logger.debug(
+                "intraday fallback %s rejected (no canonical close for "
+                "price-coherence guard)",
+                s,
+            )
+            continue
         for c in cand_map[s]:
             ser = sib.get(c)
             if not _has_intraday(ser):
                 continue
-            if prim_close:
-                dev = abs(float(ser.iloc[-1]) / prim_close - 1.0)
-                if dev > _SIBLING_PRICE_TOLERANCE:
-                    logger.debug("intraday fallback %s→%s rejected (%.1f%% off "
-                                 "primary close)", s, c, dev * 100)
-                    continue
+            dev = abs(float(ser.iloc[-1]) / prim_close - 1.0)
+            if dev > _SIBLING_PRICE_TOLERANCE:
+                logger.debug(
+                    "intraday fallback %s→%s rejected (%.1f%% off primary close)",
+                    s,
+                    c,
+                    dev * 100,
+                )
+                continue
             out[s] = (ser, c)
-            logger.info("intraday fallback: %s → %s (EUR sibling listing)", s, c)
+            logger.info(
+                "intraday fallback: %s → %s (price-coherent EUR venue candidate)",
+                s,
+                c,
+            )
             break
     return out
 
 
 def _fetch_intraday_with_fallback(symbols: list[str]) -> dict:
-    """``{symbol: Close series}`` with EUR sibling fallback for intraday-empty
-    listings. The sibling series is keyed under the ORIGINAL symbol so callers
-    (e.g. the newsletter sparkline map) need no changes."""
+    """``{symbol: Close series}`` with guarded EUR venue fallback.
+
+    The selected series remains keyed under the original canonical symbol for
+    compatibility; callers that need the effective source use
+    :func:`_resolve_intraday` instead.
+    """
     return {k: ser for k, (ser, _src) in _resolve_intraday(symbols).items()
             if ser is not None}
 
@@ -307,6 +439,11 @@ def _fetch_intraday_with_fallback(symbols: list[str]) -> dict:
 def _fetch_intraday(symbols: list[str]) -> dict:
     """One batched intraday download → ``{symbol: Close series}``. Empty on
     any failure (the caller falls back to the daily history)."""
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return {}
+
     out: dict = {}
     try:
         import warnings
@@ -403,10 +540,11 @@ def broker_1d(tickers: list[str]) -> dict:
             ),),
             policy=policy,
         )
-    # Resolve intraday with EUR sibling fallback: a ``.MI`` holding with no
-    # Milan intraday borrows the series from its Xetra/Euronext twin. ``src``
-    # is the listing the series came from, so the previous close is pulled
-    # from that SAME feed — keeping ``cur`` and ``prev`` currency-consistent.
+    # Resolve intraday canonical-first with guarded EUR venue fallback. A
+    # ``.MI`` holding can use a price-coherent same-root candidate only after
+    # its canonical close is available for the collision guard. ``src`` is the
+    # listing the series came from, so the previous close is pulled from that
+    # SAME feed — keeping ``cur`` and ``prev`` currency-consistent.
     resolved = _resolve_intraday(uniq)
     out: dict = {}
     for tk, (intra, src) in resolved.items():
@@ -414,6 +552,17 @@ def broker_1d(tickers: list[str]) -> dict:
             continue
         cur = float(intra.iloc[-1])
         last_ts = intra.index[-1]
+        try:
+            intraday_observation = pd.Timestamp(last_ts)
+            if intraday_observation.tzinfo is None:
+                intraday_observation = intraday_observation.tz_localize("UTC")
+            else:
+                intraday_observation = intraday_observation.tz_convert("UTC")
+            intraday_observation_timestamp = (
+                intraday_observation.to_pydatetime()
+            )
+        except (TypeError, ValueError, OverflowError):
+            intraday_observation_timestamp = None
         iday = last_ts.date()
         # "live" = the source listing's exchange is in its regular session
         # right now, judged by EXCHANGE HOURS (not bar recency). Uses ``src``
@@ -444,7 +593,20 @@ def broker_1d(tickers: list[str]) -> dict:
             for cand in (tk, src):
                 oc, pv = _official_and_prev(_fetch_history, cand, iday)
                 if oc is not None and pv:
-                    out[tk] = {"pct": (oc / pv - 1.0) * 100.0, "live": False}
+                    out[tk] = {
+                        "pct": (oc / pv - 1.0) * 100.0,
+                        "live": False,
+                        "source_ticker": cand,
+                        "intraday_source_ticker": src,
+                        "intraday_observation_timestamp": (
+                            intraday_observation_timestamp
+                        ),
+                        "source_reason": (
+                            "canonical official close"
+                            if cand == tk
+                            else "price-coherent EUR venue official-close fallback"
+                        ),
+                    }
                     break
             if tk in out:
                 continue
@@ -465,7 +627,20 @@ def broker_1d(tickers: list[str]) -> dict:
         if prev is None:
             prev = float(intra.iloc[0])
         if prev:
-            out[tk] = {"pct": (cur / prev - 1.0) * 100.0, "live": bool(is_live)}
+            out[tk] = {
+                "pct": (cur / prev - 1.0) * 100.0,
+                "live": bool(is_live),
+                "source_ticker": src,
+                "intraday_source_ticker": src,
+                "intraday_observation_timestamp": (
+                    intraday_observation_timestamp
+                ),
+                "source_reason": (
+                    "canonical intraday feed"
+                    if src == tk
+                    else "price-coherent EUR venue intraday fallback"
+                ),
+            }
     coverage = len(out) / len(uniq) * 100.0 if uniq else 100.0
     availability = (
         Availability.AVAILABLE if len(out) == len(uniq)

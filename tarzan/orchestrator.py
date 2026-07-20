@@ -28,111 +28,255 @@ logger = logging.getLogger(__name__)
 def _apply_per_holding_targets(holdings, targets: dict) -> None:
     """Attach per-holding rebalancing targets in place.
 
-    ``targets`` is keyed by ISIN (when present) or uppercased ticker, as
-    produced by ``load_targets_per_holding``. Matching uses the canonical
-    ``instrument_key`` (ISIN, else ``TICKER:<symbol>``) with a fallback to the
-    legacy raw-ISIN / uppercased-ticker keys, so existing target files keep
-    matching identically while new lookups go through one rule. A holding with
-    no matching target is left untouched.
+    Every direct, cross-reference, and taxonomy-resolved match contributes a
+    candidate before selection. A target is applied only when all compatible
+    evidence converges on one distinct source row; collisions are never
+    resolved by lookup order, and ticker aliases never override a conflicting
+    explicit ISIN.
     """
     if not targets:
         return
-    from tarzan.models.instrument_key import instrument_key, normalize_ticker
+
+    from tarzan import config as cfg
     from tarzan.data import price_cache
+    from tarzan.models.instrument_key import (
+        instrument_key,
+        normalize_isin,
+        normalize_ticker,
+    )
+
+    def _identity_aliases(isin, ticker) -> set[str]:
+        return {
+            instrument_key(isin, ticker),
+            normalize_isin(isin),
+            normalize_ticker(ticker),
+            str(ticker or "").strip().upper(),
+        } - {""}
+
+    def _usable_isin(value) -> str:
+        normalized = normalize_isin(value)
+        return (
+            normalized
+            if len(normalized) == 12 and normalized[:2].isalpha()
+            else ""
+        )
+
+    # Both canonical and legacy mapping keys point to the same row object.
+    # Resolve each source row once, then publish every safe identity alias and
+    # retain its strongest ISIN evidence for compatibility filtering.
+    resolved_aliases: dict[str, dict[int, dict]] = {}
+    target_isins: dict[int, str] = {}
+    seen_rows: set[int] = set()
+    for row in targets.values():
+        row_id = id(row)
+        if row_id in seen_rows:
+            continue
+        seen_rows.add(row_id)
+        resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity(
+            row.get("isin"),
+            row.get("ticker"),
+            row.get("name"),
+        )
+        target_isins[row_id] = (
+            _usable_isin(row.get("isin")) or _usable_isin(resolved_isin)
+        )
+        for alias in _identity_aliases(resolved_isin, resolved_ticker):
+            resolved_aliases.setdefault(alias, {})[row_id] = row
+
     matched = 0
     for h in holdings:
-        # Canonical key first (built the same way for holding and target row),
-        # then the historical raw-ISIN / uppercased-bare-ticker fallbacks.
-        t = (targets.get(instrument_key(h.isin, h.ticker))
-             or targets.get(h.isin)
-             or (targets.get(normalize_ticker(h.ticker)) if h.ticker else None))
-        # Cross-identifier bridge: a broker import (Fineco) gives a holding only
-        # its ISIN, while the target row may be keyed only by ticker (or vice
-        # versa). This runs BEFORE enrichment resolves the holding's ticker, so
-        # match through the learned ISIN↔ticker xref too — otherwise the target
-        # never attaches, the position sells to 0%, and a phantom buy-new is
-        # seeded, showing the SAME fund as both BUY and SELL. (The data file's
-        # ISIN column is the cold-cache backstop; this covers the warm path and
-        # any row still missing one identifier.)
-        if not t and h.isin:
+        candidates: dict[int, dict] = {}
+        holding_aliases = _identity_aliases(h.isin, h.ticker)
+        holding_isin = _usable_isin(h.isin)
+
+        def _add_target_keys(keys: set[str]) -> None:
+            for key in keys - {""}:
+                row = targets.get(key)
+                if row is not None:
+                    candidates[id(row)] = row
+
+        # Direct canonical and compatibility keys are evidence, not an early
+        # winner. A second row discovered below must make the match ambiguous.
+        _add_target_keys(holding_aliases)
+
+        # Cross-identifier bridge for broker imports that carry only one side
+        # of ISIN↔ticker. Publish the xref aliases to both direct and resolved
+        # lookup paths so all sources participate in the same uniqueness check.
+        if h.isin:
             xref_ticker = price_cache.load_ticker_isin_reverse(h.isin)
             if xref_ticker:
-                t = (targets.get(normalize_ticker(xref_ticker))
-                     or targets.get(instrument_key("", xref_ticker)))
-        if not t and h.ticker:
+                xref_aliases = (
+                    _identity_aliases("", xref_ticker)
+                    | _identity_aliases(h.isin, xref_ticker)
+                )
+                holding_aliases.update(xref_aliases)
+                _add_target_keys(xref_aliases)
+        if h.ticker:
             xref_isin = price_cache.load_ticker_isin(h.ticker)
             if xref_isin:
-                t = targets.get(xref_isin) or targets.get(instrument_key(xref_isin, ""))
-        if not t:
+                if not holding_isin:
+                    holding_isin = _usable_isin(xref_isin)
+                xref_aliases = (
+                    _identity_aliases(xref_isin, "")
+                    | _identity_aliases(xref_isin, h.ticker)
+                )
+                holding_aliases.update(xref_aliases)
+                _add_target_keys(xref_aliases)
+
+        resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity(
+            h.isin,
+            h.ticker,
+            h.name,
+        )
+        if not holding_isin:
+            holding_isin = _usable_isin(resolved_isin)
+        holding_aliases.update(_identity_aliases(resolved_isin, resolved_ticker))
+        for alias in holding_aliases:
+            candidates.update(resolved_aliases.get(alias, {}))
+
+        if holding_isin:
+            compatible = {
+                row_id: row
+                for row_id, row in candidates.items()
+                if not target_isins.get(row_id)
+                or target_isins[row_id] == holding_isin
+            }
+            if len(compatible) != len(candidates):
+                logger.info(
+                    "Ignored target alias with conflicting ISIN for holding %s",
+                    h.isin or h.ticker,
+                )
+            candidates = compatible
+
+        if len(candidates) != 1:
+            if len(candidates) > 1:
+                # In per-holding-only planning, a missing target otherwise
+                # means 0% and could turn an ambiguity into a liquidation.
+                # Freeze the affected holding until the input collision is
+                # resolved; never execute either candidate implicitly.
+                h.no_buy_no_sell = True
+                logger.error(
+                    "Multiple target rows resolve to holding %s; holding frozen "
+                    "and no target applied",
+                    h.isin or h.ticker,
+                )
             continue
-        if t.get("target_equities") is not None:
-            h.target_equities = t["target_equities"]
-        if t.get("target_fixed_income") is not None:
-            h.target_fixed_income = t["target_fixed_income"]
-        if t.get("target_portfolio") is not None:
-            h.target_portfolio = t["target_portfolio"]
-        h.no_buy_no_sell = bool(t.get("no_buy_no_sell", False))
+
+        target = next(iter(candidates.values()))
+        requested_ticker = str(target.get("ticker") or "").strip()
+        if requested_ticker:
+            _, target_ticker = cfg.resolve_taxonomy_identity(
+                target.get("isin"),
+                requested_ticker,
+                target.get("name"),
+            )
+            h.ticker_requested = requested_ticker
+            if target_ticker:
+                # A matched target row is explicit user ticker authority. Feed
+                # its curated identity into the sole market resolver so one
+                # canonical listing is selected for history/current data and
+                # remains the first choice for intraday data.
+                h.ticker = target_ticker
+        if target.get("target_equities") is not None:
+            h.target_equities = target["target_equities"]
+        if target.get("target_fixed_income") is not None:
+            h.target_fixed_income = target["target_fixed_income"]
+        if target.get("target_portfolio") is not None:
+            h.target_portfolio = target["target_portfolio"]
+        h.no_buy_no_sell = bool(target.get("no_buy_no_sell", False))
         matched += 1
     logger.info("Applied per-holding targets to %d/%d holdings", matched, len(holdings))
 
 
 def _seed_missing_targets(holdings, targets: dict) -> list:
-    """Create zero-value holdings for target instruments not currently held.
+    """Create enriched zero-value holdings for target instruments not held.
 
-    Used by the per-holding-only rebalancing mode so the optimizer can open
-    a new position toward an instrument's ``target_portfolio`` weight. Matches
-    existing holdings by ISIN or (uppercased) ticker; every remaining target
-    row with a positive ``target_portfolio`` becomes a seeded Holding
-    (quantity 0) to be enriched alongside the rest.
+    Target rows may intentionally carry a bare ticker. Before constructing a
+    seed, resolve that partial identity through curated taxonomy. Explicit ISIN
+    evidence wins; a suffixed ticker requires an exact listing match; bare
+    matching is reserved for tickers that remain genuinely unresolved.
     """
+    from tarzan import config as cfg
+    from tarzan.data import price_cache
     from tarzan.models.holding import Holding
     from tarzan.models.instrument_key import instrument_key
 
-    # The targets dict now stores each entry under BOTH a legacy and a
-    # canonical key, so iterate UNIQUE entries (by identity) to avoid
-    # double-seeding the same instrument.
-    #
-    # A target must be recognised as "already held" if it matches a holding by
-    # ISIN, ticker, OR name — not only the canonical instrument_key. Otherwise a
-    # fund whose order carries only an ISIN (holding key = ISIN) but whose target
-    # row carries only a ticker (target key = TICKER:...) is seeded as a phantom
-    # buy-new AND left target-less as a real holding, so the SAME fund shows up
-    # twice: once "buy to N%" and once "exit to 0%". Matching on any identifier
-    # collapses them back to one instrument. (See _apply_per_holding_targets,
-    # which should have attached the target; this is the safety net.)
-    def _norm(s) -> str:
-        return str(s or "").strip().upper()
+    def _norm(value) -> str:
+        return str(value or "").strip().upper()
 
-    def _bare(t) -> str:
-        return _norm(t).split(".")[0]  # NTSG.DE → NTSG
+    def _bare(ticker) -> str:
+        return _norm(ticker).split(".")[0]  # NTSG.DE → NTSG
 
-    from tarzan.data import price_cache
+    def _resolved_identity(row: dict) -> tuple[str, str]:
+        raw_isin = (row.get("isin") or "").strip()
+        raw_ticker = (row.get("ticker") or "").strip()
+        name = (row.get("name") or "").strip()
+        # The persisted cross-reference is intentionally bare-ticker keyed and
+        # therefore cannot prove identity across venues for a not-yet-held
+        # target. Use only curated taxonomy evidence here.
+        return cfg.resolve_taxonomy_identity(raw_isin, raw_ticker, name)
 
-    held_keys: set[str] = set()
-    held_isins: set[str] = set()
-    held_tickers: set[str] = set()
-    held_names: set[str] = set()
-    for h in holdings:
-        held_keys.add(instrument_key(h.isin, h.ticker))
-        if h.isin:
-            held_isins.add(_norm(h.isin))
-            # Cross-identifier bridge: a holding known only by ISIN (Fineco
-            # import, ticker not yet resolved) still counts as "holding" the
-            # ticker-keyed target — via the learned ISIN↔ticker xref — so it is
-            # not seeded as a phantom buy-new duplicate.
-            xref_ticker = price_cache.load_ticker_isin_reverse(h.isin)
+    # Detect many-to-one target rows before creating any synthetic holding.
+    # Canonical/legacy aliases of the same row share object identity and count
+    # once; distinct source rows resolving to one economic identity are all
+    # suppressed rather than emitted as duplicate buy-new instructions.
+    target_identity_rows: dict[str, set[int]] = {}
+    scanned_rows: set[int] = set()
+    for row in targets.values():
+        row_id = id(row)
+        if row_id in scanned_rows:
+            continue
+        scanned_rows.add(row_id)
+        target_portfolio = row.get("target_portfolio")
+        if target_portfolio is None or target_portfolio <= 0:
+            continue
+        raw_isin = (row.get("isin") or "").strip()
+        raw_ticker = (row.get("ticker") or "").strip()
+        if not raw_isin and not raw_ticker:
+            continue
+        resolved_isin, resolved_ticker = _resolved_identity(row)
+        identity = instrument_key(resolved_isin, resolved_ticker)
+        if identity:
+            target_identity_rows.setdefault(identity, set()).add(row_id)
+
+    collided_row_ids = {
+        row_id
+        for row_ids in target_identity_rows.values()
+        if len(row_ids) > 1
+        for row_id in row_ids
+    }
+    for identity, row_ids in target_identity_rows.items():
+        if len(row_ids) > 1:
+            logger.error(
+                "Multiple positive target rows resolve to %s; no rebalance "
+                "seed created for that identity",
+                identity,
+            )
+
+    # Keep each holding's identity evidence together. This prevents a ticker or
+    # name from overriding a different explicit ISIN merely because aggregate
+    # sets happen to contain both values.
+    held_identities: list[tuple[str, set[str], set[str], str]] = []
+    for holding in holdings:
+        identity_isin = _norm(holding.isin)
+        exact_tickers: set[str] = set()
+        holding_ticker = _norm(holding.ticker)
+        if holding_ticker and holding_ticker != identity_isin:
+            exact_tickers.add(holding_ticker)
+
+        if identity_isin:
+            xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin)
             if xref_ticker:
-                held_tickers.add(_norm(xref_ticker))
-                held_tickers.add(_bare(xref_ticker))
-        if h.ticker:
-            held_tickers.add(_norm(h.ticker))
-            held_tickers.add(_bare(h.ticker))
-            xref_isin = price_cache.load_ticker_isin(h.ticker)
+                exact_tickers.add(_norm(xref_ticker))
+        elif holding.ticker:
+            xref_isin = price_cache.load_ticker_isin(holding.ticker)
             if xref_isin:
-                held_isins.add(_norm(xref_isin))
-        if h.name:
-            held_names.add(_norm(h.name))
-    held_keys.discard("")
+                identity_isin = _norm(xref_isin)
+
+        bare_tickers = {_bare(ticker) for ticker in exact_tickers if ticker}
+        held_identities.append(
+            (identity_isin, exact_tickers, bare_tickers, _norm(holding.name))
+        )
 
     seen: set[int] = set()
     seeded = []
@@ -140,36 +284,93 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
         if id(row) in seen:
             continue
         seen.add(id(row))
-        tpf = row.get("target_portfolio")
-        if tpf is None or tpf <= 0:
+        if id(row) in collided_row_ids:
             continue
-        r_isin = (row.get("isin") or "").strip()
-        r_ticker = (row.get("ticker") or "").strip()
-        r_name = (row.get("name") or "").strip()
-        if not r_isin and not r_ticker:
+        target_portfolio = row.get("target_portfolio")
+        if target_portfolio is None or target_portfolio <= 0:
             continue
-        # Name match tolerates the common short-name convention: a target row's
-        # name is often a prefix of the holding's full legal name ("WisdomTree
-        # Global Efficient Core" vs "...UCITS ETF USD Acc"). Match when either
-        # name starts with the other (min 8 chars, so short tokens don't collide).
-        rn = _norm(r_name)
-        name_hit = bool(rn) and len(rn) >= 8 and any(
-            hn.startswith(rn) or rn.startswith(hn) for hn in held_names
-        )
-        # Held by canonical key, ISIN, (bare or full) ticker, or name → skip.
-        already_held = (
-            instrument_key(r_isin, r_ticker) in held_keys
-            or (r_isin and _norm(r_isin) in held_isins)
-            or (r_ticker and (_norm(r_ticker) in held_tickers or _bare(r_ticker) in held_tickers))
-            or name_hit
-        )
+
+        raw_isin = (row.get("isin") or "").strip()
+        raw_ticker = (row.get("ticker") or "").strip()
+        row_name = (row.get("name") or "").strip()
+        if not raw_isin and not raw_ticker:
+            continue
+        resolved_isin, resolved_ticker = _resolved_identity(row)
+        if (resolved_isin, resolved_ticker) != (raw_isin, raw_ticker):
+            logger.info(
+                "Resolved target identity %s → %s",
+                raw_ticker or raw_isin,
+                resolved_ticker or resolved_isin,
+            )
+
+        target_isin = _norm(resolved_isin)
+        target_ticker = _norm(resolved_ticker)
+        target_has_full_ticker = bool(target_ticker and "." in target_ticker)
+        normalized_name = _norm(row_name)
+
+        if target_isin:
+            # A different known ISIN cannot be overridden by ticker or name.
+            # Exact full ticker is accepted only for a holding with no ISIN.
+            already_held = any(
+                held_isin == target_isin
+                or (
+                    not held_isin
+                    and target_has_full_ticker
+                    and target_ticker in exact_tickers
+                )
+                for held_isin, exact_tickers, _, _ in held_identities
+            )
+        elif target_has_full_ticker:
+            target_bare = _bare(target_ticker)
+            already_held = any(
+                target_ticker in exact_tickers
+                or any(
+                    "." not in held_ticker
+                    and _bare(held_ticker) == target_bare
+                    for held_ticker in exact_tickers
+                )
+                or (
+                    not exact_tickers
+                    and bool(normalized_name)
+                    and len(normalized_name) >= 8
+                    and (
+                        held_name.startswith(normalized_name)
+                        or normalized_name.startswith(held_name)
+                    )
+                )
+                for _, exact_tickers, _, held_name in held_identities
+                if held_name or exact_tickers
+            )
+        elif target_ticker:
+            target_bare = _bare(target_ticker)
+            already_held = any(
+                target_bare in bare_tickers
+                for _, _, bare_tickers, _ in held_identities
+            )
+        else:
+            # Name similarity is only a last resort when no explicit target
+            # identity survived resolution.
+            already_held = bool(normalized_name) and len(normalized_name) >= 8 and any(
+                held_name.startswith(normalized_name)
+                or normalized_name.startswith(held_name)
+                for _, _, _, held_name in held_identities
+                if held_name
+            )
+
         if already_held:
-            continue  # already held — don't seed a phantom duplicate
+            continue
+
         seeded.append(Holding(
-            isin=r_isin, ticker=r_ticker, quantity=0.0,
-            cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
-            name=row.get("name") or r_ticker or r_isin,
-            target_portfolio=float(tpf), is_seeded_target=True,
+            isin=resolved_isin,
+            ticker=resolved_ticker,
+            quantity=0.0,
+            cost_basis_eur=0.0,
+            market_value_eur=0.0,
+            currency="EUR",
+            name=row_name or resolved_ticker or resolved_isin,
+            ticker_requested=raw_ticker or None,
+            target_portfolio=float(target_portfolio),
+            is_seeded_target=True,
         ))
     return seeded
 
@@ -273,6 +474,31 @@ def _run_once(
     if not orders:
         logger.error("No orders are effective on or before the analysis boundary.")
         return PortfolioMetrics(), config
+
+    # Resolve mechanics and identifier continuity only from the effective
+    # ledger. Profile reads are as-of aware; only a LIVE run may refresh them
+    # through OpenFIGI. Work on copies so accepted input provenance remains
+    # unchanged while every downstream financial consumer receives the same
+    # resolved evidence.
+    from tarzan.data.enricher import (
+        reset_run_caches,
+        resolve_effective_order_instruments,
+    )
+    reset_run_caches()
+    orders, instrument_resolution = resolve_effective_order_instruments(orders)
+    session.memo["instrument_resolution"] = instrument_resolution
+    session.ledger.append(LedgerEntryType.STAGE, {
+        "stage": "instrument_resolution",
+        "outcome": "SUCCEEDED",
+        "profiles_requested": instrument_resolution["profiles_requested"],
+        "profile_sources": instrument_resolution["profile_sources"],
+        "profile_statuses": instrument_resolution["profile_statuses"],
+        "resolved_kind_count": len(
+            instrument_resolution["resolved_kind_isins"]
+        ),
+        "equivalence_groups": instrument_resolution["equivalence_groups"],
+        "conflicts": instrument_resolution["conflicts"],
+    })
 
     # Derive the snapshot from the effective order list (net quantity,
     # basis, market value via enrichment) and attach per-instrument
