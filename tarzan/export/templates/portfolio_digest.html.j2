@@ -246,9 +246,24 @@
             <td class="px-32" style="padding:32px 32px 0 32px;">
               <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Optimizer</div>
               {% for plan in optimizer.plans %}
-              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">{{ plan.label }}</div>
-              <div style="margin-top:2px;font-size:12px;color:{{ palette.muted }};">
-                {{ plan.n_buy }} BUY &nbsp;·&nbsp; {{ plan.n_sell }} SELL &nbsp;·&nbsp; total
+              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
+                {{ plan.label }}
+                {% if plan.execution_status %}
+                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{{ plan.execution_status|replace('_', ' ') }}</span>
+                {% endif %}
+              </div>
+              {% if plan.execution_status == 'NON_EXECUTABLE' %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;background:{{ palette.red_bg }};border:1px solid {{ palette.red }};border-radius:8px;border-collapse:separate;border-spacing:0;">
+                <tr><td style="padding:10px 12px;font-size:12px;color:{{ palette.ink }};line-height:1.5;">
+                  <strong style="color:{{ palette.red }};">Not executable — draft only.</strong>
+                  The funding proof ends with {{ plan.funding_ending_cash_eur }} cash against a protected {{ plan.funding_protected_cash_eur }} buffer{% if plan.funding_shortfall_eur %}, a {{ plan.funding_shortfall_eur }} shortfall{% endif %}. Do not treat the trades below as executable instructions.
+                </td></tr>
+              </table>
+              {% elif plan.execution_status == 'EXECUTABLE' %}
+              <div style="margin-top:6px;padding:6px 10px;background:{{ palette.green_bg }};border-radius:7px;font-size:11px;color:{{ palette.green }};">Funding verified · ending cash {{ plan.funding_ending_cash_eur }} · protected buffer {{ plan.funding_protected_cash_eur }}</div>
+              {% endif %}
+              <div style="margin-top:5px;font-size:12px;color:{{ palette.muted }};">
+                {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} BUY &nbsp;·&nbsp; {{ plan.n_sell }} SELL &nbsp;·&nbsp; total
                 <span style="color:{{ palette.green }};font-weight:600;">{{ plan.total_buy }}</span> in,
                 <span style="color:{{ palette.red }};font-weight:600;">{{ plan.total_sell }}</span> out,
                 net <span style="color:{{ plan.net_color }};font-weight:600;">{{ plan.net }}</span>
@@ -264,11 +279,11 @@
               {% endif %}
               {% if plan.actions %}
               {# Unified instrument table: per instrument, Now → Target → Trade
-                 → After, each as "% (bold) over € (muted)". BUY rows tinted
-                 light green, SELL rows light red. Same shell as Holdings /
-                 Returns / Performance / Risk. Pre-rendered in
-                 _sections_alloc.py::_optimizer_plan_ctx. #}
+                 → After. A non-executable plan remains visible as diagnostic
+                 evidence but is explicitly labeled draft-only above. #}
               {{ plan.table_html|safe }}
+              {% elif plan.execution_status == 'NON_EXECUTABLE' %}
+              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.red_bg }};border-radius:8px;font-size:12px;color:{{ palette.red }};">No executable trade set was produced.</div>
               {% else %}
               <div style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;font-size:12px;color:{{ palette.ink }};">Already on target: no trades needed.</div>
               {% endif %}
@@ -304,6 +319,41 @@
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
               {{ methodology.html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+
+          {# ─── INSTRUMENT DATA SOURCES (compact audit) ───── #}
+          {% if ticker_sources.available %}
+          <tr>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Instrument data sources</div>
+              <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Canonical and intraday ticker · latest dated provider observation in UTC. Daily bars may use a midnight date anchor.</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
+                <tr style="background:{{ palette.page }};">
+                  <td width="36%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Instrument</td>
+                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Canonical feed</td>
+                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Intraday feed</td>
+                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Presence</td>
+                </tr>
+                {% for row in ticker_sources.rows %}
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
+                    <div style="font-size:8.5px;font-weight:600;color:{{ palette.ink }};">{{ row.name or row.ticker or "—" }}</div>
+                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7px;color:{{ palette.subtle }};">{{ row.isin or "—" }}</div>
+                  </td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
+                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:{{ palette.accent }};">{{ row.ticker or "—" }}</div>
+                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:{{ palette.subtle }};white-space:nowrap;">{{ row.canonical_refresh_timestamp or "—" }}</div>
+                  </td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
+                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:{{ palette.ink }};">{{ row.intraday_ticker or "—" }}</div>
+                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:{{ palette.subtle }};white-space:nowrap;">{{ row.intraday_refresh_timestamp or "—" }}</div>
+                  </td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:7.5px;color:{{ palette.muted }};line-height:1.25;">{{ row.portfolio_presence or "—" }}</td>
+                </tr>
+                {% endfor %}
+              </table>
             </td>
           </tr>
           {% endif %}

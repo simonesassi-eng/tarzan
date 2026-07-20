@@ -47,6 +47,18 @@ from tarzan.export.newsletter._charts import (
     _timeline_vals,
 )
 
+def _funding_verification(verifications) -> Optional[dict[str, Any]]:
+    """Return the final serialized-action funding proof, when available."""
+    return next(
+        (
+            verification
+            for verification in (verifications or [])
+            if verification.get("kind") == "funding"
+        ),
+        None,
+    )
+
+
 def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
     """Build the TL;DR headline shown above the Hero.
 
@@ -78,9 +90,13 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
                 f"({_pct(float(week_return), signed=True)}) this week"
             )
 
-    # Action clause
+    # Action clause. A failed funding proof takes precedence over the mere
+    # presence of draft actions: those trades must never read as instructions.
     suggestions = list(m.rebalancing_suggestions or [])
-    if suggestions:
+    funding = _funding_verification(m.rebalancing_verifications)
+    if funding and funding.get("status") == "NON_EXECUTABLE":
+        parts.append("and the draft rebalance is not executable until cash funding is resolved")
+    elif suggestions:
         parts.append("and the optimizer suggests rebalancing below")
     else:
         parts.append("and your allocation is on target")
@@ -217,16 +233,25 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # The engine flags every verification entry with no_solution=True
     # when the LP returned 0 actions because no plan was feasible at
     # the configured tolerance ceiling (distinct from "already
-    # aligned"). It flags ``relaxed=True`` when it had to widen the
-    # tolerance up to ``rebalancing_relax_cap_pctg`` to find a plan.
+    # aligned"). A serialized-action funding proof is a separate final
+    # authority: draft actions are not actionable unless it is executable.
     rebal_infeasible = bool(
         m.rebalancing_verifications
         and any(v.get("no_solution") for v in m.rebalancing_verifications)
+    )
+    funding = _funding_verification(m.rebalancing_verifications)
+    funding_non_executable = bool(
+        funding and funding.get("status") == "NON_EXECUTABLE"
     )
 
     if rebal_infeasible:
         rebal_label = "Infeasible"
         rebal_sublabel = "no feasible plan"
+        rebal_color = PALETTE["red"]
+        rebal_bg = PALETTE["red_bg"]
+    elif funding_non_executable:
+        rebal_label = "Not executable"
+        rebal_sublabel = "cash funding unresolved"
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
     elif n_actions == 0:
@@ -312,6 +337,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "rebal_color": rebal_color,
         "rebal_bg": rebal_bg,
         "rebal_n_actions": n_actions,
+        "rebal_executable": not rebal_infeasible and not funding_non_executable,
     }
 
 def _build_tax_note(ctx: _NewsletterContext) -> dict:
@@ -1268,11 +1294,12 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
     }
 
 def _build_optimizer(ctx: _NewsletterContext) -> dict:
-    """Build the suggested-action card with BOTH rebalancing plans (buy-only
-    and buy & sell), each ordered by absolute amount.
+    """Build both rebalancing plans with their final funding proof.
 
     Reads ``metrics.rebalancing_plans`` (always computed by the engine); falls
-    back to the single ``rebalancing_suggestions`` set for back-compat.
+    back to the single ``rebalancing_suggestions`` set for back-compat. Draft
+    actions remain visible for diagnosis, but are explicitly marked as such
+    whenever the serialized-action proof says they are not executable.
     """
     m = ctx.metrics
     from tarzan import config as _cfg
@@ -1289,6 +1316,32 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
         pc["fees_eur"] = _eur_smart(fees) if fees else None
         pc["cost_total_eur"] = _eur_smart(cgt + fees) if (cgt or fees) else None
 
+    def _attach_execution(pc: dict, verifications) -> None:
+        funding = _funding_verification(verifications)
+        if funding is None:
+            pc["execution_status"] = None
+            pc["executable"] = None
+            return
+
+        status = str(funding.get("status") or "UNKNOWN").upper()
+        residual = float(funding.get("residual_eur") or 0.0)
+        pc.update({
+            "execution_status": status,
+            "executable": status == "EXECUTABLE",
+            "funding_initial_cash_eur": _eur_smart(
+                float(funding.get("initial_cash_eur") or 0.0)),
+            "funding_external_contribution_eur": _eur_smart(
+                float(funding.get("external_contribution_eur") or 0.0)),
+            "funding_ending_cash_eur": _eur_smart(
+                float(funding.get("ending_cash_eur") or 0.0)),
+            "funding_protected_cash_eur": _eur_smart(
+                float(funding.get("protected_cash_eur") or 0.0)),
+            "funding_residual_eur": _eur_smart(residual, signed=True),
+            "funding_shortfall_eur": (
+                _eur_smart(abs(residual)) if residual < -0.005 else None
+            ),
+        })
+
     if plans_src:
         plans = []
         for p in plans_src:
@@ -1296,6 +1349,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             pc["label"] = p.get("label", "")
             pc["no_sell"] = p.get("no_sell")
             _attach_cost(pc, p)
+            _attach_execution(pc, p.get("verifications"))
             plans.append(pc)
         if not any(pc["actions"] for pc in plans):
             return {"available": False}
@@ -1308,6 +1362,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     pc = _optimizer_plan_ctx(m, suggestions, _tax)
     pc["label"] = "Suggested actions"
     pc["no_sell"] = None
+    _attach_execution(pc, m.rebalancing_verifications)
     return {"available": True, "plans": [pc]}
 
 def _build_return_contrib(ctx: _NewsletterContext) -> dict:
@@ -1349,8 +1404,11 @@ def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
     """Preview text shown in inbox preview."""
     m = ctx.metrics
     n_actions = len(m.rebalancing_suggestions or [])
+    funding = _funding_verification(m.rebalancing_verifications)
     parts = [f"Portfolio at {hero['total_value']} ({hero['gain_pct']} since inception)"]
-    if n_actions > 0:
+    if funding and funding.get("status") == "NON_EXECUTABLE":
+        parts.append("rebalance draft not executable")
+    elif n_actions > 0:
         parts.append("rebalancing suggested")
     parts.append(f"{len(m.holdings_df)} holdings tracked")
     return " · ".join(parts)

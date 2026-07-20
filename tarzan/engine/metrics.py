@@ -393,19 +393,27 @@ class MetricsEngine:
             or supplied_by_isin[isin].class_breakdown != holding.class_breakdown
             for isin, holding in enriched_by_isin.items()
         )
-        # Re-derive from effective orders and enrich any ISIN not already
-        # present, so every open order ISIN can use provider history rather
-        # than silently falling to synthetic/carry-flat pricing.
+        # Re-derive the complete historical instrument universe and enrich any
+        # exact ISIN not already present. Closed positions are represented by
+        # historical-only carriers, so they can contribute real provider
+        # history without entering current valuation or allocation.
         missing = [
-            h for h in build_holdings_from_orders(effective_orders)
-            if h.isin and h.isin not in enriched_by_isin
+            holding
+            for holding in build_holdings_from_orders(
+                effective_orders,
+                include_closed=True,
+            )
+            if holding.isin and holding.isin not in enriched_by_isin
         ]
         if missing:
             from tarzan.data.enricher import enrich_holdings
-            logger.info("Enriching %d order-only ISIN(s) for returns", len(missing))
-            for h in enrich_holdings(missing):
-                if h.isin:
-                    enriched_by_isin[h.isin] = h
+            logger.info(
+                "Enriching %d historical order ISIN(s) for returns",
+                len(missing),
+            )
+            for holding in enrich_holdings(missing):
+                if holding.isin:
+                    enriched_by_isin[holding.isin] = holding
 
         series = build_order_derived_series(
             effective_orders,
@@ -887,8 +895,14 @@ class MetricsEngine:
                 "actual_eur": None, "target_eur": None, "delta_eur": None,
             })
 
-        # Equity geography rows: % of equity portion.
-        actual_geo = dict(zip(by_geo["category"], by_geo["weight_pct"]))
+        # Equity geography rows: % of equity portion. The producer guarantees
+        # this schema even when empty; retain a defensive boundary for injected
+        # or legacy metric frames so goals cannot fail the whole report.
+        actual_geo = (
+            dict(zip(by_geo["category"], by_geo["weight_pct"]))
+            if {"category", "weight_pct"}.issubset(by_geo.columns)
+            else {}
+        )
         for cat in sorted(set(self.config.equity_geo_targets_pctg) | set(actual_geo)):
             actual = actual_geo.get(cat, 0.0)
             target = self.config.equity_geo_targets_pctg.get(cat, 0.0)
@@ -1148,16 +1162,40 @@ class MetricsEngine:
             return
         try:
             from tarzan.data.market_quotes import broker_1d
-            from tarzan.data import price_cache as _pc
-            # holding_performance keys rows by whatever the holding/benchmark
-            # carries: benchmarks use a real Yahoo ticker, but order-derived
-            # holdings key by ISIN. Resolve each to its Yahoo symbol before
-            # fetching intraday, then map the result back to the original key.
+            # holding_performance already carries the canonical ticker selected
+            # during enrichment. Do not re-resolve it through a mutable cache:
+            # every intraday consumer must request that same full listing first.
             keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
-            resolve = {k: (_pc.load_resolution(k) or k) for k in keys}
-            res = broker_1d(list({s for s in resolve.values()}))
-            live = {k: res[s]["pct"] for k, s in resolve.items() if s in res}
-            live_flag = {k: bool(res[s]["live"]) for k, s in resolve.items() if s in res}
+            res = broker_1d(keys)
+            live = {k: res[k]["pct"] for k in keys if k in res}
+            live_flag = {k: bool(res[k]["live"]) for k in keys if k in res}
+
+            holdings_by_ticker = {
+                str(holding.ticker): holding
+                for holding in self.holdings
+                if holding.ticker
+            }
+            for canonical, holding in holdings_by_ticker.items():
+                selected = res.get(canonical)
+                if selected is None:
+                    holding.intraday_ticker_reason = (
+                        "The canonical ticker was requested first, but no usable intraday series was available."
+                    )
+                    continue
+                effective = str(
+                    selected.get("intraday_source_ticker")
+                    or selected.get("source_ticker")
+                    or canonical
+                )
+                holding.intraday_ticker = effective
+                holding.intraday_observation_timestamp = selected.get(
+                    "intraday_observation_timestamp"
+                )
+                holding.intraday_ticker_reason = (
+                    "The canonical ticker supplied the intraday series."
+                    if effective == canonical
+                    else f"The canonical ticker {canonical} was requested first; {effective} supplied the price-coherent EUR venue sibling fallback after the canonical close guard passed."
+                )
         except Exception as e:  # noqa: BLE001
             logger.debug("live 1D fetch failed: %s", e)
             return
@@ -1390,6 +1428,28 @@ class MetricsEngine:
         cash_target = float(self.config.target_cash_buffer_eur) if self.config else 0.0
         assessment = self.valuation_assessment
         computed_total = ctx.get("total_value", 0.0)
+        from tarzan.models.ticker_resolution import build_ticker_resolution_records
+
+        enriched_by_isin = ctx.get("_enriched_by_isin", {}) or {}
+        historical_only = [
+            holding
+            for holding in enriched_by_isin.values()
+            if holding.is_historical_only
+        ]
+        effective_orders = ctx.get("_effective_orders", ()) or ()
+        historical_isins = {
+            order.isin
+            for order in effective_orders
+            if order.isin and order.is_position_change()
+        }
+        ticker_resolutions = build_ticker_resolution_records(
+            [
+                *self.holdings,
+                *self.rebalance_seeds,
+                *historical_only,
+            ],
+            historical_isins=historical_isins,
+        )
         return PortfolioMetrics(
             total_value=computed_total,
             valuation_availability=(
@@ -1436,6 +1496,7 @@ class MetricsEngine:
             benchmark_histories=ctx.get("benchmark_histories", {}),
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),
             holding_histories=ctx.get("holding_histories", {}),
+            ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),
             acwi_geo=ctx.get("acwi_geo", {}),
             excluded_short_tenure=ctx.get("excluded_short_tenure", []),
@@ -1528,5 +1589,7 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
             norm = {row.get("geography", "USA"): 100.0}
         pairs.append((eq_weight, norm))
     geo_weights = alloc.renorm(alloc.accumulate(pairs))
-    return pd.DataFrame([{"category": k, "weight_pct": v}
-                         for k, v in geo_weights.items()])
+    return pd.DataFrame(
+        [{"category": k, "weight_pct": v} for k, v in geo_weights.items()],
+        columns=["category", "weight_pct"],
+    )

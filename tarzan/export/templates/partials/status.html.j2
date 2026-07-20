@@ -37,15 +37,32 @@
                 </tr>
               </table>
 
-              {# Data-quality note for the returns computation (provenance for
-                 every figure in the Performance section below). #}
-              {% if performance.returns and performance.returns.coverage %}
-              <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};">Computed on {{ performance.returns.coverage }} real market data{% if performance.returns.fallback_count %} · {{ performance.returns.fallback_count }} instrument{{ 's' if performance.returns.fallback_count != 1 else '' }} priced by fallback{% endif %}.</div>
+              {# Data-quality note: current snapshot provenance is kept
+                 separate from historical order-price reconstruction. #}
+              {% if performance.returns %}
+              <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};line-height:1.5;">
+                {% if performance.returns.current_fallback_count %}
+                Current portfolio: {{ performance.returns.current_fallback_count }} identifier{{ 's' if performance.returns.current_fallback_count != 1 else '' }} priced by order-price fallback.
+                {% else %}
+                Current portfolio: 100% market-priced.
+                {% endif %}
+                {% if performance.returns.historical_closed_fallback_count %} Historical reconstruction used order-price fallback for {{ performance.returns.historical_closed_fallback_count }} closed identifier{{ 's' if performance.returns.historical_closed_fallback_count != 1 else '' }}.{% endif %}
+                {% if performance.returns.excluded_count %} {{ performance.returns.excluded_count }} historical identifier{{ 's' if performance.returns.excluded_count != 1 else '' }} excluded from return reconstruction.{% endif %}
+                {% if performance.returns.coverage %} Return-series coverage: {{ performance.returns.coverage }}.{% endif %}
+              </div>
               {% endif %}
 
               {# Slim, colored rebalance banner (only when action is needed). #}
               {% if hero.rebal_label and hero.rebal_label != 'Aligned' %}
-              <div style="margin-top:10px;padding:7px 12px;background:{{ hero.rebal_bg }};border-radius:8px;font-size:11px;font-weight:700;color:{{ hero.rebal_color }};">● Rebalance · {{ hero.rebal_n_actions }} action{{ 's' if hero.rebal_n_actions != 1 else '' }} · see optimizer below</div>
+              <div style="margin-top:10px;padding:7px 12px;background:{{ hero.rebal_bg }};border-radius:8px;font-size:11px;font-weight:700;color:{{ hero.rebal_color }};">
+                {% if hero.rebal_label == 'Not executable' %}
+                ● Rebalance · not executable · cash funding must be resolved before trading
+                {% elif hero.rebal_label == 'Infeasible' %}
+                ● Rebalance · no feasible plan
+                {% else %}
+                ● Rebalance · {{ hero.rebal_n_actions }} action{{ 's' if hero.rebal_n_actions != 1 else '' }} · see optimizer below
+                {% endif %}
+              </div>
               {% endif %}
             </td>
           </tr>

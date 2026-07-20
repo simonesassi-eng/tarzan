@@ -291,9 +291,9 @@ def _risk_metrics(portfolios):
 def _robustness_metrics(portfolios):
     headers = [(p.name, "right") for p in portfolios]
 
-    def roll(p, key, sub, fmt="{:.1f}%"):
+    def roll(p, key, sub, fmt="{:.1f}%", scale=100.0):
         v = (p.rob.get(key) or {}).get(sub)
-        return fmt.format(v) if v is not None else "&mdash;"
+        return fmt.format(v * scale) if v is not None else "&mdash;"
 
     def stress(p, scen):
         v = ((p.rob.get("stress") or {}).get(scen) or {}).get("max_drawdown")
@@ -311,7 +311,8 @@ def _robustness_metrics(portfolios):
         ("Roll 1Y ret p05", lambda p: roll(p, "rolling1y", "p05")),
         ("Roll 1Y ret median", lambda p: roll(p, "rolling1y", "median")),
         ("Roll 1Y ret p95", lambda p: roll(p, "rolling1y", "p95")),
-        ("1Y windows positive", lambda p: roll(p, "rolling1y", "pct_positive", "{:.0f}%")),
+        ("1Y windows positive", lambda p: roll(
+            p, "rolling1y", "pct_positive", "{:.0f}%", scale=1.0)),
         ("Roll 3Y ret p05", lambda p: roll(p, "rolling3y", "p05")),
         ("Roll 3Y ret median", lambda p: roll(p, "rolling3y", "median")),
         ("Roll 1Y Sharpe min&ndash;max", sharpe_range),

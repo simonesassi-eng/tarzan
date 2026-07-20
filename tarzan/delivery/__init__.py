@@ -313,7 +313,14 @@ def _failure_notification_html(result) -> str:
     )
 
 
-def _write_delivery_artifacts(writer, result, newsletter_html: str, delivery_state: str, *, checkpoint: bool = False):
+def _write_delivery_artifacts(
+    writer,
+    result,
+    newsletter_html: str,
+    delivery_state: str,
+    *,
+    checkpoint: bool = False,
+):
     """Project and atomically commit the current ledger at a delivery boundary."""
     from tarzan import runtime
     from tarzan.runtime import report_html
@@ -331,8 +338,9 @@ def _write_delivery_artifacts(writer, result, newsletter_html: str, delivery_sta
         "retention_guarantee": writer.storage.retention_guarantee,
     })
     summary = SummaryProjector.project(result, publication)
+    stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
     rendered_report = report_html.render(
-        generated_at=runtime.now_stamp("%Y-%m-%d %H:%M"),
+        generated_at=stamp,
         ledger=result.ledger,
         publication_state=publication.decision.value,
         storage_scope=writer.storage.storage_scope,

@@ -429,20 +429,38 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     return {"available": True, "html": header + matrix_card + "".join(parts)}
 
 def _perf_intraday_map(tickers: list[str]) -> dict:
-    """Batched intraday close series per ticker for the 1D sparkline.
+    """Fetch intraday closes for the exact symbols already selected upstream.
 
-    Reuses the Markets strip's single-request intraday download. Returns an
-    empty dict on any failure so callers transparently fall back to the
-    daily-history sparkline."""
+    Ticker selection belongs to enrichment/metrics, not presentation. This
+    renderer therefore never resolves an alternate listing: it requests only
+    the canonical or explicitly recorded effective source passed by callers.
+    Empty results fall back to the daily-history sparkline.
+    """
     uniq = [t for t in {t for t in tickers if t}]
     if not uniq:
         return {}
     try:
-        from tarzan.data.market_quotes import _fetch_intraday_with_fallback
-        return _fetch_intraday_with_fallback(uniq)
+        from tarzan.data.market_quotes import _fetch_intraday
+        return _fetch_intraday(uniq)
     except Exception as e:  # noqa: BLE001
         logger.debug("performance intraday fetch failed: %s", e)
         return {}
+
+
+def _recorded_intraday_sources(metrics, tickers: list[str]) -> dict[str, str]:
+    """Map canonical tickers to the effective sources recorded by metrics."""
+    recorded: dict[str, str] = {}
+    for decision in getattr(metrics, "ticker_resolutions", ()):
+        if str(decision.get("status") or "") == "CONFLICT":
+            continue
+        canonical = str(decision.get("canonical_ticker") or "").strip()
+        effective = str(decision.get("intraday_effective_ticker") or "").strip()
+        if canonical and effective:
+            recorded[canonical.casefold()] = effective
+    return {
+        ticker: recorded.get(ticker.casefold(), ticker)
+        for ticker in tickers
+    }
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
@@ -534,8 +552,7 @@ def _portfolio_intraday_series(m, resolve: Optional[dict] = None,
                 raw1d[str(pr.get("ticker", ""))] = pr.get("1d")
     keys = [str(t) for t in df["ticker"].dropna().unique() if t]
     if resolve is None:
-        from tarzan.data import price_cache as _pc
-        resolve = {k: (_pc.load_resolution(k) or k) for k in keys}
+        resolve = _recorded_intraday_sources(m, keys)
     if intraday_map is None:
         intraday_map = _perf_intraday_map(list({resolve.get(k, k) for k in keys}))
     if not intraday_map:
@@ -673,13 +690,12 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     period_keys = ["1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
     period_labels = ["1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
 
-    # Intraday + live-flag inputs for the per-row 1D sparkline cell. Resolve
-    # each holding_performance key (often an ISIN) to its Yahoo symbol so the
-    # intraday lookup matches, and carry the raw 1D value + live flag.
-    from tarzan.data import price_cache as _pc
+    # Intraday + live-flag inputs for the per-row 1D sparkline. The metrics
+    # pass already selected the canonical request and any guarded effective
+    # fallback, so presentation reuses that recorded source verbatim.
     _hp_keys = ([str(t) for t in hp["ticker"].dropna().unique() if t]
                 if (hp is not None and not hp.empty and "ticker" in hp.columns) else [])
-    _resolve = {k: (_pc.load_resolution(k) or k) for k in _hp_keys}
+    _resolve = _recorded_intraday_sources(m, _hp_keys)
     _snap_intraday = _perf_intraday_map(list({s for s in _resolve.values()}))
     _raw1d: dict = {}
     _live1d: dict = {}
@@ -998,10 +1014,29 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     returns_block = None
     if m.xirr_pct is not None or m.twror_pct is not None:
-        fallback = []
         prov = m.returns_provenance or {}
-        for key in ("synthetic", "carry_flat", "excluded"):
-            fallback.extend(prov.get(key, []))
+
+        def _identifiers(values) -> set[str]:
+            return {
+                str(value).strip()
+                for value in (values or [])
+                if value is not None
+                and not (isinstance(value, float) and pd.isna(value))
+                and str(value).strip()
+            }
+
+        synthetic_ids = _identifiers(prov.get("synthetic"))
+        carry_flat_ids = _identifiers(prov.get("carry_flat"))
+        fallback_ids = synthetic_ids | carry_flat_ids
+        excluded_ids = _identifiers(prov.get("excluded"))
+        current_ids = (
+            _identifiers(m.holdings_df["isin"].tolist())
+            if not m.holdings_df.empty and "isin" in m.holdings_df.columns
+            else set()
+        )
+        current_fallback_ids = fallback_ids & current_ids
+        historical_closed_fallback_ids = fallback_ids - current_ids
+
         returns_block = {
             "xirr": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
             "twror": _pct(m.twror_pct, signed=True) if m.twror_pct is not None else None,
@@ -1013,7 +1048,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 _pct(m.returns_coverage_pct, decimals=0)
                 if m.returns_coverage_pct is not None else None
             ),
-            "fallback_count": len(set(fallback)),
+            # Back-compat: total distinct order-price fallback identifiers.
+            "fallback_count": len(fallback_ids),
+            "current_fallback_count": len(current_fallback_ids),
+            "historical_closed_fallback_count": len(historical_closed_fallback_ids),
+            "excluded_count": len(excluded_ids),
         }
 
     # ── Pre-rendered table (grouped by asset class + role) ──────────────

@@ -113,7 +113,7 @@ _FINANCING_SYMBOL = "^IRX"
 _MF_FUND = "AQMNX"
 _MF_FUND_DEEP = "RYMFX"
 
-_returns_memo: dict[str, pd.Series] = {}
+_returns_memo: dict[tuple[str, str], pd.Series] = {}
 # Which concrete ticker each bucket resolved to, and from when.
 USED_PROXY: dict[str, tuple[str, pd.Timestamp]] = {}
 
@@ -121,15 +121,40 @@ USED_PROXY: dict[str, tuple[str, pd.Timestamp]] = {}
 _STALE_DAYS = 7   # re-fetch a cached proxy only once its tail is this old
 
 
+def _clip_cached_to_as_of(data):
+    """Return only cached observations visible at the run boundary."""
+    if data is None or data.empty:
+        return data
+    from tarzan import runtime
+
+    boundary = runtime.as_of()
+    if boundary is None:
+        return data
+    try:
+        cutoff = pd.Timestamp(boundary)
+        if getattr(data.index, "tz", None) is not None:
+            cutoff = cutoff.tz_localize(data.index.tz)
+        return data.loc[data.index <= cutoff]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not clip cached provider data to as_of: %s", exc)
+        return data.iloc[0:0]
+
+
 def _fetch_max(symbol: str) -> pd.Series:
     """Full-history daily close for ``symbol`` (disk-cached, namespaced).
 
     The cached series is reused while its last date is fresh (< _STALE_DAYS old)
     and only re-fetched when stale, so historical closes are reused across runs
-    but recent sessions stay current. A failed re-fetch degrades gracefully to
-    the cached series rather than dropping the proxy."""
+    but recent sessions stay current. Pinned runs return only cache rows visible
+    at ``as_of`` and never attempt Yahoo transport.
+    """
     key = f"PROXYMAX_{symbol}"
     cached = price_cache.load_history(key)
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        visible = _clip_cached_to_as_of(cached)
+        return visible if visible is not None else pd.Series(dtype=float)
     if cached is not None and not cached.empty:
         last = pd.Timestamp(cached.index.max())
         if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
@@ -162,11 +187,21 @@ def _fetch_max(symbol: str) -> pd.Series:
 
 
 def _returns(symbol: str) -> pd.Series:
-    if symbol in _returns_memo:
-        return _returns_memo[symbol]
+    from tarzan import runtime
+
+    context = runtime.context()
+    run_identity = "|".join((
+        context.attempt_id,
+        context.mode.value,
+        str(context.effective_date or ""),
+        context.captured_at.isoformat(),
+    ))
+    memo_key = (run_identity, symbol)
+    if memo_key in _returns_memo:
+        return _returns_memo[memo_key]
     px = _fetch_max(symbol)
     r = px.pct_change().dropna() if not px.empty else pd.Series(dtype=float)
-    _returns_memo[symbol] = r
+    _returns_memo[memo_key] = r
     return r
 
 
@@ -241,7 +276,7 @@ def _carry_returns(fin: Optional[pd.Series]) -> pd.Series:
     collateral for total return, subtract an approximate fund fee, and convert
     to the reporting currency. Empty if the manual series is unavailable (the
     caller then leaves the carry sleeve unmodelled rather than mislabel it)."""
-    lvl = manual_proxies.get_series("CRRYSIM")
+    lvl = _clip_cached_to_as_of(manual_proxies.get_series("CRRYSIM"))
     if lvl is None or lvl.empty:
         return pd.Series(dtype=float)
     r = lvl.pct_change().dropna()
@@ -264,6 +299,10 @@ def _ecb_fetch(url: str, key: str, static: bool = False) -> Optional[pd.Series]:
     network/parse failure.
     """
     cached = price_cache.load_history(key)
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return _clip_cached_to_as_of(cached)
     if cached is not None and not cached.empty:
         if static:
             return cached           # closed series (e.g. EONIA): never re-fetch
@@ -375,9 +414,15 @@ _FF_CACHE_KEY = "FF_DEV_FACTORS_DAILY"
 
 
 def _ff_download(url: str, colnames: list[str]) -> Optional[pd.DataFrame]:
-    """Download a Ken French daily-factor CSV zip and parse its daily block
-    (rows keyed by an 8-digit YYYYMMDD date) into a DataFrame of PERCENT values
-    with the given column names."""
+    """Download and parse one Ken French daily-factor CSV archive.
+
+    This low-level entry point is fail-closed outside live mode; callers in a
+    pinned run must consume the combined, as-of-clipped factor cache instead.
+    """
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     import io
     import re
     import urllib.request
@@ -413,10 +458,14 @@ def factor_daily() -> Optional[pd.DataFrame]:
     loading. The CMA (investment) leg is intentionally excluded: it is highly
     collinear with HML/RMW and not a standard ETF factor, so it only
     destabilises the fitted loadings. Fetched from the Ken French Data Library
-    and disk-cached with staleness refresh; degrades gracefully to the cached
-    copy on any network/parse failure. None if unavailable (caller falls back to
+    and disk-cached with staleness refresh; pinned runs use only cache rows at
+    or before ``as_of``. None if unavailable (caller falls back to
     calibrated/naive)."""
     cached = price_cache.load_history(_FF_CACHE_KEY)
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return _clip_cached_to_as_of(cached)
     if cached is not None and not cached.empty:
         last = pd.Timestamp(cached.index.max())
         if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
@@ -507,7 +556,7 @@ def _alt_series(fin: Optional[pd.Series]):
     at launch. Populate it with:
     ``python -m tarzan.data.manual_proxies ingest MFSIM <path>``.
     """
-    custom = manual_proxies.get_series("MFSIM")
+    custom = _clip_cached_to_as_of(manual_proxies.get_series("MFSIM"))
     if custom is not None and not custom.empty:
         r = custom.pct_change().dropna()
         return r, "custom managed-futures series (cache)", r.index.min()

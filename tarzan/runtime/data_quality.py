@@ -61,9 +61,22 @@ def reset() -> None:
     _report.set(_Report())
 
 
-def record(severity: str, source: str, message: str,
-           context: Optional[str] = None) -> None:
-    """Record one issue. Best-effort — never raises into the caller."""
+def record(
+    severity: str,
+    source: str,
+    message: str,
+    context: Optional[str] = None,
+    *,
+    accepted_resolution: Optional[str] = None,
+    acceptance_provenance=(),
+) -> None:
+    """Record one issue. Best-effort — never raises into the caller.
+
+    ``accepted_resolution`` is reserved for an explicit degraded-evidence
+    policy. Generic warnings remain closed for lifecycle completeness but carry
+    no selected resolution, so renderers continue to classify them as needing
+    review instead of inferring acceptance from closure alone.
+    """
     try:
         issue = Issue(severity=severity, source=source, message=message, context=context)
         _current_report().issues.append(issue)
@@ -87,6 +100,9 @@ def record(severity: str, source: str, message: str,
                 "availability": availability.value,
             })
             if severity in (ERROR, WARNING):
+                explicitly_accepted = bool(
+                    severity == WARNING and accepted_resolution
+                )
                 failure_id = session.ledger.open_failure(
                     stage=source,
                     stable_code=f"DATA_QUALITY_{severity}",
@@ -96,6 +112,8 @@ def record(severity: str, source: str, message: str,
                     analytical_impact=(
                         "affected result is unavailable"
                         if severity == ERROR
+                        else "affected result is degraded under an explicit fallback policy"
+                        if explicitly_accepted
                         else "affected result is degraded and requires review"
                     ),
                     publication_impact=(
@@ -103,11 +121,26 @@ def record(severity: str, source: str, message: str,
                     ),
                 )
                 if severity == WARNING:
+                    provenance = tuple(str(item) for item in acceptance_provenance)
+                    if explicitly_accepted:
+                        session.ledger.remedy(
+                            failure_id,
+                            remedy_id=str(accepted_resolution),
+                            action="select explicit degraded-evidence policy",
+                            outcome="ACCEPTED",
+                            availability=Availability.DEGRADED,
+                            provenance=provenance,
+                        )
                     session.ledger.close_failure(
                         failure_id,
                         automatically_corrected=False,
-                        selected_resolution=None,
+                        selected_resolution=(
+                            str(accepted_resolution)
+                            if explicitly_accepted
+                            else None
+                        ),
                         availability=Availability.DEGRADED,
+                        provenance=provenance,
                     )
     except Exception:  # noqa: BLE001 — a diagnostic must never break the pipeline
         pass
@@ -115,6 +148,25 @@ def record(severity: str, source: str, message: str,
 
 def warning(source: str, message: str, context: Optional[str] = None) -> None:
     record(WARNING, source, message, context)
+
+
+def accepted_warning(
+    source: str,
+    message: str,
+    context: Optional[str] = None,
+    *,
+    resolution: str,
+    provenance=(),
+) -> None:
+    """Record a warning whose degraded fallback was explicitly accepted."""
+    record(
+        WARNING,
+        source,
+        message,
+        context,
+        accepted_resolution=resolution,
+        acceptance_provenance=provenance,
+    )
 
 
 def error(source: str, message: str, context: Optional[str] = None) -> None:

@@ -16,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from tarzan import runtime as _runtime
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
+from tarzan.version import APPLICATION_VERSION
 
 from tarzan.export.newsletter._constants import (  # noqa: F401 (re-exported)
     ASSET_BG,
@@ -109,6 +110,27 @@ def build_context(
         benchmark_geo=benchmark_geo,
     )
     hero = _build_hero(nctx)
+    ticker_records = getattr(metrics, "ticker_resolutions", ()) or ()
+    ticker_sources = {
+        "available": bool(ticker_records),
+        "rows": tuple({
+            "isin": str(record.get("isin") or ""),
+            "name": str(record.get("name") or ""),
+            "ticker": str(record.get("canonical_ticker") or ""),
+            "canonical_refresh_timestamp": str(
+                record.get("canonical_refresh_timestamp") or ""
+            ),
+            "intraday_ticker": str(
+                record.get("intraday_effective_ticker") or ""
+            ),
+            "intraday_refresh_timestamp": str(
+                record.get("intraday_refresh_timestamp") or ""
+            ),
+            "portfolio_presence": str(
+                record.get("portfolio_presence") or ""
+            ),
+        } for record in ticker_records),
+    }
     return {
         "palette": PALETTE,
         "header": _build_header(nctx),
@@ -129,12 +151,13 @@ def build_context(
         "return_contrib": _build_return_contrib(nctx),
         "tax_note": _build_tax_note(nctx),
         "methodology": _build_methodology(nctx),
+        "ticker_sources": ticker_sources,
         "preheader": _build_preheader(nctx, hero),
         "footer": {
             # Pinned stamp in deterministic mode so the header does not vary
             # run-to-run (live now() otherwise).
             "generated_at": _runtime.now_stamp("%d %b %Y, %H:%M"),
-            "version": "v2.0",
+            "version": f"v{APPLICATION_VERSION}",
         },
     }
 

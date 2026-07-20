@@ -424,6 +424,10 @@ def load_targets_per_holding(
     for validated in rows:
         entry = dict(validated.value)
         legacy_key = entry["isin"] or entry["ticker"].upper()
+        # Publish the canonical key promised by the target contract while
+        # retaining the historical key for compatibility.  Both keys point to
+        # the same row object, so consumers can de-duplicate by identity.
+        result[validated.canonical_key] = entry
         result[legacy_key] = entry
 
     logger.info("Loaded per-holding targets for %d instrument(s)", len(rows))

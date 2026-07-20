@@ -130,6 +130,10 @@ class PortfolioMetrics:
     acwi_geo: dict = field(default_factory=dict)
     holding_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
     holding_histories: dict = field(default_factory=dict)
+    # Canonical ticker decision audit, one record per ISIN (or exact ticker
+    # when no ISIN exists). Rendered as the compact data-sources section at the
+    # bottom of the newsletter and excluded from the narrow summary contract.
+    ticker_resolutions: tuple[dict[str, object], ...] = ()
     # Historical risk profile (newsletter "Historical risk profile" section).
     # Uncapped, per-instrument full-history risk stats plus a current-weight
     # static backtest for the portfolio row. Populated by

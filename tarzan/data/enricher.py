@@ -20,12 +20,16 @@ so that a single API failure doesn't block the entire pipeline.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import random
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass, field, replace
 from datetime import datetime as dt, timezone
 from typing import Optional
 from urllib.request import Request, urlopen
@@ -90,6 +94,13 @@ _ticker_info_memo: dict[str, dict] = {}
 _history_memo: dict[str, pd.DataFrame] = {}
 _benchmark_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
+# The effective-order resolver initializes provider memoization before holding
+# enrichment. A context-local one-shot flag preserves that same evidence across
+# the stage boundary without changing the public ``enrich_holdings`` signature.
+_provider_memo_ready: ContextVar[bool] = ContextVar(
+    "tarzan_enricher_provider_memo_ready",
+    default=False,
+)
 
 # DataFrame attrs carry per-run provenance without entering the immutable disk
 # cache. Origin is assigned per row so an invalid fresh tail cannot relabel an
@@ -104,6 +115,7 @@ _FX_EVIDENCE_ATTR = "tarzan_fx_evidence"
 def reset_run_caches() -> None:
     """Clear all intra-run memoization. Called once at the start of each
     enrichment run so every run starts from fresh network state."""
+    _provider_memo_ready.set(False)
     with _net_lock:
         _openfigi_memo.clear()
         _ticker_info_memo.clear()
@@ -128,6 +140,11 @@ def _is_transient_error(exc: Exception) -> bool:
 
 
 def _retry(fn, *, what: str):
+    """Run a live provider call only when the run contract permits it."""
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
     return _yf_net.retry(fn, what=what, log=logger)
 
 
@@ -277,16 +294,22 @@ def _as_fraction(value) -> Optional[float]:
 
 
 def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
-    """Convert prices to EUR and attach the FX evidence used for each row."""
+    """Convert prices to EUR using only contemporaneous-or-earlier FX rows.
+
+    Pinned runs clip FX to the effective boundary before alignment. Forward
+    fill is intentionally one-way: a later FX observation must never backfill
+    an earlier instrument price.
+    """
     prices, currency = _normalize_minor_currency(prices, currency)
     if currency == "EUR":
         return prices
     fx = _usable_fx_series(_get_fx_series(currency))
+    fx = _clip_to_as_of(fx)
     if fx.empty:
         return pd.Series(dtype=float)
 
-    combined = pd.DataFrame({"price": prices, "fx": fx})
-    combined["fx"] = combined["fx"].ffill().bfill()
+    combined = pd.DataFrame({"price": prices, "fx": fx}).sort_index()
+    combined["fx"] = combined["fx"].ffill()
 
     fx_origins = fx.attrs.get(_HISTORY_ORIGINS_ATTR, {})
     origin_markers = pd.Series(
@@ -299,7 +322,7 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
         ],
         index=fx.index,
         dtype=object,
-    ).reindex(combined.index).ffill().bfill()
+    ).reindex(combined.index).ffill()
     observation_markers = pd.Series(
         [
             pd.Timestamp(index).isoformat()
@@ -309,9 +332,12 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
         ],
         index=fx.index,
         dtype=object,
-    ).reindex(combined.index).ffill().bfill()
+    ).reindex(combined.index).ffill()
 
     converted = (combined["price"] * combined["fx"]).dropna()
+    from tarzan import runtime
+
+    cache_is_fallback = runtime.allows_live_transport()
     evidence: dict[str, dict[str, object]] = {}
     for index in converted.index:
         observation_value = observation_markers.loc[index]
@@ -325,7 +351,8 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
         evidence[_history_timestamp_key(index)] = {
             "observation_time": observation,
             "is_fallback": (
-                origin == _HISTORY_ORIGIN_CACHE or observation is None
+                (origin == _HISTORY_ORIGIN_CACHE and cache_is_fallback)
+                or observation is None
             ),
             "source": (
                 "price_cache:FX"
@@ -344,37 +371,243 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
 # ---------------------------------------------------------------------------
 ISIN_EXCHANGE_SUFFIXES = cfg.isin_exchange_suffixes()
 
+_TICKER_SYMBOL_KEY = "_tarzan_selected_ticker"
+_TICKER_METHOD_KEY = "_tarzan_ticker_selection_method"
+_TICKER_REASON_KEY = "_tarzan_ticker_selection_reason"
 
-def _fetch_ticker_data(ticker: str) -> dict:
-    """Fetch fresh yfinance data for a ticker.
 
-    Falls back to base ticker (without exchange suffix) if initial fetch fails.
+def _annotate_ticker_data(
+    data: dict,
+    symbol: str,
+    method: str,
+    reason: str,
+) -> dict:
+    """Attach transient symbol-selection evidence to a provider payload."""
+    data[_TICKER_SYMBOL_KEY] = symbol
+    data[_TICKER_METHOD_KEY] = method
+    data[_TICKER_REASON_KEY] = reason
+    return data
 
-    Returns:
-        Dict with keys: info, history.
+
+def _history_has_market_evidence(history: object) -> bool:
+    """Whether history contains a finite positive close visible to this run."""
+    if history is None or getattr(history, "empty", True):
+        return False
+    if "Close" not in getattr(history, "columns", ()):
+        return False
+    closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
+    closes = closes[closes.map(math.isfinite) & (closes > 0)]
+    try:
+        closes = _clip_to_as_of(closes)
+    except Exception:  # noqa: BLE001 — evidence checks must degrade closed
+        return False
+    return not closes.empty
+
+
+def _positive_market_quote(value: object) -> bool:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(numeric) and numeric > 0
+
+
+def _ticker_data_has_market_evidence(data: dict) -> bool:
+    """Whether a selected symbol supplied a price accepted by valuation."""
+    if _history_has_market_evidence(data.get("history")):
+        return True
+    try:
+        from tarzan import runtime
+        if runtime.as_of() is not None:
+            return False
+    except Exception:  # noqa: BLE001 — provenance must not break enrichment
+        return False
+    info = data.get("info") or {}
+    return any(
+        _positive_market_quote(info.get(field))
+        for field in ("regularMarketPrice", "previousClose")
+    )
+
+
+def _is_expandable_bare_ticker(ticker: str) -> bool:
+    value = str(ticker or "").strip()
+    return bool(
+        value
+        and "." not in value
+        and not value.startswith("^")
+        and "=" not in value
+        and "-" not in value
+    )
+
+
+def _bare_resolution_cache_key(ticker: str) -> str:
+    bare = str(ticker or "").split(".", 1)[0].strip().upper()
+    return f"TICKER:{bare}"
+
+
+def _load_bare_resolution(ticker: str, *, include_expired: bool) -> str:
+    key = _bare_resolution_cache_key(ticker)
+    cached = price_cache.load_resolution(key)
+    if not cached and include_expired:
+        try:
+            cached = price_cache._load_resolution_map().get(key, {}).get("symbol")
+        except Exception:  # noqa: BLE001 — corrupt cache degrades to miss
+            cached = None
+    bare = key.removeprefix("TICKER:")
+    if cached and str(cached).split(".", 1)[0].strip().upper() == bare:
+        return str(cached)
+    return ""
+
+
+def _resolve_bare_ticker(
+    ticker: str,
+    *,
+    expected_name: str,
+    expected_currency: str,
+) -> Optional[dict]:
+    """Promote a bare ticker to one full listing with usable daily history.
+
+    A previous live decision is replayable from cache. Discovery itself is
+    live-only and ranks the bare symbol plus configured exchange suffixes by
+    name coherence, currency, venue priority, and valid history. This keeps
+    the input taxonomy venue-neutral while producing one canonical provider
+    symbol for every downstream daily-data consumer.
+    """
+    from tarzan import runtime
+
+    allows_live_transport = runtime.allows_live_transport()
+    cached = _load_bare_resolution(
+        ticker,
+        include_expired=not allows_live_transport,
+    )
+    if cached:
+        info = _fetch_ticker_info(cached)
+        history = _fetch_history(cached)
+        if _history_visible_at_boundary(history):
+            return _annotate_ticker_data(
+                {"info": info, "history": history},
+                cached,
+                "BARE_TICKER_RESOLUTION_CACHE",
+                f"Reused the cached full listing previously selected for {ticker}.",
+            )
+
+    if not allows_live_transport:
+        return None
+
+    bare = str(ticker or "").strip().upper()
+    symbols = [bare, *(f"{bare}{suffix}" for suffix in ISIN_EXCHANGE_SUFFIXES)]
+    candidates = [
+        candidate
+        for symbol in dict.fromkeys(symbols)
+        if (candidate := _fetch_candidate_meta(symbol)) is not None
+        and (
+            not expected_name
+            or _name_match_score(candidate.name, expected_name) > 0
+        )
+    ]
+    ranked = sorted(
+        candidates,
+        key=lambda candidate: (
+            _rank_key(candidate, expected_name, expected_currency),
+            _neg_str(candidate.symbol),
+        ),
+        reverse=True,
+    )
+    for candidate in ranked:
+        history = _fetch_history(candidate.symbol)
+        if not _history_visible_at_boundary(history):
+            continue
+        price_cache.store_resolution(
+            _bare_resolution_cache_key(bare),
+            candidate.symbol,
+        )
+        return _annotate_ticker_data(
+            {"info": candidate.info, "history": history},
+            candidate.symbol,
+            "BARE_TICKER_PROMOTION",
+            (
+                f"Promoted bare ticker {ticker} to {candidate.symbol} after "
+                "ranking matching listings with usable daily history."
+            ),
+        )
+    return None
+
+
+def _fetch_ticker_data(
+    ticker: str,
+    *,
+    expected_name: str = "",
+    expected_currency: str = "",
+) -> dict:
+    """Fetch market data and retain the exact provider symbol consumed.
+
+    A qualified symbol is attempted directly. A bare symbol with known
+    instrument name is resolved across configured venues before use, so a
+    taxonomy containing only bare tickers still produces one full canonical
+    history/current ticker. Qualified symbols retain the established bare
+    fallback when their provider listing has no usable history.
     """
     logger.info("Fetching data for %s", ticker)
+    if _is_expandable_bare_ticker(ticker) and expected_name:
+        promoted = _resolve_bare_ticker(
+            ticker,
+            expected_name=expected_name,
+            expected_currency=expected_currency,
+        )
+        if promoted is not None:
+            return promoted
+        return _annotate_ticker_data(
+            {"info": {}, "history": pd.DataFrame()},
+            ticker,
+            "BARE_TICKER_UNRESOLVED",
+            (
+                f"No full listing matching bare ticker {ticker} and the "
+                "instrument name supplied usable daily history."
+            ),
+        )
+
+    selected_ticker = ticker
     # yfinance raises ValueError("Invalid ISIN number: ...") from the
     # Ticker constructor when the symbol looks like an ISIN but fails
-    # its check-digit validation (common for BTP / US Treasury / EIB
-    # bonds). The retry/memoized helpers catch this and return empties,
-    # so current_price stays None and the caller proceeds to the bond
-    # fallback in _enrich_single.
+    # its check-digit validation. The helpers degrade to empty evidence.
     info = _fetch_ticker_info(ticker)
     history = _fetch_history(ticker)
+    if _ticker_data_has_market_evidence({"info": info, "history": history}):
+        method = "DIRECT_TICKER"
+        reason = "The supplied ticker directly supplied usable market data."
+    else:
+        method = "DIRECT_TICKER_NO_DATA"
+        reason = (
+            "The supplied ticker was retained as the canonical request, but "
+            "it supplied no usable market data."
+        )
 
-    # Fallback: strip exchange suffix
-    if history.empty and not info.get("regularMarketPrice") and "." in ticker:
+    # Fallback: strip exchange suffix. This is deliberately visible in the
+    # canonical decision rather than leaving Holding.ticker on a symbol whose
+    # data was never consumed.
+    if not _ticker_data_has_market_evidence(
+        {"info": info, "history": history}
+    ) and "." in ticker:
         base_ticker = ticker.split(".")[0]
         logger.debug("Trying base ticker %s (stripped from %s)", base_ticker, ticker)
         info2 = _fetch_ticker_info(base_ticker)
-        if info2.get("regularMarketPrice") or info2.get("previousClose"):
-            history2 = _fetch_history(base_ticker)
-            if not history2.empty:
-                info, history = info2, history2
-                logger.info("Fallback to base ticker %s succeeded", base_ticker)
+        history2 = _fetch_history(base_ticker)
+        if _history_has_market_evidence(history2):
+            info, history = info2, history2
+            selected_ticker = base_ticker
+            method = "BARE_TICKER_FALLBACK"
+            reason = (
+                f"The canonical listing {ticker} had no usable history; "
+                f"Tarzan used its bare ticker {base_ticker}."
+            )
+            logger.info("Fallback to base ticker %s succeeded", base_ticker)
 
-    return {"info": info, "history": history}
+    return _annotate_ticker_data(
+        {"info": info, "history": history},
+        selected_ticker,
+        method,
+        reason,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,9 +631,6 @@ def _fetch_ticker_data(ticker: str) -> dict:
 #
 # No ISINs are hardcoded and no extra input file is needed — the criteria
 # are derived from OpenFIGI metadata + config, so this scales globally.
-
-from dataclasses import dataclass, field
-
 
 @dataclass
 class _Candidate:
@@ -494,6 +724,11 @@ def _currency_matches(candidate_ccy: str, expected_ccy: str) -> bool:
     return cand == exp
 
 
+def _history_visible_at_boundary(history: Optional[pd.DataFrame]) -> bool:
+    """Whether history contains a usable close visible to this run's clock."""
+    return _history_has_market_evidence(history)
+
+
 def _resolve_isin(
     isin: str, hint_ticker: str = "", expected_currency: str = ""
 ) -> Optional[tuple[dict, str]]:
@@ -509,28 +744,189 @@ def _resolve_isin(
     Returns ``(data_dict, winning_symbol)`` or ``None`` if nothing priced.
     """
     clean_isin = isin.replace("-", "")
+    from tarzan import runtime
+    from tarzan.models.instrument_key import normalize_ticker
 
-    # Fast path: a previously-resolved symbol is cached on disk. The
-    # resolution is deterministic and stable, so we can skip the whole
-    # OpenFIGI + candidate sweep and just price the cached symbol. If it
-    # no longer prices (delisted/renamed), fall through to a full
-    # re-resolve so the cache self-heals.
+    allows_live_transport = runtime.allows_live_transport()
+    known_symbols: list[str] = []
+    _, taxonomy_ticker = cfg.resolve_taxonomy_identity(clean_isin, "")
+    xref_ticker = ""
+    promoted_hint = ""
+    if not allows_live_transport:
+        # Resolve provider-independent identities before consulting the learned
+        # resolution cache. A cached symbol from an older live run is accepted
+        # only when the current ISIN authority (or, if none exists, the current
+        # caller hint) still identifies it.
+        xref_ticker = price_cache.load_ticker_isin_reverse(clean_isin)
+        authoritative_symbols = [
+            symbol for symbol in (taxonomy_ticker, xref_ticker) if symbol
+        ]
+        if authoritative_symbols:
+            known_symbols = list(dict.fromkeys(authoritative_symbols))
+            if hint_ticker and hint_ticker not in known_symbols:
+                logger.debug(
+                    "Pinned run ignored unverified ticker hint %s for ISIN %s",
+                    hint_ticker,
+                    clean_isin,
+                )
+        else:
+            # No provider-independent ISIN mapping exists. The caller hint is
+            # the only available identity evidence; promote a unique bare
+            # ticker through taxonomy so ergonomic inputs still work.
+            _, promoted_hint = cfg.resolve_taxonomy_identity("", hint_ticker)
+            known_symbols = list(dict.fromkeys(
+                symbol for symbol in (promoted_hint, hint_ticker) if symbol
+            ))
+
+    # Fast path: a previously-resolved symbol is cached on disk. Live runs may
+    # reuse it directly. Pinned runs additionally require that it agrees with
+    # the authoritative symbol set assembled above and has history visible at
+    # the effective boundary; a current quote can never prove point-in-time
+    # value.
     cached_symbol = price_cache.load_resolution(clean_isin)
-    if cached_symbol:
+    if not allows_live_transport and not cached_symbol:
+        # Live TTLs govern refresh policy, not whether a pinned run may consume
+        # an already-known immutable ISIN→symbol mapping. Read the persisted
+        # entry even when its live refresh TTL elapsed; compatibility checks
+        # below still require current provider-independent identity evidence.
+        try:
+            cached_entry = price_cache._load_resolution_map().get(clean_isin, {})
+            cached_symbol = cached_entry.get("symbol")
+        except Exception:  # noqa: BLE001 — cache corruption degrades to miss
+            cached_symbol = None
+
+    cached_matches_taxonomy = bool(
+        cached_symbol
+        and taxonomy_ticker
+        and (
+            cached_symbol.casefold() == taxonomy_ticker.casefold()
+            or (
+                _is_expandable_bare_ticker(taxonomy_ticker)
+                and normalize_ticker(cached_symbol)
+                == normalize_ticker(taxonomy_ticker)
+            )
+        )
+    )
+    if allows_live_transport:
+        cached_is_compatible = True
+    elif not cached_symbol:
+        cached_is_compatible = False
+    elif taxonomy_ticker:
+        cached_is_compatible = cached_matches_taxonomy
+    elif xref_ticker:
+        # The learned reverse map is intentionally bare-ticker keyed. A cached
+        # exact listing such as XDEM.MI is corroborated by the same bare symbol
+        # without pretending that a different bare ticker is equivalent.
+        cached_is_compatible = (
+            normalize_ticker(cached_symbol) == normalize_ticker(xref_ticker)
+        )
+    else:
+        cached_is_compatible = any(
+            cached_symbol.casefold() == symbol.casefold()
+            or normalize_ticker(cached_symbol) == normalize_ticker(symbol)
+            for symbol in known_symbols
+        )
+    if cached_symbol and cached_is_compatible:
         info = _fetch_ticker_info(cached_symbol)
         history = _fetch_history(cached_symbol)
-        price = info.get("regularMarketPrice") or info.get("previousClose")
-        if (history is not None and not history.empty) or price:
-            logger.info("Resolved ISIN %s → %s (from cache)", isin, cached_symbol)
-            return {"info": info, "history": history}, cached_symbol
-        logger.info(
-            "Cached symbol %s for ISIN %s no longer prices; re-resolving",
-            cached_symbol, isin,
+        has_quote = any(
+            _positive_market_quote(info.get(field))
+            for field in ("regularMarketPrice", "previousClose")
         )
+        if _history_visible_at_boundary(history) or (
+            allows_live_transport and has_quote
+        ):
+            logger.info("Resolved ISIN %s → %s (from cache)", isin, cached_symbol)
+            if cached_matches_taxonomy:
+                reason = (
+                    "Reused cached ISIN resolution corroborated by instrument "
+                    "taxonomy."
+                )
+            elif xref_ticker and (
+                normalize_ticker(cached_symbol) == normalize_ticker(xref_ticker)
+            ):
+                reason = (
+                    "Reused cached ISIN resolution corroborated by the learned "
+                    "ISIN cross-reference."
+                )
+            elif hint_ticker and (
+                cached_symbol.casefold() == hint_ticker.casefold()
+                or normalize_ticker(cached_symbol) == normalize_ticker(hint_ticker)
+            ):
+                reason = (
+                    "Reused cached ISIN resolution corroborated by the supplied "
+                    "ticker."
+                )
+            else:
+                reason = (
+                    "Reused the live ISIN-resolution cache after the cached "
+                    "symbol supplied usable market evidence."
+                )
+            return _annotate_ticker_data(
+                {"info": info, "history": history},
+                cached_symbol,
+                "ISIN_RESOLUTION_CACHE",
+                reason,
+            ), cached_symbol
+        logger.info(
+            "Cached symbol %s for ISIN %s has no history visible at the run "
+            "boundary; re-resolving",
+            cached_symbol,
+            isin,
+        )
+    elif cached_symbol:
+        logger.info(
+            "Pinned run ignored cached symbol %s conflicting with ISIN %s",
+            cached_symbol,
+            clean_isin,
+        )
+
+    if not allows_live_transport:
+        # Pinned runs may consume only known symbols and cached history. Never
+        # expand an ISIN into the configured Yahoo suffix probe matrix: that
+        # sweep is discovery transport, not point-in-time evidence.
+        for symbol in known_symbols:
+            history = _fetch_history(symbol)
+            if _history_visible_at_boundary(history):
+                logger.info(
+                    "Resolved ISIN %s → %s from pinned cache evidence",
+                    isin,
+                    symbol,
+                )
+                if taxonomy_ticker and symbol.casefold() == taxonomy_ticker.casefold():
+                    method = "INSTRUMENT_TAXONOMY"
+                    reason = "Instrument taxonomy mapped the ISIN to this canonical listing."
+                elif xref_ticker:
+                    method = "LEARNED_ISIN_XREF"
+                    reason = "A learned ISIN-to-ticker cross-reference selected this cached symbol."
+                else:
+                    method = "SUPPLIED_TICKER_CACHE"
+                    reason = "The supplied ticker was the only identity with boundary-visible cached history."
+                return _annotate_ticker_data(
+                    {"info": {}, "history": history},
+                    symbol,
+                    method,
+                    reason,
+                ), symbol
+        logger.debug("Pinned run has no cached market history for ISIN %s", isin)
+        return None
 
     canonical_name = _openfigi_name(clean_isin)
 
-    candidates = _collect_candidate_metas(clean_isin, hint_ticker)
+    # ISIN-only broker rows commonly carry the ISIN itself as their temporary
+    # ticker. When curated taxonomy knows a bare ticker, use that identity as
+    # the discovery hint so its qualified venue candidates are probed before
+    # the bounded generic sweep. An explicit caller listing remains authoritative.
+    hint_is_isin_only = (
+        not hint_ticker
+        or hint_ticker.replace("-", "").casefold() == clean_isin.casefold()
+    )
+    resolution_hint = (
+        taxonomy_ticker
+        if taxonomy_ticker and hint_is_isin_only
+        else hint_ticker
+    )
+    candidates = _collect_candidate_metas(clean_isin, resolution_hint)
     if not candidates:
         return None
 
@@ -552,8 +948,13 @@ def _resolve_isin(
     best = ranked[0]
     for cand in ranked:
         history = _fetch_history(cand.symbol)
-        if history is not None and not history.empty:
-            cand.data = {"info": cand.info, "history": history}
+        if _history_visible_at_boundary(history):
+            cand.data = _annotate_ticker_data(
+                {"info": cand.info, "history": history},
+                cand.symbol,
+                "PROVIDER_CANDIDATE_RANKING",
+                "Provider candidates were ranked by name coherence, currency, venue priority, and usable history.",
+            )
             price_cache.store_resolution(clean_isin, cand.symbol)
             logger.info(
                 "Resolved ISIN %s → %s (price=%.2f %s, name='%s')",
@@ -565,7 +966,12 @@ def _resolve_isin(
     # but do NOT cache it, so next run re-resolves and can self-heal once a
     # vendor serves the series.
     history = _fetch_history(best.symbol)
-    best.data = {"info": best.info, "history": history}
+    best.data = _annotate_ticker_data(
+        {"info": best.info, "history": history},
+        best.symbol,
+        "PROVIDER_QUOTE_ONLY",
+        "Provider candidate ranking selected this quote, but no candidate supplied usable history.",
+    )
     logger.warning(
         "Resolved ISIN %s → %s by quote only (no price history from any "
         "candidate); not cached so it re-resolves next run.",
@@ -585,7 +991,8 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
 
     Symbols are probed in a deterministic order and de-duplicated:
 
-      1. the CSV/order ticker hint (if any);
+      1. the CSV/order ticker hint (if any), immediately followed by its
+         configured exchange variants when the hint is bare;
       2. OpenFIGI-mapped exchange tickers;
       3. every OpenFIGI *bare* ticker combined with each configured
          exchange suffix — this is what lets the order-list path (which
@@ -596,8 +1003,8 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
       5. the raw ISIN as-is.
 
     To bound network cost and rate-limit exposure the number of *fetched*
-    candidates is capped; because the order is deterministic the cap does
-    not affect reproducibility.
+    candidates is capped; because hint-derived listings precede the generic
+    sweep, a curated bare identity cannot be pushed beyond that cap.
     """
     symbols: list[str] = []
 
@@ -607,6 +1014,9 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
 
     if hint_ticker and hint_ticker != clean_isin:
         _add(hint_ticker)
+        if _is_expandable_bare_ticker(hint_ticker):
+            for suffix in ISIN_EXCHANGE_SUFFIXES:
+                _add(f"{hint_ticker}{suffix}")
 
     figi_syms = _openfigi_lookup(clean_isin)
     for sym in figi_syms:
@@ -766,11 +1176,22 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
             pass
 
     origins = _history_origins(cached, fresh, result)
+    from tarzan import runtime
+
+    pinned = not runtime.allows_live_transport()
+    if pinned:
+        # Split detection may use later sessions to confirm a discontinuity and
+        # back-adjust all earlier closes. In a point-in-time run that would let
+        # a post-boundary split rewrite pre-boundary valuation evidence. Clip
+        # first, repair only the visible frame, and leave the full disk cache
+        # untouched for future/live runs.
+        result = _clip_to_as_of(result)
     result = price_cache.repair_split_jumps(result)
     if result is not None and not result.empty:
         result.attrs[_HISTORY_ORIGINS_ATTR] = origins
         result.attrs[_HISTORY_SYMBOL_ATTR] = symbol
-        price_cache.store_history(symbol, result)
+        if not pinned:
+            price_cache.store_history(symbol, result)
 
     with _net_lock:
         _history_memo[symbol] = result
@@ -784,37 +1205,79 @@ _FIGI_EXCHANGE_MAP = cfg.figi_exchange_map()
 _FIGI_MIC_MAP = cfg.figi_mic_map()
 
 
-def _openfigi_raw(isin: str) -> list:
-    """Raw OpenFIGI API call, rate-limited, retried on throttle, and
-    memoized per run.
+_OPENFIGI_BATCH_SIZE = 10
 
-    The unauthenticated OpenFIGI endpoint caps at ~25 requests/min, so a
-    minimum inter-call spacing is enforced and the result is memoized so
-    the three logical lookups per ISIN (name, ticker mapping, classify)
-    collapse to a single network call.
-    """
+
+def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
+    """Fetch uncached ISIN mappings in bounded OpenFIGI request batches."""
+    from tarzan import runtime
+
+    ordered = list(dict.fromkeys(str(isin or "").strip() for isin in isins))
+    ordered = [isin for isin in ordered if isin]
+    if not ordered:
+        return {}
+    if not runtime.allows_live_transport():
+        logger.debug("Pinned run: skipping %d live OpenFIGI lookup(s)", len(ordered))
+        return {isin: [] for isin in ordered}
+
     with _net_lock:
-        if isin in _openfigi_memo:
-            return _openfigi_memo[isin]
+        missing = [isin for isin in ordered if isin not in _openfigi_memo]
 
-    def _call() -> list:
-        # Enforce minimum spacing between OpenFIGI calls across threads.
+    for offset in range(0, len(missing), _OPENFIGI_BATCH_SIZE):
+        batch = missing[offset:offset + _OPENFIGI_BATCH_SIZE]
+
+        def _call(values=batch) -> list:
+            # Enforce minimum spacing between OpenFIGI requests across threads.
+            with _net_lock:
+                wait = _OPENFIGI_MIN_INTERVAL - (
+                    _time.monotonic() - _openfigi_last_call[0]
+                )
+                if wait > 0:
+                    _time.sleep(wait)
+                _openfigi_last_call[0] = _time.monotonic()
+            payload = [
+                {"idType": "ID_ISIN", "idValue": value}
+                for value in values
+            ]
+            request = Request(
+                "https://api.openfigi.com/v3/mapping",
+                data=json.dumps(payload).encode("utf-8"),
+            )
+            request.add_header("Content-Type", "application/json")
+            with urlopen(request, timeout=10) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        response = _retry(
+            _call,
+            what=f"OpenFIGI batch ({len(batch)} ISINs)",
+        )
+        valid_response = (
+            isinstance(response, list) and len(response) == len(batch)
+        )
+        if not valid_response:
+            logger.debug(
+                "OpenFIGI batch returned an invalid shape for %d ISIN(s)",
+                len(batch),
+            )
         with _net_lock:
-            wait = _OPENFIGI_MIN_INTERVAL - (_time.monotonic() - _openfigi_last_call[0])
-            if wait > 0:
-                _time.sleep(wait)
-            _openfigi_last_call[0] = _time.monotonic()
-        url = "https://api.openfigi.com/v3/mapping"
-        payload = [{"idType": "ID_ISIN", "idValue": isin}]
-        req = Request(url, data=json.dumps(payload).encode("utf-8"))
-        req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            for index, isin in enumerate(batch):
+                _openfigi_memo[isin] = (
+                    [response[index]] if valid_response else []
+                )
 
-    results = _retry(_call, what=f"OpenFIGI {isin}") or []
     with _net_lock:
-        _openfigi_memo[isin] = results
-    return results
+        return {isin: _openfigi_memo.get(isin, []) for isin in ordered}
+
+
+def _openfigi_raw(isin: str) -> list:
+    """Return one rate-limited, per-run-memoized OpenFIGI mapping response.
+
+    Pinned runs fail closed before reading a live memo or opening a socket;
+    their instrument metadata must come from the as-of-compatible profile
+    cache. Live callers share the same bounded batch transport used by the
+    effective-order resolver.
+    """
+    return _openfigi_raw_many([isin]).get(isin, [])
 
 
 def _openfigi_name(isin: str) -> str:
@@ -833,19 +1296,23 @@ def _openfigi_name(isin: str) -> str:
 
 
 def _openfigi_bond_signals(isin: str) -> tuple[Optional[str], Optional[str]]:
-    """Return (marketSector, securityType2) from OpenFIGI for an ISIN.
+    """Return exact OpenFIGI bond evidence for an ISIN, if present.
 
-    These are OpenFIGI's authoritative instrument-level classification
-    fields, used to detect bonds reliably (so the per-100-nominal value
-    convention is applied). Reads the per-run memoized OpenFIGI result,
-    so this adds no extra network call. Returns (None, None) if unknown.
+    OpenFIGI labels exchange-traded products with ``marketSector=Equity``
+    even when ``securityType=ETP``.  Passing that exposure sector into the
+    mechanics resolver conflicts with the instrument's ETF evidence and can
+    make a valid quote unusable.  Only forward fields that jointly resolve to
+    bond mechanics; non-bond records contribute no bond assertion.
     """
+    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+
     clean = isin.replace("-", "")
     for result_group in _openfigi_raw(clean):
         for item in result_group.get("data", []):
             sector = item.get("marketSector")
             sec_type = item.get("securityType2") or item.get("securityType")
-            if sector or sec_type:
+            resolution = TypeEvidenceGateway().resolve(sector, sec_type)
+            if resolution.kind is InstrumentKind.BOND:
                 return sector, sec_type
     return None, None
 
@@ -952,6 +1419,583 @@ def _classify_figi_item(
         info["instrument_type"] = "Money Market"
 
     return info
+
+
+# ---------------------------------------------------------------------------
+# Effective-order instrument profiles and equivalence resolution
+# ---------------------------------------------------------------------------
+
+_INSTRUMENT_PROFILE_RESOLVER_VERSION = "2"
+_EQUIVALENCE_QUANTITY_EPSILON = 1e-8
+_TRANSACTIONAL_EQUIVALENCE_MAX_DAYS = 45
+
+
+def _normalized_profile_isin(value: object) -> str:
+    return "".join(
+        character
+        for character in str(value or "").strip().upper()
+        if character.isalnum()
+    )
+
+
+def _figi_values(items: list[dict], field_name: str) -> list[str]:
+    return sorted({
+        str(item.get(field_name)).strip()
+        for item in items
+        if str(item.get(field_name) or "").strip()
+    })
+
+
+def _figi_item_kind(item: dict):
+    """Resolve mechanics from OpenFIGI's structured fields, not its name."""
+    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+
+    # OpenFIGI uses securityType=ETP with securityType2=Mutual Fund for ETFs,
+    # bond ETFs, ETCs, and other exchange-traded products. ETP is exact
+    # provider mechanics evidence; marketSector=Equity must not turn it into a
+    # stock or into an exposure-category assertion.
+    provider_security_type = str(item.get("securityType") or "").strip().upper()
+    if provider_security_type == "ETP":
+        return InstrumentKind.ETF
+
+    kw = cfg.classification()
+    security_type = str(item.get("securityType2") or "").strip().lower()
+    market_sector = str(item.get("marketSector") or "").strip().lower()
+    classified = _classify_figi_item(
+        security_type,
+        market_sector,
+        str(item.get("name") or ""),
+        kw,
+        kw.get("figi_fixed_income", []),
+        kw.get("figi_equity", []),
+        kw.get("figi_etf", []),
+    )
+    declared_type = classified.get("instrument_type")
+    if declared_type:
+        return TypeEvidenceGateway().resolve(declared_type).kind
+
+    # An equity market sector is not sufficient to distinguish a stock from
+    # an ETF. Fixed-income sectors, by contrast, are exact mechanics evidence.
+    sector_evidence = (
+        item.get("marketSector")
+        if market_sector in {"govt", "corp", "mtge", "muni"}
+        else None
+    )
+    return TypeEvidenceGateway().resolve(
+        item.get("securityType2"),
+        item.get("securityType"),
+        sector_evidence,
+    ).kind
+
+
+def _build_openfigi_profile(isin: str, results: list) -> dict:
+    """Convert one successful OpenFIGI response into a cache-safe profile."""
+    from tarzan import runtime
+
+    items = [
+        item
+        for group in results
+        if isinstance(group, dict)
+        for item in group.get("data", [])
+        if isinstance(item, dict)
+    ]
+    kinds = {
+        kind
+        for kind in (_figi_item_kind(item) for item in items)
+        if kind is not None
+    }
+    if len(kinds) == 1:
+        status = "VERIFIED"
+        kind_value = next(iter(kinds)).value
+        confidence = "HIGH"
+    elif len(kinds) > 1:
+        status = "CONFLICTING"
+        kind_value = None
+        confidence = "CONFLICTING"
+    else:
+        status = "UNRESOLVED"
+        kind_value = None
+        confidence = "NONE"
+
+    observed_at = runtime.context().captured_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    return {
+        "isin": _normalized_profile_isin(isin),
+        "kind": kind_value,
+        "identifiers": {
+            "figi": _figi_values(items, "figi"),
+            "compositeFIGI": _figi_values(items, "compositeFIGI"),
+            "shareClassFIGI": _figi_values(items, "shareClassFIGI"),
+        },
+        "securityType": _figi_values(items, "securityType"),
+        "securityType2": _figi_values(items, "securityType2"),
+        "marketSector": _figi_values(items, "marketSector"),
+        "names": _figi_values(items, "name"),
+        "tickers": _figi_values(items, "ticker"),
+        "source": "OpenFIGI",
+        "provenance": {
+            "provider": "OpenFIGI",
+            "idType": "ID_ISIN",
+        },
+        "resolver_version": _INSTRUMENT_PROFILE_RESOLVER_VERSION,
+        "observed_at": observed_at.astimezone(timezone.utc).isoformat(),
+        "status": status,
+        "confidence": confidence,
+    }
+
+
+def _reclassify_cached_profile(profile: Optional[dict]) -> Optional[dict]:
+    """Apply the current resolver policy to already-observed raw evidence."""
+    if profile is None:
+        return None
+    updated = dict(profile)
+    security_types = {
+        str(value or "").strip().upper()
+        for value in profile.get("securityType", [])
+        if str(value or "").strip()
+    }
+    if security_types == {"ETP"}:
+        updated.update({
+            "kind": "ETF",
+            "status": "VERIFIED",
+            "confidence": "HIGH",
+        })
+    updated["resolver_version"] = _INSTRUMENT_PROFILE_RESOLVER_VERSION
+    return updated
+
+
+def _load_or_fetch_instrument_profile(isin: str) -> tuple[Optional[dict], str]:
+    """Resolve one profile cache-first, with live transport only in LIVE mode."""
+    from tarzan import runtime
+
+    if runtime.allows_live_transport():
+        cached = price_cache.load_instrument_profile(isin)
+        if cached is not None:
+            reclassified = _reclassify_cached_profile(cached)
+            if reclassified != cached:
+                price_cache.store_instrument_profile(isin, reclassified)
+                return reclassified, "cache_reclassified"
+            return cached, "cache"
+        stale = price_cache.load_instrument_profile(isin, allow_stale=True)
+        results = _openfigi_raw(isin)
+        if results:
+            profile = _build_openfigi_profile(isin, results)
+            price_cache.store_instrument_profile(isin, profile)
+            return profile, "openfigi"
+        if stale is not None:
+            return _reclassify_cached_profile(stale), "stale_cache"
+        return None, "unavailable"
+
+    cached = price_cache.load_instrument_profile(
+        isin,
+        as_of=runtime.as_of(),
+        allow_stale=True,
+    )
+    cached = _reclassify_cached_profile(cached)
+    return (cached, "cache_as_of") if cached is not None else (None, "unavailable")
+
+
+def _profile_kind(profile: Optional[dict]):
+    from tarzan.instruments.registry import InstrumentKind
+
+    if not profile or profile.get("status") != "VERIFIED":
+        return None
+    try:
+        return InstrumentKind(str(profile.get("kind") or "").strip().upper())
+    except ValueError:
+        return None
+
+
+def _strong_equivalence_components(
+    profiles: dict[str, Optional[dict]],
+) -> list[tuple[set[str], list[str]]]:
+    """Return connected ISIN sets sharing exact provider identity values."""
+    claims: dict[tuple[str, str], set[str]] = {}
+    for isin, profile in profiles.items():
+        identifiers = profile.get("identifiers", {}) if profile else {}
+        if not isinstance(identifiers, dict):
+            continue
+        for field_name in ("figi", "compositeFIGI", "shareClassFIGI"):
+            values = identifiers.get(field_name, [])
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                normalized = str(value or "").strip().upper()
+                if normalized:
+                    claims.setdefault((field_name, normalized), set()).add(isin)
+
+    parent = {isin: isin for isin in profiles}
+
+    def find(isin: str) -> str:
+        while parent[isin] != isin:
+            parent[isin] = parent[parent[isin]]
+            isin = parent[isin]
+        return isin
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    for members in claims.values():
+        ordered = sorted(members)
+        for member in ordered[1:]:
+            union(ordered[0], member)
+
+    components: dict[str, set[str]] = {}
+    for isin in profiles:
+        components.setdefault(find(isin), set()).add(isin)
+
+    result = []
+    for members in components.values():
+        if len(members) < 2:
+            continue
+        evidence = sorted(
+            f"{field_name}:{value}"
+            for (field_name, value), claim_members in claims.items()
+            if len(claim_members & members) >= 2
+        )
+        if evidence:
+            result.append((members, evidence))
+    return sorted(result, key=lambda item: sorted(item[0]))
+
+
+def _name_identity_tokens(names: set[str]) -> tuple[set[str], set[str]]:
+    tokens: set[str] = set()
+    for name in names:
+        normalized = "".join(
+            character.upper() if character.isalnum() else " "
+            for character in name
+        )
+        tokens.update(normalized.split())
+    issue_tokens = {
+        token
+        for token in tokens
+        if len(token) >= 5
+        and any(character.isalpha() for character in token)
+        and any(character.isdigit() for character in token)
+    }
+    issuer_tokens = {
+        token for token in tokens if len(token) >= 3 and token.isalpha()
+    }
+    return issue_tokens, issuer_tokens
+
+
+def _median(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2.0
+
+
+def _order_instrument_summaries(orders: list) -> dict[str, dict]:
+    summaries: dict[str, dict] = {}
+    for order in orders:
+        isin = _normalized_profile_isin(order.isin)
+        if not isin:
+            continue
+        summary = summaries.setdefault(isin, {
+            "net_quantity": 0.0,
+            "position_quantities": [],
+            "position_types": set(),
+            "dates": [],
+            "currencies": set(),
+            "sources": set(),
+            "names": set(),
+            "prices": [],
+        })
+        if order.currency:
+            summary["currencies"].add(str(order.currency).strip().upper())
+        if order.source:
+            summary["sources"].add(str(order.source).strip().casefold())
+        if order.name:
+            summary["names"].add(str(order.name).strip())
+        if not order.is_position_change() or math.isclose(
+            float(order.quantity), 0.0, abs_tol=_EQUIVALENCE_QUANTITY_EPSILON
+        ):
+            continue
+        quantity = float(order.quantity)
+        summary["net_quantity"] += quantity
+        summary["position_quantities"].append(quantity)
+        summary["position_types"].add(order.type)
+        summary["dates"].append(order.trade_date or order.date)
+        try:
+            price = float(order.price_native)
+            if math.isfinite(price) and price > 0:
+                summary["prices"].append(price)
+        except (TypeError, ValueError):
+            pass
+    return summaries
+
+
+def _transactional_equivalence_pairs(
+    orders: list,
+    kind_by_isin: dict,
+    excluded_isins: set[str],
+) -> list[tuple[str, str]]:
+    """Find mutually unique bond identifier rollovers from ledger evidence.
+
+    This deliberately requires several independent signals. It never compares
+    ISIN prefixes, ticker text, or a name by itself.
+    """
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.models.order import OrderType
+
+    summaries = _order_instrument_summaries(orders)
+    candidates: list[tuple[str, str]] = []
+    eligible = sorted(set(summaries) - excluded_isins)
+    for index, left_isin in enumerate(eligible):
+        for right_isin in eligible[index + 1:]:
+            left, right = summaries[left_isin], summaries[right_isin]
+            left_quantities = left["position_quantities"]
+            right_quantities = right["position_quantities"]
+            if not left_quantities or not right_quantities:
+                continue
+            left_direction = 1 if all(value > 0 for value in left_quantities) else -1 if all(
+                value < 0 for value in left_quantities
+            ) else 0
+            right_direction = 1 if all(value > 0 for value in right_quantities) else -1 if all(
+                value < 0 for value in right_quantities
+            ) else 0
+            if {left_direction, right_direction} != {-1, 1}:
+                continue
+            positive, negative = (
+                (left, right) if left_direction > 0 else (right, left)
+            )
+            if positive["position_types"] != {OrderType.TRANSFER_IN}:
+                continue
+            if not negative["position_types"] or not negative["position_types"].issubset(
+                {OrderType.SELL, OrderType.TRANSFER_OUT}
+            ):
+                continue
+            if not math.isclose(
+                left["net_quantity"],
+                -right["net_quantity"],
+                rel_tol=1e-10,
+                abs_tol=_EQUIVALENCE_QUANTITY_EPSILON,
+            ):
+                continue
+            if (
+                len(left["currencies"]) != 1
+                or left["currencies"] != right["currencies"]
+                or len(right["currencies"]) != 1
+                or len(left["sources"]) != 1
+                or left["sources"] != right["sources"]
+                or len(right["sources"]) != 1
+            ):
+                continue
+            if not positive["dates"] or not negative["dates"]:
+                continue
+            elapsed_days = (
+                min(negative["dates"]) - max(positive["dates"])
+            ).days
+            if not 0 <= elapsed_days <= _TRANSACTIONAL_EQUIVALENCE_MAX_DAYS:
+                continue
+
+            left_issue, left_issuer = _name_identity_tokens(left["names"])
+            right_issue, right_issuer = _name_identity_tokens(right["names"])
+            if not (left_issue & right_issue) or not (left_issuer & right_issuer):
+                continue
+            left_price, right_price = _median(left["prices"]), _median(right["prices"])
+            if left_price is None or right_price is None:
+                continue
+            price_ratio = min(left_price, right_price) / max(left_price, right_price)
+            if price_ratio < 0.8:
+                continue
+
+            kinds = {kind_by_isin.get(left_isin), kind_by_isin.get(right_isin)}
+            if kinds != {None, InstrumentKind.BOND}:
+                continue
+            candidates.append((left_isin, right_isin))
+
+    neighbors: dict[str, set[str]] = {}
+    for left_isin, right_isin in candidates:
+        neighbors.setdefault(left_isin, set()).add(right_isin)
+        neighbors.setdefault(right_isin, set()).add(left_isin)
+    return [
+        pair
+        for pair in candidates
+        if len(neighbors.get(pair[0], set())) == 1
+        and len(neighbors.get(pair[1], set())) == 1
+    ]
+
+
+def _automatic_group_id(source: str, members: set[str]) -> str:
+    digest = hashlib.sha256("|".join(sorted(members)).encode("utf-8")).hexdigest()[:16]
+    return f"AUTO-{source.upper()}-{digest}"
+
+
+def resolve_effective_order_instruments(orders: list) -> tuple[list, dict]:
+    """Attach generated kind/equivalence evidence to effective-order copies."""
+    from tarzan import runtime
+    from tarzan.instruments.registry import InstrumentKind
+
+    isins = sorted({
+        _normalized_profile_isin(order.isin)
+        for order in orders
+        if _normalized_profile_isin(order.isin)
+    })
+    profiles: dict[str, Optional[dict]] = {}
+    profile_sources: dict[str, str] = {}
+    if runtime.allows_live_transport():
+        refresh_isins = [
+            isin
+            for isin in isins
+            if price_cache.load_instrument_profile(isin) is None
+        ]
+        _openfigi_raw_many(refresh_isins)
+    for isin in isins:
+        profile, source = _load_or_fetch_instrument_profile(isin)
+        profiles[isin] = profile
+        profile_sources[isin] = source
+
+    explicit_kinds: dict[str, set] = {}
+    explicit_groups: dict[str, set[str]] = {}
+    for order in orders:
+        isin = _normalized_profile_isin(order.isin)
+        if order.instrument_kind is not None:
+            explicit_kinds.setdefault(isin, set()).add(order.instrument_kind)
+        group = str(order.instrument_equivalence_group or "").strip()
+        if group:
+            explicit_groups.setdefault(isin, set()).add(group.casefold())
+
+    conflicts: list[str] = []
+    blocked_isins: set[str] = set()
+    kind_by_isin: dict[str, Optional[InstrumentKind]] = {}
+    for isin in isins:
+        declared = explicit_kinds.get(isin, set())
+        profile_kind = _profile_kind(profiles.get(isin))
+        if len(declared) > 1:
+            conflicts.append(f"{isin}: conflicting declared kinds")
+            blocked_isins.add(isin)
+            kind_by_isin[isin] = None
+        elif declared:
+            declared_kind = next(iter(declared))
+            kind_by_isin[isin] = declared_kind
+            if profile_kind is not None and profile_kind is not declared_kind:
+                conflicts.append(f"{isin}: declared/profile kind conflict")
+                blocked_isins.add(isin)
+        else:
+            kind_by_isin[isin] = profile_kind
+        if len(explicit_groups.get(isin, set())) > 1:
+            conflicts.append(f"{isin}: conflicting declared equivalence groups")
+            blocked_isins.add(isin)
+
+    automatic_group_by_isin: dict[str, str] = {}
+    accepted_groups: list[dict] = []
+    reserved_isins = set(explicit_groups) | blocked_isins
+    for members, evidence in _strong_equivalence_components(profiles):
+        if members & reserved_isins:
+            continue
+        member_kinds = {
+            kind_by_isin.get(member)
+            for member in members
+            if kind_by_isin.get(member) is not None
+        }
+        if len(member_kinds) > 1:
+            conflicts.append(
+                f"{', '.join(sorted(members))}: provider identity kind conflict"
+            )
+            blocked_isins.update(members)
+            continue
+        group_id = _automatic_group_id("FIGI", members)
+        for member in members:
+            automatic_group_by_isin[member] = group_id
+        accepted_groups.append({
+            "group": group_id,
+            "source": "strong_provider_identifier",
+            "members": sorted(members),
+            "evidence": evidence,
+        })
+
+    transactional_exclusions = (
+        reserved_isins | blocked_isins | set(automatic_group_by_isin)
+    )
+    for left_isin, right_isin in _transactional_equivalence_pairs(
+        orders,
+        kind_by_isin,
+        transactional_exclusions,
+    ):
+        members = {left_isin, right_isin}
+        group_id = _automatic_group_id("LEDGER", members)
+        for member in members:
+            automatic_group_by_isin[member] = group_id
+        accepted_groups.append({
+            "group": group_id,
+            "source": "unique_transactional_rollover",
+            "members": sorted(members),
+            "evidence": [
+                "net_flat_opposite_quantity",
+                "transfer_in_then_disposal",
+                "matching_currency_source_issue_and_price",
+            ],
+        })
+
+    # Propagate one non-conflicting mechanics kind across every accepted
+    # identity component. This is what gives an obsolete cum identifier the
+    # verified bond mechanics of its OpenFIGI-resolved ex identifier.
+    for group in accepted_groups:
+        members = set(group["members"])
+        member_kinds = {
+            kind_by_isin.get(member)
+            for member in members
+            if kind_by_isin.get(member) is not None
+        }
+        if len(member_kinds) == 1:
+            resolved_kind = next(iter(member_kinds))
+            for member in members:
+                if member not in blocked_isins:
+                    kind_by_isin[member] = resolved_kind
+
+    resolved_orders = []
+    for order in orders:
+        isin = _normalized_profile_isin(order.isin)
+        resolved_orders.append(replace(
+            order,
+            instrument_kind=(order.instrument_kind or kind_by_isin.get(isin)),
+            instrument_equivalence_group=(
+                order.instrument_equivalence_group
+                or automatic_group_by_isin.get(isin)
+            ),
+        ))
+
+    for conflict in conflicts:
+        logger.warning("Instrument resolution conflict: %s", conflict)
+        dq.warning("instrument_resolution", conflict, context="effective_orders")
+    profile_statuses = {
+        status: sum(
+            1
+            for profile in profiles.values()
+            if profile and profile.get("status") == status
+        )
+        for status in ("VERIFIED", "CONFLICTING", "UNRESOLVED")
+    }
+    report = {
+        "network_allowed": runtime.allows_live_transport(),
+        "profiles_requested": len(isins),
+        "profile_sources": {
+            source: sum(1 for value in profile_sources.values() if value == source)
+            for source in sorted(set(profile_sources.values()))
+        },
+        "profile_statuses": profile_statuses,
+        "resolved_kind_isins": sorted(
+            isin for isin, kind in kind_by_isin.items() if kind is not None
+        ),
+        "equivalence_groups": accepted_groups,
+        "conflicts": sorted(conflicts),
+    }
+    logger.info(
+        "Instrument profiles: %d requested, %d kinds resolved, %d automatic equivalence group(s)",
+        len(isins),
+        len(report["resolved_kind_isins"]),
+        len(accepted_groups),
+    )
+    _provider_memo_ready.set(True)
+    return resolved_orders, report
 
 
 # ---------------------------------------------------------------------------
@@ -1224,6 +2268,87 @@ def _scrape_geo_breakdown(
 # Single holding enrichment
 # ---------------------------------------------------------------------------
 
+def _record_ticker_decision(
+    holding: Holding,
+    original_ticker: str,
+    data: dict,
+) -> str:
+    """Persist one canonical market-symbol decision on ``holding``.
+
+    ``ticker_requested`` preserves user intent while ``holding.ticker`` remains
+    the compatibility field consumed by every existing history/current/intraday
+    section. The returned symbol is the exact provider feed selected here.
+    """
+    clean_isin = (holding.isin or "").replace("-", "").strip().upper()
+    requested = (holding.ticker_requested or "").strip()
+    if not requested and original_ticker and original_ticker.strip().upper() != clean_isin:
+        requested = original_ticker.strip()
+    selected = str(data.get(_TICKER_SYMBOL_KEY) or holding.ticker or "").strip()
+    if clean_isin and selected.upper() == clean_isin:
+        selected = ""
+
+    base_method = str(data.get(_TICKER_METHOD_KEY) or "UNRESOLVED")
+    base_reason = str(
+        data.get(_TICKER_REASON_KEY)
+        or "No market ticker with usable provider evidence was resolved."
+    )
+    method = base_method
+    reason = base_reason
+    has_market_evidence = _ticker_data_has_market_evidence(data)
+    if not selected:
+        method = "UNRESOLVED"
+        reason = (
+            "No canonical ticker with usable market evidence was resolved. "
+            f"{base_reason}"
+        )
+    elif requested:
+        requested_upper = requested.upper()
+        selected_upper = selected.upper()
+        requested_bare = requested_upper.split(".", 1)[0]
+        selected_bare = selected_upper.split(".", 1)[0]
+        if requested_upper == selected_upper and "." in requested:
+            if has_market_evidence:
+                reason = (
+                    f"User pre-empted the ticker: {requested} was supplied "
+                    "explicitly and verified as the selected market listing. "
+                    f"Selection evidence: {base_reason}"
+                )
+            else:
+                reason = (
+                    f"User pre-empted the ticker choice: {requested} was "
+                    "supplied explicitly and retained as the canonical request, "
+                    "but no usable market data verified the listing."
+                )
+        elif (
+            requested_upper != selected_upper
+            and requested_bare == selected_bare
+            and "." not in requested
+            and "." in selected
+        ):
+            reason = (
+                f"User supplied the bare ticker {requested}; Tarzan selected "
+                f"the canonical listing {selected}. Selection evidence: "
+                f"{base_reason}"
+            )
+        elif requested_upper == selected_upper:
+            reason = (
+                f"User supplied {requested}, which remained the canonical "
+                f"ticker. Selection evidence: {base_reason}"
+            )
+        else:
+            reason = (
+                f"User requested {requested}; Tarzan selected {selected} instead. "
+                f"Selection evidence: {base_reason}"
+            )
+
+    holding.ticker_requested = requested or None
+    holding.ticker_selection_method = method
+    holding.ticker_selection_reason = reason
+    if selected:
+        holding.ticker = selected
+    return selected
+
+
 def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     """Enrich a single holding with market data from yfinance.
 
@@ -1273,11 +2398,53 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                     price_cache.store_ticker_isin(resolved_ticker, clean_isin)
 
         if data is None:
-            data = _fetch_ticker_data(ticker)
+            from tarzan import runtime
+
+            if is_valid_isin and not runtime.allows_live_transport():
+                # _resolve_isin already exhausted every symbol corroborated for
+                # this ISIN. Preserve any taxonomy-selected canonical listing
+                # for reporting, but do not claim that it supplied data.
+                _, known_ticker = cfg.resolve_taxonomy_identity(clean_isin, ticker)
+                if known_ticker and known_ticker != clean_isin:
+                    data = _annotate_ticker_data(
+                        {"info": {}, "history": pd.DataFrame()},
+                        known_ticker,
+                        "INSTRUMENT_TAXONOMY_NO_DATA",
+                        "Instrument taxonomy selected this canonical listing, but no boundary-visible market data was available.",
+                    )
+                else:
+                    data = _annotate_ticker_data(
+                        {"info": {}, "history": pd.DataFrame()},
+                        "",
+                        "UNRESOLVED",
+                        "No canonical ticker with boundary-visible market data was resolved for this ISIN.",
+                    )
+            else:
+                if _is_expandable_bare_ticker(ticker) and holding.name:
+                    data = _fetch_ticker_data(
+                        ticker,
+                        expected_name=holding.name,
+                        expected_currency=holding.currency or "",
+                    )
+                else:
+                    data = _fetch_ticker_data(ticker)
             info = data.get("info", {})
             history = data.get("history", pd.DataFrame())
 
-        holding.name = info.get("longName") or info.get("shortName") or info.get("name") or ticker
+        selected_ticker = _record_ticker_decision(holding, ticker, data)
+        if selected_ticker and is_valid_isin:
+            price_cache.store_ticker_isin(selected_ticker, clean_isin)
+        if selected_ticker and (history is not None and not history.empty or info):
+            data_source = f"yfinance:{selected_ticker}"
+
+        holding.name = (
+            info.get("longName")
+            or info.get("shortName")
+            or info.get("name")
+            or holding.name
+            or selected_ticker
+            or ticker
+        )
         holding.instrument_type = _infer_instrument_type(info, holding)
         holding.fetch_timestamp = dt.now(timezone.utc)
 
@@ -1285,6 +2452,16 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         # observation and whether the chosen value came from non-primary data.
         currency = info.get("currency", holding.currency or "EUR")
         _set_price_data(holding, history, info, currency)
+        if selected_ticker:
+            if holding.price_history is not None and len(holding.price_history) > 0:
+                holding.history_ticker = selected_ticker
+            if holding.current_price is not None:
+                holding.current_ticker = selected_ticker
+            holding.intraday_ticker_reason = (
+                "Not requested for a historical-only instrument."
+                if holding.is_historical_only
+                else "The canonical ticker is the default for every intraday consumer; no intraday feed was selected yet."
+            )
 
         # Value and gain use one exact InstrumentKind. Exposure category,
         # display text, names, prices, and quantities never select the bond
@@ -1320,27 +2497,43 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                 if holding.price_history is not None and len(holding.price_history) > 0:
                     holding.price_history = holding.price_history / 100.0
                 holding.current_price = holding.current_price / 100.0
-            if not holding.price_is_fallback:
+            if not holding.price_is_fallback and not holding.data_source:
                 holding.data_source = data_source
-            elif not holding.data_source:
+            elif holding.price_is_fallback and not holding.data_source:
                 holding.data_source = f"{data_source} (fallback price)"
         elif has_price:
-            holding.current_value = holding.market_value_eur or 0.0
-            holding.data_source = "last-known (instrument kind unavailable)"
-            dq.error(
-                "instrument_capability",
-                "Current price was not valued because exact instrument-kind "
-                "evidence is missing or conflicting.",
-                context=holding.isin or holding.ticker,
-            )
+            if holding.is_historical_only:
+                # Closed-position carriers need the series for return history,
+                # but never participate in current valuation. Missing mechanics
+                # therefore is not a current instrument-capability failure.
+                holding.current_value = 0.0
+                holding.data_source = (
+                    f"{data_source} (historical-only; instrument kind unavailable)"
+                )
+            else:
+                holding.current_value = holding.market_value_eur or 0.0
+                holding.data_source = "last-known (instrument kind unavailable)"
+                dq.error(
+                    "instrument_capability",
+                    "Current price was not valued because exact instrument-kind "
+                    "evidence is missing or conflicting.",
+                    context=holding.isin or holding.ticker,
+                )
         else:
             from tarzan.instruments.registry import InstrumentKind
 
-            if instrument_kind is InstrumentKind.BOND:
+            if (
+                instrument_kind is InstrumentKind.BOND
+                and not holding.is_historical_only
+            ):
                 _try_terrapin_fallback(holding, instrument_kind)
             else:
                 holding.current_value = holding.market_value_eur or 0.0
-                holding.data_source = "input_csv (no market data)"
+                holding.data_source = (
+                    "historical-only (no configured market history)"
+                    if holding.is_historical_only
+                    else "input_csv (no market data)"
+                )
 
         # Safety net: never let a holding carry a None/NaN current_value into
         # the portfolio total. A single NaN propagates through the sum and
@@ -1499,7 +2692,13 @@ def _set_price_data(
             origins = history.attrs.get(_HISTORY_ORIGINS_ATTR, {})
             selected_origin = origins.get(selected_key)
             if selected_origin == _HISTORY_ORIGIN_CACHE:
-                is_fallback = True
+                # In LIVE mode a retained cache row is a fallback after a failed
+                # refresh. In pinned modes the exact as-of-clipped provider row
+                # is the only admissible market evidence; freshness, not its
+                # storage location, decides whether it is stale.
+                from tarzan import runtime
+
+                is_fallback = runtime.allows_live_transport()
                 symbol = history.attrs.get(_HISTORY_SYMBOL_ATTR)
                 selected_source = (
                     f"price_cache:{symbol}" if symbol else "price_cache"
@@ -1659,6 +2858,13 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
     USD Treasury, a ZAR EIB note, a GBP gilt are all handled the same way
     via the shared FX machinery — no per-currency special-casing.
     """
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        holding.current_value = holding.market_value_eur
+        holding.data_source = "input_csv (live transport disabled)"
+        return
+
     try:
         from tarzan.data.bond_fetcher import fetch_bond_price, value_position
         from tarzan.instruments.registry import InstrumentKind
@@ -1754,12 +2960,12 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
 # ---------------------------------------------------------------------------
 
 def _apply_taxonomy_override(holding: Holding) -> bool:
-    """Pin asset_class + role from the curated instrument_taxonomy.csv.
+    """Pin category, role, and exact mechanics evidence from the taxonomy.
 
     Looks up by ISIN first, then bare ticker (suffix stripped). On a match,
-    sets ``holding.asset_class`` and ``holding.role`` and returns True so the
-    caller skips the auto-classification chain. Returns False when the
-    instrument is not in the curated catalog (auto-classification takes over).
+    sets ``asset_class``/``role`` and contributes the curated ``kind`` without
+    erasing other assertions. Conflicts therefore remain ambiguous in the type
+    gateway instead of being overwritten by taxonomy precedence.
     """
     lut = cfg.instrument_taxonomy()
     if not lut:
@@ -1797,6 +3003,15 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
             )
             return False
         holding.role = role
+        curated_kind = cfg.kind_for(holding.isin, holding.ticker)
+        if (
+            curated_kind
+            and curated_kind not in holding.instrument_kind_evidence
+        ):
+            holding.instrument_kind_evidence = (
+                *holding.instrument_kind_evidence,
+                curated_kind,
+            )
         # Resilient display name: fall back to the curated taxonomy ``name``
         # when enrichment produced none (yfinance unreachable / rate-limited)
         # or left the bare ticker as the name — so a curated instrument always
@@ -1819,10 +3034,18 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     exact OpenFIGI security-type mappings, then typed unavailability. Names,
     tickers, prices, and quantities never select financial behavior.
     """
-    holding, info = _enrich_single(holding)
-
-    # Curated taxonomy is the deterministic category authority when present.
+    # Curated kind is causal local evidence and must be available before
+    # current-value mechanics run. Re-apply after symbol resolution so a row
+    # keyed only by the resolved ticker can still provide category/display data.
     curated = _apply_taxonomy_override(holding)
+    holding, info = _enrich_single(holding)
+    curated = _apply_taxonomy_override(holding) or curated
+
+    # Closed-position carriers exist only to supply exact mechanics and causal
+    # price history. Current category, geography, sector, and rebalancing
+    # capabilities are neither consumed nor actionable for them.
+    if holding.is_historical_only:
+        return holding
 
     if not curated and holding.asset_class is None:
         classification = classify_asset_class(info, holding.ticker, holding)
@@ -1947,18 +3170,28 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
         List of enriched Holding objects with market data and classifications.
     """
     if not holdings:
+        _provider_memo_ready.set(False)
         return holdings
 
-    # Reset intra-run memoization so this run starts from fresh network
-    # state (no stale data across runs), then de-duplicates concurrent
-    # requests within the run.
-    reset_run_caches()
+    # Standalone callers start with fresh memoization. The orchestrator's
+    # effective-order resolver marks its freshly initialized memo for exactly
+    # one continuation into this stage, avoiding duplicate OpenFIGI calls.
+    reuse_provider_memo = _provider_memo_ready.get()
+    _provider_memo_ready.set(False)
+    if not reuse_provider_memo:
+        reset_run_caches()
 
     logger.info("Enriching %d holdings (max %d workers)...", len(holdings), MAX_WORKERS)
 
     enriched: list[Holding] = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(_enrich_and_classify, h): h for h in holdings}
+        # Context variables do not propagate to executor threads implicitly.
+        # Give each task its own copied context so run mode, effective date,
+        # active ledger, and transport policy remain authoritative in workers.
+        futures = {
+            executor.submit(copy_context().run, _enrich_and_classify, h): h
+            for h in holdings
+        }
         for future in as_completed(futures):
             try:
                 enriched.append(future.result())
@@ -1978,7 +3211,7 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     # anchor, not a live quote. (A NaN/None price was reseeded upstream; this
     # flags the ones still carrying no real current_price.)
     for h in enriched:
-        if not h.is_enriched():
+        if not h.is_enriched() and not h.is_historical_only:
             dq.warning(
                 "enricher",
                 "no market price resolved; valued from its last-known/CSV EUR "

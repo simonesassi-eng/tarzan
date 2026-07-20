@@ -123,6 +123,162 @@ def instrument_taxonomy() -> dict:
     return _taxonomy_lookup()
 
 
+def resolve_taxonomy_identity(
+    isin: Optional[str],
+    ticker: Optional[str],
+    name: Optional[str] = None,
+) -> tuple[str, str]:
+    """Resolve a partial identity to one unambiguous taxonomy row.
+
+    Target files intentionally may use a bare ticker such as ``X710``. This
+    resolver preserves that curated identity so rows remain matchable; market
+    enrichment is responsible for selecting a provider-compatible listing
+    such as ``X710.MI``. ISIN wins when supplied; otherwise an exact ticker or
+    a unique bare ticker is used. Name is only an ambiguity breaker. Ambiguous
+    or absent taxonomy evidence is returned unchanged rather than guessed.
+    """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    normalized_isin = normalize_isin(isin)
+    raw_ticker = str(ticker or "").strip()
+    if raw_ticker.casefold() == "nan":
+        raw_ticker = ""
+    bare_ticker = normalize_ticker(raw_ticker)
+    raw_name = str(name or "").strip()
+    if raw_name.casefold() == "nan":
+        raw_name = ""
+
+    frame = _load_indexes_csv()
+    if frame.empty:
+        return normalized_isin, raw_ticker
+
+    def _cell(row, column: str) -> str:
+        value = row.get(column)
+        if value is None or pd.isna(value):
+            return ""
+        return str(value).strip()
+
+    rows = list(frame.to_dict("records"))
+    candidates = rows
+    if normalized_isin:
+        candidates = [
+            row for row in rows
+            if normalize_isin(_cell(row, "isin")) == normalized_isin
+        ]
+    elif bare_ticker:
+        exact = [
+            row for row in rows
+            if _cell(row, "ticker").casefold() == raw_ticker.casefold()
+        ]
+        # A suffix supplied by the user is an explicit venue choice. If that
+        # full listing is absent from the taxonomy, preserve it rather than
+        # replacing it with a same-symbol listing from another exchange.
+        if exact:
+            candidates = exact
+        elif "." in raw_ticker:
+            return normalized_isin, raw_ticker
+        else:
+            candidates = [
+                row for row in rows
+                if normalize_ticker(_cell(row, "ticker")) == bare_ticker
+            ]
+    elif raw_name:
+        candidates = [
+            row for row in rows
+            if _cell(row, "name").casefold() == raw_name.casefold()
+        ]
+    else:
+        return normalized_isin, raw_ticker
+
+    if len(candidates) > 1 and raw_name:
+        exact_name = [
+            row for row in candidates
+            if _cell(row, "name").casefold() == raw_name.casefold()
+        ]
+        if exact_name:
+            candidates = exact_name
+
+    identities = {
+        (
+            normalize_isin(_cell(row, "isin")),
+            _cell(row, "ticker"),
+        )
+        for row in candidates
+        if normalize_isin(_cell(row, "isin")) or _cell(row, "ticker")
+    }
+    if len(identities) != 1:
+        return normalized_isin, raw_ticker
+
+    taxonomy_isin, taxonomy_ticker = next(iter(identities))
+    return (
+        normalized_isin or taxonomy_isin,
+        taxonomy_ticker or raw_ticker,
+    )
+
+
+def kind_for(isin: Optional[str], ticker: Optional[str]) -> Optional[str]:
+    """Return one supported mechanics kind from curated taxonomy evidence.
+
+    ISIN evidence wins when the taxonomy contains it. If the supplied ISIN is
+    absent, an unambiguous exact/resolved ticker may still identify a curated
+    row; this supports broker placeholders without allowing a conflicting ISIN
+    row to be overridden. ETC/ETN listings use ETF per-unit mechanics.
+    """
+    from tarzan.models.instrument_key import normalize_isin
+
+    normalized_isin = normalize_isin(isin)
+    raw_ticker = str(ticker or "").strip()
+    frame = _load_indexes_csv()
+    if frame.empty or "kind" not in frame.columns:
+        return None
+
+    def _clean(value) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        return str(value).strip()
+
+    rows = list(frame.to_dict("records"))
+    candidates = [
+        row for row in rows
+        if normalized_isin
+        and normalize_isin(_clean(row.get("isin"))) == normalized_isin
+    ]
+    if not candidates and raw_ticker:
+        resolved_isin, resolved_ticker = resolve_taxonomy_identity(
+            "", raw_ticker
+        )
+        if resolved_isin:
+            candidates = [
+                row for row in rows
+                if normalize_isin(_clean(row.get("isin"))) == resolved_isin
+            ]
+        if not candidates:
+            expected = str(resolved_ticker or raw_ticker).strip().casefold()
+            candidates = [
+                row for row in rows
+                if _clean(row.get("ticker")).casefold() == expected
+            ]
+
+    mapping = {
+        "stock": "STOCK",
+        "equity": "STOCK",
+        "etf": "ETF",
+        "etc": "ETF",
+        "etn": "ETF",
+        "bond": "BOND",
+        "cash": "CASH",
+    }
+    kinds = {
+        mapping[value]
+        for value in (
+            _clean(row.get("kind")).casefold()
+            for row in candidates
+        )
+        if value in mapping
+    }
+    return next(iter(kinds)) if len(kinds) == 1 else None
+
+
 # Notional asset-class exposure columns in instrument_taxonomy.csv → AssetClass value.
 _EXP_COLUMNS = {
     "exp_equities": "Equities",
