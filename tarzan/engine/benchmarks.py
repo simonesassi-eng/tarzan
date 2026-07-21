@@ -78,7 +78,15 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         if ticker in _enr._benchmark_memo:
             return _enr._benchmark_memo[ticker]
 
-    data = _enr._fetch_ticker_data(ticker)
+    # Benchmark identities in the taxonomy are intentionally venue-neutral.
+    # Supply the curated name so the bounded bare-ticker resolver can select
+    # one provider listing with usable history instead of querying the bare
+    # symbol directly. This keeps discovery limited to configured venues.
+    expected_name = cfg.name_for(None, ticker) or ""
+    data = _enr._fetch_ticker_data(
+        ticker,
+        expected_name=expected_name,
+    )
     history = data.get("history", pd.DataFrame())
     if history.empty:
         series = pd.Series(dtype=float)
