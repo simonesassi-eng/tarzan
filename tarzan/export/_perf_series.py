@@ -137,32 +137,33 @@ def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
 
 
 def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":
-    """Rebase ANY price/level series to 0% over the window spanned by ``idx``,
-    anchored on the series' OWN first real observation within the window.
+    """Rebase a level series over exactly the dates spanned by ``idx``.
 
-    This is the ONE canonical rule for turning a level series into a
-    cumulative-%-over-window chart line, used for both the portfolio NAV line
-    and every benchmark line — so a chart line's endpoint equals a plain
-    period return computed the same way (``compute_period_return``: anchor on
-    the first observation at/after the window start).
-
-    Crucially the anchor is NOT a value carried forward from *before* the
-    window: the target ``idx`` can start on a non-trading day (e.g. a
-    Saturday), and a plain ``reindex(idx, ffill)`` then takes a stale
-    pre-window value as the denominator — overstating the move and disagreeing
-    with the Performance section's period return. Anchoring on
-    ``series[index >= idx[0]].iloc[0]`` makes the chart and the section agree.
-    Returns a %-list aligned to ``idx``, or None when unavailable."""
+    The denominator is the first real source observation inside the window;
+    alignment uses the union of source and target dates before forward-fill so
+    observations on a source-only trading day are never silently discarded.
+    No observation after ``idx[-1]`` can affect the line.  Returns a percentage
+    list aligned to ``idx``, or ``None`` when fewer than two real in-window
+    observations exist.
+    """
     a = _norm_series(araw)
-    if a is None or len(a) < 2:
+    if a is None:
         return None
-    in_win = a[a.index >= idx[0]]
+    a = a.replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if len(a) < 2 or len(idx) < 2:
+        return None
+    in_win = a[(a.index >= idx[0]) & (a.index <= idx[-1])]
     if len(in_win) < 2 or not float(in_win.iloc[0]):
         return None
     anchor = float(in_win.iloc[0])
-    aligned = a.reindex(idx).ffill()
-    # Leading dates before the first in-window observation → hold at the anchor
-    # (line starts at 0%) rather than showing a stale pre-window level.
+    # Reindexing directly to ``idx`` would throw away valid source observations
+    # that fall on dates absent from the target calendar.  Fill on the union,
+    # then sample the exact target window.
+    aligned = (
+        a.reindex(a.index.union(idx)).sort_index().ffill().reindex(idx)
+    )
+    # Leading target dates before the first in-window observation start at the
+    # anchor (0%) rather than carrying a stale pre-window source value.
     lead = aligned.index < in_win.index[0]
     aligned = aligned.mask(lead, anchor).bfill()
     return list(((aligned / anchor - 1.0) * 100.0).values.astype(float))
@@ -185,44 +186,71 @@ def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.S
 
 def _perf_window(m: PortfolioMetrics, n_days: int = 30,
                  geo_name: Optional[str] = None) -> Optional[dict]:
-    """Last ``n_days`` of value (€), TWROR (%), MSCI ACWI (%) and P&L (€→%),
-    on a common daily index, plus deposit/withdrawal markers. Reuses the
-    order-derived series (no recomputation). None when unavailable."""
+    """Comparable trailing performance window on one shared close boundary.
+
+    Portfolio value, TWROR, P&L and the geographic benchmark are all truncated
+    to the latest date observed by both portfolio and benchmark before the
+    ``n_days`` cutoff is calculated.  This prevents a live/partial benchmark
+    candle from supplying a legend value while the chart stops at the prior
+    portfolio close (or vice versa).  ``endpoints`` is the sole source for
+    chart labels and is derived from the exact plotted arrays.
+    """
     val_raw = m.actual_value_series
     if val_raw is None or len(val_raw) < 2:
         return None
-    val = _norm_series(val_raw).replace([float("inf"), float("-inf")], float("nan")).dropna()
-    if len(val) < 2:
+    val_all = _norm_series(val_raw).replace(
+        [float("inf"), float("-inf")], float("nan")
+    ).dropna()
+    if len(val_all) < 2:
         return None
-    cutoff = val.index[-1] - pd.Timedelta(days=n_days)
-    val = val[val.index >= cutoff]
+
+    acwi_all = None
+    acwi_raw = _geo_benchmark_series(m, geo_name)
+    if acwi_raw is not None:
+        candidate = _norm_series(acwi_raw).replace(
+            [float("inf"), float("-inf")], float("nan")
+        ).dropna()
+        if len(candidate) >= 2:
+            acwi_all = candidate
+
+    common_end = val_all.index[-1]
+    if acwi_all is not None:
+        common_dates = val_all.index.intersection(acwi_all.index)
+        if len(common_dates) >= 2:
+            common_end = common_dates[-1]
+        else:
+            # A benchmark without two common closes cannot support a
+            # comparable line; retain the portfolio-only window instead.
+            acwi_all = None
+
+    cutoff = common_end - pd.Timedelta(days=n_days)
+    val = val_all[(val_all.index >= cutoff) & (val_all.index <= common_end)]
     if len(val) < 2:
         return None
     idx = val.index
 
-    # TWROR line: anchor on the NAV's first in-window observation (the same
-    # canonical rule as the benchmark line and compute_period_return), so the
-    # line's endpoint equals the authoritative window return rather than a
-    # value stale-filled from before the window.
-    twror = (_rebase_to_window(m.portfolio_history, idx)
-             if m.portfolio_history is not None else None)
-
-    acwi = None
-    acwi_raw = _geo_benchmark_series(m, geo_name)
-    if acwi_raw is not None:
-        # Anchor on the benchmark's own first in-window observation (not a
-        # stale price ffill'd from before the window), so this matches the
-        # Performance section's period return.
-        acwi = _rebase_benchmark(acwi_raw, idx)
+    twror = (
+        _rebase_to_window(m.portfolio_history, idx)
+        if m.portfolio_history is not None else None
+    )
+    acwi = (
+        _rebase_benchmark(acwi_all[acwi_all.index <= common_end], idx)
+        if acwi_all is not None else None
+    )
 
     pnl_pct = None
     if m.pnl_series is not None:
         pnl = _norm_series(m.pnl_series).reindex(idx, method="ffill").bfill()
-        base = (pnl - pnl.iloc[0])
+        base = pnl - pnl.iloc[0]
         v0 = float(val.iloc[0]) or 1.0
         pnl_pct = [float(p) / v0 * 100.0 for p in base.values]
 
     dates = list(idx)
+    endpoints = {
+        "twror": float(twror[-1]) if twror else None,
+        "acwi": float(acwi[-1]) if acwi else None,
+        "pnl_pct": float(pnl_pct[-1]) if pnl_pct else None,
+    }
     return {
         "dates": dates,
         "value": list(val.values.astype(float)),
@@ -230,6 +258,13 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         "acwi": acwi,
         "pnl_pct": pnl_pct,
         "flows": _flow_list(m.external_flows, dates[0], dates[-1]),
+        "window_start": dates[0],
+        "window_end": dates[-1],
+        "source_end_dates": {
+            "portfolio": val_all.index[-1],
+            "benchmark": acwi_all.index[-1] if acwi_all is not None else None,
+        },
+        "endpoints": endpoints,
     }
 
 

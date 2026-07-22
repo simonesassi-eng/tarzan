@@ -184,6 +184,9 @@ class RunLedger:
             key = (stage, stable_code)
             ordinal = self._failure_ordinals.get(key, 0) + 1
             self._failure_ordinals[key] = ordinal
+        normalized_error = ErrorNormalizer.normalize(error)
+        if not isinstance(normalized_error, Mapping):
+            normalized_error = {"message": normalized_error}
         raw = f"failure-v1|{stage}|{stable_code}|{ordinal}"
         failure_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
         self.append(LedgerEntryType.FAILURE_OPEN, {
@@ -191,7 +194,7 @@ class RunLedger:
             "stage": stage,
             "stable_code": stable_code,
             "severity": severity,
-            "original_failure": ErrorNormalizer.normalize(error),
+            "original_failure": normalized_error,
             "context": dict(context or {}),
             "affected_outputs": list(affected_outputs),
             "analytical_impact": analytical_impact,

@@ -332,4 +332,9 @@ class _NewsletterContext:
     issue_number: int = 1
     benchmark_alpha_beta: str = "S&P 500"
     benchmark_geo: str = "MSCI ACWI"
+    # One run-scoped preprocessed intraday catalog is shared by every
+    # performance table. The renderer performs no provider request or venue
+    # resolution; the semantic gate checks this projection against metrics.
+    performance_intraday_map: Optional[dict] = None
+    semantic_audit: Optional[dict] = None
 

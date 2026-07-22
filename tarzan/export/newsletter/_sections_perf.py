@@ -36,7 +36,6 @@ from tarzan.export.newsletter._constants import (
     uni_cell,
 )
 from tarzan.export.newsletter._format import (
-    _clean_ticker,
     _colorize_pct,
     _display_ticker,
     _pct,
@@ -171,23 +170,6 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
               f'text-transform:uppercase;">Markets</div>')
     return {"available": True, "html": header + "".join(blocks)}
 
-def _benchmark_period_return(m, bench_name: Optional[str], period: str):
-    """The AUTHORITATIVE period return (e.g. '1m') for a benchmark, read from
-    the engine's ``holding_performance`` — the same source the Returns tables
-    use. Returns None when unavailable. This is what chart legends must show so
-    a benchmark's chart number equals its table number by construction."""
-    if not bench_name:
-        return None
-    hp = getattr(m, "holding_performance", None)
-    if hp is None or hp.empty or "name" not in hp.columns or period not in hp.columns:
-        return None
-    want = bench_name.strip().lower()
-    match = hp[hp["name"].astype(str).str.strip().str.lower() == want]
-    if match.empty:
-        return None
-    val = match.iloc[0].get(period)
-    return None if (val is None or (isinstance(val, float) and pd.isna(val))) else float(val)
-
 def _build_performance30(ctx: _NewsletterContext) -> dict:
     """Performance section: a 1D / 7D / 30D / since-inception returns matrix
     (Total P&L €+%, Unrealized P&L €+%, TWROR %) with an annualized footer,
@@ -290,27 +272,43 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     def _colcap(t: str) -> str:
         return f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};margin-bottom:3px;">{t}</div>'
 
-    # Legend numbers are pinned to the engine's AUTHORITATIVE figures, never
-    # the chart line's own endpoint: the line draws the trajectory, but the %
-    # it is labelled with is the same number the Performance tables show, so a
-    # chart and a table can never tell two stories. (The lines are anchored on
-    # the same canonical window rule, so the endpoint already coincides — the
-    # pin makes that a guarantee, not a coincidence.)
-    perf_full = m.performance_full or {}
-    acwi_1m = _benchmark_period_return(m, ctx.benchmark_geo, "1m")
+    # Last-30-day labels come from the exact arrays passed to the chart. The
+    # shared-close endpoint is therefore the only number that can describe a
+    # line; generic 1M return buckets are intentionally not consulted here.
+    endpoints = dict(win.get("endpoints") or {})
+    legend_values: dict[str, float] = {}
+    legend_labels: dict[str, str] = {}
 
-    # Last 30 days (rebased to 0). Labels pinned to performance_full["1m"] and
-    # the benchmark's authoritative 1m return.
+    def _window_label(key: str, prefix: str) -> str:
+        value = float(endpoints[key])
+        label = f'{prefix} {_pct(value, signed=True)}'
+        legend_values[key] = value
+        legend_labels[key] = label
+        return label
+
     s30, l30 = [], []
-    if win["twror"] is not None:
+    if win["twror"] is not None and endpoints.get("twror") is not None:
         s30.append({"values": win["twror"], "color": GREEN})
-        l30.append((f'TWROR {_pct(perf_full.get("1m"), signed=True)}', GREEN, False))
-    if win["pnl_pct"] is not None:
+        l30.append((_window_label("twror", "TWROR"), GREEN, False))
+    if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL})
-        l30.append((f'Total P&L % {_pct(win["pnl_pct"][-1], signed=True)}', PNL, False))
-    if win["acwi"] is not None:
+        l30.append((_window_label("pnl_pct", "Total P&L %"), PNL, False))
+    if win["acwi"] is not None and endpoints.get("acwi") is not None:
         s30.append({"values": win["acwi"], "color": BENCH})
-        l30.append((f'MSCI ACWI {_pct(acwi_1m, signed=True)}', BENCH, False))
+        l30.append((_window_label("acwi", "MSCI ACWI"), BENCH, False))
+
+    if ctx.semantic_audit is not None:
+        ctx.semantic_audit["performance_30d"] = {
+            "window_start": str(win.get("window_start") or ""),
+            "window_end": str(win.get("window_end") or ""),
+            "source_end_dates": {
+                key: str(value or "")
+                for key, value in (win.get("source_end_dates") or {}).items()
+            },
+            "endpoints": endpoints,
+            "legend_values": legend_values,
+            "legend_labels": legend_labels,
+        }
 
     # Since inception (cumulative), over the WHOLE inception→today range — its
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
@@ -428,39 +426,61 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     return {"available": True, "html": header + matrix_card + "".join(parts)}
 
-def _perf_intraday_map(tickers: list[str]) -> dict:
-    """Fetch intraday closes for the exact symbols already selected upstream.
+def _intraday_quote_parts(quote) -> tuple[object, object]:
+    """Return ``(series, baseline)`` from a preprocessed quote.
 
-    Ticker selection belongs to enrichment/metrics, not presentation. This
-    renderer therefore never resolves an alternate listing: it requests only
-    the canonical or explicitly recorded effective source passed by callers.
-    Empty results fall back to the daily-history sparkline.
+    A bare series is accepted for the synthetic portfolio path and lightweight
+    render fixtures. Production rows always use the structured quote emitted
+    by ``MetricsEngine._live_1d``.
     """
-    uniq = [t for t in {t for t in tickers if t}]
-    if not uniq:
-        return {}
-    try:
-        from tarzan.data.market_quotes import _fetch_intraday
-        return _fetch_intraday(uniq)
-    except Exception as e:  # noqa: BLE001
-        logger.debug("performance intraday fetch failed: %s", e)
-        return {}
+    if isinstance(quote, dict):
+        return quote.get("intraday_series"), quote.get("intraday_baseline")
+    return quote, None
 
 
-def _recorded_intraday_sources(metrics, tickers: list[str]) -> dict[str, str]:
-    """Map canonical tickers to the effective sources recorded by metrics."""
-    recorded: dict[str, str] = {}
-    for decision in getattr(metrics, "ticker_resolutions", ()):
-        if str(decision.get("status") or "") == "CONFLICT":
+def _performance_intraday_tickers(metrics) -> list[str]:
+    """Canonical full symbols needed by all performance tables."""
+    tickers: list[str] = []
+    for frame in (
+        getattr(metrics, "holding_performance", None),
+        getattr(metrics, "holdings_df", None),
+    ):
+        if frame is None or getattr(frame, "empty", True) or "ticker" not in frame.columns:
             continue
-        canonical = str(decision.get("canonical_ticker") or "").strip()
-        effective = str(decision.get("intraday_effective_ticker") or "").strip()
-        if canonical and effective:
-            recorded[canonical.casefold()] = effective
-    return {
-        ticker: recorded.get(ticker.casefold(), ticker)
-        for ticker in tickers
+        tickers.extend(
+            str(ticker).strip()
+            for ticker in frame["ticker"].dropna()
+            if str(ticker).strip()
+        )
+    return list(dict.fromkeys(tickers))
+
+
+def _shared_performance_intraday(ctx: _NewsletterContext) -> dict:
+    """Share the run-scoped preprocessed quote catalog across all sections."""
+    if ctx.performance_intraday_map is not None:
+        return ctx.performance_intraday_map
+
+    metrics = ctx.metrics
+    requested = tuple(getattr(metrics, "intraday_requested_tickers", ()) or ())
+    result = dict(getattr(metrics, "intraday_quotes", {}) or {})
+    source_tickers = {
+        canonical: str(
+            quote.get("intraday_source_ticker")
+            or quote.get("source_ticker")
+            or canonical
+        )
+        for canonical, quote in result.items()
+        if isinstance(quote, dict)
     }
+    ctx.performance_intraday_map = result
+    if ctx.semantic_audit is not None:
+        ctx.semantic_audit["performance_intraday"] = {
+            "origin": "metrics_preprocessing",
+            "requested_tickers": requested,
+            "returned_tickers": tuple(result.keys()),
+            "source_tickers": source_tickers,
+        }
+    return result
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
@@ -489,15 +509,25 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
             f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
 
-    intra = intraday_map.get(raw_ticker) if raw_ticker else None
+    quote = intraday_map.get(raw_ticker) if raw_ticker else None
+    intra, feed_baseline = _intraday_quote_parts(quote)
     if intra is not None and len(intra) >= 2:
-        # Baseline = previous close, derived from the known 1D return so no
-        # extra fetch is needed: prev = last / (1 + day%).
-        last = float(intra.iloc[-1])
-        if dv is not None and (1.0 + dv / 100.0) != 0:
-            baseline = last / (1.0 + dv / 100.0)
-        else:
-            baseline = float(intra.iloc[0])
+        # Production uses the exact previous close retained by preprocessing
+        # from the same feed as ``intra``. The derived fallback exists only for
+        # synthetic portfolio paths and lightweight render fixtures.
+        baseline = None
+        try:
+            candidate = float(feed_baseline)
+            if math.isfinite(candidate) and candidate != 0:
+                baseline = candidate
+        except (TypeError, ValueError):
+            pass
+        if baseline is None:
+            last = float(intra.iloc[-1])
+            if dv is not None and (1.0 + dv / 100.0) != 0:
+                baseline = last / (1.0 + dv / 100.0)
+            else:
+                baseline = float(intra.iloc[0])
         # Time-axis intraday: line fills only the elapsed part of the session.
         # ``live`` (from exchange hours) drives whether the session is still in
         # progress, so a closed same-day session renders full width.
@@ -524,21 +554,15 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     cell = f'<td width="96" align="center" style="padding:6px 8px;{bgc}">{inner}</td>'
     return cell, inner
 
-def _portfolio_intraday_series(m, resolve: Optional[dict] = None,
-                               intraday_map: Optional[dict] = None,
+def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
                                raw1d: Optional[dict] = None):
-    """Value-weighted intraday level path for the whole portfolio, rebased to
-    100 at the previous close, so the Total Portfolio row can show a *real* 1D
-    sparkline: its holdings trade intraday even though the portfolio has no
-    single ticker.
+    """Value-weighted intraday level path for the whole portfolio.
 
-    Each holding's intraday series is rebased to its own previous close
-    (derived from its live 1D %, the same basis the per-row cells use), then
-    the % paths are value-weighted by ``weight_pct`` on a common (union) time
-    index. Callers that already fetched the holdings' intraday can pass
-    ``resolve``/``intraday_map``/``raw1d`` to avoid a second download; missing
-    inputs are computed from ``m``. Returns a pandas Series (level) or None
-    when no holding has a usable intraday series."""
+    Canonical holding tickers key the run-scoped quote catalog. Each quote may
+    carry a different, guarded intraday source ticker, but this consumer never
+    resolves or fetches it; it uses the exact series and baseline selected by
+    preprocessing.
+    """
     df = getattr(m, "holdings_df", None)
     if df is None or getattr(df, "empty", True):
         return None
@@ -550,30 +574,44 @@ def _portfolio_intraday_series(m, resolve: Optional[dict] = None,
         if hp is not None and not getattr(hp, "empty", True) and "ticker" in hp.columns:
             for _, pr in hp.iterrows():
                 raw1d[str(pr.get("ticker", ""))] = pr.get("1d")
-    keys = [str(t) for t in df["ticker"].dropna().unique() if t]
-    if resolve is None:
-        resolve = _recorded_intraday_sources(m, keys)
     if intraday_map is None:
-        intraday_map = _perf_intraday_map(list({resolve.get(k, k) for k in keys}))
+        intraday_map = dict(getattr(m, "intraday_quotes", {}) or {})
     if not intraday_map:
         return None
     paths = []  # (weight, pct-path indexed by timestamp)
-    for tk, w in zip(df["ticker"], df["weight_pct"]):
-        if w is None:
+    for ticker_value, weight in zip(df["ticker"], df["weight_pct"]):
+        if weight is None:
             continue
-        sym = resolve.get(str(tk), str(tk))
-        intra = intraday_map.get(sym)
+        ticker = str(ticker_value)
+        quote = intraday_map.get(ticker)
+        intra, feed_baseline = _intraday_quote_parts(quote)
         if intra is None or len(intra) < 2:
             continue
-        dv = raw1d.get(str(tk))
+        day_return = raw1d.get(ticker)
         try:
-            last = float(intra.iloc[-1])
-            denom = (1.0 + float(dv) / 100.0) if dv is not None else None
-            base_i = last / denom if denom else float(intra.iloc[0])
+            base_i = None
+            try:
+                candidate = float(feed_baseline)
+                if math.isfinite(candidate) and candidate != 0:
+                    base_i = candidate
+            except (TypeError, ValueError):
+                pass
+            if base_i is None:
+                last = float(intra.iloc[-1])
+                denominator = (
+                    1.0 + float(day_return) / 100.0
+                    if day_return is not None
+                    else None
+                )
+                base_i = (
+                    last / denominator
+                    if denominator
+                    else float(intra.iloc[0])
+                )
             if not base_i:
                 continue
-            p = (intra.astype(float) / base_i - 1.0) * 100.0
-            paths.append((float(w), p))
+            path = (intra.astype(float) / base_i - 1.0) * 100.0
+            paths.append((float(weight), path))
         except Exception:  # noqa: BLE001
             continue
     if not paths:
@@ -690,13 +728,10 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     period_keys = ["1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
     period_labels = ["1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
 
-    # Intraday + live-flag inputs for the per-row 1D sparkline. The metrics
-    # pass already selected the canonical request and any guarded effective
-    # fallback, so presentation reuses that recorded source verbatim.
-    _hp_keys = ([str(t) for t in hp["ticker"].dropna().unique() if t]
-                if (hp is not None and not hp.empty and "ticker" in hp.columns) else [])
-    _resolve = _recorded_intraday_sources(m, _hp_keys)
-    _snap_intraday = _perf_intraday_map(list({s for s in _resolve.values()}))
+    # Intraday + live flags use the one render-wide batch of exact full
+    # symbols already selected in preprocessing. Presentation never maps a
+    # holding or benchmark to another venue.
+    _snap_intraday = _shared_performance_intraday(ctx)
     _raw1d: dict = {}
     _live1d: dict = {}
     if hp is not None and not hp.empty:
@@ -776,8 +811,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # holdings trade intraday, so build a value-weighted synthetic intraday
     # path (reusing the already-fetched holdings intraday) for a real 1D
     # sparkline; fall back to the dashed placeholder when unavailable.
-    _pf_series = _portfolio_intraday_series(m, resolve=_resolve,
-                                            intraday_map=_snap_intraday, raw1d=_raw1d)
+    _pf_series = _portfolio_intraday_series(
+        m, intraday_map=_snap_intraday, raw1d=_raw1d
+    )
     _prev_lbl = _prev_session_label(m)
     if _pf_series is not None and len(_pf_series) >= 2:
         _, port_inner = _perf_spark_cell(
@@ -798,10 +834,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         ticker = str(h.get("ticker", "") or "")
         isin = str(h.get("isin", "") or "")
         raw_name = str(h.get("name", "") or ticker)
-        display_tk = _clean_ticker(isin) or _display_ticker(ticker) or ""
-        sym = _resolve.get(ticker, ticker)
+        display_tk = _display_ticker(ticker) or ""
         _, inner = _perf_spark_cell(
-            _raw1d.get(ticker), sym, _snap_intraday,
+            _raw1d.get(ticker), ticker, _snap_intraday,
             live=bool(_live1d.get(ticker, False)), prev_label=_prev_lbl)
         row_items.append({
             "_ac": str(h.get("asset_class", "") or "") or "Other",
@@ -1055,20 +1090,17 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             "excluded_count": len(excluded_ids),
         }
 
-    # ── Pre-rendered table (grouped by asset class + role) ──────────────
-    # 1D is a Markets-style intraday sparkline (with the % pill on top); the
-    # remaining columns are % returns. One batched intraday fetch covers all
-    # tracked tickers; instruments without a usable intraday series fall back
-    # to a dashed daily sparkline.
+    # One exact-symbol batch is shared with the holding snapshot above. Missing
+    # series remain unavailable; no renderer-side listing fallback is allowed.
     P = PALETTE
     period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
-    intraday_map = _perf_intraday_map([r.get("raw_ticker") for r in benchmark_rows])
+    intraday_map = _shared_performance_intraday(ctx)
 
     # Portfolio row (highlighted): a real 1D sparkline from a value-weighted
     # synthetic intraday path over the holdings (the portfolio has no single
     # ticker, but its holdings trade intraday); dashed placeholder when the
-    # intraday isn't available.
-    _pf_series = _portfolio_intraday_series(m)
+    # exact-symbol intraday data is unavailable.
+    _pf_series = _portfolio_intraday_series(m, intraday_map=intraday_map)
     _prev_lbl = _prev_session_label(m)
     if _pf_series is not None and len(_pf_series) >= 2:
         _, port_inner = _perf_spark_cell(

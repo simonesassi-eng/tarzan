@@ -105,3 +105,13 @@ class TestRender:
         assert "Total P&amp;L" in html
         assert "Unrealized P&amp;L" in html
         assert "TWROR" in html
+        # The Portfolio value series follows the Markets contract: green above
+        # the start baseline, red below it. Unrealized P&L is neutral/dashed.
+        from tarzan.export.newsletter import PALETTE
+        assert 'clip-path="url(#dg' in html
+        assert f'stroke="{PALETTE["green"]}" stroke-width="2.6"' in html
+        assert f'stroke="{PALETTE["red"]}" stroke-width="2.6"' in html
+        assert (
+            f'stroke="{PALETTE["muted"]}" stroke-width="1.8" '
+            'stroke-dasharray="4,3"' in html
+        )

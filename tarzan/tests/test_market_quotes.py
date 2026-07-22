@@ -152,9 +152,14 @@ def test_broker_1d_uses_sibling_prev_close(monkeypatch):
     monkeypatch.setattr(mq, "market_open_now", lambda s: True)
     res = mq.broker_1d(["NTSG.MI"])
     assert "NTSG.MI" in res
+    selected = res["NTSG.MI"]
     # 29.66 / 29.18 - 1 = +1.645% (Xetra-consistent), not 29.66/29.19.
-    assert round(res["NTSG.MI"]["pct"], 3) == round((29.66 / 29.18 - 1) * 100, 3)
-    assert res["NTSG.MI"]["live"] is True
+    assert round(selected["pct"], 3) == round((29.66 / 29.18 - 1) * 100, 3)
+    assert selected["live"] is True
+    assert selected["source_ticker"] == "NTSG.DE"
+    assert selected["intraday_source_ticker"] == "NTSG.DE"
+    assert selected["intraday_series"].equals(sib)
+    assert selected["intraday_baseline"] == 29.18
 
 
 def test_fetch_intraday_with_fallback_keys_on_original(monkeypatch):

@@ -355,19 +355,21 @@ def _sibling_symbols(ticker: str) -> list[str]:
     return [f"{root}.{s}" for s in _SIBLING_SUFFIXES.get(suf, ())]
 
 
-def _resolve_intraday(symbols: list[str]) -> dict:
-    """Resolve an intraday close series per symbol, with guarded EUR fallback.
+def _resolve_intraday(
+    symbols: list[str],
+    *,
+    allow_sibling_fallback: bool = True,
+) -> dict:
+    """Fetch intraday series for exact symbols, optionally trying siblings.
 
-    The canonical symbol is always fetched first. A same-root EUR-venue
-    candidate may supply the series only when its latest price is coherent
-    with the canonical listing's known daily close; without that comparison
-    evidence the canonical request remains unresolved. Returns
-    ``{original_symbol: (series, source_symbol)}`` and never raises.
+    The portfolio pipeline enables sibling discovery only at this run-scoped
+    preprocessing boundary. Downstream analytics and presentation consume the
+    selected series and provenance without resolving another venue.
     """
     prim = _fetch_intraday(symbols)
     out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s))}
     missing = [s for s in symbols if s not in out]
-    if not missing:
+    if not missing or not allow_sibling_fallback:
         return out
 
     cand_map = {s: _sibling_symbols(s) for s in missing}
@@ -504,10 +506,17 @@ def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
             "spark": spark, "baseline": baseline, "spark_series": spark_series}
 
 
-def broker_1d(tickers: list[str]) -> dict:
+def broker_1d(
+    tickers: list[str],
+    *,
+    allow_sibling_fallback: bool = True,
+) -> dict:
     """Broker-style 1D return per ticker: the latest intraday price vs the
     previous official close, in the instrument's listing currency.
 
+    The portfolio pipeline enables sibling fallback here, once, and retains
+    the selected series plus provenance in its run-scoped metrics result.
+    ``allow_sibling_fallback=False`` remains available to exact-feed callers.
     This is the "since previous close" figure a broker shows live during the
     session (and the last completed session's change once closed). Returns
     ``{ticker: {"pct": float, "live": bool}}`` only for tickers with a usable
@@ -545,7 +554,10 @@ def broker_1d(tickers: list[str]) -> dict:
     # its canonical close is available for the collision guard. ``src`` is the
     # listing the series came from, so the previous close is pulled from that
     # SAME feed — keeping ``cur`` and ``prev`` currency-consistent.
-    resolved = _resolve_intraday(uniq)
+    resolved = _resolve_intraday(
+        uniq,
+        allow_sibling_fallback=allow_sibling_fallback,
+    )
     out: dict = {}
     for tk, (intra, src) in resolved.items():
         if intra is None or len(intra) < 2:
@@ -581,23 +593,36 @@ def broker_1d(tickers: list[str]) -> dict:
         else:
             is_live = bool(mkt_open)
 
+        # Preserve the exact series and its own previous-close baseline. The
+        # renderer consumes these values directly, so it never has to fetch or
+        # re-resolve a venue and cannot drift from the 1D calculation.
+        source_official, source_previous_close = _official_and_prev(
+            _fetch_history, src, iday
+        )
+        intraday_baseline = (
+            source_previous_close
+            if source_previous_close
+            else float(intra.iloc[0])
+        )
+
         # --- Closed session: the authoritative 1D move is the instrument's
         # OWN primary-listing official daily close (which includes the closing
         # auction) vs its previous close — exactly what a broker shows for the
-        # held position, and immune to lone wide intraday prints (e.g. a 17:19
-        # tick vs the 17:30 auction). Prefer the primary listing ``tk``; only
-        # if it has no official close for the day fall back to the source
-        # (sibling) listing. This keeps the % on the venue the user holds,
-        # while the sibling is still used for the *live* intraday sparkline. ---
+        # held position. The sibling series remains the sparkline source. ---
         if not is_live:
-            for cand in (tk, src):
-                oc, pv = _official_and_prev(_fetch_history, cand, iday)
+            for cand in dict.fromkeys((tk, src)):
+                if cand == src:
+                    oc, pv = source_official, source_previous_close
+                else:
+                    oc, pv = _official_and_prev(_fetch_history, cand, iday)
                 if oc is not None and pv:
                     out[tk] = {
                         "pct": (oc / pv - 1.0) * 100.0,
                         "live": False,
                         "source_ticker": cand,
                         "intraday_source_ticker": src,
+                        "intraday_series": intra,
+                        "intraday_baseline": intraday_baseline,
                         "intraday_observation_timestamp": (
                             intraday_observation_timestamp
                         ),
@@ -614,24 +639,15 @@ def broker_1d(tickers: list[str]) -> dict:
         # --- Live session (or no official close available yet): the latest
         # intraday tick vs the previous close from the SAME feed, so ``cur``
         # and ``prev`` are currency-consistent. ---
-        prev = None
-        try:
-            hist = _fetch_history(src)
-            if hist is not None and len(hist) and "Close" in getattr(hist, "columns", []):
-                dclose = hist["Close"].dropna()
-                prior = dclose[[ts.date() < iday for ts in dclose.index]]
-                if len(prior):
-                    prev = float(prior.iloc[-1])
-        except Exception:  # noqa: BLE001
-            pass
-        if prev is None:
-            prev = float(intra.iloc[0])
+        prev = source_previous_close or float(intra.iloc[0])
         if prev:
             out[tk] = {
                 "pct": (cur / prev - 1.0) * 100.0,
                 "live": bool(is_live),
                 "source_ticker": src,
                 "intraday_source_ticker": src,
+                "intraday_series": intra,
+                "intraday_baseline": prev,
                 "intraday_observation_timestamp": (
                     intraday_observation_timestamp
                 ),

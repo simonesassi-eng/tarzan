@@ -128,7 +128,8 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
     calls: list[object] = []
     violations: dict[str, object] = {}
 
-    def fake_broker_1d(tickers):
+    def fake_broker_1d(tickers, *, allow_sibling_fallback):
+        assert allow_sibling_fallback is True
         calls.append(("market", tuple(tickers)))
         return {str(t): {"pct": 1.25, "live": True} for t in tickers}
 

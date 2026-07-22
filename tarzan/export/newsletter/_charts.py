@@ -151,10 +151,12 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
     )
 
 def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> str:
-    """Dual-axis hero chart: portfolio value (€, left axis) as a two-tone
-    green/red line (green above the window-start baseline, red below) and the
-    Unrealized PnL % (right axis) as a grey dashed line, with cash-flow
-    triangles on the value line (▲ deposit green / ▼ withdrawal grey)."""
+    """Dual-axis hero chart with the same baseline semantics as Markets.
+
+    Portfolio value is green above the window-start baseline and red below it;
+    Unrealized P&L remains the neutral dashed secondary series. Cash-flow
+    triangles stay attached to the value line.
+    """
     global _dual_uid
     _dual_uid += 1
     u = _dual_uid
@@ -166,7 +168,9 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> 
     PW, PH = w - ML - MR, h - MT - MB
     base = values[0]
     from tarzan.export import _charts as _ch
-    vlo, vhi, vticks = _ch.nice_ticks(min(min(values), base), max(max(values), base), 4)
+    vlo, vhi, vticks = _ch.nice_ticks(
+        min(min(values), base), max(max(values), base), 4
+    )
     plo, phi, pticks = _ch.nice_ticks(min(pct), max(pct), 4)
 
     def X(i):
@@ -183,24 +187,37 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> 
         if t < vlo - 1e-9 or t > vhi + 1e-9:
             continue
         y = Yv(t)
-        grid += (f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" stroke="{P["border"]}" stroke-width="1"/>'
-                 f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" font-size="9" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>')
+        grid += (
+            f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" '
+            f'stroke="{P["border"]}" stroke-width="1"/>'
+            f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" '
+            f'font-size="9" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>'
+        )
     for t in pticks:
         if t < plo - 1e-9 or t > phi + 1e-9:
             continue
-        grid += f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" text-anchor="start" font-size="9" fill="{P["muted"]}">{_ch.fmt_pct_tick(t)}</text>'
+        grid += (
+            f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" '
+            f'text-anchor="start" font-size="9" fill="{P["muted"]}">'
+            f'{_ch.fmt_pct_tick(t)}</text>'
+        )
     xlab = ""
     for k in sorted({0, n // 3, 2 * n // 3, n - 1}):
         x = X(k)
         anc = "start" if k == 0 else "end" if k == n - 1 else "middle"
-        xlab += (f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="9" '
-                 f'fill="{P["subtle"]}">{pd.Timestamp(dates[k]).strftime("%b %d")}</text>')
+        xlab += (
+            f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="9" '
+            f'fill="{P["subtle"]}">{pd.Timestamp(dates[k]).strftime("%b %d")}</text>'
+        )
 
     vline = " ".join(f"{X(i):.1f},{Yv(v):.1f}" for i, v in enumerate(values))
-    yb = Yv(base)
-    poly = f"{vline} {X(n - 1):.1f},{yb:.1f} {X(0):.1f},{yb:.1f}"
+    baseline_y = Yv(base)
+    value_poly = (
+        f"{vline} {X(n - 1):.1f},{baseline_y:.1f} "
+        f"{X(0):.1f},{baseline_y:.1f}"
+    )
     pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
-    yb_c = max(MT, min(yb, MT + PH))
+    baseline_clip_y = max(MT, min(baseline_y, MT + PH))
 
     marks = ""
     if flows:
@@ -212,26 +229,50 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> 
             x, y = X(i), Yv(values[i])
             col = P["green"] if v >= 0 else P["muted"]
             if v >= 0:
-                marks += f'<polygon points="{x:.1f},{y-5:.1f} {x-4:.1f},{y+3:.1f} {x+4:.1f},{y+3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+                marks += (
+                    f'<polygon points="{x:.1f},{y-5:.1f} {x-4:.1f},{y+3:.1f} '
+                    f'{x+4:.1f},{y+3:.1f}" fill="{col}" stroke="#fff" '
+                    f'stroke-width="0.8"/>'
+                )
             else:
-                marks += f'<polygon points="{x:.1f},{y+5:.1f} {x-4:.1f},{y-3:.1f} {x+4:.1f},{y-3:.1f}" fill="{col}" stroke="#fff" stroke-width="0.8"/>'
+                marks += (
+                    f'<polygon points="{x:.1f},{y+5:.1f} {x-4:.1f},{y-3:.1f} '
+                    f'{x+4:.1f},{y-3:.1f}" fill="{col}" stroke="#fff" '
+                    f'stroke-width="0.8"/>'
+                )
 
     return (
         f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
-        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;font-family:-apple-system,Helvetica,Arial,sans-serif;">'
-        f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
-        f'<clipPath id="dr{u}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath></defs>'
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;'
+        f'font-family:-apple-system,Helvetica,Arial,sans-serif;">'
+        f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" '
+        f'height="{baseline_clip_y:.1f}"/></clipPath>'
+        f'<clipPath id="dr{u}"><rect x="0" y="{baseline_clip_y:.1f}" width="{w}" '
+        f'height="{h - baseline_clip_y:.1f}"/></clipPath></defs>'
         + grid
-        + f'<polygon points="{poly}" fill="{P["green"]}" fill-opacity="0.16" clip-path="url(#dg{u})"/>'
-        + f'<polygon points="{poly}" fill="{P["red"]}" fill-opacity="0.16" clip-path="url(#dr{u})"/>'
-        + f'<polyline points="{vline}" fill="none" stroke="{P["green"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
-        + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
-        + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
+        + f'<line x1="{ML}" y1="{baseline_y:.1f}" x2="{ML + PW}" '
+        f'y2="{baseline_y:.1f}" stroke="{P["subtle"]}" stroke-width="0.8" '
+        f'stroke-dasharray="3,3"/>'
+        + f'<polygon points="{value_poly}" fill="{P["green"]}" fill-opacity="0.16" '
+        f'clip-path="url(#dg{u})"/>'
+        + f'<polygon points="{value_poly}" fill="{P["red"]}" fill-opacity="0.16" '
+        f'clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["green"]}" '
+        f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
+        + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" '
+        f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
+        + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" '
+        f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
         + marks + xlab + "</svg>"
         + f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
-        f'<span style="margin-right:16px;"><span style="display:inline-block;width:22px;height:5px;border-radius:3px;background:{P["green"]};vertical-align:middle;margin-right:5px;"></span>Value (\u20ac) \u00b7 left</span>'
-        f'<span><span style="display:inline-block;width:22px;height:0;border-top:2px dashed {P["muted"]};vertical-align:middle;margin-right:5px;"></span>Unrealized PnL (%) \u00b7 right</span>'
-        f'</div>'
+        f'<span style="margin-right:16px;"><span style="display:inline-block;'
+        f'width:10px;height:5px;background:{P["green"]};vertical-align:middle;'
+        f'margin-right:1px;"></span><span style="display:inline-block;width:10px;'
+        f'height:5px;background:{P["red"]};vertical-align:middle;margin-right:5px;'
+        f'"></span>Value (€) · left · start baseline</span>'
+        f'<span><span style="display:inline-block;width:22px;height:0;border-top:2px '
+        f'dashed {P["muted"]};vertical-align:middle;margin-right:5px;"></span>'
+        f'Unrealized PnL (%) · right</span></div>'
     )
 
 def _hero_flow_chips(flows) -> str:

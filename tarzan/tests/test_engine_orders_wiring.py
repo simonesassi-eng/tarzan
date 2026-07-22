@@ -57,9 +57,10 @@ class TestProperty1Identity:
         # _allocation_timeline is appended last (after _returns) on the
         # order path to feed the newsletter Diversification sparklines.
         assert names[-1] == "_allocation_timeline"
-        # Same number of computers as default + 2 appended (the history
-        # provider swap is in-place): _returns and _allocation_timeline.
-        assert len(names) == 16
+        # Benchmark preprocessing is the first base computer. The order path
+        # keeps that 15-computer base, swaps the history provider in place,
+        # then appends _returns and _allocation_timeline.
+        assert len(names) == 17
         # Broker-style live 1D runs after per-instrument performance.
         assert "_live_1d" in names
         # The historical-risk computer is part of the base pipeline.

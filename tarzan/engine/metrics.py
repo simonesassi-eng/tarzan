@@ -48,12 +48,14 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
 )
 from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
     BENCHMARKS,
+    ResolvedBenchmark,
     _add_mix_to_histories,
     _build_benchmark_series,
     _clip_to_window,
     _compute_single_benchmark_metrics,
     _fetch_benchmark_history,
     _populate_perf_row,
+    preprocess_benchmarks as _preprocess_benchmark_catalog,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,10 @@ class MetricsEngine:
         # the portfolio snapshot (holdings, returns, allocations).
         self.rebalance_seeds = rebalance_seeds or []
         self._computers: list[Callable] = [
+            # Resolve every venue-neutral benchmark identity once, before any
+            # metric, table or chart can consume it.  All later stages receive
+            # only the resulting full provider ticker and its matching series.
+            self._preprocess_benchmarks,
             self._valuation,
             self._portfolio_history,
             self._performance,
@@ -183,6 +189,36 @@ class MetricsEngine:
             )
         ctx["_degraded"] = degraded
         return self._build_result(ctx)
+
+    # ------------------------------------------------------------------
+    # Run-scoped instrument preprocessing
+    # ------------------------------------------------------------------
+    def _preprocess_benchmarks(self, ctx: dict) -> None:
+        """Resolve all benchmark tickers once before analytical consumers."""
+        catalog, errors = _preprocess_benchmark_catalog(
+            BENCHMARKS,
+            fetch_history=_fetch_benchmark_history,
+        )
+        ctx["_benchmark_catalog"] = catalog
+        ctx["benchmark_tickers"] = {
+            name: record.ticker for name, record in catalog.items()
+        }
+        ctx["benchmark_resolution_errors"] = errors
+        if errors:
+            logger.warning(
+                "Benchmark preprocessing left %d unresolved instrument(s): %s",
+                len(errors), "; ".join(errors),
+            )
+
+    @staticmethod
+    def _benchmark_record(
+        ctx: dict,
+        name: str,
+    ) -> Optional[ResolvedBenchmark]:
+        return (ctx.get("_benchmark_catalog") or {}).get(name)
+
+    def _alpha_beta_benchmark(self, ctx: dict) -> Optional[ResolvedBenchmark]:
+        return self._benchmark_record(ctx, cfg.benchmark_beta_name())
 
     # ------------------------------------------------------------------
     # Valuation
@@ -716,11 +752,11 @@ class MetricsEngine:
         if ph_full.empty:
             ctx["performance_full"] = {}
         else:
-            bench = pd.Series(dtype=float)
-            try:
-                bench = _fetch_benchmark_history(cfg.benchmark_beta())
-            except Exception:
-                pass
+            record = self._alpha_beta_benchmark(ctx)
+            bench = (
+                record.history if record is not None
+                else pd.Series(dtype=float)
+            )
             full_row = {"ticker": "PORTFOLIO", "name": "** TOTAL PORTFOLIO **", "type": "Portfolio"}
             _populate_perf_row(full_row, ph_full, bench)
             ctx["performance_full"] = full_row
@@ -751,12 +787,13 @@ class MetricsEngine:
         result["sortino"] = compute_sortino(daily_returns, annual_return)
         result["var_95"] = _scale_or_nan(compute_var(daily_returns, 0.95), 100)
         result["cvar_95"] = _scale_or_nan(compute_cvar(daily_returns, 0.95), 100)
-        # Beta/Alpha
-        bench_history = pd.Series(dtype=float)
-        try:
-            bench_history = _fetch_benchmark_history(cfg.benchmark_beta())
-        except Exception as e:
-            logger.warning("Benchmark fetch for risk failed: %s", e)
+        # Beta/Alpha use the same preprocessed full benchmark ticker/history
+        # consumed by every other analytical and presentation stage.
+        record = self._alpha_beta_benchmark(ctx)
+        bench_history = (
+            record.history if record is not None
+            else pd.Series(dtype=float)
+        )
         if not bench_history.empty and len(bench_history) > 1:
             beta, alpha = _compute_beta_alpha(ph, bench_history, annual_return)
             result["beta"] = beta
@@ -1054,42 +1091,39 @@ class MetricsEngine:
         comp_rows = []
         key_histories: dict[str, pd.Series] = {}
         chart_benchmarks = set(cfg.chart_benchmarks())
-        # Common risk window = the portfolio's own history span, so every
-        # benchmark's risk metrics are computed over the *same* period as
-        # the portfolio (apples-to-apples). Without this, a ~6-month
-        # portfolio was compared against benchmarks measured over ~5 years.
+        catalog: dict[str, ResolvedBenchmark] = ctx.get("_benchmark_catalog", {})
+
+        # Every metric below consumes the exact history attached to the one
+        # full ticker selected by preprocessing.  No fetch or symbol resolver
+        # is reachable from this stage.
         risk_window = ctx.get("portfolio_history_full", pd.Series(dtype=float))
         if risk_window is None or risk_window.empty:
             risk_window = ph
         win_start, win_end = risk_window.index.min(), risk_window.index.max()
-        # Fetch the α/β reference series once: every other benchmark row
-        # gets α/β computed against this same series, so the columns are
-        # comparable. The α/β benchmark vs itself yields β=1, α=0.
-        ab_benchmark = pd.Series(dtype=float)
-        try:
-            ab_benchmark = _fetch_benchmark_history(cfg.benchmark_beta())
-        except Exception as e:
-            logger.warning("α/β benchmark fetch failed: %s", e)
+        ab_record = self._alpha_beta_benchmark(ctx)
+        ab_benchmark = (
+            ab_record.history if ab_record is not None
+            else pd.Series(dtype=float)
+        )
         ab_benchmark_win = _clip_to_window(ab_benchmark, win_start, win_end)
-        for name, ticker in BENCHMARKS.items():
-            try:
-                bench = _build_benchmark_series(name, ticker, initial_value)
-                if bench.empty or len(bench) < 2:
-                    continue
-                if name in chart_benchmarks:
-                    key_histories[name] = bench
-                # Clip to the portfolio window for the risk metrics; fall
-                # back to the full series if the overlap is too thin to
-                # estimate anything (so the row still appears).
-                bench_win = _clip_to_window(bench, win_start, win_end)
-                if len(bench_win) < 2:
-                    bench_win = bench
-                metrics = _compute_single_benchmark_metrics(bench_win, ab_benchmark_win)
-                metrics["benchmark"] = name
-                comp_rows.append(metrics)
-            except Exception as e:
-                logger.warning("Benchmark %s failed: %s", name, e)
-        _add_mix_to_histories(key_histories, initial_value)
+
+        for name, record in catalog.items():
+            bench = record.history
+            if bench.empty or len(bench) < 2:
+                continue
+            if name in chart_benchmarks:
+                key_histories[name] = bench
+            bench_win = _clip_to_window(bench, win_start, win_end)
+            if len(bench_win) < 2:
+                bench_win = bench
+            metrics = _compute_single_benchmark_metrics(
+                bench_win, ab_benchmark_win
+            )
+            metrics["benchmark"] = name
+            metrics["ticker"] = record.ticker
+            comp_rows.append(metrics)
+
+        _add_mix_to_histories(key_histories, initial_value, catalog)
         ctx["benchmark_comparison"] = pd.DataFrame(comp_rows)
         ctx["benchmark_histories"] = key_histories
 
@@ -1098,15 +1132,11 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _holding_performance(self, ctx: dict) -> None:
         rows = []
-        # Period returns are populated by ``_populate_perf_row`` from the
-        # shared ``stats.PERIOD_DAYS`` bucket map (no local copy to drift).
-
-        # Fetch Alpha/Beta benchmark once for all holdings
-        bench_history = pd.Series(dtype=float)
-        try:
-            bench_history = _fetch_benchmark_history(cfg.benchmark_beta())
-        except Exception as e:
-            logger.warning("Alpha/Beta benchmark fetch failed: %s", e)
+        ab_record = self._alpha_beta_benchmark(ctx)
+        bench_history = (
+            ab_record.history if ab_record is not None
+            else pd.Series(dtype=float)
+        )
 
         unavailable = set(ctx.get("_order_history_unavailable", []))
         for h in self.holdings:
@@ -1114,24 +1144,29 @@ class MetricsEngine:
                 continue
             if h.price_history is None or len(h.price_history) < 2:
                 continue
-            # Cap all metrics at max 5 years
             s = _cap_to_years(h.price_history, 5)
-            row: dict = {"ticker": h.ticker, "name": h.name or h.ticker, "type": "In portfolio"}
+            # Holdings have already crossed the enrichment preprocessing
+            # boundary: ``h.ticker`` is the sole full operational ticker.
+            row: dict = {
+                "ticker": h.ticker,
+                "name": h.name or h.ticker,
+                "type": "In portfolio",
+            }
             _populate_perf_row(row, s, bench_history)
             rows.append(row)
 
-        # Add benchmark rows (from instrument_taxonomy.csv is_benchmark=true)
-        for bench_name, bench_ticker in BENCHMARKS.items():
-            try:
-                bs = _fetch_benchmark_history(bench_ticker)
-                if bs.empty or len(bs) < 2:
-                    continue
-                bs = _cap_to_years(bs, 5)
-                row = {"ticker": bench_ticker, "name": bench_name, "type": "Benchmark index"}
-                _populate_perf_row(row, bs, bench_history)
-                rows.append(row)
-            except Exception as e:
-                logger.warning("Benchmark %s performance computation failed: %s", bench_name, e)
+        # Benchmark rows receive the exact same full ticker whose attached
+        # history is used for every metric and chart.
+        catalog: dict[str, ResolvedBenchmark] = ctx.get("_benchmark_catalog", {})
+        for record in catalog.values():
+            bs = _cap_to_years(record.history, 5)
+            row = {
+                "ticker": record.ticker,
+                "name": record.name,
+                "type": "Benchmark index",
+            }
+            _populate_perf_row(row, bs, bench_history)
+            rows.append(row)
 
         ctx["holding_performance"] = pd.DataFrame(rows)
 
@@ -1139,53 +1174,102 @@ class MetricsEngine:
     # Broker-style (live) 1D
     # ------------------------------------------------------------------
     def _live_1d(self, ctx: dict) -> None:
-        """Override the 1D column with a broker-style "since previous close"
-        return: the latest intraday price vs the previous official close.
+        """Resolve each run's intraday feed once and project broker-style 1D.
 
-        This makes the 1D figure update live during the session (like a
-        broker) instead of only advancing once today closes. It is applied
-        consistently everywhere the 1D is shown — per-instrument
-        (holding_performance → newsletter Returns tables + Excel) and the
-        portfolio (performance / performance_full → the highlighted rows).
-        Best-effort: tickers without a usable intraday series keep their
-        end-of-day close return, and any failure leaves the numbers
-        untouched, so an offline run degrades cleanly to the close-based 1D.
+        The canonical full ticker remains the instrument identity used by
+        history, metrics and display. When that listing has no bars, the
+        provider may select a price-coherent EUR sibling for the intraday data
+        class only. The selected series, baseline and provenance are retained
+        in ``ctx`` so presentation performs no market lookup or second fetch.
         """
-        # Deterministic mode: skip the live intraday override entirely so the
-        # 1D stays on the reproducible end-of-day close (a live quote would
-        # differ run-to-run). The close-based 1D computed upstream is kept.
-        from tarzan import runtime
-        if not runtime.allows_live_transport():
-            return
         hp = ctx.get("holding_performance")
         if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
             return
-        try:
-            from tarzan.data.market_quotes import broker_1d
-            # holding_performance already carries the canonical ticker selected
-            # during enrichment. Do not re-resolve it through a mutable cache:
-            # every intraday consumer must request that same full listing first.
-            keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
-            res = broker_1d(keys)
-            live = {k: res[k]["pct"] for k in keys if k in res}
-            live_flag = {k: bool(res[k]["live"]) for k in keys if k in res}
 
-            holdings_by_ticker = {
-                str(holding.ticker): holding
-                for holding in self.holdings
-                if holding.ticker
-            }
-            for canonical, holding in holdings_by_ticker.items():
-                selected = res.get(canonical)
+        keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
+        ctx["intraday_requested_tickers"] = tuple(keys)
+        ctx["intraday_quotes"] = {}
+
+        from tarzan import runtime
+        if not runtime.allows_live_transport():
+            return
+
+        try:
+            from tarzan.data.market_quotes import broker_1d, _sibling_symbols
+
+            res = broker_1d(keys, allow_sibling_fallback=True)
+            identity_errors: list[str] = []
+            resolved: dict[str, dict] = {}
+            intraday_quotes: dict[str, dict] = {}
+
+            for ticker in keys:
+                selected = res.get(ticker)
                 if selected is None:
-                    holding.intraday_ticker_reason = (
-                        "The canonical ticker was requested first, but no usable intraday series was available."
+                    continue
+                return_source = str(
+                    selected.get("source_ticker") or ticker
+                ).strip()
+                intraday_source = str(
+                    selected.get("intraday_source_ticker")
+                    or return_source
+                    or ticker
+                ).strip()
+                allowed_sources = {ticker, *_sibling_symbols(ticker)}
+                invalid_sources = {
+                    source
+                    for source in (return_source, intraday_source)
+                    if source not in allowed_sources
+                }
+                if invalid_sources:
+                    identity_errors.append(
+                        f"{ticker} returned invalid source(s) "
+                        f"{sorted(invalid_sources)!r}"
                     )
                     continue
+
+                normalized = dict(selected)
+                normalized["source_ticker"] = return_source
+                normalized["intraday_source_ticker"] = intraday_source
+                resolved[ticker] = normalized
+                series = normalized.get("intraday_series")
+                if series is not None and len(series) >= 2:
+                    intraday_quotes[ticker] = normalized
+
+            if identity_errors:
+                logger.error(
+                    "Intraday source validation failed: %s",
+                    "; ".join(identity_errors),
+                )
+                ctx.setdefault("_degraded", []).append("_live_1d")
+
+            ctx["intraday_quotes"] = intraday_quotes
+            live = {
+                ticker: selected["pct"]
+                for ticker, selected in resolved.items()
+                if selected.get("pct") is not None
+            }
+            live_flag = {
+                ticker: bool(selected.get("live"))
+                for ticker, selected in resolved.items()
+            }
+
+            for holding in self.holdings:
+                canonical = str(holding.ticker or "")
+                if not canonical:
+                    continue
+                selected = resolved.get(canonical)
+                if selected is None:
+                    holding.intraday_ticker = None
+                    holding.intraday_observation_timestamp = None
+                    holding.intraday_ticker_reason = (
+                        f"The canonical ticker {canonical} was requested first, "
+                        "but neither it nor a guarded price-coherent EUR sibling "
+                        "supplied a usable intraday series."
+                    )
+                    continue
+
                 effective = str(
-                    selected.get("intraday_source_ticker")
-                    or selected.get("source_ticker")
-                    or canonical
+                    selected.get("intraday_source_ticker") or canonical
                 )
                 holding.intraday_ticker = effective
                 holding.intraday_observation_timestamp = selected.get(
@@ -1194,48 +1278,51 @@ class MetricsEngine:
                 holding.intraday_ticker_reason = (
                     "The canonical ticker supplied the intraday series."
                     if effective == canonical
-                    else f"The canonical ticker {canonical} was requested first; {effective} supplied the price-coherent EUR venue sibling fallback after the canonical close guard passed."
+                    else (
+                        f"The canonical ticker {canonical} was requested first; "
+                        f"{effective} supplied the price-coherent EUR venue "
+                        "sibling fallback after the canonical-close collision "
+                        "guard passed."
+                    )
                 )
         except Exception as e:  # noqa: BLE001
-            logger.debug("live 1D fetch failed: %s", e)
+            logger.debug("live 1D preprocessing failed: %s", e)
             return
+
+        hp["live_1d"] = [
+            bool(live_flag.get(str(ticker), False)) for ticker in hp["ticker"]
+        ]
+        hp["1d"] = [
+            live.get(str(ticker), old)
+            for ticker, old in zip(hp["ticker"], hp["1d"])
+        ]
+        ctx["holding_performance"] = hp
+        ctx["live_1d"] = live
         if not live:
             return
-        ctx["live_1d"] = live
 
-        # Per-instrument override (keeps the close-based value when no live),
-        # plus a boolean column flagging the rows whose 1D is a live
-        # (market-open) quote vs a last-completed-session close.
-        hp["1d"] = [live.get(str(tk), old)
-                    for tk, old in zip(hp["ticker"], hp["1d"])]
-        hp["live_1d"] = [bool(live_flag.get(str(tk), False)) for tk in hp["ticker"]]
-        ctx["holding_performance"] = hp
-
-        # Portfolio 1D = value-weighted live move over the holdings that have
-        # a live quote (renormalized to the covered weight), applied to both
-        # the inception and full performance dicts so every portfolio 1D
-        # agrees. The portfolio is flagged live when any contributing holding
-        # is live (they share the same session, so it is effectively all or
-        # nothing for a single-region book).
+        # Portfolio 1D is value-weighted over covered canonical holdings. Each
+        # percentage was calculated against the selected feed's own previous
+        # close, so no cross-venue prices are mixed.
         df = ctx.get("holdings_df")
         if df is not None and not df.empty and {"ticker", "weight_pct"}.issubset(df.columns):
             num = 0.0
             wsum = 0.0
             any_live = False
-            for tk, w in zip(df["ticker"], df["weight_pct"]):
-                pct = live.get(str(tk))
-                if pct is None or w is None:
+            for ticker, weight in zip(df["ticker"], df["weight_pct"]):
+                pct = live.get(str(ticker))
+                if pct is None or weight is None:
                     continue
-                num += float(w) * float(pct)
-                wsum += float(w)
-                any_live = any_live or bool(live_flag.get(str(tk), False))
+                num += float(weight) * float(pct)
+                wsum += float(weight)
+                any_live = any_live or bool(live_flag.get(str(ticker), False))
             if wsum > 0:
                 port_1d = num / wsum
                 for key in ("performance", "performance_full"):
-                    d = ctx.get(key)
-                    if isinstance(d, dict):
-                        d["1d"] = port_1d
-                        d["1d_live"] = any_live
+                    projection = ctx.get(key)
+                    if isinstance(projection, dict):
+                        projection["1d"] = port_1d
+                        projection["1d_live"] = any_live
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)
@@ -1307,12 +1394,12 @@ class MetricsEngine:
                 return f"{int(round(days / 30))}M"
             return f"{days}D"
 
-        # α/β reference series (full history) so α/β are comparable across rows.
-        ab_bench = pd.Series(dtype=float)
-        try:
-            ab_bench = _fetch_benchmark_history(cfg.benchmark_beta())
-        except Exception as e:
-            logger.warning("Historical risk α/β benchmark fetch failed: %s", e)
+        # α/β reference is the exact preprocessed benchmark series.
+        ab_record = self._alpha_beta_benchmark(ctx)
+        ab_bench = (
+            ab_record.history if ab_record is not None
+            else pd.Series(dtype=float)
+        )
 
         # ---- Portfolio: current-weight static backtest (common window) ----
         unavailable = set(ctx.get("_order_history_unavailable", []))
@@ -1385,28 +1472,25 @@ class MetricsEngine:
         # group the risk profile the same way as the Performance table.
         from tarzan import config as _cfg_mod
         _taxonomy = _cfg_mod.instrument_taxonomy()
-        for name, ticker in BENCHMARKS.items():
-            try:
-                bench = _fetch_benchmark_history(ticker)
-            except Exception as e:
-                logger.warning("Historical risk fetch failed for %s: %s", name, e)
-                continue
-            if bench is None or bench.empty or len(bench) < 2:
+        catalog: dict[str, ResolvedBenchmark] = ctx.get("_benchmark_catalog", {})
+        for record in catalog.values():
+            bench = record.history
+            if bench.empty or len(bench) < 2:
                 continue
             bench = _norm(bench)
             metrics = _compute_single_benchmark_metrics(bench, ab_bench)
-            # Lookup by ticker (uppercased) in the taxonomy for class/role.
-            _meta = _taxonomy.get(ticker.upper().split(".")[0])
+            # Taxonomy lookup is classification-only; the operational ticker
+            # retained in the row is always the full preprocessed symbol.
+            _meta = _taxonomy.get(record.ticker.upper().split(".")[0])
             if not _meta:
-                _meta = _taxonomy.get(ticker.upper())
-            # _taxonomy returns (asset_class, role) tuples.
+                _meta = _taxonomy.get(record.ticker.upper())
             if isinstance(_meta, tuple) and len(_meta) >= 2:
                 _ac, _role = _meta[0], _meta[1]
             else:
                 _ac, _role = "", ""
             instrument_rows.append({
-                "label": name,
-                "ticker": ticker,
+                "label": record.name,
+                "ticker": record.ticker,
                 "span_label": _span_label(bench),
                 "note": None,
                 "metrics": metrics,
@@ -1494,7 +1578,15 @@ class MetricsEngine:
                 else ctx.get("portfolio_history")
             ),
             benchmark_histories=ctx.get("benchmark_histories", {}),
+            benchmark_tickers=ctx.get("benchmark_tickers", {}),
+            benchmark_resolution_errors=tuple(
+                ctx.get("benchmark_resolution_errors", ())
+            ),
             holding_performance=ctx.get("holding_performance", pd.DataFrame()),
+            intraday_requested_tickers=tuple(
+                ctx.get("intraday_requested_tickers", ())
+            ),
+            intraday_quotes=ctx.get("intraday_quotes", {}),
             holding_histories=ctx.get("holding_histories", {}),
             ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),
