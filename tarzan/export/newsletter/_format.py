@@ -83,28 +83,20 @@ def _signed_pp(value: Optional[float], decimals: int = 1) -> str:
     return f"{sign}{abs(value):.{decimals}f}"
 
 def _display_ticker(symbol: Optional[str]) -> Optional[str]:
-    """Short, human-facing ticker for an inline pin: strip the exchange
-    suffix (``XDEM.MI`` → ``XDEM``, the same ``split('.')[0]`` convention
-    used by :func:`_clean_ticker`) and the index caret (``^GSPC`` →
-    ``GSPC``). Returns None when there is nothing worth showing (empty, the
-    synthetic PORTFOLIO ticker, or a blended-mix pseudo-ticker) so the
-    caller can skip the pin entirely.
+    """Return the exact resolved provider ticker for human-facing output.
 
-    Shared by the Holdings, Returns-vs-benchmarks and Historical-risk
-    sections so the ticker is derived one way everywhere."""
+    Exchange suffixes and index markers are part of the instrument identity
+    and must not be stripped after preprocessing.  Synthetic portfolio/mix
+    labels remain hidden because they are not provider tickers.
+    """
     if not symbol:
         return None
-    t = str(symbol).strip()
-    if not t or t.upper() in ("PORTFOLIO", "—", "NAN"):
+    ticker = str(symbol).strip()
+    if not ticker or ticker.upper() in ("PORTFOLIO", "—", "NAN"):
         return None
-    if t.startswith("^"):
-        t = t[1:]
-    t = t.split(".")[0]  # strip exchange suffix (XDEM.MI → XDEM)
-    # Blended-mix pseudo-tickers (e.g. "60/40 ACWI+Bond") carry no clean
-    # symbol — skip the pin rather than show something confusing.
-    if not t or "/" in t or " " in t:
+    if "/" in ticker or " " in ticker:
         return None
-    return t
+    return ticker
 
 def _semaphore(delta: Optional[float], tolerance: float) -> str:
     """Return 'green' / 'amber' / 'red' based on |delta| vs tolerance."""
@@ -120,18 +112,6 @@ def _semaphore(delta: Optional[float], tolerance: float) -> str:
 def _semaphore_color(sema: str) -> str:
     return {"green": PALETTE["green"], "amber": PALETTE["amber"],
             "red": PALETTE["red"], "muted": PALETTE["muted"]}.get(sema, PALETTE["ink"])
-
-def _clean_ticker(isin: str) -> str:
-    """Resolve an ISIN to its Yahoo symbol via the price cache and strip the
-    exchange suffix (XDEM.MI → XDEM). Empty when unresolved (e.g. bonds with
-    no listing), so callers can fall back to the name alone."""
-    if not isin:
-        return ""
-    from tarzan.data import price_cache as _pc
-    sym = _pc.load_resolution(isin) or ""
-    # Reuse the single ticker-shortening helper so Holdings, Returns and
-    # Historical-risk all strip the exchange suffix identically.
-    return _display_ticker(sym) or ""
 
 def _colorize_pct(text: str) -> str:
     """HTML-escape ``text`` and wrap signed percentages AND percentage-point

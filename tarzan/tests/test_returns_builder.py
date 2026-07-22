@@ -1710,7 +1710,8 @@ class TestUnavailableOrderHistory:
         )
         live_requests = []
 
-        def _broker_1d(symbols):
+        def _broker_1d(symbols, *, allow_sibling_fallback):
+            assert allow_sibling_fallback is True
             live_requests.extend(symbols)
             return {
                 symbol: {"pct": 3.25, "live": True}

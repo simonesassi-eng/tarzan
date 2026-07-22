@@ -127,8 +127,19 @@ class PortfolioMetrics:
     history_unavailable_instruments: tuple[str, ...] = ()
     portfolio_history: Optional[pd.Series] = None
     benchmark_histories: dict = field(default_factory=dict)
+    # Run-scoped benchmark identity contract.  Each curated benchmark name
+    # maps to the one full provider ticker resolved during preprocessing; all
+    # histories, metrics, tables and charts must project this same mapping.
+    benchmark_tickers: dict[str, str] = field(default_factory=dict)
+    benchmark_resolution_errors: tuple[str, ...] = ()
     acwi_geo: dict = field(default_factory=dict)
     holding_performance: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # Run-scoped intraday preprocessing contract. Canonical keys remain the
+    # analytical/display identities; each quote records the selected feed,
+    # exact series and same-feed previous-close baseline. Presentation only
+    # consumes this catalog and never performs provider I/O.
+    intraday_requested_tickers: tuple[str, ...] = ()
+    intraday_quotes: dict[str, dict] = field(default_factory=dict)
     holding_histories: dict = field(default_factory=dict)
     # Canonical ticker decision audit, one record per ISIN (or exact ticker
     # when no ISIN exists). Rendered as the compact data-sources section at the

@@ -30,7 +30,6 @@ from tarzan.export.newsletter._constants import (
     uni_name,
 )
 from tarzan.export.newsletter._format import (
-    _clean_ticker,
     _display_ticker,
     _eur,
     _pct,
@@ -909,7 +908,7 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
     rows = []
     for it in targeted:
         key = it.get("ticker") or it.get("category") or ""
-        tk = _clean_ticker(key) or _display_ticker(key) or ""
+        tk = _display_ticker(key) or ""
         # "Now" = the CURRENT weight (% of invested) from the snapshot, so it
         # matches the By-asset-class table exactly. The verification's
         # actual_pct is POST-trade (it reflects the plan's buys), which would
@@ -929,7 +928,7 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
     held_exits = [it for it in exits if cur_by_isin.get(_isin_for(it), 0.0) > 0.05]
     if held_exits:
         names = ", ".join(
-            (_clean_ticker(it.get("ticker") or "") or _display_ticker(it.get("ticker") or "")
+            (_display_ticker(it.get("ticker") or "")
              or short_instrument_name(it.get("category") or "", 16))
             for it in held_exits
         )
@@ -955,16 +954,16 @@ def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
                                        str(it.get("ticker", "")),
                                        str(it.get("category", ""))))
         for it in items:
-            isin = it.get("ticker", "")
-            tk = _clean_ticker(isin) or _display_ticker(isin) or ""
+            ticker = it.get("ticker", "")
+            tk = _display_ticker(ticker) or ""
             vals = None
             if hold_series:
-                xs = [float(pt.get(isin, 0.0)) for pt in hold_series]
+                xs = [float(pt.get(ticker, 0.0)) for pt in hold_series]
                 if any(x > 0 for x in xs) and len(xs) >= 2:
                     vals = xs
             rows.append({
                 "label_html": _div_label(
-                    short_instrument_name(it.get("category") or isin, 42),
+                    short_instrument_name(it.get("category") or ticker, 42),
                     color, ticker=tk),
                 "now": float(it.get("actual_pct", 0.0)),
                 "target": float(it.get("target_pct", 0.0)),
@@ -1172,8 +1171,10 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "_ac": klass,
             "_isin": h.get("isin", ""),
             "_ticker": h.get("ticker", ""),
-            "name_html": uni_name(short_instrument_name(h.get("name", ""), 40),
-                                  _clean_ticker(h.get("isin", ""))),
+            "name_html": uni_name(
+                short_instrument_name(h.get("name", ""), 40),
+                _display_ticker(h.get("ticker")) or "",
+            ),
             "cells": [
                 uni_cell(_eur(value, 2), width=72),
                 uni_cell(weight_str, width=50),
@@ -1238,9 +1239,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
             if not match.empty:
                 klass = match["asset_class"].iloc[0]
         signed_amount = amount if direction == "BUY" else -amount
-        # Clean pin ticker (no exchange suffix), same as Holdings/By holding.
-        tk = (_clean_ticker(isin) or _clean_ticker(ticker)
-              or _display_ticker(ticker) or "")
+        # Suggestions already carry the full ticker selected during
+        # preprocessing; presentation must not re-resolve it from ISIN/cache.
+        tk = _display_ticker(ticker) or ""
         # Whole-row tint by action: light green for BUY, light red for SELL,
         # so the proposed action reads at a glance across all columns.
         row_bg = PALETTE["green_tint"] if direction == "BUY" else PALETTE["red_tint"]

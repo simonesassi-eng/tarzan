@@ -544,8 +544,8 @@ def _fetch_ticker_data(
     A qualified symbol is attempted directly. A bare symbol with known
     instrument name is resolved across configured venues before use, so a
     taxonomy containing only bare tickers still produces one full canonical
-    history/current ticker. Qualified symbols retain the established bare
-    fallback when their provider listing has no usable history.
+    history/current ticker. A qualified symbol is already resolved and is
+    never replaced with a bare or sibling listing when data is unavailable.
     """
     logger.info("Fetching data for %s", ticker)
     if _is_expandable_bare_ticker(ticker) and expected_name:
@@ -582,25 +582,11 @@ def _fetch_ticker_data(
             "it supplied no usable market data."
         )
 
-    # Fallback: strip exchange suffix. This is deliberately visible in the
-    # canonical decision rather than leaving Holding.ticker on a symbol whose
-    # data was never consumed.
-    if not _ticker_data_has_market_evidence(
-        {"info": info, "history": history}
-    ) and "." in ticker:
-        base_ticker = ticker.split(".")[0]
-        logger.debug("Trying base ticker %s (stripped from %s)", base_ticker, ticker)
-        info2 = _fetch_ticker_info(base_ticker)
-        history2 = _fetch_history(base_ticker)
-        if _history_has_market_evidence(history2):
-            info, history = info2, history2
-            selected_ticker = base_ticker
-            method = "BARE_TICKER_FALLBACK"
-            reason = (
-                f"The canonical listing {ticker} had no usable history; "
-                f"Tarzan used its bare ticker {base_ticker}."
-            )
-            logger.info("Fallback to base ticker %s succeeded", base_ticker)
+    # A qualified ticker is an already-resolved identity.  Never strip its
+    # venue and retry a bare symbol: doing so would let current valuation,
+    # historical series and intraday charts consume different instruments.
+    # Missing evidence remains missing and is handled by the run's typed data-
+    # quality policy; only the preprocessing resolver may select a ticker.
 
     return _annotate_ticker_data(
         {"info": info, "history": history},

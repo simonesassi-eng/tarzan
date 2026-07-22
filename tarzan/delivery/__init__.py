@@ -419,12 +419,8 @@ def run_and_send() -> int:
         )
 
     publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
-    result.ledger.append(LedgerEntryType.PUBLICATION, {
-        "decision": publication.decision.value,
-        "delivery_purpose": publication.delivery_purpose.value,
-        "critical_failure_refs": list(publication.critical_failure_ids),
-    })
 
+    semantic_errors: tuple[str, ...] = ()
     if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
         html = _failure_notification_html(result)
         subject = f"{subject_prefix} - Analysis failure"
@@ -439,13 +435,53 @@ def run_and_send() -> int:
         _seed_manual_proxies()
         from tarzan.backtest import newsletter_portfolios
         backtest_portfolios = newsletter_portfolios()
+        semantic_audit: dict = {}
         html = render_newsletter(
             metrics=metrics,
             config=config,
             issue_number=issue_number,
             backtest_portfolios=backtest_portfolios,
+            semantic_audit=semantic_audit,
         )
+        from tarzan.export.newsletter._semantic import validate_newsletter_semantics
+        semantic_errors = validate_newsletter_semantics(
+            metrics,
+            semantic_audit,
+            html,
+        )
+        if semantic_errors:
+            result.ledger.open_failure(
+                stage="newsletter_semantics",
+                stable_code="NEWSLETTER_SEMANTIC_INVARIANT_FAILED",
+                severity="CRITICAL",
+                error="; ".join(semantic_errors),
+                affected_outputs=[
+                    "newsletter",
+                    "benchmark_tables",
+                    "performance_charts",
+                    "delivery",
+                ],
+                analytical_impact=(
+                    "rendered market identities or chart labels are inconsistent "
+                    "with preprocessed analytical data"
+                ),
+                publication_impact="BLOCK_NORMAL_AND_DO_NOT_SEND",
+            )
+            logger.critical(
+                "Newsletter semantic gate failed with %d violation(s); claim and "
+                "SMTP are blocked.",
+                len(semantic_errors),
+            )
         subject = build_subject(metrics, subject_prefix, trigger_label)
+
+    # Rendering can add a fail-closed semantic failure. Evaluate and record the
+    # single authoritative publication outcome only after that gate completes.
+    publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
+    result.ledger.append(LedgerEntryType.PUBLICATION, {
+        "decision": publication.decision.value,
+        "delivery_purpose": publication.delivery_purpose.value,
+        "critical_failure_refs": list(publication.critical_failure_ids),
+    })
 
     now = now_local()
     output_root = ROOT / "output" / now.strftime("%Y-%m-%d")
@@ -460,6 +496,21 @@ def run_and_send() -> int:
             execution_environment="github-actions" if automated else "email-local",
         ),
     )
+
+    if semantic_errors:
+        result.ledger.append(LedgerEntryType.DELIVERY, {
+            "state": "SEMANTIC_VALIDATION_FAILED",
+            "purpose": publication.delivery_purpose.value,
+            "smtp_invoked": False,
+            "violations": list(semantic_errors),
+        })
+        _write_delivery_artifacts(
+            writer,
+            result,
+            html,
+            "SEMANTIC_VALIDATION_FAILED",
+        )
+        return 1
 
     if dry_run:
         result.ledger.append(LedgerEntryType.DELIVERY, {

@@ -9,6 +9,8 @@ for a benchmark or a performance row. The pure math it relies on lives in
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 import logging
 
 import numpy as np
@@ -65,12 +67,27 @@ def _clip_to_window(series: pd.Series, start, end) -> pd.Series:
     return s[(s.index >= lo) & (s.index <= hi)]
 
 
-def _fetch_benchmark_history(ticker: str) -> pd.Series:
-    """EUR-converted close-price history for a benchmark ticker.
+@dataclass(frozen=True)
+class ResolvedBenchmark:
+    """One benchmark after the run-scoped ticker preprocessing boundary.
 
-    Memoized per run (via the enricher's benchmark store) so the same
-    benchmark fetched by _performance/_risk/_benchmarks/_holding_performance
-    in one compute_all triggers a single network fetch + conversion.
+    ``requested_ticker`` is input provenance only.  Every analytical and
+    presentation consumer must use ``ticker`` and ``history``; both identify
+    the same exact provider listing.
+    """
+
+    name: str
+    requested_ticker: str
+    ticker: str
+    history: pd.Series
+
+
+def _fetch_benchmark_history(ticker: str) -> pd.Series:
+    """Resolve and fetch one benchmark for preprocessing only.
+
+    This is the sole network/resolution boundary for benchmark identities.
+    Downstream code receives :class:`ResolvedBenchmark` objects and must never
+    call this function or reconstruct a symbol from the taxonomy ticker.
     """
     from tarzan.data import enricher as _enr
 
@@ -78,51 +95,109 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         if ticker in _enr._benchmark_memo:
             return _enr._benchmark_memo[ticker]
 
-    # Benchmark identities in the taxonomy are intentionally venue-neutral.
-    # Supply the curated name so the bounded bare-ticker resolver can select
-    # one provider listing with usable history instead of querying the bare
-    # symbol directly. This keeps discovery limited to configured venues.
     expected_name = cfg.name_for(None, ticker) or ""
-    data = _enr._fetch_ticker_data(
-        ticker,
-        expected_name=expected_name,
-    )
+    data = _enr._fetch_ticker_data(ticker, expected_name=expected_name)
+    selected_ticker = str(
+        data.get(_enr._TICKER_SYMBOL_KEY) or ticker
+    ).strip()
     history = data.get("history", pd.DataFrame())
     if history.empty:
         series = pd.Series(dtype=float)
     else:
         prices = history["Close"]
-        # Only FX-convert when yfinance actually reports a non-EUR currency.
-        # Defaulting a MISSING currency to "USD" (the old behavior) spuriously
-        # divided an already-EUR benchmark by USDEUR, corrupting its level,
-        # CAGR and the α/β reference series. A missing currency → leave the
-        # series as-is rather than guess a conversion.
+        # A missing currency is not evidence of USD; leave an already-EUR
+        # series untouched rather than applying a speculative FX conversion.
         currency = data.get("info", {}).get("currency")
-        if currency and currency != "EUR":
-            series = _enr.convert_to_eur(prices, currency)
-        else:
-            series = prices
+        series = (
+            _enr.convert_to_eur(prices, currency)
+            if currency and currency != "EUR"
+            else prices
+        )
+
+    # The exact provider symbol is part of the series contract.  ``name`` is
+    # intentionally the same full symbol so serialized/debug series cannot
+    # silently regress to the venue-neutral input ticker.
+    series = series.copy()
+    series.name = selected_ticker
+    series.attrs.update({
+        "resolved_ticker": selected_ticker,
+        "requested_ticker": ticker,
+    })
 
     with _enr._net_lock:
         _enr._benchmark_memo[ticker] = series
     return series
 
 
-def _build_benchmark_series(name: str, ticker: str, initial_value: float) -> pd.Series:
-    if ticker:
-        return _fetch_benchmark_history(ticker)
-    mix_c = cfg.mix_60_40()
-    eq = _fetch_benchmark_history(mix_c["equity_ticker"])
-    bd = _fetch_benchmark_history(mix_c["bond_ticker"])
-    if eq.empty or bd.empty:
+def preprocess_benchmarks(
+    definitions: Mapping[str, str] | None = None,
+    *,
+    fetch_history: Callable[[str], pd.Series] | None = None,
+) -> tuple[dict[str, ResolvedBenchmark], tuple[str, ...]]:
+    """Resolve the complete benchmark universe exactly once for one run.
+
+    The returned catalog is keyed by the curated display name, but every
+    record exposes only one operational ticker: the full provider symbol that
+    supplied its historical series.  Resolution failures remain explicit and
+    are returned for the pre-delivery semantic gate.
+    """
+    requested = BENCHMARKS if definitions is None else definitions
+    fetch = fetch_history or _fetch_benchmark_history
+    catalog: dict[str, ResolvedBenchmark] = {}
+    errors: list[str] = []
+    for name, input_ticker in requested.items():
+        try:
+            history = fetch(input_ticker)
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{name}: resolution failed ({type(error).__name__})")
+            continue
+        if history is None or history.empty or len(history) < 2:
+            errors.append(f"{name}: no usable history for {input_ticker}")
+            continue
+        resolved_ticker = str(
+            history.attrs.get("resolved_ticker")
+            or history.attrs.get("provider_ticker")
+            or input_ticker
+        ).strip()
+        if not resolved_ticker:
+            errors.append(f"{name}: resolved ticker is empty")
+            continue
+        canonical_history = history.copy()
+        canonical_history.name = resolved_ticker
+        canonical_history.attrs.update({
+            "resolved_ticker": resolved_ticker,
+            "requested_ticker": input_ticker,
+        })
+        catalog[name] = ResolvedBenchmark(
+            name=name,
+            requested_ticker=input_ticker,
+            ticker=resolved_ticker,
+            history=canonical_history,
+        )
+
+    logger.info(
+        "Benchmark preprocessing resolved %d/%d full provider tickers",
+        len(catalog), len(requested),
+    )
+    return catalog, tuple(errors)
+
+
+def _build_benchmark_series(
+    name: str,
+    ticker: str,
+    initial_value: float,
+    catalog: Mapping[str, ResolvedBenchmark] | None = None,
+) -> pd.Series:
+    """Compatibility projection from the already-preprocessed catalog.
+
+    No resolution or provider access is permitted here.  ``ticker`` must equal
+    the catalog's full ticker; otherwise an empty series makes the contract
+    violation visible instead of silently selecting another listing.
+    """
+    record = (catalog or {}).get(name)
+    if record is None or record.ticker != ticker:
         return pd.Series(dtype=float)
-    combined = pd.DataFrame({"eq": eq, "bd": bd}).dropna()
-    if combined.empty:
-        return pd.Series(dtype=float)
-    eq_norm = combined["eq"] / combined["eq"].iloc[0]
-    bd_norm = combined["bd"] / combined["bd"].iloc[0]
-    bench = eq_norm * mix_c.get("equity_weight", 0.6) + bd_norm * mix_c.get("bond_weight", 0.4)
-    return bench * initial_value
+    return record.history
 
 
 def _compute_single_benchmark_metrics(
@@ -163,26 +238,38 @@ def _compute_single_benchmark_metrics(
     return metrics
 
 
-def _add_mix_to_histories(key_histories: dict, initial_value: float) -> None:
+def _add_mix_to_histories(
+    key_histories: dict,
+    initial_value: float,
+    catalog: Mapping[str, ResolvedBenchmark],
+) -> None:
+    """Build the optional 60/40 line from preprocessed histories only."""
     mix_cfg = cfg.mix_60_40()
-    eq_ticker_name = None
-    for bname, bticker in BENCHMARKS.items():
-        if bticker == mix_cfg.get("equity_ticker"):
-            eq_ticker_name = bname
-            break
-    if eq_ticker_name and eq_ticker_name in key_histories:
-        try:
-            bond_hist = _fetch_benchmark_history(mix_cfg["bond_ticker"])
-            if not bond_hist.empty:
-                eq_w = mix_cfg.get("equity_weight", 0.6)
-                bd_w = mix_cfg.get("bond_weight", 0.4)
-                combined = pd.DataFrame({"eq": key_histories[eq_ticker_name], "bd": bond_hist}).dropna()
-                if not combined.empty:
-                    eq_n = combined["eq"] / combined["eq"].iloc[0]
-                    bd_n = combined["bd"] / combined["bd"].iloc[0]
-                    key_histories["60/40 ACWI+Bond"] = (eq_n * eq_w + bd_n * bd_w) * initial_value
-        except Exception as e:
-            logger.warning("Failed to build 60/40 mix: %s", e)
+    equity = next(
+        (record for record in catalog.values()
+         if record.requested_ticker == mix_cfg.get("equity_ticker")),
+        None,
+    )
+    bond = next(
+        (record for record in catalog.values()
+         if record.requested_ticker == mix_cfg.get("bond_ticker")),
+        None,
+    )
+    if equity is None or bond is None or equity.name not in key_histories:
+        return
+    combined = pd.DataFrame({
+        "eq": key_histories[equity.name],
+        "bd": bond.history,
+    }).dropna()
+    if combined.empty:
+        return
+    eq_n = combined["eq"] / combined["eq"].iloc[0]
+    bd_n = combined["bd"] / combined["bd"].iloc[0]
+    eq_w = mix_cfg.get("equity_weight", 0.6)
+    bd_w = mix_cfg.get("bond_weight", 0.4)
+    key_histories["60/40 ACWI+Bond"] = (
+        eq_n * eq_w + bd_n * bd_w
+    ) * initial_value
 
 
 def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> None:

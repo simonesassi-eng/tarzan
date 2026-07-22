@@ -79,6 +79,7 @@ def build_context(
     benchmark_geo: str = "MSCI ACWI",
     ai_summary: Optional[str] = None,
     backtest_portfolios: Optional[list] = None,
+    semantic_audit: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build the full Jinja2 context dict for the newsletter template.
 
@@ -90,6 +91,8 @@ def build_context(
         benchmark_geo: Display name of geographic allocation benchmark.
         ai_summary: Optional precomputed market-context narrative.
         backtest_portfolios: Optional candidate portfolios for the backtest section.
+        semantic_audit: Optional mutable mapping populated with the exact raw
+            intraday request and rendered chart-label sources.
 
     Returns:
         A dict with all keys consumed by ``portfolio_digest.html.j2``.
@@ -108,6 +111,7 @@ def build_context(
         issue_number=issue_number,
         benchmark_alpha_beta=benchmark_alpha_beta,
         benchmark_geo=benchmark_geo,
+        semantic_audit=semantic_audit if semantic_audit is not None else {},
     )
     hero = _build_hero(nctx)
     ticker_records = getattr(metrics, "ticker_resolutions", ()) or ()
@@ -170,6 +174,7 @@ def render_newsletter(
     benchmark_geo: Optional[str] = None,
     ai_summary: Optional[str] = None,
     backtest_portfolios: Optional[list] = None,
+    semantic_audit: Optional[dict[str, Any]] = None,
 ) -> str:
     """Render the newsletter HTML to a string.
 
@@ -224,6 +229,7 @@ def render_newsletter(
     context = build_context(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
         ai_summary=ai_summary, backtest_portfolios=backtest_portfolios,
+        semantic_audit=semantic_audit,
     )
     return template.render(**context)
 
