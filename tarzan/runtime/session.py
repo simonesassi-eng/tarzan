@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import threading
 import time
 import uuid
@@ -15,6 +14,8 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Protocol
+
+from tarzan.runtime.io_utils import canonical_json_bytes
 
 
 class RunMode(str, Enum):
@@ -169,14 +170,7 @@ def canonical_analysis_id(evidence: Mapping[str, Any]) -> str:
     """Hash canonical output-affecting evidence; operational noise is excluded."""
     ignored = {"attempt_id", "wall_time", "latency", "retry_delay", "diagnostic_prose"}
     canonical = {key: value for key, value in evidence.items() if key not in ignored}
-    encoded = json.dumps(
-        canonical,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-        default=str,
-    ).encode("utf-8")
+    encoded = canonical_json_bytes(canonical, ascii_only=True, default=str)
     return hashlib.sha256(encoded).hexdigest()
 
 

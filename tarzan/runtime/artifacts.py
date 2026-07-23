@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
+
+from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
 
 
 MANIFEST_SCHEMA_VERSION = "1.0"
@@ -45,31 +44,12 @@ class LocalArtifactWriter:
 
     def _atomic_write(self, name: str, content: bytes) -> Path:
         destination = self.directory / name
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{name}.", suffix=".tmp", dir=self.directory
-        )
-        temporary = Path(temp_name)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, destination)
-            return destination
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        atomic_write_bytes(destination, content)
+        return destination
 
     @staticmethod
     def _json_bytes(value: Any) -> bytes:
-        return json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-            default=str,
-        ).encode("utf-8")
+        return canonical_json_bytes(value, default=str)
 
     def checkpoint(
         self,

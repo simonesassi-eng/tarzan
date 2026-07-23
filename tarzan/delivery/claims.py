@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
 
 
 DELIVERY_IDENTITY_SCHEMA_VERSION = "1.0"
@@ -58,15 +58,15 @@ class DeliveryIntent:
 
     @property
     def logical_id(self) -> str:
-        canonical = json.dumps({
+        canonical = canonical_json_bytes({
             "identity_schema_version": DELIVERY_IDENTITY_SCHEMA_VERSION,
             "stable_event_id": self.stable_event_id,
             "purpose": self.purpose.value,
             "recipient_set_digest": self.recipient_set_digest,
             "template_schema_version": self.template_schema_version,
             "authorized_resend_token": self.authorized_resend_token,
-        }, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        }, ascii_only=True)
+        return hashlib.sha256(canonical).hexdigest()
 
     @property
     def intent_digest(self) -> str:
@@ -162,22 +162,8 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
         return document
 
     def _write(self, document: dict) -> None:
-        payload = json.dumps(
-            document, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-        fd, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        payload = canonical_json_bytes(document, ascii_only=True)
+        atomic_write_bytes(self.path, payload)
 
     def claim(self, intent: DeliveryIntent) -> ClaimResult:
         with self._lock():
@@ -252,9 +238,7 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         # is never persisted by the service or included in errors/evidence.
         wire = dict(request)
         wire["auth_token"] = self._auth_token
-        payload = json.dumps(
-            wire, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
+        payload = canonical_json_bytes(wire, ascii_only=True)
         http_request = Request(
             self.endpoint,
             data=payload,

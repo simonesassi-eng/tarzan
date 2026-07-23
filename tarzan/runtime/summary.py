@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Optional
 
+from tarzan.runtime.io_utils import canonical_json_bytes
 from tarzan.runtime.ledger import Availability, FailureRecord
 from tarzan.runtime.publication import PublicationEvaluator, PublicationOutcome
 from tarzan.runtime.session import RunResult
@@ -62,13 +62,7 @@ class VersionedRunSummary:
         }
 
     def canonical_bytes(self) -> bytes:
-        return json.dumps(
-            self.to_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
+        return canonical_json_bytes(self.to_dict())
 
 
 class SummaryProjector:
