@@ -257,12 +257,6 @@ def simulation_rows(portfolios) -> list[dict]:
     return rows
 
 
-def backfill_label(backfill: str) -> str:
-    return {"calibrated": "regression-calibrated",
-            "factor": "factor-aware (Developed FF SMB/HML/RMW/MOM on factor ETFs)"}.get(
-        backfill, "1:1 proxy")
-
-
 _DEFAULT_WEIGHTS = ROOT / "input" / "portfolio_test.csv"
 
 

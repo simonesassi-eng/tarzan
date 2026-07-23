@@ -92,10 +92,6 @@ class ProviderResult(Mapping[K, V], Generic[K, V]):
     def __len__(self) -> int:
         return len(self.value)
 
-    @property
-    def degraded(self) -> bool:
-        return self.availability is Availability.DEGRADED
-
 
 class ValuationEvidenceState(str, Enum):
     PRIMARY = "PRIMARY"

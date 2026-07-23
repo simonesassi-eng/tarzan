@@ -427,17 +427,6 @@ def _resolve_intraday(
     return out
 
 
-def _fetch_intraday_with_fallback(symbols: list[str]) -> dict:
-    """``{symbol: Close series}`` with guarded EUR venue fallback.
-
-    The selected series remains keyed under the original canonical symbol for
-    compatibility; callers that need the effective source use
-    :func:`_resolve_intraday` instead.
-    """
-    return {k: ser for k, (ser, _src) in _resolve_intraday(symbols).items()
-            if ser is not None}
-
-
 def _fetch_intraday(symbols: list[str]) -> dict:
     """One batched intraday download → ``{symbol: Close series}``. Empty on
     any failure (the caller falls back to the daily history)."""

@@ -1,8 +1,7 @@
 """MetricsEngine: single class computing all portfolio metrics.
 
-Extensible via register() — append a callable and it runs in the pipeline.
-Each computer receives a context dict and populates it with results.
-The final context is used to build a PortfolioMetrics DTO.
+Each computer in the pipeline receives a context dict and populates it with
+results. The final context is used to build a PortfolioMetrics DTO.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from tarzan import config as cfg
 # preserved for callers, tests and scripts.
 from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     RISK_FREE_RATE,
-    TRADING_DAYS,
     DAYS_PER_YEAR,
     TwrorResult,
     PERIOD_DAYS,
@@ -46,7 +44,6 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     xnpv,
     _compute_beta_alpha,
     _safe_pct_change,
-    _scale_or_nan,
     _is_nan,
     _cap_to_years,
 )
@@ -66,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 class MetricsEngine:
-    """Computes all portfolio metrics. Extensible via register()."""
+    """Computes all portfolio metrics."""
 
     def __init__(self, holdings: list[Holding], config: InvestorConfig,
                  orders: Optional[list] = None,
@@ -112,10 +109,6 @@ class MetricsEngine:
             self._computers[idx] = self._portfolio_history_from_orders
             self._computers.append(self._returns)
             self._computers.append(self._allocation_timeline)
-
-    def register(self, fn: Callable) -> None:
-        """Append a custom metric computer to the pipeline."""
-        self._computers.append(fn)
 
     def _current_valuation_holdings(self) -> list[Holding]:
         """Project only policy-accepted holdings at their selected EUR value.

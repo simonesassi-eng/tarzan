@@ -4,22 +4,19 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 
 from tarzan.models.instrument_key import normalize_ticker
-from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.export._format import (
     eur_smart as _eur_smart,
     short_instrument_name,
 )
 from tarzan.export import _charts as _charts
 from tarzan.export._perf_series import (
-    _geo_benchmark_series,
     _norm_series,
     _perf_full_series,
-    _perf_level_series,
     _perf_vol_series,
     _perf_window,
     _window_money_pnl,
@@ -438,23 +435,6 @@ def _intraday_quote_parts(quote) -> tuple[object, object]:
     return quote, None
 
 
-def _performance_intraday_tickers(metrics) -> list[str]:
-    """Canonical full symbols needed by all performance tables."""
-    tickers: list[str] = []
-    for frame in (
-        getattr(metrics, "holding_performance", None),
-        getattr(metrics, "holdings_df", None),
-    ):
-        if frame is None or getattr(frame, "empty", True) or "ticker" not in frame.columns:
-            continue
-        tickers.extend(
-            str(ticker).strip()
-            for ticker in frame["ticker"].dropna()
-            if str(ticker).strip()
-        )
-    return list(dict.fromkeys(tickers))
-
-
 def _shared_performance_intraday(ctx: _NewsletterContext) -> dict:
     """Share the run-scoped preprocessed quote catalog across all sections."""
     if ctx.performance_intraday_map is not None:
@@ -726,7 +706,6 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # moved" table), so it is dropped from the numeric columns here. The rest
     # stay aligned with ``_build_performance``.
     period_keys = ["1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
-    period_labels = ["1W", "1M", "3M", "YTD", "1Y", "3Y", "5Y"]
 
     # Intraday + live flags use the one render-wide batch of exact full
     # symbols already selected in preprocessing. Presentation never maps a

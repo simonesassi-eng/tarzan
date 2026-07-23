@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Protocol
+from typing import Any, Mapping, Optional
 
 from tarzan.runtime.io_utils import canonical_json_bytes
 
@@ -136,34 +136,6 @@ def record_last_run_result(result: RunResult) -> None:
 
 def last_run_result() -> Optional[RunResult]:
     return _last_run_result.get()
-
-
-IsolationScope = Optional[str]
-
-
-class TenantPolicyPort(Protocol):
-    def resolve(self, scope: IsolationScope, invocation: Mapping[str, Any]) -> Mapping[str, Any]: ...
-
-
-class ScopedStoragePort(Protocol):
-    def open(self, scope: IsolationScope, context: RunContext) -> Any: ...
-
-
-class SingleUserPolicyPort:
-    def resolve(self, scope: IsolationScope, invocation: Mapping[str, Any]) -> Mapping[str, Any]:
-        if scope is not None:
-            raise ValueError("current single-user policy accepts only scope=None")
-        return MappingProxyType(dict(invocation))
-
-
-class LocalStoragePort:
-    def __init__(self, root) -> None:
-        self.root = root
-
-    def open(self, scope: IsolationScope, context: RunContext):
-        if scope is not None:
-            raise ValueError("current local storage accepts only scope=None")
-        return self.root / context.attempt_id
 
 
 def canonical_analysis_id(evidence: Mapping[str, Any]) -> str:

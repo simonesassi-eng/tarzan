@@ -22,31 +22,6 @@ from tarzan.engine.stats import TRADING_DAYS
 _FACTOR_CONTROLS = frozenset({"MKT", "RF"})
 
 
-def leveraged_daily_returns(base_ret: pd.Series, leverage: float, *,
-                            expense_annual: float = 0.0,
-                            financing_daily=None,
-                            spread_annual: float = 0.0) -> pd.Series:
-    """Daily returns of a synthetic daily-reset leveraged version of ``base_ret``.
-
-    ``financing_daily`` may be a scalar daily rate, an aligned Series, or
-    None (then only the spread is charged on the borrowed portion).
-    """
-    if base_ret is None or base_ret.empty:
-        return pd.Series(dtype=float)
-    exp = expense_annual / TRADING_DAYS
-    lev = leverage * base_ret
-    if leverage > 1.0:
-        if financing_daily is None:
-            fin = 0.0
-        elif np.isscalar(financing_daily):
-            fin = float(financing_daily)
-        else:
-            fin = financing_daily.reindex(base_ret.index).ffill().fillna(0.0)
-        borrow = (leverage - 1.0) * (fin + spread_annual / TRADING_DAYS)
-        return lev - borrow - exp
-    return lev - exp
-
-
 def returns_to_price(ret: pd.Series, start: float = 100.0) -> pd.Series:
     """Compound a daily-return series into a price/NAV level series."""
     if ret is None or ret.empty:

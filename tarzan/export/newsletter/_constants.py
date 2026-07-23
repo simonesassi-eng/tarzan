@@ -16,7 +16,6 @@ from tarzan.models.taxonomy import (
     ORDER_PERF as _ORDER_PERF,
 )
 from tarzan.export._format import (
-    ASSET_CLASS_BG,
     ASSET_CLASS_COLORS,
     GEO_COLORS as _GEO_COLORS,
     css,
@@ -40,17 +39,11 @@ PALETTE = {
     "green_tint": "#ECFDF5",
     "red_tint": "#FEF2F2",
     "amber_bg": "#FFF7ED",
-    "amber_border": "#FED7AA",
     "red_bg": "#FEE2E2",
-    "red_border": "#FECACA",
     "accent_bg": "#EEF2FF",
-    "gold_bg": "#FEF3C7",
-    "fi_bg": "#FEF3C7",
 }
 
 ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
-
-ASSET_BG = {k: css(v) for k, v in ASSET_CLASS_BG.items()}
 
 GEO_COLORS = {k: css(v) for k, v in _GEO_COLORS.items()}
 

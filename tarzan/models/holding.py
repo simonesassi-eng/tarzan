@@ -155,7 +155,3 @@ class Holding:
         """Return True if this holding has been enriched with market data."""
         return self.current_price is not None
 
-    def unrealized_gain_eur(self) -> float:
-        """Compute unrealized P&L in EUR."""
-        value = self.current_value if self.current_value is not None else self.market_value_eur
-        return value - self.cost_basis_eur

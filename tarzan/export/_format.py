@@ -32,16 +32,6 @@ ASSET_CLASS_COLORS: dict[str, str] = {
 }
 
 # Soft background tints for asset-class chips/rows in the newsletter.
-ASSET_CLASS_BG: dict[str, str] = {
-    "Equities": "EEF2FF",
-    "Fixed Income": "FEF3C7",
-    "Cash & Cash Equivalents": "DCFCE7",
-    "Gold": "FEF3C7",
-    "Commodities": "FEF3C7",
-    "Crypto": "EEF2FF",
-    "Alternative": "F1F5F9",
-}
-
 GEO_COLORS: dict[str, str] = {
     "USA": "1D4ED8",
     "Eurozone EMU": "A16207",
@@ -70,12 +60,6 @@ def asset_class_color(name: str, *, css_form: bool = False, default: str = "5B5B
     """Canonical color for an asset class. Bare hex by default; CSS form
     (``#RRGGBB``) when ``css_form=True``."""
     raw = ASSET_CLASS_COLORS.get(name, default)
-    return css(raw) if css_form else raw
-
-
-def asset_class_bg(name: str, *, css_form: bool = False, default: str = "EEF2FF") -> str:
-    """Canonical background tint for an asset class."""
-    raw = ASSET_CLASS_BG.get(name, default)
     return css(raw) if css_form else raw
 
 

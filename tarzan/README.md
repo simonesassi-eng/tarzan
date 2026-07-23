@@ -252,12 +252,12 @@ be attached to email or sent through normal, degraded, or failure publication.
 
 ## Gemini boundary
 
-`GeminiPayloadBuilder` accepts only typed parsed portfolio/analysis domain
-content and explicit summary instructions. Environment maps, arbitrary paths or
-files, credentials, authentication objects, and machine metadata are not inputs.
-The API key reaches only the final transport adapter. Keys, prompts, payloads,
-raw responses, environment fragments, file contents, and secret-bearing
-exceptions are not persisted.
+The request payload (`build_digest`) carries only typed parsed
+portfolio/analysis domain content and explicit summary instructions.
+Environment maps, arbitrary paths or files, credentials, authentication
+objects, and machine metadata are not inputs. The API key reaches only the
+final transport adapter. Keys, prompts, payloads, raw responses, environment
+fragments, file contents, and secret-bearing exceptions are not persisted.
 
 Grounded, non-grounded, failed, and deterministic Signals fallback attempts are
 recorded as non-secret structured evidence. Gemini transport is prohibited in

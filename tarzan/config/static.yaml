@@ -64,13 +64,3 @@ figi_mic_map:
   XSWX: ".SW"
   ETLX: ".MI"
 
-# ---------------------------------------------------------------------------
-# Excel sheet names
-# ---------------------------------------------------------------------------
-sheet_names:
-  - Dashboard
-  - Optimizer
-  - Holdings
-  - Performance
-  - Return Contribution
-
