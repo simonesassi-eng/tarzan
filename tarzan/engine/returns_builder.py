@@ -1017,8 +1017,6 @@ def build_order_derived_series(
             context=",".join(fallback_instruments),
         )
 
-    # Coverage: share of today's value priced by real market data. Use the
-    # SAME value_position basis as value_on so bonds (priced /100) are
     # Coverage: share of today's value priced by real market data. Borsa
     # Italiana is a real market quote (the best available for BTPs / US
     # Treasuries / foreign-currency notes that yfinance does not cover), so
