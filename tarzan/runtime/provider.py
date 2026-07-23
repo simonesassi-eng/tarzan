@@ -170,6 +170,135 @@ class ValuationCompletenessEvaluator:
         )
         return resolution.kind.value if resolution.kind is not None else "UNKNOWN"
 
+    def _classify_holding(
+        self, holding: object, key: str, kind: str, policy, captured_at
+    ) -> ValuationEvidence:
+        """Pure per-holding valuation classification (no side effects).
+
+        Reads the holding's price/anchor/cost evidence and the applied policy
+        and returns the :class:`ValuationEvidence` verdict — materiality basis,
+        selected value, freshness and accept/reject. The accumulation, ledger
+        writes and failure bookkeeping stay in :meth:`evaluate`; this stays
+        side-effect-free so the gate's core decision is unit-testable alone."""
+        from datetime import timezone
+
+        current_value = self._finite(getattr(holding, "current_value", None))
+        anchor_value = self._finite(getattr(holding, "market_value_eur", None))
+        cost_basis = self._finite(getattr(holding, "cost_basis_eur", None))
+        quantity_value = self._finite(getattr(holding, "quantity", None))
+        quantity = abs(quantity_value) if quantity_value is not None else None
+        current_price = self._finite(getattr(holding, "current_price", None))
+        has_price = current_price is not None
+        price_is_fallback = bool(
+            getattr(holding, "price_is_fallback", False)
+        )
+
+        # Zero storage anchors on a nonzero position do not prove zero
+        # materiality. Order-derived holdings use 0.0 when exact mechanics
+        # cannot produce a seed; if cost/current evidence is also absent,
+        # the basis is indeterminate and must take the critical path.
+        basis_candidates = (
+            anchor_value,
+            cost_basis,
+            current_value if has_price else None,
+        )
+        basis = next(
+            (abs(value) for value in basis_candidates
+             if value is not None and value != 0.0),
+            None,
+        )
+        if basis is None and quantity == 0.0:
+            basis = 0.0
+
+        # Freshness follows the selected market observation, not when the
+        # request happened. Fetch time is a fallback clock only for a
+        # non-fallback quote that has no distinct observation timestamp.
+        observed = getattr(holding, "price_observation_timestamp", None)
+        evidence_time = observed
+        if evidence_time is None and has_price and not price_is_fallback:
+            evidence_time = getattr(holding, "fetch_timestamp", None)
+
+        age_seconds = None
+        freshness_age_seconds = None
+        session_adjusted = False
+        if evidence_time is not None:
+            if evidence_time.tzinfo is None:
+                evidence_time = evidence_time.replace(tzinfo=timezone.utc)
+            if captured_at.tzinfo is None:
+                captured_at = captured_at.replace(tzinfo=timezone.utc)
+            age_seconds = max(
+                0.0,
+                (captured_at - evidence_time).total_seconds(),
+            )
+            freshness_age_seconds = age_seconds
+            try:
+                from tarzan.data.market_quotes import market_session_age_seconds
+
+                market_age = market_session_age_seconds(
+                    str(getattr(holding, "ticker", None) or ""),
+                    evidence_time,
+                    captured_at,
+                )
+                if market_age is not None:
+                    freshness_age_seconds = market_age
+                    session_adjusted = True
+            except Exception:  # noqa: BLE001 - freshness must fail closed
+                pass
+        stale = (
+            freshness_age_seconds is not None
+            and (
+                freshness_age_seconds >= policy.freshness_seconds
+                if session_adjusted
+                else freshness_age_seconds > policy.freshness_seconds
+            )
+        )
+
+        if kind == "UNKNOWN":
+            state = ValuationEvidenceState.UNSUPPORTED
+            selected = None
+            accepted = False
+        elif has_price and current_value is not None and stale:
+            state = ValuationEvidenceState.STALE
+            selected = current_value if policy.allow_fallback else None
+            accepted = policy.allow_fallback
+        elif has_price and current_value is not None and price_is_fallback:
+            state = ValuationEvidenceState.FALLBACK
+            selected = current_value if policy.allow_fallback else None
+            accepted = policy.allow_fallback
+        elif has_price and current_value is not None:
+            state = ValuationEvidenceState.PRIMARY
+            selected = current_value
+            accepted = True
+        elif anchor_value is not None and (anchor_value != 0.0 or quantity == 0.0):
+            state = ValuationEvidenceState.FALLBACK
+            selected = anchor_value if policy.allow_fallback else None
+            accepted = policy.allow_fallback
+        else:
+            state = ValuationEvidenceState.MISSING
+            selected = None
+            accepted = False
+
+        return ValuationEvidence(
+            instrument_key=key,
+            instrument_kind=kind,
+            data_class=self.DATA_CLASS,
+            state=state,
+            value_eur=selected,
+            materiality_basis_eur=basis,
+            source=getattr(holding, "data_source", None),
+            policy_id=policy.policy_id,
+            accepted_by_policy=accepted,
+            age_seconds=age_seconds,
+            freshness_age_seconds=freshness_age_seconds,
+            freshness_basis=(
+                "MARKET_SESSION"
+                if session_adjusted
+                else "WALL_CLOCK"
+                if evidence_time is not None
+                else None
+            ),
+        )
+
     def evaluate(self, holdings: list[object], ledger) -> ValuationCompletenessAssessment:
         from datetime import datetime, time, timezone
 
@@ -205,127 +334,15 @@ class ValuationCompletenessEvaluator:
             if policy is None:
                 raise ValueError(f"missing required valuation policy for {policy_key}")
 
-            current_value = self._finite(getattr(holding, "current_value", None))
-            anchor_value = self._finite(getattr(holding, "market_value_eur", None))
-            cost_basis = self._finite(getattr(holding, "cost_basis_eur", None))
-            quantity_value = self._finite(getattr(holding, "quantity", None))
-            quantity = abs(quantity_value) if quantity_value is not None else None
-            current_price = self._finite(getattr(holding, "current_price", None))
-            has_price = current_price is not None
-            price_is_fallback = bool(
-                getattr(holding, "price_is_fallback", False)
-            )
+            evidence = self._classify_holding(holding, key, kind, policy, captured_at)
+            state = evidence.state
+            accepted = evidence.accepted_by_policy
+            if evidence.materiality_basis_eur is not None:
+                total_basis += evidence.materiality_basis_eur
 
-            # Zero storage anchors on a nonzero position do not prove zero
-            # materiality. Order-derived holdings use 0.0 when exact mechanics
-            # cannot produce a seed; if cost/current evidence is also absent,
-            # the basis is indeterminate and must take the critical path.
-            basis_candidates = (
-                anchor_value,
-                cost_basis,
-                current_value if has_price else None,
-            )
-            basis = next(
-                (abs(value) for value in basis_candidates
-                 if value is not None and value != 0.0),
-                None,
-            )
-            if basis is None and quantity == 0.0:
-                basis = 0.0
-            if basis is not None:
-                total_basis += basis
-
-            # Freshness follows the selected market observation, not when the
-            # request happened. Fetch time is a fallback clock only for a
-            # non-fallback quote that has no distinct observation timestamp.
-            observed = getattr(holding, "price_observation_timestamp", None)
-            evidence_time = observed
-            if evidence_time is None and has_price and not price_is_fallback:
-                evidence_time = getattr(holding, "fetch_timestamp", None)
-
-            age_seconds = None
-            freshness_age_seconds = None
-            session_adjusted = False
-            if evidence_time is not None:
-                if evidence_time.tzinfo is None:
-                    evidence_time = evidence_time.replace(tzinfo=timezone.utc)
-                if captured_at.tzinfo is None:
-                    captured_at = captured_at.replace(tzinfo=timezone.utc)
-                age_seconds = max(
-                    0.0,
-                    (captured_at - evidence_time).total_seconds(),
-                )
-                freshness_age_seconds = age_seconds
-                try:
-                    from tarzan.data.market_quotes import market_session_age_seconds
-
-                    market_age = market_session_age_seconds(
-                        str(getattr(holding, "ticker", None) or ""),
-                        evidence_time,
-                        captured_at,
-                    )
-                    if market_age is not None:
-                        freshness_age_seconds = market_age
-                        session_adjusted = True
-                except Exception:  # noqa: BLE001 - freshness must fail closed
-                    pass
-            stale = (
-                freshness_age_seconds is not None
-                and (
-                    freshness_age_seconds >= policy.freshness_seconds
-                    if session_adjusted
-                    else freshness_age_seconds > policy.freshness_seconds
-                )
-            )
-
-            if kind == "UNKNOWN":
-                state = ValuationEvidenceState.UNSUPPORTED
-                selected = None
-                accepted = False
-            elif has_price and current_value is not None and stale:
-                state = ValuationEvidenceState.STALE
-                selected = current_value if policy.allow_fallback else None
-                accepted = policy.allow_fallback
-            elif has_price and current_value is not None and price_is_fallback:
-                state = ValuationEvidenceState.FALLBACK
-                selected = current_value if policy.allow_fallback else None
-                accepted = policy.allow_fallback
-            elif has_price and current_value is not None:
-                state = ValuationEvidenceState.PRIMARY
-                selected = current_value
-                accepted = True
-            elif anchor_value is not None and (anchor_value != 0.0 or quantity == 0.0):
-                state = ValuationEvidenceState.FALLBACK
-                selected = anchor_value if policy.allow_fallback else None
-                accepted = policy.allow_fallback
-            else:
-                state = ValuationEvidenceState.MISSING
-                selected = None
-                accepted = False
-
-            evidence = ValuationEvidence(
-                instrument_key=key,
-                instrument_kind=kind,
-                data_class=self.DATA_CLASS,
-                state=state,
-                value_eur=selected,
-                materiality_basis_eur=basis,
-                source=getattr(holding, "data_source", None),
-                policy_id=policy.policy_id,
-                accepted_by_policy=accepted,
-                age_seconds=age_seconds,
-                freshness_age_seconds=freshness_age_seconds,
-                freshness_basis=(
-                    "MARKET_SESSION"
-                    if session_adjusted
-                    else "WALL_CLOCK"
-                    if evidence_time is not None
-                    else None
-                ),
-            )
             rows.append({"evidence": evidence, "policy": policy})
-            if selected is not None and accepted:
-                known_subtotal += selected
+            if evidence.value_eur is not None and accepted:
+                known_subtotal += evidence.value_eur
 
             ledger.append(LedgerEntryType.CAPABILITY, {
                 "instrument": key,
@@ -334,8 +351,8 @@ class ValuationCompletenessEvaluator:
                 "state": state.value,
                 "accepted_by_policy": accepted,
                 "policy_id": policy.policy_id,
-                "age_seconds": age_seconds,
-                "freshness_age_seconds": freshness_age_seconds,
+                "age_seconds": evidence.age_seconds,
+                "freshness_age_seconds": evidence.freshness_age_seconds,
                 "freshness_basis": evidence.freshness_basis,
             })
             if state in (ValuationEvidenceState.FALLBACK, ValuationEvidenceState.STALE) and accepted:
