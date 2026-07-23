@@ -359,6 +359,13 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
         figs.append(f'P&amp;L net of tax <strong style="color:{_sgn(m.pnl_eur_net_tax)};">'
                     f'{_eur_smart(m.pnl_eur_net_tax, signed=True)}</strong>')
     figs_html = (" &nbsp;·&nbsp; ".join(figs)) if figs else ""
+    # Rates from config, not hardcoded: the note only renders when a CGT
+    # estimate exists (rates configured), so this states the rates actually
+    # applied — no drift if the user runs a non-26%/12.5% jurisdiction.
+    cfg = ctx.config
+    std = float(cfg.rebalancing_capital_gains_tax_standard_pctg or 0.0)
+    gov = float(cfg.rebalancing_capital_gains_tax_government_pctg or 0.0)
+    rate_txt = f"{std:g}% / {gov:g}% on government bonds"
     html = (
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;'
@@ -367,7 +374,7 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
         f'<span style="font-weight:700;color:{P["ink"]};">Net-of-tax estimate</span>'
         + (f' &nbsp;{figs_html}' if figs_html else "")
         + f'<div style="margin-top:4px;font-size:10px;color:{P["subtle"]};">Estimate only: average-cost basis, '
-        f'26% / 12.5% on government bonds, realized losses offset later gains where Italian rules allow '
+        f'{rate_txt}, realized losses offset later gains where Italian rules allow '
         f'(ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of '
         f'transferred-in positions. TWROR is gross of tax.</div>'
         f'</div></td></tr></table>'
