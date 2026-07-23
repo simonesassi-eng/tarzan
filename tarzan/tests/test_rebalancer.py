@@ -336,6 +336,19 @@ def test_tax_per_unit_gov_bond_matches_cgt_classifier():
     eq.gain_pct = 100.0
     assert _tax_per_unit_sold([eq], cfg)[0] == pytest.approx(0.13, abs=1e-9)
 
+    # A GOVERNMENT-BOND ETF (asset_class=Fixed Income, KIND=ETF) whose name
+    # carries an issuer token must NOT earn the reduced rate: the realized-CGT
+    # estimate classifies an ETF as capital income at 26% (it never reaches the
+    # sovereign test), so the rebalancer must charge 26% too — not 12.5%.
+    bond_etf = Holding(
+        isin="IE00B", ticker="IBGL", quantity=1.0, cost_basis_eur=100.0,
+        market_value_eur=200.0, currency="EUR",
+        asset_class=AssetClass.FIXED_INCOME, instrument_type="ETF",
+        name="iShares BTP Italia Govt Bond UCITS ETF",
+    )
+    bond_etf.gain_pct = 100.0
+    assert _tax_per_unit_sold([bond_etf], cfg)[0] == pytest.approx(0.13, abs=1e-9)
+
 
 # ---------------------------------------------------------------------------
 # Production-readiness bug exploration: C3 executable funding

@@ -449,6 +449,7 @@ class _ObjectiveModel:
 
 def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.ndarray:
     from tarzan.engine.tax import is_government_bond
+    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
 
     cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
     cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
@@ -457,12 +458,20 @@ def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.nd
         gp = float(h.gain_pct or 0.0)
         if gp <= 0:
             continue
-        # Same sovereign-debt test as the realized-CGT estimate. The name regex
-        # is bond-gated (only consulted for FIXED_INCOME) so an equity name can
-        # never earn the reduced rate; the subtype markers are safe unconditionally.
+        # Same gate as the realized-CGT estimate (tax._classify): prove BOND
+        # mechanics BEFORE consulting the sovereign name/subtype markers. A bond
+        # ETF (asset_class=Fixed Income, KIND=ETF) is capital income at the
+        # standard rate, so an issuer token in its NAME (BTP/BUND/…) must not
+        # buy it the reduced rate here while the estimate charges 26%.
+        kind = TypeEvidenceGateway().resolve(
+            h.security_type, h.instrument_type, *(h.instrument_kind_evidence or ())
+        ).kind
         subtypes = (h.instrument_type, h.security_type)
-        names = (h.name,) if h.asset_class == AssetClass.FIXED_INCOME else ()
-        rate = cg_gov if is_government_bond(subtypes, names) else cg_std
+        rate = (
+            cg_gov
+            if kind is InstrumentKind.BOND and is_government_bond(subtypes, (h.name,))
+            else cg_std
+        )
         # Tax withheld per euro of SALE PROCEEDS (not per euro of cost). gp is
         # the gain relative to cost, so a position up gp% has proceeds
         # (100+gp) for every 100 of cost, of which gp is taxable gain. The
