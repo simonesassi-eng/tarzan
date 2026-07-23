@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from tarzan.models.instrument_key import normalize_ticker
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.export._format import (
     eur_smart as _eur_smart,
@@ -1020,7 +1021,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             if geo_name and name_norm == geo_name:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             raw_ticker = str(r.get("ticker") or "").strip()
-            bare = raw_ticker.split(".")[0].upper() if raw_ticker else ""
+            bare = normalize_ticker(raw_ticker)
             asset_class, role = taxonomy.get(bare, (None, None))
             benchmark_rows.append({
                 # Display name goes through the SAME shortener as the holding

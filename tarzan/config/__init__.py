@@ -75,6 +75,51 @@ def _load_indexes_csv() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _by_isin_and_ticker(df: pd.DataFrame, extract) -> dict:
+    """Build a taxonomy lookup keyed by both ISIN and bare ticker.
+
+    ``extract(row) -> value`` returns the cell value for a row, or ``None`` to
+    skip it. Keys are the canonical identity normalizers (``normalize_isin`` /
+    ``normalize_ticker``); ISIN entries win over ticker entries on collision.
+    One place to keep the taxonomy build rule and the identity convention.
+    """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    by_isin: dict[str, object] = {}
+    by_ticker: dict[str, object] = {}
+    for _, row in df.iterrows():
+        value = extract(row)
+        if value is None:
+            continue
+        isin = normalize_isin(row.get("isin"))
+        if isin:
+            by_isin.setdefault(isin, value)
+        ticker = normalize_ticker(row.get("ticker"))
+        if ticker:
+            by_ticker.setdefault(ticker, value)
+    merged = dict(by_ticker)
+    merged.update(by_isin)  # ISIN wins on collision
+    return merged
+
+
+def _lookup_by_identity(lut: dict, isin: Optional[str], ticker: Optional[str]):
+    """Read a ``_by_isin_and_ticker`` map by ISIN then bare ticker, or None."""
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    for key in (normalize_isin(isin), normalize_ticker(ticker)):
+        if key and key in lut:
+            return lut[key]
+    return None
+
+
+def _flagged_rows(col: str) -> pd.DataFrame:
+    """Taxonomy rows whose boolean flag column ``col`` is truthy ("true")."""
+    df = _load_indexes_csv()
+    if df.empty or col not in df.columns:
+        return df.iloc[0:0] if not df.empty else df
+    return df[df[col].astype(str).str.strip().str.lower() == "true"]
+
+
 def _warn_taxonomy(message: str) -> None:
     """Emit a taxonomy-degradation warning to the data-quality report,
     tolerating the (rare) case where the report module is unavailable."""
@@ -97,25 +142,15 @@ def _taxonomy_lookup() -> dict:
     df = _load_indexes_csv()
     if df.empty or "asset_class" not in df.columns:
         return {}
-    by_isin: dict[str, tuple] = {}
-    by_ticker: dict[str, tuple] = {}
-    for _, row in df.iterrows():
+
+    def extract(row):
         ac = str(row.get("asset_class", "")).strip()
         if not ac or ac.lower() == "nan":
-            continue
+            return None
         role = str(row.get("role", "")).strip()
-        val = (ac, role or None)
-        isin = str(row.get("isin", "")).strip().upper()
-        if isin and isin.lower() != "nan":
-            by_isin.setdefault(isin, val)
-        tk = str(row.get("ticker", "")).strip()
-        bare = tk.split(".")[0].upper() if tk else ""
-        if bare and bare.lower() != "nan":
-            by_ticker.setdefault(bare, val)
-    # ISIN entries win over ticker entries on key collisions.
-    merged = dict(by_ticker)
-    merged.update(by_isin)
-    return merged
+        return (ac, role or None)
+
+    return _by_isin_and_ticker(df, extract)
 
 
 def instrument_taxonomy() -> dict:
@@ -315,9 +350,8 @@ def class_exposure_lookup() -> dict:
     present = [c for c in _EXP_COLUMNS if c in df.columns]
     if not present:
         return {}
-    by_isin: dict[str, dict] = {}
-    by_ticker: dict[str, dict] = {}
-    for _, row in df.iterrows():
+
+    def extract(row):
         breakdown: dict[str, float] = {}
         for col in present:
             raw = row.get(col)
@@ -332,18 +366,9 @@ def class_exposure_lookup() -> dict:
                 continue
             if v != 0.0:
                 breakdown[_EXP_COLUMNS[col]] = v
-        if not breakdown:
-            continue
-        isin = str(row.get("isin", "")).strip().upper()
-        if isin and isin.lower() != "nan":
-            by_isin.setdefault(isin, breakdown)
-        tk = str(row.get("ticker", "")).strip()
-        bare = tk.split(".")[0].upper() if tk else ""
-        if bare and bare.lower() != "nan":
-            by_ticker.setdefault(bare, breakdown)
-    merged = dict(by_ticker)
-    merged.update(by_isin)  # ISIN wins on collision
-    return merged
+        return breakdown or None
+
+    return _by_isin_and_ticker(df, extract)
 
 
 @lru_cache(maxsize=1)
@@ -357,28 +382,18 @@ def ter_lookup() -> dict:
     df = _load_indexes_csv()
     if df.empty or "ter" not in df.columns:
         return {}
-    by_isin: dict[str, float] = {}
-    by_ticker: dict[str, float] = {}
-    for _, row in df.iterrows():
+
+    def extract(row):
         s = str(row.get("ter", "")).strip()
         if not s or s.lower() == "nan":
-            continue
+            return None
         try:
             v = float(s)
         except (TypeError, ValueError):
-            continue
-        if v <= 0:
-            continue
-        isin = str(row.get("isin", "")).strip().upper()
-        if isin and isin.lower() != "nan":
-            by_isin.setdefault(isin, v)
-        tk = str(row.get("ticker", "")).strip()
-        bare = tk.split(".")[0].upper() if tk else ""
-        if bare and bare.lower() != "nan":
-            by_ticker.setdefault(bare, v)
-    merged = dict(by_ticker)
-    merged.update(by_isin)  # ISIN wins on collision
-    return merged
+            return None
+        return v if v > 0 else None
+
+    return _by_isin_and_ticker(df, extract)
 
 
 @lru_cache(maxsize=1)
@@ -390,48 +405,24 @@ def name_lookup() -> dict:
     df = _load_indexes_csv()
     if df.empty or "name" not in df.columns:
         return {}
-    by_isin: dict[str, str] = {}
-    by_ticker: dict[str, str] = {}
-    for _, row in df.iterrows():
+
+    def extract(row):
         nm = str(row.get("name", "")).strip()
-        if not nm or nm.lower() == "nan":
-            continue
-        isin = str(row.get("isin", "")).strip().upper()
-        if isin and isin.lower() != "nan":
-            by_isin.setdefault(isin, nm)
-        tk = str(row.get("ticker", "")).strip()
-        bare = tk.split(".")[0].upper() if tk else ""
-        if bare and bare.lower() != "nan":
-            by_ticker.setdefault(bare, nm)
-    merged = dict(by_ticker)
-    merged.update(by_isin)  # ISIN wins on collision
-    return merged
+        return nm if nm and nm.lower() != "nan" else None
+
+    return _by_isin_and_ticker(df, extract)
 
 
 def name_for(isin: Optional[str], ticker: Optional[str]) -> Optional[str]:
     """Curated display name for one instrument by ISIN then bare ticker, or
     None when the taxonomy has no ``name`` for it."""
-    lut = name_lookup()
-    for key in (
-        (isin or "").strip().upper(),
-        (ticker or "").split(".")[0].strip().upper(),
-    ):
-        if key and key in lut:
-            return lut[key]
-    return None
+    return _lookup_by_identity(name_lookup(), isin, ticker)
 
 
 def ter_for(isin: Optional[str], ticker: Optional[str]) -> Optional[float]:
     """Curated TER (FRACTION) for one instrument by ISIN then bare ticker, or
     None when the taxonomy has no ``ter`` for it."""
-    lut = ter_lookup()
-    for key in (
-        (isin or "").strip().upper(),
-        (ticker or "").split(".")[0].strip().upper(),
-    ):
-        if key and key in lut:
-            return lut[key]
-    return None
+    return _lookup_by_identity(ter_lookup(), isin, ticker)
 
 
 def class_breakdown_for(isin: Optional[str], ticker: Optional[str],
@@ -443,13 +434,9 @@ def class_breakdown_for(isin: Optional[str], ticker: Optional[str],
     added in the future — always has a valid breakdown with no manual work.
     Returns ``{}`` only when there is neither an override nor an asset class.
     """
-    lut = class_exposure_lookup()
-    for key in (
-        (isin or "").strip().upper(),
-        (ticker or "").split(".")[0].strip().upper(),
-    ):
-        if key and key in lut:
-            return dict(lut[key])
+    override = _lookup_by_identity(class_exposure_lookup(), isin, ticker)
+    if override is not None:
+        return dict(override)
     if asset_class_value and str(asset_class_value).strip():
         return {str(asset_class_value).strip(): 100.0}
     return {}
@@ -491,10 +478,7 @@ def trading_days() -> int:
 
 def benchmark_beta() -> str:
     """Get the ticker for Alpha/Beta calculation from instrument_taxonomy.csv (is_benchmark_alpha_beta=true)."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark_alpha_beta" not in df.columns:
-        return "^GSPC"
-    match = df[df["is_benchmark_alpha_beta"].astype(str).str.strip().str.lower() == "true"]
+    match = _flagged_rows("is_benchmark_alpha_beta")
     if not match.empty:
         return str(match.iloc[0]["ticker"]).strip()
     return "^GSPC"
@@ -502,28 +486,19 @@ def benchmark_beta() -> str:
 
 def benchmark_beta_name() -> str:
     """Get the index name for Alpha/Beta calculation (used for column headers)."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark_alpha_beta" not in df.columns:
-        return "S&P 500"
-    match = df[df["is_benchmark_alpha_beta"].astype(str).str.strip().str.lower() == "true"]
+    match = _flagged_rows("is_benchmark_alpha_beta")
     if not match.empty:
         return str(match.iloc[0]["name"]).strip()
     return "S&P 500"
 
 def chart_benchmarks() -> list[str]:
     """Get index names marked as is_benchmark=true for chart overlay."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark" not in df.columns:
-        return []
-    match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
+    match = _flagged_rows("is_benchmark")
     return match["name"].tolist() if not match.empty else []
 
 def benchmark_geo_allocation() -> str:
     """Get the index name for geo benchmark reference (is_benchmark_geo=true)."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark_geo" not in df.columns:
-        return "MSCI ACWI"
-    match = df[df["is_benchmark_geo"].astype(str).str.strip().str.lower() == "true"]
+    match = _flagged_rows("is_benchmark_geo")
     if not match.empty:
         return str(match.iloc[0]["name"]).strip()
     return "MSCI ACWI"
@@ -556,10 +531,7 @@ def geography_map() -> dict[str, Geography]:
 
 def benchmarks() -> dict[str, str]:
     """Get benchmark dict {index_name: ticker} from instrument_taxonomy.csv where is_benchmark=true."""
-    df = _load_indexes_csv()
-    if df.empty or "is_benchmark" not in df.columns:
-        return {}
-    match = df[df["is_benchmark"].astype(str).str.strip().str.lower() == "true"]
+    match = _flagged_rows("is_benchmark")
     result = {}
     for _, row in match.iterrows():
         name = str(row.get("name", "")).strip()

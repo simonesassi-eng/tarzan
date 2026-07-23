@@ -28,8 +28,7 @@ from typing import Optional
 def normalize_isin(raw: Optional[str]) -> str:
     """Uppercased, whitespace/hyphen-stripped ISIN; '' for blank/'nan'.
 
-    (Mirrors ``tarzan.contracts.validation.normalize_isin`` — kept here too so this
-    module has no dependency on the validation layer.)
+    The single canonical ISIN normalizer; ``contracts.validation`` re-exports it.
     """
     if raw is None:
         return ""

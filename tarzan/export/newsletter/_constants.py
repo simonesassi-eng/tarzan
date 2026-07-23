@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.models.taxonomy import (
@@ -97,8 +98,7 @@ def role_for(isin, ticker, taxonomy) -> str:
     instrument, from ``instrument_taxonomy.csv`` (ISIN first, then bare
     ticker). ``taxonomy`` is ``config.instrument_taxonomy()`` — passed in so
     this stays a pure function. Returns '—' when the role is unset."""
-    for k in (str(isin or "").strip().upper(),
-              str(ticker or "").split(".")[0].upper()):
+    for k in (normalize_isin(isin), normalize_ticker(ticker)):
         if k and k in taxonomy and taxonomy[k][1]:
             return taxonomy[k][1]
     return "—"
