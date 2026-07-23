@@ -54,6 +54,13 @@ PERIOD_DAYS: dict[str, int] = {
 # ======================================================================
 
 def compute_cagr(series: pd.Series) -> float:
+    # Drop missing observations first: the endpoints drive the whole ratio, so
+    # a trailing NaN bar (providers append one for the not-yet-closed session,
+    # esp. EU venues queried after close) or a leading gap would null the CAGR
+    # while pct_change-based metrics on the same series stay valid. Mirrors the
+    # dropna already done in compute_period_return.
+    if series is not None:
+        series = series.dropna()
     if series.empty or len(series) < 2:
         return 0.0
     start, end = float(series.iloc[0]), float(series.iloc[-1])
