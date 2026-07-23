@@ -924,8 +924,8 @@ class MetricsEngine:
             ctx["weighted_yield"] = 0.0
             ctx["avg_ter"] = 0.0
             return
-        ctx["weighted_yield"] = float((df["yield_pct"].fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
-        ctx["avg_ter"] = float((df["ter"].fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
+        ctx["weighted_yield"] = float((pd.to_numeric(df["yield_pct"], errors="coerce").fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
+        ctx["avg_ter"] = float((pd.to_numeric(df["ter"], errors="coerce").fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
 
     # ------------------------------------------------------------------
     # Goal deltas
