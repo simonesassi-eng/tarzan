@@ -27,7 +27,7 @@ import math
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextvars import ContextVar, copy_context
+from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from datetime import datetime as dt, timezone
 from typing import Optional
@@ -97,13 +97,6 @@ _benchmark_memo: dict[str, pd.Series] = {}
 # re-attempt the network refresh — the series is identical within a run.
 _fx_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
-# The effective-order resolver initializes provider memoization before holding
-# enrichment. A context-local one-shot flag preserves that same evidence across
-# the stage boundary without changing the public ``enrich_holdings`` signature.
-_provider_memo_ready: ContextVar[bool] = ContextVar(
-    "tarzan_enricher_provider_memo_ready",
-    default=False,
-)
 
 # DataFrame attrs carry per-run provenance without entering the immutable disk
 # cache. Origin is assigned per row so an invalid fresh tail cannot relabel an
@@ -118,7 +111,6 @@ _FX_EVIDENCE_ATTR = "tarzan_fx_evidence"
 def reset_run_caches() -> None:
     """Clear all intra-run memoization. Called once at the start of each
     enrichment run so every run starts from fresh network state."""
-    _provider_memo_ready.set(False)
     with _net_lock:
         _openfigi_memo.clear()
         _ticker_info_memo.clear()
@@ -2013,7 +2005,6 @@ def resolve_effective_order_instruments(orders: list) -> tuple[list, dict]:
         len(report["resolved_kind_isins"]),
         len(accepted_groups),
     )
-    _provider_memo_ready.set(True)
     return resolved_orders, report
 
 
@@ -3200,15 +3191,17 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
         List of enriched Holding objects with market data and classifications.
     """
     if not holdings:
-        _provider_memo_ready.set(False)
         return holdings
 
-    # Standalone callers start with fresh memoization. The orchestrator's
-    # effective-order resolver marks its freshly initialized memo for exactly
-    # one continuation into this stage, avoiding duplicate OpenFIGI calls.
-    reuse_provider_memo = _provider_memo_ready.get()
-    _provider_memo_ready.set(False)
-    if not reuse_provider_memo:
+    # The provider memo is run-scoped (see module docstring): one network call
+    # per instrument identity per run. An active RunSession means the run has
+    # already reset the memo once (orchestrator.py, before instrument
+    # resolution), so every enrichment pass in that run — holdings, historical
+    # ISINs for returns, backtest candidates — REUSES the resolved symbols,
+    # price history and OpenFIGI profiles instead of wiping and re-fetching
+    # them. Only standalone callers (tools, tests) with no session start fresh.
+    from tarzan.runtime.session import current_session
+    if current_session() is None:
         reset_run_caches()
 
     logger.info("Enriching %d holdings (max %d workers)...", len(holdings), MAX_WORKERS)
