@@ -392,6 +392,38 @@ class TestCurrencyMatches:
         assert not enricher._currency_matches("EUR", "")
 
 
+class TestFxMemoization:
+    def test_same_currency_fetched_once_per_run(self, monkeypatch):
+        enricher.reset_run_caches()
+        calls = {"n": 0}
+
+        def fake_uncached(currency):
+            calls["n"] += 1
+            return pd.Series([1.1], index=pd.to_datetime(["2026-07-20"]))
+
+        monkeypatch.setattr(enricher, "_fetch_fx_pair_uncached", fake_uncached)
+        # Many holdings in the same currency…
+        enricher._fetch_fx_pair("USD")
+        enricher._fetch_fx_pair("USD")
+        enricher._fetch_fx_pair("USD")
+        # …collapse to one disk/network resolution.
+        assert calls["n"] == 1
+
+    def test_reset_clears_fx_memo(self, monkeypatch):
+        enricher.reset_run_caches()
+        calls = {"n": 0}
+
+        def fake_uncached(currency):
+            calls["n"] += 1
+            return pd.Series([1.1], index=pd.to_datetime(["2026-07-20"]))
+
+        monkeypatch.setattr(enricher, "_fetch_fx_pair_uncached", fake_uncached)
+        enricher._fetch_fx_pair("USD")
+        enricher.reset_run_caches()
+        enricher._fetch_fx_pair("USD")
+        assert calls["n"] == 2
+
+
 class TestOpenFigiMemoization:
     def test_single_network_call_per_isin(self, monkeypatch):
         enricher.reset_run_caches()

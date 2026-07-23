@@ -93,6 +93,9 @@ _openfigi_memo: dict[str, list] = {}
 _ticker_info_memo: dict[str, dict] = {}
 _history_memo: dict[str, pd.DataFrame] = {}
 _benchmark_memo: dict[str, pd.Series] = {}
+# Per-currency FX history, so N holdings in USD don't each re-read disk and
+# re-attempt the network refresh — the series is identical within a run.
+_fx_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
 # The effective-order resolver initializes provider memoization before holding
 # enrichment. A context-local one-shot flag preserves that same evidence across
@@ -121,6 +124,7 @@ def reset_run_caches() -> None:
         _ticker_info_memo.clear()
         _history_memo.clear()
         _benchmark_memo.clear()
+        _fx_memo.clear()
         _geo_breakdown_memo.clear()
         _geo_source_memo.clear()
         _openfigi_last_call[0] = 0.0
@@ -180,7 +184,22 @@ def _usable_fx_series(series: Optional[pd.Series]) -> pd.Series:
 
 
 def _fetch_fx_pair(currency: str) -> pd.Series:
-    """Fetch FX history with row-level live/cache provenance."""
+    """Fetch FX history with row-level live/cache provenance.
+
+    Memoized per currency for the run (cleared by :func:`reset_run_caches`):
+    every holding in a given currency shares one series instead of re-reading
+    the disk cache and re-attempting the refresh."""
+    with _net_lock:
+        if currency in _fx_memo:
+            return _fx_memo[currency]
+
+    result = _fetch_fx_pair_uncached(currency)
+    with _net_lock:
+        _fx_memo[currency] = result
+    return result
+
+
+def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
     cache_key = f"FX_{currency}"
     cached = price_cache.load_history(cache_key)
     start = price_cache.refresh_start(cached)
