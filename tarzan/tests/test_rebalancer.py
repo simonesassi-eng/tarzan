@@ -304,6 +304,39 @@ def test_tax_per_unit_uses_proceeds_gain_fraction():
     assert _tax_per_unit_sold([h], cfg)[0] == 0.0
 
 
+def test_tax_per_unit_gov_bond_matches_cgt_classifier():
+    """The rebalancer earns the reduced gov rate on the SAME instruments the
+    realized-CGT estimate does — a sovereign bond named 'BTP …' but tagged with
+    a generic 'Bond' subtype, not only the literal 'government bond' string.
+    Guards against the two CGT models drifting (26% vs 12.5% on one BTP).
+    """
+    from tarzan.engine.rebalancer import _tax_per_unit_sold
+    from tarzan.models.investor_config import InvestorConfig
+
+    cfg = InvestorConfig()
+    cfg.rebalancing_capital_gains_tax_standard_pctg = 26.0
+    cfg.rebalancing_capital_gains_tax_government_pctg = 12.5
+    btp = Holding(
+        isin="IT0005", ticker="BTP", quantity=1.0, cost_basis_eur=100.0,
+        market_value_eur=200.0, currency="EUR",
+        asset_class=AssetClass.FIXED_INCOME, instrument_type="Bond",
+        name="BTP Italia 2030",
+    )
+    btp.gain_pct = 100.0
+    # gov rate applies: 0.125 * (100/200) = 0.0625, not the 0.26 std rate.
+    assert _tax_per_unit_sold([btp], cfg)[0] == pytest.approx(0.0625, abs=1e-9)
+
+    # An equity whose name merely contains a sovereign token keeps the std rate.
+    eq = Holding(
+        isin="US0004", ticker="TWE", quantity=1.0, cost_basis_eur=100.0,
+        market_value_eur=200.0, currency="EUR",
+        asset_class=AssetClass.EQUITIES, instrument_type="Stock",
+        name="Treasury Wine Estates",
+    )
+    eq.gain_pct = 100.0
+    assert _tax_per_unit_sold([eq], cfg)[0] == pytest.approx(0.13, abs=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # Production-readiness bug exploration: C3 executable funding
 # ---------------------------------------------------------------------------
