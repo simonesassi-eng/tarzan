@@ -3084,6 +3084,17 @@ def _enrich_and_classify(holding: Holding) -> Holding:
     _apply_geo_breakdown(holding)
     _apply_class_breakdown(holding)
 
+    # TER gap-fill: curated-taxonomy / yfinance TER (set in _enrich_single) is
+    # authoritative; only when it is absent do we fall back to the justETF
+    # profile fee, then a per-asset-class default. Same resolver the backtest
+    # reads, so the live "average TER" and the backtest charge identical fees
+    # instead of the live path counting an unknown fee as 0%. justETF is
+    # network-gated (cache-only + None in pinned runs) via allows_live_transport.
+    if holding.ter is None:
+        from tarzan.data.geo_resolver import resolve_ter
+        ac_val = holding.asset_class.value if holding.asset_class else None
+        holding.ter = resolve_ter(holding.isin, ac_val)
+
     return holding
 
 
