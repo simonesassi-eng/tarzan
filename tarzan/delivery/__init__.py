@@ -63,8 +63,8 @@ from tarzan.delivery.claims import (
 
 logger = logging.getLogger("tarzan.newsletter")
 
-# Repo root (…/tarzan/delivery.py → parents[1]). Used to place local HTML copies
-# under output/<date>/ the same way the CLI does.
+# Repo root (…/tarzan/delivery/__init__.py → parents[2]). Used to place local
+# HTML copies under output/<date>/ the same way the CLI does.
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -98,9 +98,7 @@ def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     ((total value − cost basis) / cost basis), the same figure the Hero shows
     as "Unrealized PnL".
     """
-    cost = float(metrics.holdings_df["cost_basis_eur"].sum()) if not metrics.holdings_df.empty else 0.0
-    total_gain = metrics.total_value - cost
-    gain_pct = (total_gain / cost * 100) if cost > 0 else 0.0
+    gain_pct = metrics.unrealized_pnl_pct or 0.0
     generated_at = now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 

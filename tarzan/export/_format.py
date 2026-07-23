@@ -116,8 +116,8 @@ _NAME_NOISE_PATTERNS = [
 
 # Issuer name → standardized short form, applied to the leading word(s)
 # of an instrument name. Keys are matched case-insensitively and anchored
-# at the start. Keep this list the single source of truth so Excel and the
-# email abbreviate issuers identically.
+# at the start. Single source of truth so every newsletter table abbreviates
+# issuers identically.
 _ISSUER_ABBREVIATIONS = {
     "Xtrackers": "Xtr.",
     "Invesco": "Inv.",
@@ -145,8 +145,8 @@ def short_instrument_name(
     ``max_len`` with an ellipsis.
 
     Used to keep the newsletter Returns-snapshot rows single-line and
-    the same height as the Performance table. Kept here (shared) so
-    Excel and the email render instrument names identically.
+    the same height as the Performance table. Kept here (shared) so every
+    newsletter table renders instrument names identically.
 
     Returns an empty string for falsy input.
     """

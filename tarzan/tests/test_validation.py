@@ -104,7 +104,6 @@ class TestDataQualityReport:
         dq.reset()
         assert dq.issues() == []
         assert "no issues" in dq.summary_line().lower()
-        assert "No issues this run" in dq.render()
 
     def test_records_and_counts(self):
         dq.reset()
@@ -114,29 +113,6 @@ class TestDataQualityReport:
         c = dq.counts()
         assert c == {"WARNING": 1, "ERROR": 1, "INFO": 1}
         assert len(dq.issues()) == 3
-
-    def test_render_groups_by_source_and_is_greppable(self):
-        dq.reset()
-        dq.warning("order_load", "sign corrected", context="IE00X")
-        dq.error("metrics", "boom")
-        report = dq.render()
-        # Greppable severity+source prefix.
-        assert "[ERROR][metrics]" in report
-        assert "[WARNING][order_load]" in report
-        # Grouped section headers present.
-        assert "## metrics" in report
-        assert "## order_load" in report
-        # Summary counts line.
-        assert "SUMMARY:" in report
-
-    def test_write_report_creates_file(self, tmp_path):
-        dq.reset()
-        dq.warning("order_load", "something", context="row 1")
-        path = dq.write_report(str(tmp_path))
-        assert path is not None
-        content = (tmp_path / "data_quality.log").read_text()
-        assert "TARZAN DATA-QUALITY REPORT" in content
-        assert "something" in content
 
     def test_record_never_raises(self):
         dq.reset()

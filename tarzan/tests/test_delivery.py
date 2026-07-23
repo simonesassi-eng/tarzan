@@ -7,18 +7,17 @@ Drive-vs-local input resolution.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pandas as pd
 import pytest
 
 from tarzan import delivery
+from tarzan.models.portfolio import PortfolioMetrics
 
 
-def _metrics(total_value: float, cost_basis: float):
-    """Minimal stand-in for PortfolioMetrics: only the fields build_subject reads."""
+def _metrics(total_value: float, cost_basis: float) -> PortfolioMetrics:
+    """PortfolioMetrics carrying only the fields build_subject reads."""
     df = pd.DataFrame({"cost_basis_eur": [cost_basis]}) if cost_basis else pd.DataFrame()
-    return SimpleNamespace(total_value=total_value, holdings_df=df)
+    return PortfolioMetrics(total_value=total_value, holdings_df=df)
 
 
 def test_build_subject_gain_and_loss(monkeypatch):

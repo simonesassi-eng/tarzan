@@ -8,9 +8,19 @@ import pandas as pd
 
 from tarzan.export.newsletter._constants import PALETTE
 
+
+def is_missing(value) -> bool:
+    """True for an Unavailable display value: ``None`` or a float NaN.
+
+    The one predicate behind every "render '—' when there's nothing to show"
+    guard in the newsletter, so a numeric zero is never mistaken for missing
+    (the numeric-zero != Unavailable invariant)."""
+    return value is None or (isinstance(value, float) and pd.isna(value))
+
+
 def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> str:
     """Format a number as a localised EUR amount: €1,234.56 / +€1,234.56."""
-    if amount is None or (isinstance(amount, float) and pd.isna(amount)):
+    if is_missing(amount):
         return "—"
     fmt = f",.{decimals}f"
     formatted = f"€{abs(amount):{fmt}}"
@@ -23,7 +33,7 @@ def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> st
 
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
     """Format a percentage. Already in pp (e.g. 8.59 means 8.59%)."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if is_missing(value):
         return "—"
     if signed:
         sign = "+" if value >= 0 else "−"
@@ -46,7 +56,7 @@ def _pct_compact(value: Optional[float], signed: bool = True) -> str:
     meaningful precision (a few basis points on a >100% multi-year
     return are noise).
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if is_missing(value):
         return "—"
     v = float(value)
     av = abs(v)
@@ -65,7 +75,7 @@ def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = Fal
       71.7  → "71.7%"
       −1.6  → "−1.6%" (or "+1.7%" with signed=True)
     """
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if is_missing(value):
         return "—"
     rounded = round(float(value), max_decimals)
     is_integer = abs(rounded - round(rounded)) < 10 ** (-(max_decimals + 1))
@@ -77,7 +87,7 @@ def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = Fal
 
 def _signed_pp(value: Optional[float], decimals: int = 1) -> str:
     """Format a signed delta in percentage points (no % sign)."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if is_missing(value):
         return "—"
     sign = "+" if value >= 0 else "−"
     return f"{sign}{abs(value):.{decimals}f}"
@@ -100,7 +110,7 @@ def _display_ticker(symbol: Optional[str]) -> Optional[str]:
 
 def _semaphore(delta: Optional[float], tolerance: float) -> str:
     """Return 'green' / 'amber' / 'red' based on |delta| vs tolerance."""
-    if delta is None or (isinstance(delta, float) and pd.isna(delta)):
+    if is_missing(delta):
         return "muted"
     abs_d = abs(delta)
     if abs_d <= tolerance:

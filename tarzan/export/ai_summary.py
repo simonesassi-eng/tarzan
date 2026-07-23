@@ -670,7 +670,7 @@ def build_digest(metrics, config) -> dict:
     digest["since_inception"] = _clean({
         "total_pnl_eur": _num(getattr(m, "pnl_eur", None), 0),
         "total_pnl_pct": _num(getattr(m, "pnl_pct", None)),
-        "unrealized_pnl_eur": _num(m.total_value - cost, 0) if cost else None,
+        "unrealized_pnl_eur": _num(m.unrealized_pnl_eur, 0) if cost else None,
         "twror_cumulative_pct": _num(getattr(m, "twror_pct", None)),
         "twror_annualized_pct": _num(getattr(m, "twror_annualized_pct", None)),
         "xirr_pct": _num(getattr(m, "xirr_pct", None)),
