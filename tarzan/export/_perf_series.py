@@ -56,13 +56,14 @@ def _window_money_pnl(
 
 
 def _norm_series(s: pd.Series) -> pd.Series:
-    """tz-naive, calendar-day-normalised, de-duplicated copy of a series."""
-    s = s.copy()
-    ix = s.index
-    if getattr(ix, "tz", None) is not None:
-        ix = ix.tz_convert("UTC").tz_localize(None)
-    s.index = pd.DatetimeIndex(ix).normalize()
-    return s[~s.index.duplicated(keep="last")]
+    """tz-naive, calendar-day-normalised, de-duplicated copy of a series.
+
+    The export layer's spelling of ``stats.normalize_index(..., drop_duplicates
+    =True)`` — a thin alias so all the newsletter chart/series builders keep the
+    same short name while the tz-collapse logic lives in exactly one place.
+    """
+    from tarzan.engine.stats import normalize_index
+    return normalize_index(s, drop_duplicates=True)
 
 
 # Curated set of major indices for the "Markets" strip, in display order.
