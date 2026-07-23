@@ -347,18 +347,16 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     price = _usable_price(last.price_native)
     if price is None:
         return 0.0
-    fx = last.fx_rate or 1.0
-    try:
-        fx_numeric = float(fx)
-    except (TypeError, ValueError, OverflowError):
-        return 0.0
-    if not math.isfinite(fx_numeric):
+    fx_numeric = _order_fx_rate(last)
+    if fx_numeric is None:
+        # Foreign order with no usable FX rate: no seed (native-as-EUR would
+        # overstate by the FX rate); enrichment supplies the real EUR value.
         return 0.0
     seeded = value_position(
         abs(qty),
         price,
         instrument_kind=kind,
-    ) / (fx_numeric if fx_numeric > 0 else 1.0)
+    ) / fx_numeric
     return seeded if math.isfinite(seeded) else 0.0
 
 
@@ -526,6 +524,33 @@ def _usable_price(value: object) -> Optional[float]:
     return numeric
 
 
+def _order_fx_rate(order: Order) -> Optional[float]:
+    """Fineco ``Cambio`` divisor (native units per EUR) for converting an
+    order's native price to EUR, or ``None`` when a FOREIGN order carries no
+    usable rate.
+
+    A EUR (base-currency) order needs no conversion → ``1.0``. For a non-EUR
+    order a missing/zero rate is *unavailable*, NOT 1:1: booking a ZAR or USD
+    price as if it were EUR overstates the whole value series by the FX rate
+    (~20× for ZAR). Returning ``None`` makes the caller drop that observation
+    (numeric-zero≠unavailable), consistent with the terrapin path that also
+    refuses to book 1:1 when FX is missing.
+    """
+    ccy = str(order.currency or "").strip().upper()
+    if ccy in ("", "EUR"):
+        return 1.0
+    fx = order.fx_rate
+    if fx is None:
+        return None
+    try:
+        fx_numeric = float(fx)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(fx_numeric) or fx_numeric <= 0.0:
+        return None
+    return fx_numeric
+
+
 def _price_at(price_history: pd.Series, d: datetime.date) -> Optional[float]:
     """Last observed price at or before ``d`` in a tz-aware-safe way.
 
@@ -576,18 +601,11 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
         native_price = _usable_price(o.price_native)
         if native_price is None:
             continue
-        fx = o.fx_rate or 1.0
-        try:
-            fx_numeric = float(fx)
-        except (TypeError, ValueError, OverflowError):
+        fx_numeric = _order_fx_rate(o)
+        if fx_numeric is None:
+            # Foreign order with no usable FX rate: unavailable, not 1:1.
             continue
-        if not math.isfinite(fx_numeric):
-            continue
-        eur_price = (
-            native_price / fx_numeric
-            if fx_numeric > 0.0
-            else native_price
-        )
+        eur_price = native_price / fx_numeric
         usable_eur_price = _usable_price(eur_price)
         if usable_eur_price is not None:
             obs.append((o.trade_date, usable_eur_price))
