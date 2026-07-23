@@ -981,3 +981,62 @@ class TestExactKindEvidenceConflicts:
 
         assert classified["instrument_type"] == "ETF"
         assert "asset_class" not in classified
+
+
+class TestMemoSurvivesEnrichPasses:
+    """The provider memo is run-scoped: one yfinance/OpenFIGI call per
+    instrument identity per run. A run makes several enrich_holdings passes
+    (holdings, historical ISINs for returns, backtest candidates) — none may
+    wipe the memo the earlier pass filled, or the same ticker is fetched
+    2-3×. The reset happens once at run start; passes under an active session
+    must NOT reset again."""
+
+    def _holding(self):
+        from tarzan.models.holding import Holding
+        return Holding(
+            isin="IE0006WW1TQ4", ticker="X", quantity=1.0,
+            cost_basis_eur=1.0, market_value_eur=1.0, currency="EUR",
+        )
+
+    def test_passes_under_a_session_reset_once_not_per_pass(self, monkeypatch):
+        from tarzan.runtime.session import (
+            RunContext, RunMode, RunSession, activate_session,
+        )
+        import datetime as _dt
+
+        resets = {"n": 0}
+        real_reset = enricher.reset_run_caches
+        monkeypatch.setattr(
+            enricher, "reset_run_caches",
+            lambda: (resets.__setitem__("n", resets["n"] + 1), real_reset())[1],
+        )
+        # Skip real network/classification; we only assert reset accounting.
+        monkeypatch.setattr(enricher, "_enrich_and_classify", lambda h: h)
+
+        ctx = RunContext(
+            attempt_id="t", mode=RunMode.POINT_IN_TIME,
+            effective_date=_dt.date(2026, 7, 22),
+            captured_at=_dt.datetime(2026, 7, 22, tzinfo=_dt.timezone.utc),
+        )
+        session = RunSession(context=ctx, config_snapshot={}, ledger=None)
+
+        # Run start resets once; then three enrichment passes must NOT reset.
+        enricher.reset_run_caches()  # the orchestrator's one run-start reset
+        with activate_session(session):
+            enricher.enrich_holdings([self._holding()])   # pass 1: holdings
+            enricher.enrich_holdings([self._holding()])   # pass 2: returns
+            enricher.enrich_holdings([self._holding()])   # pass 3: backtest
+        assert resets["n"] == 1
+
+    def test_standalone_caller_without_session_still_resets(self, monkeypatch):
+        resets = {"n": 0}
+        real_reset = enricher.reset_run_caches
+        monkeypatch.setattr(
+            enricher, "reset_run_caches",
+            lambda: (resets.__setitem__("n", resets["n"] + 1), real_reset())[1],
+        )
+        monkeypatch.setattr(enricher, "_enrich_and_classify", lambda h: h)
+
+        # No active session (tool/test context) → each call starts fresh.
+        enricher.enrich_holdings([self._holding()])
+        assert resets["n"] == 1
