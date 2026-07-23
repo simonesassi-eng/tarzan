@@ -17,6 +17,9 @@ from tarzan.engine.returns_builder import (
     _instrument_identity_by_isin,
     _open_isins,
     _net_qty_by_isin,
+    _order_fx_rate,
+    _seed_market_value,
+    _build_synthetic_history,
 )
 from tarzan.instruments.registry import InstrumentKind
 from tarzan.models.holding import Holding, AssetClass, Geography
@@ -25,7 +28,8 @@ from tarzan.runtime.ledger import Availability
 
 
 def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
-       td=None, kind=InstrumentKind.STOCK, equivalence_group=None):
+       td=None, kind=InstrumentKind.STOCK, equivalence_group=None,
+       currency="EUR", fx=1.0):
     return Order(
         date=datetime.date(*d),
         trade_date=datetime.date(*td) if td is not None else datetime.date(*d),
@@ -34,9 +38,9 @@ def _o(otype, isin, qty=0.0, net=0.0, gross=0.0, price=None, d=(2025, 1, 1),
         name="X",
         ticker="",
         quantity=qty,
-        currency="EUR",
+        currency=currency,
         price_native=price,
-        fx_rate=1.0,
+        fx_rate=fx,
         gross_eur=gross,
         fees_eur=0.0,
         net_eur=net,
@@ -634,6 +638,39 @@ class TestBorsaItalianaRung:
             orders, {isin: h}, today=datetime.date(2025, 6, 1))
         assert isin not in res.provenance["borsa_italiana"]
         assert isin in res.provenance["carry_flat"]
+
+
+class TestOrderFxRate:
+    """A foreign order missing its FX rate is UNAVAILABLE, never booked 1:1
+    (booking a ZAR/USD native price as EUR overstates value by the FX rate)."""
+
+    def test_eur_needs_no_rate(self):
+        assert _order_fx_rate(_o(OrderType.BUY, "X", currency="EUR", fx=None)) == 1.0
+        assert _order_fx_rate(_o(OrderType.BUY, "X", currency="", fx=None)) == 1.0
+
+    def test_foreign_with_rate_uses_it(self):
+        assert _order_fx_rate(_o(OrderType.BUY, "X", currency="USD", fx=1.08)) == 1.08
+
+    def test_foreign_missing_or_bad_rate_is_unavailable(self):
+        assert _order_fx_rate(_o(OrderType.BUY, "X", currency="USD", fx=None)) is None
+        assert _order_fx_rate(_o(OrderType.BUY, "X", currency="ZAR", fx=0.0)) is None
+        assert _order_fx_rate(
+            _o(OrderType.BUY, "X", currency="ZAR", fx=float("nan"))) is None
+
+    def test_synthetic_history_drops_foreign_row_without_rate(self):
+        # A ZAR buy at 98 native with no rate must NOT enter the series as 98 EUR.
+        isin = "XS2105803527"
+        orders = [_o(OrderType.BUY, isin, qty=100.0, price=98.0,
+                     d=(2025, 1, 1), currency="ZAR", fx=None,
+                     kind=InstrumentKind.BOND)]
+        assert _build_synthetic_history(orders, isin) is None
+
+    def test_seed_is_zero_for_foreign_without_rate(self):
+        isin = "US91282CGJ45"
+        orders = [_o(OrderType.BUY, isin, qty=10.0, price=98.0,
+                     d=(2025, 1, 1), currency="USD", fx=None,
+                     kind=InstrumentKind.BOND)]
+        assert _seed_market_value(orders, isin, 10.0) == 0.0
 
 
 class TestCumExConservationProperty:
