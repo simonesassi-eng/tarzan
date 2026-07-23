@@ -58,6 +58,19 @@ class TestCAGR:
         series = pd.Series(values, index=idx)
         assert compute_cagr(series) == 0.0
 
+    def test_cagr_ignores_edge_nans(self):
+        """A leading/trailing NaN (providers append a bar for the not-yet-
+        closed session) must not null the CAGR — the endpoints drive the whole
+        ratio, so they are dropped first, matching the clean-series result."""
+        idx = pd.date_range("2024-01-01", "2026-01-01", freq="D")
+        clean = pd.Series(np.linspace(100, 200, len(idx)), index=idx)
+        expected = compute_cagr(clean)
+
+        lead = clean.copy(); lead.iloc[0] = np.nan
+        trail = clean.copy(); trail.iloc[-1] = np.nan
+        assert compute_cagr(lead) == pytest.approx(expected, rel=1e-3)
+        assert compute_cagr(trail) == pytest.approx(expected, rel=1e-3)
+
 
 class TestMaxDrawdown:
     def test_known_drawdown(self):
