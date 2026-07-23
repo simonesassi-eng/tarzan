@@ -947,6 +947,22 @@ def build_order_derived_series(
             external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) + o.quantity * unit
         elif o.type in (OrderType.COUPON, OrderType.DIVIDEND) and o.net_eur:
             # Distribution paid out of the securities portfolio → withdrawal.
+            # DOUBLE-COUNT GUARD: this GIPS treatment is correct only when the
+            # instrument's price series is PRICE-ONLY (income not embedded), as
+            # for bonds priced on the clean price. The yfinance rung is total-
+            # return (auto_adjust=True, dividends already in the price), so
+            # crediting the distribution ALSO as a flow would count it twice.
+            # No distributing holding is priced via yfinance today; warn loudly
+            # if that ever changes rather than silently inflating the return.
+            _, src = resolver.price_on(o.isin, o.trade_date)
+            if src == "yfinance":
+                dq.warning(
+                    "returns",
+                    f"{o.type.value} booked as a cash flow on a total-return "
+                    f"(yfinance) price series — income would be double-counted; "
+                    f"this holding needs a price-only series",
+                    context=o.isin,
+                )
             external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) - o.net_eur
 
     cf_dates = sorted(external_flows.keys())

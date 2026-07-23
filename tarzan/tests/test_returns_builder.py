@@ -673,6 +673,40 @@ class TestOrderFxRate:
         assert _seed_market_value(orders, isin, 10.0) == 0.0
 
 
+class TestDistributionDoubleCountGuard:
+    """A distribution booked as a cash flow is the GIPS total-return treatment,
+    correct ONLY on a PRICE-ONLY series. The yfinance rung is total-return
+    (auto_adjust=True), so a DIVIDEND order on such a holding would count the
+    income twice — the builder must warn, not silently inflate the return. A
+    bond coupon (clean price, Borsa rung) is price-only → no warning."""
+
+    def test_dividend_on_yfinance_series_warns(self):
+        from tarzan.runtime import data_quality as dq
+        dq.reset()
+        isin = "AAA"
+        orders = [
+            _o(OrderType.BUY, isin, qty=10.0, net=-1000.0, price=100.0, d=(2025, 1, 1)),
+            _o(OrderType.DIVIDEND, isin, net=19.0, d=(2025, 1, 2)),
+        ]
+        enriched = {isin: _enriched_with_history(isin, [100.0, 101.0, 102.0])}
+        build_order_derived_series(orders, enriched, today=datetime.date(2025, 1, 3))
+        msgs = [i for i in dq.issues() if i.context == isin and "double-count" in i.message]
+        assert msgs, "expected a double-count warning for a dividend on a total-return series"
+
+    def test_bond_coupon_on_clean_price_does_not_warn(self):
+        from tarzan.runtime import data_quality as dq
+        dq.reset()
+        isin = "IT0005542359"
+        orders = [
+            _o(OrderType.TRANSFER_IN, isin, qty=4000.0, gross=4000.0, price=100.0,
+               d=(2025, 1, 1), kind=InstrumentKind.BOND),
+            _o(OrderType.COUPON, isin, net=98.0, d=(2025, 1, 2)),
+        ]
+        enriched = {isin: _enriched_borsa_bond(isin, current_price=1.0384, qty=4000.0)}
+        build_order_derived_series(orders, enriched, today=datetime.date(2025, 1, 3))
+        assert not [i for i in dq.issues() if "double-count" in i.message]
+
+
 class TestCumExConservationProperty:
     @given(
         face=st.floats(min_value=1000.0, max_value=1e6),

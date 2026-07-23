@@ -208,9 +208,13 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
         def _call(p=pair, s=start):
             _space_yf_call()
             ticker = yf.Ticker(p)
+            # auto_adjust pinned for a stable "Close" column across yfinance
+            # versions (FX pairs pay no dividends, so the value is unaffected;
+            # this only guards the column set the reader below depends on).
             if s is not None:
-                return ticker.history(start=s, interval="1d")
-            return ticker.history(period=_backtest_period(), interval="1d")
+                return ticker.history(start=s, interval="1d", auto_adjust=True)
+            return ticker.history(period=_backtest_period(), interval="1d",
+                                  auto_adjust=True)
 
         history = _retry(_call, what=f"FX {pair}")
         if history is not None and not history.empty:
@@ -1146,9 +1150,19 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     def _call():
         _space_yf_call()
         ticker = yf.Ticker(symbol)
+        # auto_adjust pinned EXPLICITLY (the yfinance default flip-flopped
+        # across versions — see proxy_data): total-return closes, so a
+        # benchmark's dividends live in its price. Holdings are currently all
+        # accumulating (no DIVIDEND orders) or bonds priced on the clean price
+        # via Borsa, so total-return == price-only for them today. If a
+        # DISTRIBUTING holding is ever added AND its dividends are booked as
+        # orders (the chosen policy), that holding's price must switch to
+        # price-only to avoid double-counting the income — build_order_derived
+        # _series guards that case at run time.
         if start is not None:
-            return ticker.history(start=start, interval="1d")
-        return ticker.history(period=_backtest_period(), interval="1d")
+            return ticker.history(start=start, interval="1d", auto_adjust=True)
+        return ticker.history(period=_backtest_period(), interval="1d",
+                              auto_adjust=True)
 
     fresh = _retry(_call, what=f"history {symbol}")
     if fresh is None:
