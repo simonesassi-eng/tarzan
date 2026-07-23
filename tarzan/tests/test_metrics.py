@@ -212,6 +212,37 @@ class TestRiskMetricRowRiskFree:
         assert tv > scalar
 
 
+class TestAlphaRiskFree:
+    """Jensen's alpha must use the real (time-varying) risk-free, not the
+    hardcoded 4% scalar. rf enters the CAPM regression as a level, so the
+    window-mean annual % (rf_annual_pct) is the correct scalar; None keeps the
+    documented RISK_FREE_RATE fallback (pinned/offline runs unchanged)."""
+
+    def test_rf_annual_pct_collapses_series_to_window_mean(self):
+        from tarzan.engine.stats import rf_annual_pct, TRADING_DAYS
+        idx = pd.date_range("2020-01-01", periods=100, freq="B")
+        s = pd.Series(0.02 / TRADING_DAYS, index=idx)  # flat 2%/yr daily path
+        assert rf_annual_pct(s) == pytest.approx(2.0)
+        assert rf_annual_pct(None) is None            # → RISK_FREE_RATE fallback
+        assert rf_annual_pct(pd.Series(dtype=float)) is None
+        assert rf_annual_pct(3.5) == 3.5              # scalar passthrough
+
+    def test_alpha_shifts_with_risk_free(self):
+        # alpha = port.mean − β·bench.mean − rf·(1−β): with β≠1 a different rf
+        # moves alpha. A ~0% rf (vs the 4% default) must change the number.
+        from tarzan.engine.stats import _compute_beta_alpha
+        idx = pd.date_range("2018-01-01", periods=520, freq="B")
+        rng = np.random.default_rng(1)
+        bench_r = rng.normal(0.0004, 0.008, len(idx))
+        bench = pd.Series(100.0 * np.cumprod(1 + bench_r), index=idx)
+        # Defensive port (β≈0.5): half the benchmark's moves plus idiosyncratic.
+        port_r = 0.5 * bench_r + rng.normal(0.0002, 0.004, len(idx))
+        port = pd.Series(100.0 * np.cumprod(1 + port_r), index=idx)
+        _, alpha_default = _compute_beta_alpha(port, bench, 5.0)          # rf=4%
+        _, alpha_zero = _compute_beta_alpha(port, bench, 5.0, risk_free=0.0)
+        assert alpha_zero != pytest.approx(alpha_default)
+
+
 class TestVaR:
     def test_var_insufficient_data_returns_nan(self):
         returns = pd.Series([0.01, 0.02])  # fewer than 5
