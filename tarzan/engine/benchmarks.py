@@ -13,25 +13,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import logging
 
-import numpy as np
 import pandas as pd
 
 from tarzan import config as cfg
 from tarzan.engine.stats import (
-    TRADING_DAYS,
     DAYS_PER_YEAR,
     PERIOD_DAYS,
-    compute_cagr,
-    compute_cvar,
-    compute_max_drawdown,
     compute_period_return,
-    compute_sharpe,
-    compute_sortino,
-    compute_ulcer_index,
-    compute_var,
     compute_ytd_return,
     _compute_beta_alpha,
-    _scale_or_nan,
+    normalize_index,
+    risk_metric_row,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,11 +50,7 @@ def _clip_to_window(series: pd.Series, start, end) -> pd.Series:
             ts = ts.tz_convert("UTC").tz_localize(None)
         return ts.normalize()
 
-    idx = series.index
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_convert("UTC").tz_localize(None)
-    s = series.copy()
-    s.index = idx.normalize()
+    s = normalize_index(series)
     lo, hi = _naive(start), _naive(end)
     return s[(s.index >= lo) & (s.index <= hi)]
 
@@ -215,24 +203,15 @@ def _compute_single_benchmark_metrics(
             CAGR). Pass the same series as ``bench`` to get the trivial
             β=1.00 / α=0 (vs itself).
     """
-    cagr = compute_cagr(bench)
-    daily_ret = bench.pct_change().dropna()
-    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
     metrics = {
-        "cagr": cagr,
+        **risk_metric_row(bench),
         **{k: compute_period_return(bench, d) for k, d in PERIOD_DAYS.items()},
         "ytd": compute_ytd_return(bench),
-        "volatility": vol, "sharpe": compute_sharpe(cagr, vol),
-        "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
-        "max_drawdown": compute_max_drawdown(bench) * 100,
-        "ulcer_index": compute_ulcer_index(bench),
-        "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
-        "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
         "alpha": float("nan"),
         "beta": float("nan"),
     }
     if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
-        beta, alpha = _compute_beta_alpha(bench, ab_benchmark, cagr)
+        beta, alpha = _compute_beta_alpha(bench, ab_benchmark, metrics["cagr"])
         metrics["alpha"] = alpha
         metrics["beta"] = beta
     return metrics
@@ -284,19 +263,10 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
         row[key] = compute_period_return(s, days)
     row["ytd"] = compute_ytd_return(s)
 
-    # Risk metrics on full series
-    row["cagr"] = compute_cagr(s)
+    # Risk metrics on full series (same shared block as the benchmark rows).
+    row.update(risk_metric_row(s))
     daily_ret = s.pct_change().dropna()
-    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
     cagr_val = row["cagr"] if isinstance(row["cagr"], (int, float)) else 0.0
-    row["volatility"] = vol
-    row["sharpe"] = compute_sharpe(cagr_val, vol)
-    row["sortino"] = compute_sortino(daily_ret, cagr_val) if len(daily_ret) > 0 else float("nan")
-    row["max_drawdown"] = compute_max_drawdown(s) * 100
-    row["ulcer_index"] = compute_ulcer_index(s)
-    # Tail risk (historical simulation, 95% confidence)
-    row["var_95"] = _scale_or_nan(compute_var(daily_ret, 0.95), 100)
-    row["cvar_95"] = _scale_or_nan(compute_cvar(daily_ret, 0.95), 100)
     # Alpha/Beta vs the reference benchmark, on the *overlapping* window so
     # the figures are apples-to-apples with `s`: a 6-month track record is
     # measured against the benchmark over those same 6 months, not the

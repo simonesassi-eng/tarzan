@@ -38,6 +38,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     compute_ulcer_index,
     compute_var,
     compute_ytd_return,
+    normalize_index,
     twror,
     xirr,
     xnpv,
@@ -359,15 +360,9 @@ class MetricsEngine:
             )
 
         combined = pd.concat(kept_series, axis=1).ffill()
-        # Normalize the index to naive calendar days so that series coming from
-        # different exchanges (with different timezones) align cleanly, and
-        # drop any duplicate days created by timezone offsets.
-        combined.index = (
-            combined.index.tz_convert("UTC").tz_localize(None).normalize()
-            if combined.index.tz is not None
-            else combined.index.normalize()
-        )
-        combined = combined[~combined.index.duplicated(keep="last")]
+        # Naive calendar-day index so cross-exchange (different tz) series align,
+        # dropping the duplicate days the tz collapse can create.
+        combined = normalize_index(combined, drop_duplicates=True)
         # Drop dates where any holding is missing (pre-existence periods)
         combined = combined.dropna(how="any")
         if combined.empty:
@@ -1377,12 +1372,7 @@ class MetricsEngine:
         MIN_DAYS = 365  # exclude holdings younger than 1Y from the backtest
 
         def _norm(s: pd.Series) -> pd.Series:
-            idx = s.index
-            if getattr(idx, "tz", None) is not None:
-                idx = idx.tz_convert("UTC").tz_localize(None)
-            out = s.copy()
-            out.index = idx.normalize()
-            return out[~out.index.duplicated(keep="last")]
+            return normalize_index(s, drop_duplicates=True)
 
         def _span_label(s: pd.Series) -> str:
             if s is None or len(s) < 2:

@@ -393,12 +393,46 @@ def compute_cvar(daily_returns: pd.Series, confidence: float = 0.95) -> float:
     return float(tail.mean()) if not tail.empty else var
 
 
-def _normalize_index(series: pd.Series) -> pd.Series:
+def risk_metric_row(series: pd.Series) -> dict:
+    """The standard risk/return block for a price ``series``.
+
+    cagr, volatility, sharpe, sortino, max_drawdown, ulcer_index, var_95,
+    cvar_95 — percent units where applicable. Alpha/beta are left to the caller
+    since they need a chosen reference benchmark. Shared by the benchmark metric
+    builders and the per-holding performance rows so every table reports the
+    same numbers computed the same way.
+    """
+    cagr = compute_cagr(series)
+    daily_ret = series.pct_change().dropna()
+    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
+    return {
+        "cagr": cagr,
+        "volatility": vol,
+        "sharpe": compute_sharpe(cagr, vol),
+        "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
+        "max_drawdown": compute_max_drawdown(series) * 100,
+        "ulcer_index": compute_ulcer_index(series),
+        "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
+        "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
+    }
+
+
+def normalize_index(series: pd.Series, *, drop_duplicates: bool = False) -> pd.Series:
+    """Copy of ``series`` with a tz-naive, calendar-day-normalized index.
+
+    Series coming from different exchanges (different timezones) only align
+    once their indices are collapsed to naive calendar days. ``drop_duplicates``
+    additionally drops the duplicate days that the tz collapse can create
+    (last observation wins) — needed when several intraday timestamps fold onto
+    the same date.
+    """
     s = series.copy()
-    if hasattr(s.index, "tz") and s.index.tz is not None:
-        s.index = s.index.tz_convert("UTC").tz_localize(None).normalize()
-    else:
-        s.index = s.index.normalize()
+    idx = s.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    s.index = idx.normalize()
+    if drop_duplicates:
+        s = s[~s.index.duplicated(keep="last")]
     return s
 
 
@@ -426,8 +460,8 @@ def _compute_beta_alpha(
     if series_or_returns is None or len(series_or_returns) < 10:
         return float("nan"), float("nan")
 
-    port_raw = _normalize_index(series_or_returns)
-    bench_raw = _normalize_index(benchmark_history)
+    port_raw = normalize_index(series_or_returns)
+    bench_raw = normalize_index(benchmark_history)
 
     # If port is already returns (median abs < 0.5), reconstruct a price
     # index so we can resample to weekly cleanly.
