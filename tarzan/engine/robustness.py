@@ -14,6 +14,7 @@ import pandas as pd
 from tarzan.engine.stats import (
     RISK_FREE_RATE,
     TRADING_DAYS,
+    _align_rf_daily,
     _compute_beta_alpha,
     compute_cagr,
     compute_cvar,
@@ -119,16 +120,24 @@ def rolling_return_distribution(nav: pd.Series, window_days: int = 252) -> dict:
     }
 
 
-def rolling_sharpe_range(nav: pd.Series, window_days: int = 252) -> dict:
-    """Min / median / max of the rolling annualised Sharpe ratio."""
+def rolling_sharpe_range(nav: pd.Series, window_days: int = 252, rf_daily=None) -> dict:
+    """Min / median / max of the rolling annualised Sharpe ratio.
+
+    Each rolling window is charged the risk-free rate prevailing over it: when
+    ``rf_daily`` (the time-varying daily path) is supplied, the Sharpe uses daily
+    excess returns ``r_t − rf_t`` (matching ``compute_sharpe_tv``); otherwise the
+    per-day rate collapses to the scalar ``RISK_FREE_RATE`` and the result is
+    identical to the flat-rate form.
+    """
     r = daily_returns(nav)
     if len(r) <= window_days:
         return {}
-    roll = r.rolling(window_days)
-    # RISK_FREE_RATE is in percent, so annualised return/vol are ×100 too.
-    ann_ret = roll.mean() * TRADING_DAYS * 100.0
-    ann_vol = roll.std() * np.sqrt(TRADING_DAYS) * 100.0
-    sharpe = ((ann_ret - RISK_FREE_RATE) / ann_vol).replace([np.inf, -np.inf], np.nan).dropna()
+    # Per-day excess returns; _align_rf_daily forward-fills the path onto r's
+    # index, or lays down a flat RISK_FREE_RATE when rf_daily is None.
+    excess = r - _align_rf_daily(r, rf_daily)
+    roll = excess.rolling(window_days)
+    sharpe = ((roll.mean() / roll.std()) * np.sqrt(TRADING_DAYS)
+              ).replace([np.inf, -np.inf], np.nan).dropna()
     if sharpe.empty:
         return {}
     a = sharpe.values
@@ -194,13 +203,20 @@ def stress_scenarios(nav: pd.Series, scenarios: dict | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 def block_bootstrap(nav: pd.Series, *, n_sims: int = 2000, block_days: int = 21,
-                    horizon_days: int = 252, seed: int = 42) -> dict:
+                    horizon_days: int = 252, seed: int = 42, rf_annual=None) -> dict:
     """Stationary-block bootstrap of daily returns → CIs on CAGR / Sharpe /
     max drawdown over ``horizon_days``.
 
     Blocks preserve short-run autocorrelation (momentum / vol clustering)
     that an IID resample would destroy. Returns 5th/50th/95th percentiles.
+
+    ``rf_annual`` is the annualised risk-free (percent) charged in the Sharpe
+    numerator. Block resampling shuffles the calendar, so a per-day risk-free
+    path cannot be aligned; the window-average real rate is the right scalar
+    here (``proxy_data.risk_free_annual``). ``None`` falls back to the flat
+    ``RISK_FREE_RATE``.
     """
+    rf = RISK_FREE_RATE if rf_annual is None else float(rf_annual)
     r = daily_returns(nav)
     if len(r) < max(block_days * 2, 60):
         return {}
@@ -221,8 +237,8 @@ def block_bootstrap(nav: pd.Series, *, n_sims: int = 2000, block_days: int = 21,
         cagr = (1.0 + total) ** (1.0 / horizon_years) - 1.0
         cagrs[i] = cagr
         vol = path.std() * np.sqrt(TRADING_DAYS)
-        # Sharpe in consistent percent units (RISK_FREE_RATE is percent).
-        sharpes[i] = (cagr * 100.0 - RISK_FREE_RATE) / (vol * 100.0) if vol > 0 else np.nan
+        # Sharpe in consistent percent units (rf is percent).
+        sharpes[i] = (cagr * 100.0 - rf) / (vol * 100.0) if vol > 0 else np.nan
         peak = np.maximum.accumulate(price)
         mdds[i] = (price / peak - 1.0).min()
 
