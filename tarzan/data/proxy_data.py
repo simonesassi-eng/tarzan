@@ -380,8 +380,11 @@ def risk_free_daily(start=None, end=None) -> Optional[pd.Series]:
 def risk_free_annual(start=None, end=None) -> Optional[float]:
     """Window-average annualised risk-free (%) in the TARGET currency — the
     mean of ``risk_free_daily`` over the window. Used for DISPLAY (the header
-    figure) and as a scalar fallback; the Sharpe/Sortino themselves use the
-    full time-varying daily path via ``risk_free_daily``.
+    figure) and as a scalar fallback; the newsletter Sharpe/Sortino themselves
+    consume the full time-varying daily path via ``risk_free_daily`` (wired into
+    ``MetricsEngine._rf_daily`` → ``risk_metric_row``), falling back to the
+    scalar ``RISK_FREE_RATE`` only when the historical series is unavailable
+    (e.g. a pinned run with no cached ^IRX/ECB rows).
     """
     s = risk_free_daily(start, end)
     if s is None or s.empty:

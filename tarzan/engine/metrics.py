@@ -39,6 +39,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     compute_var,
     compute_ytd_return,
     normalize_index,
+    risk_metric_row,
     twror,
     xirr,
     xnpv,
@@ -754,12 +755,32 @@ class MetricsEngine:
                 else pd.Series(dtype=float)
             )
             full_row = {"ticker": "PORTFOLIO", "name": "** TOTAL PORTFOLIO **", "type": "Portfolio"}
-            _populate_perf_row(full_row, ph_full, bench)
+            _populate_perf_row(full_row, ph_full, bench, self._rf_daily(ctx))
             ctx["performance_full"] = full_row
 
     # ------------------------------------------------------------------
     # Risk
     # ------------------------------------------------------------------
+    def _rf_daily(self, ctx: dict):
+        """The time-varying daily risk-free path for Sharpe/Sortino, memoized
+        per run into ``ctx``.
+
+        Fetched from ``proxy_data.risk_free_daily`` (real ECB SR_3M+EONIA / ^IRX
+        historical series) so every day is charged its own prevailing short rate
+        instead of a single hardcoded 4%. The proxy fetch layer already gates on
+        ``runtime.allows_live_transport()`` and clips to as_of, so a pinned run
+        returns only cache rows visible at as_of (never live transport, never
+        future data); when nothing is cached it returns ``None`` and the risk
+        block falls back to the scalar ``RISK_FREE_RATE``.
+        """
+        if "_rf_daily" not in ctx:
+            from tarzan.data import proxy_data
+            try:
+                ctx["_rf_daily"] = proxy_data.risk_free_daily()
+            except Exception:  # noqa: BLE001 — any fetch failure → scalar fallback
+                ctx["_rf_daily"] = None
+        return ctx["_rf_daily"]
+
     def _risk(self, ctx: dict) -> None:
         if ctx.get("_order_history_unavailable"):
             ctx["risk"] = None
@@ -778,14 +799,17 @@ class MetricsEngine:
         if daily_returns.empty:
             ctx["risk"] = result
             return
-        annual_vol = float(daily_returns.std()) * np.sqrt(TRADING_DAYS)
-        annual_return = compute_cagr(ph)
-        result["volatility"] = annual_vol * 100
-        result["sharpe"] = compute_sharpe(annual_return, annual_vol * 100)
-        result["max_drawdown"] = compute_max_drawdown(ph) * 100
-        result["sortino"] = compute_sortino(daily_returns, annual_return)
-        result["var_95"] = _scale_or_nan(compute_var(daily_returns, 0.95), 100)
-        result["cvar_95"] = _scale_or_nan(compute_cvar(daily_returns, 0.95), 100)
+        # Single source of truth for the risk block (dedup with the benchmark /
+        # per-holding rows): compute cagr/vol/sharpe/sortino/maxdd/var/cvar once
+        # via risk_metric_row, with the time-varying risk-free path so Sharpe and
+        # Sortino use per-day rates. Keep only the keys this dashboard block emits.
+        block = risk_metric_row(ph, self._rf_daily(ctx))
+        result["volatility"] = block["volatility"]
+        result["sharpe"] = block["sharpe"]
+        result["max_drawdown"] = block["max_drawdown"]
+        result["sortino"] = block["sortino"]
+        result["var_95"] = block["var_95"]
+        result["cvar_95"] = block["cvar_95"]
         # Beta/Alpha use the same preprocessed full benchmark ticker/history
         # consumed by every other analytical and presentation stage.
         record = self._alpha_beta_benchmark(ctx)
@@ -794,7 +818,7 @@ class MetricsEngine:
             else pd.Series(dtype=float)
         )
         if not bench_history.empty and len(bench_history) > 1:
-            beta, alpha = _compute_beta_alpha(ph, bench_history, annual_return)
+            beta, alpha = _compute_beta_alpha(ph, bench_history, block["cagr"])
             result["beta"] = beta
             result["alpha"] = alpha
         ctx["risk"] = result
@@ -1116,7 +1140,7 @@ class MetricsEngine:
             if len(bench_win) < 2:
                 bench_win = bench
             metrics = _compute_single_benchmark_metrics(
-                bench_win, ab_benchmark_win
+                bench_win, ab_benchmark_win, self._rf_daily(ctx)
             )
             metrics["benchmark"] = name
             metrics["ticker"] = record.ticker
@@ -1151,7 +1175,7 @@ class MetricsEngine:
                 "name": h.name or h.ticker,
                 "type": "In portfolio",
             }
-            _populate_perf_row(row, s, bench_history)
+            _populate_perf_row(row, s, bench_history, self._rf_daily(ctx))
             rows.append(row)
 
         # Benchmark rows receive the exact same full ticker whose attached
@@ -1164,7 +1188,7 @@ class MetricsEngine:
                 "name": record.name,
                 "type": "Benchmark index",
             }
-            _populate_perf_row(row, bs, bench_history)
+            _populate_perf_row(row, bs, bench_history, self._rf_daily(ctx))
             rows.append(row)
 
         ctx["holding_performance"] = pd.DataFrame(rows)
@@ -1436,7 +1460,7 @@ class MetricsEngine:
                 # Prepend the window-start baseline so the NAV starts at 100.
                 first_day = ret_df.index[0] - pd.Timedelta(days=1)
                 nav = pd.concat([pd.Series([100.0], index=[first_day]), nav])
-                metrics = _compute_single_benchmark_metrics(nav, ab_bench)
+                metrics = _compute_single_benchmark_metrics(nav, ab_bench, self._rf_daily(ctx))
                 notes = []
                 if unavailable:
                     notes.append(
@@ -1472,7 +1496,7 @@ class MetricsEngine:
             if bench.empty or len(bench) < 2:
                 continue
             bench = _norm(bench)
-            metrics = _compute_single_benchmark_metrics(bench, ab_bench)
+            metrics = _compute_single_benchmark_metrics(bench, ab_bench, self._rf_daily(ctx))
             # Taxonomy lookup is classification-only; the operational ticker
             # retained in the row is always the full preprocessed symbol.
             _meta = _taxonomy.get(normalize_ticker(record.ticker))
