@@ -215,9 +215,12 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                 p.rob = {
                     "rolling1y": rob.rolling_return_distribution(nav, 252),
                     "rolling3y": rob.rolling_return_distribution(nav, 252 * 3),
-                    "sharpe": rob.rolling_sharpe_range(nav, 252),
+                    # Same real risk-free the headline Sharpe uses: the daily
+                    # path for the rolling window, its window-average for the
+                    # calendar-shuffling bootstrap.
+                    "sharpe": rob.rolling_sharpe_range(nav, 252, rf_daily=rf_daily),
                     "stress": rob.stress_scenarios(nav),
-                    "bootstrap": rob.block_bootstrap(nav),
+                    "bootstrap": rob.block_bootstrap(nav, rf_annual=rf),
                 }
 
     proxy_data.set_target_currency(default_ccy)
