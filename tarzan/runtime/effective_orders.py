@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Optional
 
 from tarzan.models.order import Order
+from tarzan.runtime.io_utils import canonical_json_bytes
 
 
 @dataclass(frozen=True)
@@ -60,13 +60,7 @@ class EffectiveOrderSnapshot:
             for order in visible
         ]
         digest = hashlib.sha256(
-            json.dumps(
-                canonical,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-                allow_nan=False,
-            ).encode("utf-8")
+            canonical_json_bytes(canonical, ascii_only=True)
         ).hexdigest()
         return cls(
             orders=visible,

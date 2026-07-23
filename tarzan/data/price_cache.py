@@ -43,7 +43,6 @@ import json
 import logging
 import math
 import os
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -54,6 +53,7 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.models.instrument_key import normalize_ticker
+from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +107,7 @@ def _file_lock(path: Path):
 
 
 def _canonical_json(value) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
+    return canonical_json_bytes(value, ascii_only=True)
 
 
 def _validate_json_value(value) -> bool:
@@ -163,25 +157,9 @@ def _atomic_write_json(path: Path, namespace: str, entries) -> None:
         raise ValueError(f"invalid or non-finite {namespace} cache value")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = _canonical_json(_envelope(namespace, entries))
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError:
-            pass
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    # fsync_dir: a resurrected stale cache entry would be served as fresh, so
+    # the rename itself must survive a crash.
+    atomic_write_bytes(path, payload, fsync_dir=True)
 
 
 def _read_map(path: Path, namespace: str) -> dict:

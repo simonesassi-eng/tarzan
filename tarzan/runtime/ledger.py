@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import threading
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Generic, Iterable, Mapping, Optional, TypeVar
+
+from tarzan.runtime.io_utils import canonical_json_bytes
 
 
 LEDGER_SCHEMA_VERSION = "1.0"
@@ -150,14 +151,12 @@ class RunLedger:
         normalized = ErrorNormalizer.normalize(payload)
         with self._lock:
             sequence = len(self._entries) + 1
-            stable = json.dumps(
+            stable = canonical_json_bytes(
                 {"type": entry_type.value, "payload": normalized, "sequence": sequence},
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
+                ascii_only=True,
                 default=str,
             )
-            entry_id = hashlib.sha256(stable.encode("utf-8")).hexdigest()[:24]
+            entry_id = hashlib.sha256(stable).hexdigest()[:24]
             entry = LedgerEntry(
                 sequence=sequence,
                 entry_id=entry_id,
