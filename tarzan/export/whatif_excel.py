@@ -15,8 +15,7 @@ import logging
 from datetime import datetime
 
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.chart.label import DataLabelList
+from openpyxl.chart import LineChart, Reference
 from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.drawing.line import LineProperties
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -61,13 +60,6 @@ def _style_line_series(chart) -> None:
         s.smooth = False
 
 
-def _style_bar_series(chart) -> None:
-    """Give each bar series a distinct solid fill from the palette."""
-    for i, s in enumerate(chart.series):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        s.graphicalProperties = GraphicalProperties(solidFill=color)
-
-
 def _show_axes(chart, x_title: str, y_title: str) -> None:
     """Force both axes (and their titles/tick labels) to render — openpyxl
     leaves ``delete`` unset, which makes Excel hide the axes entirely so the
@@ -105,12 +97,6 @@ def _align(h="left", v="center"):
 def _border():
     s = Side(style="thin", color=_C["border"])
     return Border(left=s, right=s, top=s, bottom=s)
-
-
-def _renorm(d):
-    # Shared primitive — same normalisation the metrics engine and backtest use.
-    from tarzan.engine.allocations import renorm
-    return renorm(d)
 
 
 def _dev_color(delta, tol):

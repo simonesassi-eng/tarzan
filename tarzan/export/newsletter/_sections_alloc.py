@@ -33,7 +33,6 @@ from tarzan.export.newsletter._format import (
     _display_ticker,
     _eur,
     _pct,
-    _pct_compact,
     _pct_smart,
     _semaphore,
     _semaphore_color,

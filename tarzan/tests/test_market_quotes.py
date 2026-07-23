@@ -162,17 +162,6 @@ def test_broker_1d_uses_sibling_prev_close(monkeypatch):
     assert selected["intraday_baseline"] == 29.18
 
 
-def test_fetch_intraday_with_fallback_keys_on_original(monkeypatch):
-    sib = _intra([29.2, 29.4])
-    monkeypatch.setattr(mq, "_fetch_intraday",
-                        lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
-    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
-                        lambda s: _close([29.0, 29.19]))
-    out = mq._fetch_intraday_with_fallback(["NTSG.MI"])
-    assert "NTSG.MI" in out and "NTSG.DE" not in out
-    assert len(out["NTSG.MI"]) == 2
-
-
 # ---------------------------------------------------------------------------
 # Closed-session % uses the official daily close, not the last intraday tick
 # ---------------------------------------------------------------------------

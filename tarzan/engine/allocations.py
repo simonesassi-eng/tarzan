@@ -71,7 +71,6 @@ def clean_geo(gb: Optional[dict]) -> Optional[dict]:
 # Canonical exposure schema. Percentages are intentionally not normalized:
 # leveraged/multi-class holdings may contribute more than 100% notional.
 CANONICAL_EXPOSURE_SCHEMA_VERSION = "1.0"
-CANONICAL_EXPOSURE_TOLERANCE_PCT = 0.000001
 
 
 def holding_class_breakdown(holding) -> dict[str, float]:

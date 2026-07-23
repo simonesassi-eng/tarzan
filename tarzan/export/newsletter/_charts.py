@@ -12,7 +12,6 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.export._format import eur_smart as _eur_smart
-from tarzan.export import _charts as _charts
 from tarzan.export.newsletter._constants import PALETTE
 
 _day_spark_uid = 0

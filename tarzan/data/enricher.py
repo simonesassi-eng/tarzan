@@ -2133,22 +2133,6 @@ def classify_asset_class(info: dict, ticker: str, holding: Holding):
     )
 
 
-def _classify_from_hint(hint: str, kw: dict) -> Optional[AssetClass]:
-    """Resolve an input hint only when it exactly matches a declared alias."""
-    from tarzan.instruments.registry import TrackedCategoryEvidenceGateway
-
-    resolution = TrackedCategoryEvidenceGateway().resolve(hint)
-    return AssetClass(resolution.category) if resolution.category is not None else None
-
-
-def _classify_from_category(cat: str, sector: str) -> Optional[AssetClass]:
-    """Resolve exact declared category evidence; sector does not select behavior."""
-    from tarzan.instruments.registry import TrackedCategoryEvidenceGateway
-
-    resolution = TrackedCategoryEvidenceGateway().resolve(cat)
-    return AssetClass(resolution.category) if resolution.category is not None else None
-
-
 # ---------------------------------------------------------------------------
 # Geography classification
 # ---------------------------------------------------------------------------

@@ -7,8 +7,6 @@ the models layer, below both computation and presentation.
 
 from __future__ import annotations
 
-from typing import Optional
-
 # Canonical membership (every asset class Tarzan knows). Mirrors AssetClass
 # in models.holding; kept as strings here so config/export need not import the
 # enum just to order things.
@@ -54,17 +52,3 @@ GEO_ORDER: tuple[str, ...] = (
 )
 
 
-def order_with_extras(
-    order: tuple[str, ...], present: Optional[list[str]] = None
-) -> list[str]:
-    """A display order that never silently drops an unlisted class.
-
-    Returns ``order`` (optionally filtered to ``present``) with any class in
-    ``present`` that is not in ``order`` appended alphabetically at the end —
-    the shared "extras go last" convention every surface already used, so a
-    newly added asset class still shows up in every report.
-    """
-    if not present:
-        return list(order)
-    extra = sorted(set(present) - set(order))
-    return [c for c in order if c in present] + extra

@@ -476,14 +476,6 @@ def risk_free_rate() -> float:
 def trading_days() -> int:
     return 252
 
-def benchmark_beta() -> str:
-    """Get the ticker for Alpha/Beta calculation from instrument_taxonomy.csv (is_benchmark_alpha_beta=true)."""
-    match = _flagged_rows("is_benchmark_alpha_beta")
-    if not match.empty:
-        return str(match.iloc[0]["ticker"]).strip()
-    return "^GSPC"
-
-
 def benchmark_beta_name() -> str:
     """Get the index name for Alpha/Beta calculation (used for column headers)."""
     match = _flagged_rows("is_benchmark_alpha_beta")
@@ -584,13 +576,6 @@ def figi_exchange_map() -> dict[str, str]:
 
 def figi_mic_map() -> dict[str, str]:
     return get("figi_mic_map", {})
-
-def sheet_names() -> list[str]:
-    return get("sheet_names", [
-        "Dashboard", "Optimizer", "Holdings", "Performance",
-        "Return Contribution",
-    ])
-
 
 def portfolio_backtest_period() -> str:
     """Default backtest period (5 years, hardcoded)."""

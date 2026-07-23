@@ -143,17 +143,6 @@ def _store_provider_result(result: GeminiProviderResult) -> None:
         pass
 
 
-class GeminiPayloadBuilder:
-    """Pure domain-only request builder with no environment/filesystem access."""
-
-    @staticmethod
-    def build(metrics: Any, config: Any, instructions: str) -> dict[str, Any]:
-        return {
-            "portfolio_analysis": build_digest(metrics, config),
-            "instructions": str(instructions),
-        }
-
-
 def is_enabled() -> bool:
     """True only when an API key is present and the feature is not disabled."""
     if os.environ.get("TARZAN_DISABLE_AI", "").strip().lower() in ("1", "true", "yes"):
@@ -347,7 +336,7 @@ def build_divergence_digest(metrics, config,
     alpha = _num(risk.get("alpha"))
     # Two DISTINCT, precisely-defined betas, both from the engine's one
     # _compute_beta_alpha primitive against the same benchmark (cfg
-    # .benchmark_beta) — so they form a truthful, apples-to-apples trend:
+    # .benchmark_beta_name) — so they form a truthful, apples-to-apples trend:
     #   * realized: regression of the REAL order-derived NAV over the actual
     #     holding period (m.risk["beta"]). Since it is measured on the very
     #     returns being attributed, it — not the current-mix beta — is the

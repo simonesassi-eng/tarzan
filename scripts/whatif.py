@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tarzan.backtest import (  # noqa: E402
-    ASSET_ORDER, GEO_ORDER, backfill_label, instrument_ter, run_backtest,
+    ASSET_ORDER, GEO_ORDER, instrument_ter, run_backtest,
     simulation_rows, testfol_instrument_map, testfol_lines,
 )
 from tarzan.data import proxy_data  # noqa: E402

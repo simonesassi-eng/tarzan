@@ -19,7 +19,6 @@ from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.version import APPLICATION_VERSION
 
 from tarzan.export.newsletter._constants import (  # noqa: F401 (re-exported)
-    ASSET_BG,
     ASSET_COLORS,
     ASSET_CLASS_ORDER,
     GEO_COLORS,

@@ -55,10 +55,6 @@ class OrderType(str, Enum):
             return None
 
 
-# Movement kinds that move cash on the bank account (XIRR cash flows).
-_CASHFLOW_TYPES = frozenset(
-    {OrderType.BUY, OrderType.SELL, OrderType.COUPON, OrderType.DIVIDEND}
-)
 # Movement kinds that change the held quantity of a security.
 _POSITION_CHANGE_TYPES = frozenset(
     {OrderType.BUY, OrderType.SELL, OrderType.TRANSFER_IN, OrderType.TRANSFER_OUT}
@@ -134,10 +130,6 @@ class Order:
             f"{self.gross_eur:.2f}", self.source,
         ))
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
-
-    def is_cashflow(self) -> bool:
-        """True if this order moves cash on the bank account."""
-        return self.type in _CASHFLOW_TYPES
 
     def is_position_change(self) -> bool:
         """True if this order changes the held quantity of a security."""

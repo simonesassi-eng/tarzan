@@ -50,19 +50,18 @@ class TestOrderTypeFromRaw:
 
 class TestOrderHelpers:
     @pytest.mark.parametrize(
-        "otype,is_cf,is_pos",
+        "otype,is_pos",
         [
-            (OrderType.BUY, True, True),
-            (OrderType.SELL, True, True),
-            (OrderType.COUPON, True, False),
-            (OrderType.DIVIDEND, True, False),
-            (OrderType.TRANSFER_IN, False, True),
-            (OrderType.TRANSFER_OUT, False, True),
+            (OrderType.BUY, True),
+            (OrderType.SELL, True),
+            (OrderType.COUPON, False),
+            (OrderType.DIVIDEND, False),
+            (OrderType.TRANSFER_IN, True),
+            (OrderType.TRANSFER_OUT, True),
         ],
     )
-    def test_classification(self, otype, is_cf, is_pos):
+    def test_classification(self, otype, is_pos):
         o = _order(otype)
-        assert o.is_cashflow() is is_cf
         assert o.is_position_change() is is_pos
 
 

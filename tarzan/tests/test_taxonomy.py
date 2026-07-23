@@ -60,19 +60,3 @@ class TestConsumersUnified:
         assert we._GEO_ORDER == _HIST_GEO + ["Other"]
 
 
-class TestOrderWithExtras:
-    def test_no_present_returns_full_order(self):
-        assert tx.order_with_extras(tx.CANONICAL_ORDER) == list(tx.CANONICAL_ORDER)
-
-    def test_filters_to_present(self):
-        got = tx.order_with_extras(tx.CANONICAL_ORDER, present=["Gold", "Equities"])
-        assert got == ["Equities", "Gold"]  # in canonical order
-
-    def test_unlisted_class_appended_alphabetically_not_dropped(self):
-        # A class absent from the canonical set (a future/unknown class) is
-        # appended, never silently dropped from a report.
-        got = tx.order_with_extras(
-            tx.CANONICAL_ORDER, present=["Equities", "Zebras", "Aardvark"])
-        assert got[0] == "Equities"
-        assert set(got) == {"Equities", "Zebras", "Aardvark"}
-        assert got[-2:] == ["Aardvark", "Zebras"]  # extras alphabetical at end
