@@ -17,26 +17,22 @@ from __future__ import annotations
 
 from tarzan.data import geo_resolver
 
-from tarzan.backtest.model import (
-    ALT, COMM, CRYPTO, EQ, FI, GOLD, WhatIfItem,
-)
-
-# Per-asset-class default TER (%) — last-resort only.
-_TER_FALLBACK = {EQ: 0.20, FI: 0.15, GOLD: 0.15, COMM: 0.40,
-                 ALT: 0.90, CRYPTO: 0.50}
+from tarzan.backtest.model import EQ, WhatIfItem
 
 
 def instrument_ter(it: "WhatIfItem") -> float:
-    """Best TER estimate (%) for an instrument, most-precise source first."""
-    # holding.ter is a FRACTION (0.0035 == 0.35%): taxonomy ter (curated) or
-    # yfinance. Bounded to reject junk values.
+    """Best TER estimate (%) for an instrument, most-precise source first.
+
+    holding.ter (curated taxonomy / yfinance, then the enricher's justETF +
+    class-default gap-fill) is a FRACTION and is authoritative — the live and
+    backtest paths share that single resolution. Only if it is somehow still
+    absent do we resolve here against the dominant notional class, so a bare
+    WhatIfItem never crashes the drag model.
+    """
     ter = getattr(it.holding, "ter", None)
     if ter is not None and ter == ter and 0 < ter < 0.05:
         return ter * 100.0
     isin = getattr(it, "isin", "") or getattr(it.holding, "isin", "")
-    if isin:
-        jt = geo_resolver.justetf_ter(isin)
-        if jt is not None and 0 < jt < 0.05:
-            return jt * 100.0
     dom = max(it.comp_notional, key=it.comp_notional.get) if it.comp_notional else EQ
-    return _TER_FALLBACK.get(dom, 0.20)
+    resolved = geo_resolver.resolve_ter(isin, dom)
+    return (resolved if resolved is not None else 0.0020) * 100.0

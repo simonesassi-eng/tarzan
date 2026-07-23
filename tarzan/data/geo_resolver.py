@@ -343,6 +343,30 @@ def justetf_ter(isin: str) -> Optional[float]:
     return ter
 
 
+# Per-asset-class default TER (FRACTION) — last resort when neither the curated
+# taxonomy, yfinance, nor justETF carry a real fee. Keyed by AssetClass.value so
+# the backtest (which keys on the same strings) and the live enricher agree.
+_TER_CLASS_DEFAULT = {
+    "Equities": 0.0020, "Fixed Income": 0.0015, "Gold": 0.0015,
+    "Commodities": 0.0040, "Alternative": 0.0090, "Crypto": 0.0050,
+}
+
+
+def resolve_ter(isin: str, asset_class_value: Optional[str]) -> Optional[float]:
+    """Best TER estimate (FRACTION) for an instrument, most-precise source first:
+    justETF profile by ISIN → per-asset-class default. Returns ``None`` when the
+    asset class is unknown and justETF has nothing — a missing fee stays
+    Unavailable (never silently 0%), preserving numeric-zero≠unavailable.
+
+    The curated-taxonomy / yfinance TER is a MORE precise source and is applied
+    upstream (``holding.ter``); this only fills the gap when that is absent.
+    """
+    jt = justetf_ter(isin) if isin else None
+    if jt is not None and 0 < jt < 0.05:
+        return jt
+    return _TER_CLASS_DEFAULT.get(asset_class_value)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
