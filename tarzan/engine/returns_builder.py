@@ -43,6 +43,7 @@ from tarzan.data.bond_fetcher import value_position
 from tarzan.engine import allocations as _alloc
 from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
 from tarzan.models.holding import AssetClass, Holding
+from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.models.order import Order, OrderType
 from tarzan.runtime import data_quality as dq
 from tarzan.runtime.ledger import Availability
@@ -1449,7 +1450,7 @@ def build_allocation_timeline(
         holding = enriched_by_isin.get(isin)
         if holding and holding.asset_class:
             return holding.asset_class.value
-        hit = _taxonomy.get(isin.upper()) or _taxonomy.get(isin.upper().split(".")[0])
+        hit = _taxonomy.get(normalize_isin(isin)) or _taxonomy.get(normalize_ticker(isin))
         if hit and hit[0]:
             return hit[0]
         intrinsic = {
@@ -1470,7 +1471,7 @@ def build_allocation_timeline(
         if h is not None and getattr(h, "class_breakdown", None):
             return {(k.value if hasattr(k, "value") else str(k)): v
                     for k, v in h.class_breakdown.items()}
-        ov = _exp_lut.get(isin.upper()) or _exp_lut.get(isin.upper().split(".")[0])
+        ov = _exp_lut.get(normalize_isin(isin)) or _exp_lut.get(normalize_ticker(isin))
         if ov:
             return dict(ov)
         category = _class_for(isin)

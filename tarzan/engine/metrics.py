@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from tarzan.models.holding import AssetClass, Holding
+from tarzan.models.instrument_key import normalize_ticker
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan import config as cfg
@@ -1481,7 +1482,7 @@ class MetricsEngine:
             metrics = _compute_single_benchmark_metrics(bench, ab_bench)
             # Taxonomy lookup is classification-only; the operational ticker
             # retained in the row is always the full preprocessed symbol.
-            _meta = _taxonomy.get(record.ticker.upper().split(".")[0])
+            _meta = _taxonomy.get(normalize_ticker(record.ticker))
             if not _meta:
                 _meta = _taxonomy.get(record.ticker.upper())
             if isinstance(_meta, tuple) and len(_meta) >= 2:

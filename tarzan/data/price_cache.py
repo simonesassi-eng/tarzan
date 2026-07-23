@@ -53,6 +53,8 @@ from typing import Optional
 
 import pandas as pd
 
+from tarzan.models.instrument_key import normalize_ticker
+
 logger = logging.getLogger(__name__)
 
 # How many trailing days to always re-fetch so the latest close (and any
@@ -741,7 +743,7 @@ def load_ticker_isin(ticker: str) -> Optional[str]:
     """Cached ISIN for a bare ticker (immutable; no TTL), or None."""
     if not ticker:
         return None
-    return _load_ticker_isin_map().get(ticker.split(".")[0].strip().upper())
+    return _load_ticker_isin_map().get(normalize_ticker(ticker))
 
 
 def load_ticker_isin_reverse(isin: str) -> Optional[str]:
@@ -766,7 +768,7 @@ def store_ticker_isin(ticker: str, isin: str) -> None:
     if len(clean) != 12 or not clean[:2].isalpha():
         return
     try:
-        key = ticker.split(".")[0].strip().upper()
+        key = normalize_ticker(ticker)
         _update_map(_ticker_isin_path(), "ticker_isin", key, clean)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Ticker↔ISIN cache write failed for %s: %s", ticker, exc)

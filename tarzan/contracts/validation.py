@@ -27,21 +27,15 @@ from dataclasses import dataclass
 from typing import Optional
 
 from tarzan.models.order import OrderType
+# The canonical ISIN normalizer lives in the identity layer; re-exported here
+# so the loader can keep importing it from the validation boundary.
+from tarzan.models.instrument_key import normalize_isin
 
 # ---------------------------------------------------------------------------
 # ISIN — format only (no mod-10 check digit; see module docstring)
 # ---------------------------------------------------------------------------
 
 _ISIN_LEN = 12
-
-
-def normalize_isin(raw: Optional[str]) -> str:
-    """Uppercase and strip an ISIN (also removing internal spaces/hyphens a
-    hand-edited cell might carry). Returns '' for None/blank/'nan'."""
-    if raw is None:
-        return ""
-    s = str(raw).strip().upper().replace(" ", "").replace("-", "")
-    return "" if s in ("", "NAN") else s
 
 
 def isin_format_error(isin: str) -> Optional[str]:

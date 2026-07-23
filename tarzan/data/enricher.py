@@ -38,6 +38,7 @@ import pandas as pd
 import yfinance as yf
 
 from tarzan.models.holding import AssetClass, Geography, Holding
+from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.data import price_cache
 from tarzan.data import _yf_net
 from tarzan import config as cfg
@@ -2958,9 +2959,9 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
         return False
     keys = []
     if holding.isin:
-        keys.append(holding.isin.strip().upper())
+        keys.append(normalize_isin(holding.isin))
     if holding.ticker:
-        keys.append(holding.ticker.split(".")[0].strip().upper())
+        keys.append(normalize_ticker(holding.ticker))
     # Bidirectional bridge: a taxonomy row may be keyed by only one of
     # (ISIN, ticker) while the holding knows only the other — e.g. a Fineco
     # ISIN-only order vs a ticker-only UEQC row. Resolve across the learned
@@ -2968,13 +2969,13 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
     # populated as instruments resolve; ticker→ISIN also lets an ISIN-keyed
     # row match a ticker-only holding.)
     if holding.isin:
-        xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin.strip().upper())
+        xref_ticker = price_cache.load_ticker_isin_reverse(normalize_isin(holding.isin))
         if xref_ticker:
-            keys.append(xref_ticker.split(".")[0].strip().upper())
+            keys.append(normalize_ticker(xref_ticker))
     if holding.ticker:
         xref_isin = price_cache.load_ticker_isin(holding.ticker)
         if xref_isin:
-            keys.append(xref_isin.strip().upper())
+            keys.append(normalize_isin(xref_isin))
     for k in keys:
         hit = lut.get(k)
         if not hit:
@@ -3003,7 +3004,7 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
         # or left the bare ticker as the name — so a curated instrument always
         # shows a real name, even offline and even when its taxonomy row is
         # keyed only by ticker (no ISIN).
-        bare = (holding.ticker or "").split(".")[0].strip().upper()
+        bare = normalize_ticker(holding.ticker)
         if not holding.name or holding.name.strip().upper() in (
                 (holding.ticker or "").strip().upper(), bare):
             tax_name = cfg.name_for(holding.isin, holding.ticker)
@@ -3084,8 +3085,8 @@ def _apply_class_breakdown(holding: Holding) -> None:
     }
     # Nudge for likely-notional instruments missing an explicit override.
     lut = cfg.class_exposure_lookup()
-    keyed = ((holding.isin or "").strip().upper() in lut or
-             (holding.ticker or "").split(".")[0].strip().upper() in lut)
+    keyed = (normalize_isin(holding.isin) in lut or
+             normalize_ticker(holding.ticker) in lut)
     if not keyed:
         hint_src = f"{holding.role or ''} {holding.name or ''}".lower()
         if (any(h in (holding.role or "").lower() for h in cfg._NOTIONAL_ROLE_HINTS)
