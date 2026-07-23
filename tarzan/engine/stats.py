@@ -393,7 +393,7 @@ def compute_cvar(daily_returns: pd.Series, confidence: float = 0.95) -> float:
     return float(tail.mean()) if not tail.empty else var
 
 
-def risk_metric_row(series: pd.Series) -> dict:
+def risk_metric_row(series: pd.Series, rf_daily=None) -> dict:
     """The standard risk/return block for a price ``series``.
 
     cagr, volatility, sharpe, sortino, max_drawdown, ulcer_index, var_95,
@@ -401,15 +401,27 @@ def risk_metric_row(series: pd.Series) -> dict:
     since they need a chosen reference benchmark. Shared by the benchmark metric
     builders and the per-holding performance rows so every table reports the
     same numbers computed the same way.
+
+    When ``rf_daily`` (a daily risk-free path, ``pd.Series`` of daily fractions)
+    is supplied, Sharpe/Sortino use the TIME-VARYING excess-return form (each day
+    charged its own prevailing short rate); otherwise they fall back to the
+    scalar ``RISK_FREE_RATE``. The single source of truth for the risk block, so
+    time-varying vs scalar is decided once, here, for every table that shows it.
     """
     cagr = compute_cagr(series)
     daily_ret = series.pct_change().dropna()
     vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
+    if rf_daily is not None and len(daily_ret) > 0:
+        sharpe = compute_sharpe_tv(daily_ret, rf_daily)
+        sortino = compute_sortino_tv(daily_ret, rf_daily)
+    else:
+        sharpe = compute_sharpe(cagr, vol)
+        sortino = compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan")
     return {
         "cagr": cagr,
         "volatility": vol,
-        "sharpe": compute_sharpe(cagr, vol),
-        "sortino": compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan"),
+        "sharpe": sharpe,
+        "sortino": sortino,
         "max_drawdown": compute_max_drawdown(series) * 100,
         "ulcer_index": compute_ulcer_index(series),
         "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),

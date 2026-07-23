@@ -191,6 +191,7 @@ def _build_benchmark_series(
 def _compute_single_benchmark_metrics(
     bench: pd.Series,
     ab_benchmark: "pd.Series | None" = None,
+    rf_daily=None,
 ) -> dict:
     """Compute the standard set of metrics for a benchmark series.
 
@@ -202,9 +203,12 @@ def _compute_single_benchmark_metrics(
             returns on overlap window; α annualized using benchmark
             CAGR). Pass the same series as ``bench`` to get the trivial
             β=1.00 / α=0 (vs itself).
+        rf_daily: Optional time-varying daily risk-free path forwarded to
+            ``risk_metric_row`` for the Sharpe/Sortino excess-return form;
+            ``None`` falls back to the scalar ``RISK_FREE_RATE``.
     """
     metrics = {
-        **risk_metric_row(bench),
+        **risk_metric_row(bench, rf_daily),
         **{k: compute_period_return(bench, d) for k, d in PERIOD_DAYS.items()},
         "ytd": compute_ytd_return(bench),
         "alpha": float("nan"),
@@ -251,11 +255,15 @@ def _add_mix_to_histories(
     ) * initial_value
 
 
-def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> None:
+def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
+                       rf_daily=None) -> None:
     """Populate a performance row dict with period returns + risk metrics + alpha/beta.
 
     All risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Alpha, Beta) use the full series `s`
     (already capped to max 5 years). Period Used reflects the actual window covered.
+
+    ``rf_daily`` is the optional time-varying daily risk-free path used for the
+    Sharpe/Sortino excess-return form; ``None`` falls back to the scalar rate.
     """
     # Period returns — single shared bucket→days mapping (stats.PERIOD_DAYS)
     # so every table in Tarzan measures the same windows.
@@ -264,7 +272,7 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series) -> Non
     row["ytd"] = compute_ytd_return(s)
 
     # Risk metrics on full series (same shared block as the benchmark rows).
-    row.update(risk_metric_row(s))
+    row.update(risk_metric_row(s, rf_daily))
     daily_ret = s.pct_change().dropna()
     cagr_val = row["cagr"] if isinstance(row["cagr"], (int, float)) else 0.0
     # Alpha/Beta vs the reference benchmark, on the *overlapping* window so

@@ -176,6 +176,42 @@ class TestSortino:
         assert result == pytest.approx(0.3744, abs=1e-3)
 
 
+class TestRiskMetricRowRiskFree:
+    """risk_metric_row is the single source of truth for the risk block; it must
+    use the time-varying risk-free path when given one, and stay identical to the
+    scalar behaviour when not (so pinned/offline runs are unchanged)."""
+
+    def _ramp(self):
+        # A price series with genuine daily variation so Sharpe/Sortino are
+        # finite and rate-sensitive (a pure linear ramp has ~zero daily vol).
+        from tarzan.engine.stats import risk_metric_row
+        idx = pd.date_range("2020-01-01", periods=260, freq="B")
+        rng = np.random.default_rng(0)
+        rets = rng.normal(0.0006, 0.01, len(idx))
+        prices = pd.Series(100.0 * np.cumprod(1 + rets), index=idx)
+        return risk_metric_row, prices
+
+    def test_none_matches_scalar_sharpe_sortino(self):
+        risk_metric_row, prices = self._ramp()
+        row = risk_metric_row(prices)  # rf_daily default None
+        cagr = compute_cagr(prices)
+        vol = float(prices.pct_change().dropna().std()) * math.sqrt(252) * 100
+        assert row["sharpe"] == pytest.approx(compute_sharpe(cagr, vol))
+        assert row["sortino"] == pytest.approx(
+            compute_sortino(prices.pct_change().dropna(), cagr))
+
+    def test_timevarying_rf_changes_sharpe(self):
+        risk_metric_row, prices = self._ramp()
+        daily_ret = prices.pct_change().dropna()
+        # A ~0% flat risk-free path (vs the scalar 4%) must lift Sharpe: less
+        # is subtracted from every daily return. Proves the tv branch is live.
+        rf_zero = pd.Series(0.0, index=daily_ret.index)
+        scalar = risk_metric_row(prices)["sharpe"]
+        tv = risk_metric_row(prices, rf_zero)["sharpe"]
+        assert tv != pytest.approx(scalar)
+        assert tv > scalar
+
+
 class TestVaR:
     def test_var_insufficient_data_returns_nan(self):
         returns = pd.Series([0.01, 0.02])  # fewer than 5
