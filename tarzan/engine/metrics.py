@@ -765,7 +765,10 @@ class MetricsEngine:
             ctx["risk"] = None
             return
         ph = ctx.get("portfolio_history", pd.Series(dtype=float))
-        result = {"volatility": 0.0, "sharpe": float("nan"), "max_drawdown": 0.0,
+        # Unavailable, not zero: with <2 points there is no risk to measure, so
+        # every metric is nan (rendered "—"). A 0.0 volatility/drawdown would
+        # read as "measured, no risk" — the numeric-zero≠unavailable invariant.
+        result = {"volatility": float("nan"), "sharpe": float("nan"), "max_drawdown": float("nan"),
                   "sortino": float("nan"), "var_95": float("nan"), "cvar_95": float("nan"),
                   "beta": float("nan"), "alpha": float("nan")}
         if ph.empty or len(ph) < 2:

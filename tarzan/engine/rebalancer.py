@@ -448,6 +448,8 @@ class _ObjectiveModel:
 # ---------------------------------------------------------------------------
 
 def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.ndarray:
+    from tarzan.engine.tax import is_government_bond
+
     cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
     cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
     tax = np.zeros(len(holdings))
@@ -455,8 +457,12 @@ def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.nd
         gp = float(h.gain_pct or 0.0)
         if gp <= 0:
             continue
-        instr = (h.instrument_type or "").lower()
-        rate = cg_gov if "government bond" in instr else cg_std
+        # Same sovereign-debt test as the realized-CGT estimate. The name regex
+        # is bond-gated (only consulted for FIXED_INCOME) so an equity name can
+        # never earn the reduced rate; the subtype markers are safe unconditionally.
+        subtypes = (h.instrument_type, h.security_type)
+        names = (h.name,) if h.asset_class == AssetClass.FIXED_INCOME else ()
+        rate = cg_gov if is_government_bond(subtypes, names) else cg_std
         # Tax withheld per euro of SALE PROCEEDS (not per euro of cost). gp is
         # the gain relative to cost, so a position up gp% has proceeds
         # (100+gp) for every 100 of cost, of which gp is taxable gain. The

@@ -32,6 +32,23 @@ _GOV_BOND_NAME = re.compile(
     re.IGNORECASE,
 )
 
+
+def is_government_bond(subtypes=(), names=()) -> bool:
+    """Sovereign-debt test for the reduced CGT rate, from provider subtype
+    markers OR a sovereign short-name/description match.
+
+    The single home for "is this a government bond?" so the realized-CGT
+    estimate (``tax``) and the rebalancer's plan-cost tax model apply the same
+    reduced rate to the same instruments. The caller must only pass instruments
+    already established as BOND mechanics: the name regex distinguishes
+    sovereign from corporate debt, it does NOT prove an instrument is a bond
+    (an equity named "Treasury Wine" must never reach here).
+    """
+    if any("govern" in str(s).casefold() or "govt" in str(s).casefold()
+           for s in subtypes):
+        return True
+    return any(_GOV_BOND_NAME.search(str(n)) for n in names if n)
+
 # How many years a realized loss stays usable (year of realization + 4).
 _LOSS_CARRY_YEARS = 4
 
@@ -138,11 +155,7 @@ def _classify(
         if value
     ]
     names = [related.name for related in related_orders if related.name]
-    is_government_bond = any(
-        "govern" in subtype.casefold() or "govt" in subtype.casefold()
-        for subtype in provider_subtypes
-    ) or any(_GOV_BOND_NAME.search(name) for name in names)
-    return is_government_bond, False
+    return is_government_bond(provider_subtypes, names), False
 
 
 def _realizations(
