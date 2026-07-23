@@ -13,7 +13,6 @@ Recording is best-effort so diagnostics cannot break financial execution.
 from __future__ import annotations
 
 import logging
-import os
 from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -25,7 +24,6 @@ logger = logging.getLogger(__name__)
 ERROR = "ERROR"
 WARNING = "WARNING"
 INFO = "INFO"
-_SEVERITY_ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
 
 
 @dataclass
@@ -194,68 +192,3 @@ def summary_line() -> str:
         return "Data quality: no issues."
     parts = [f"{c[s]} {s.lower()}(s)" for s in (ERROR, WARNING, INFO) if c.get(s)]
     return "Data quality: " + ", ".join(parts) + "."
-
-
-def render() -> str:
-    """Render the full report as a string (also what gets written to disk)."""
-    lines: list[str] = []
-    lines.append("=" * 72)
-    lines.append("TARZAN DATA-QUALITY REPORT")
-    lines.append("=" * 72)
-    lines.append("")
-    lines.append(
-        "Everything the run skipped, coerced, or fell back on. "
-        "This is NOT the full log (see analyzer.log) — only items worth a "
-        "human's review."
-    )
-    lines.append("")
-
-    all_issues = _current_report().issues
-    if not all_issues:
-        lines.append("No issues this run — every input parsed and priced cleanly. ✅")
-        lines.append("")
-        return "\n".join(lines)
-
-    # Summary counts.
-    c = counts()
-    summary = ", ".join(
-        f"{c[s]} {s}" for s in (ERROR, WARNING, INFO) if c.get(s)
-    )
-    lines.append(f"SUMMARY: {summary}")
-    # Per-category (source) counts for a quick "where" read.
-    by_source = Counter(i.source for i in all_issues)
-    lines.append("BY SECTION: " + ", ".join(
-        f"{src}={n}" for src, n in sorted(by_source.items())
-    ))
-    lines.append("")
-    lines.append("-" * 72)
-    lines.append("")
-
-    # Issues grouped by source, most-serious severity first within each group.
-    for src in sorted({i.source for i in all_issues}):
-        group = [i for i in all_issues if i.source == src]
-        group.sort(key=lambda i: _SEVERITY_ORDER.get(i.severity, 99))
-        lines.append(f"## {src}  ({len(group)})")
-        for i in group:
-            ctx = f" [{i.context}]" if i.context else ""
-            lines.append(f"  [{i.severity}][{i.source}]{ctx} {i.message}")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-def write_report(output_dir: str, filename: str = "data_quality.log") -> Optional[str]:
-    """Write the report to ``output_dir/filename`` and return its path.
-
-    Best-effort: on any I/O error we log and return None rather than break
-    the run (the console summary line still gives the headline counts).
-    """
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        path = os.path.join(output_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(render())
-        return path
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Data-quality report write failed: %s", e)
-        return None

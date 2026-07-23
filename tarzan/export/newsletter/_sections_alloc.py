@@ -38,6 +38,7 @@ from tarzan.export.newsletter._format import (
     _semaphore,
     _semaphore_color,
     _signed_pp,
+    is_missing,
 )
 from tarzan.export.newsletter._charts import (
     _hero_flow_chips,
@@ -72,7 +73,7 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
     parts: list[str] = []
 
     # Movement clause
-    if week_return is None or (isinstance(week_return, float) and pd.isna(week_return)):
+    if is_missing(week_return):
         parts.append("Your portfolio is steady this week")
     else:
         wk_eur = m.total_value * float(week_return) / 100
@@ -150,9 +151,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     #     coupons/dividends) from the order list, expressed over the *net*
     #     capital contributed (current_value − Total PnL). It answers "how
     #     much have I actually made on the money I put in".
-    cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
-    unrealized_eur = m.total_value - cost
-    unrealized_pct = (unrealized_eur / cost * 100) if cost > 0 else 0.0
+    unrealized_eur = m.unrealized_pnl_eur
+    unrealized_pct = m.unrealized_pnl_pct or 0.0
 
     has_total_pnl = m.pnl_eur is not None
     total_pnl_eur = m.pnl_eur if has_total_pnl else unrealized_eur

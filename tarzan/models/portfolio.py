@@ -223,6 +223,26 @@ class PortfolioMetrics:
     # None on the holdings-only path (sparklines are then omitted).
     allocation_timeline: Optional[dict] = None
 
+    @property
+    def unrealized_pnl_eur(self) -> float:
+        """Snapshot unrealized P&L in EUR: current market value − Σ cost basis
+        of open holdings (the Hero's "Unrealized PnL"). Realized gains and
+        income are excluded; a zero/empty cost basis yields ``total_value``.
+
+        Single source for the ``total_value − cost`` figure the subject line,
+        performance matrix, diversification hero and AI digest all show."""
+        cost = float(self.holdings_df["cost_basis_eur"].sum()) if not self.holdings_df.empty else 0.0
+        return self.total_value - cost
+
+    @property
+    def unrealized_pnl_pct(self) -> Optional[float]:
+        """:attr:`unrealized_pnl_eur` over cost basis, as a percent. ``None``
+        when there is no cost basis to divide by — a numeric ``0.0`` would
+        falsely read as "break-even" instead of "not applicable" (the
+        numeric-zero != Unavailable invariant)."""
+        cost = float(self.holdings_df["cost_basis_eur"].sum()) if not self.holdings_df.empty else 0.0
+        return (self.unrealized_pnl_eur / cost * 100.0) if cost > 0 else None
+
     def to_summary_dict(self) -> dict:
         """Serialize key metrics to a JSON-compatible dictionary — the stable,
         versioned EXTERNAL output contract.

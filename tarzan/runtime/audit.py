@@ -10,9 +10,7 @@ collection cannot alter optimizer behavior.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -110,25 +108,3 @@ def record_rebalancing_plan(
 
 def records() -> list[dict]:
     return list(_current_audit().records)
-
-
-def write_report(output_dir: str, filename: str = "rebalancing_audit.jsonl") -> Optional[str]:
-    """Write the audit trail as JSON Lines to ``output_dir/filename``.
-
-    One JSON object per line (per plan). Best-effort: returns None on any
-    I/O error rather than breaking the run. Not written when empty (a run
-    with no rebalancing produced no plans to audit).
-    """
-    if not _current_audit().records:
-        return None
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        path = os.path.join(output_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            for rec in _current_audit().records:
-                f.write(json.dumps(rec, ensure_ascii=False, default=str))
-                f.write("\n")
-        return path
-    except Exception as e:  # noqa: BLE001
-        logger.debug("Rebalancing audit write failed: %s", e)
-        return None

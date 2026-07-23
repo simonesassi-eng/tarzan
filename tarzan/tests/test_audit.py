@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pandas as pd
 
 from tarzan.runtime import audit
@@ -49,28 +47,6 @@ class TestRebalancingAudit:
         assert rec["holdings"][0]["value_eur"] == 6000.0
         assert rec["holdings"][0]["asset_class"] == "Equities"
         assert rec["actions"] == actions
-
-    def test_write_report_emits_jsonl(self, tmp_path):
-        audit.reset()
-        audit.record_rebalancing_plan(
-            "Buy only", no_sell=True, total_value=100.0, lump_sum=None,
-            config=InvestorConfig(), holdings=[_h("IE00AAA", AssetClass.EQUITIES, 100.0)],
-            suggestions=[], verifications=[])
-        audit.record_rebalancing_plan(
-            "Buy & sell", no_sell=False, total_value=100.0, lump_sum=None,
-            config=InvestorConfig(), holdings=[], suggestions=[], verifications=[])
-        path = audit.write_report(str(tmp_path))
-        assert path is not None
-        lines = (tmp_path / "rebalancing_audit.jsonl").read_text().strip().splitlines()
-        assert len(lines) == 2  # one JSON object per plan
-        for ln in lines:
-            json.loads(ln)  # each line is valid JSON
-        assert json.loads(lines[0])["plan"] == "Buy only"
-
-    def test_empty_audit_writes_nothing(self, tmp_path):
-        audit.reset()
-        assert audit.write_report(str(tmp_path)) is None
-        assert not (tmp_path / "rebalancing_audit.jsonl").exists()
 
     def test_record_never_raises_on_bad_input(self):
         audit.reset()

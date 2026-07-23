@@ -41,6 +41,7 @@ from tarzan.export.newsletter._format import (
     _display_ticker,
     _pct,
     _pct_compact,
+    is_missing,
 )
 from tarzan.export.newsletter._charts import (
     _day_spark,
@@ -196,9 +197,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     tot = {d: _window_money_pnl(m.pnl_series, m.actual_value_series, d) for d in (1, 7, 30)}
     tot_since = (m.pnl_eur, m.pnl_pct)
     unr = {d: _window_money_pnl(m.unrealized_series, m.actual_value_series, d) for d in (1, 7, 30)}
-    cost = float(m.holdings_df["cost_basis_eur"].sum()) if not m.holdings_df.empty else 0.0
-    unreal_now = m.total_value - cost
-    unr_since = (unreal_now, (unreal_now / cost * 100.0) if cost > 0 else None)
+    unr_since = (m.unrealized_pnl_eur, m.unrealized_pnl_pct)
     nav_norm = _norm_series(m.portfolio_history)
     tw = {d: _window_twror(nav_norm, d) for d in (1, 7, 30)}
     tw_since = m.twror_pct
@@ -498,7 +497,7 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     pill (+ optional LIVE tag) + sparkline without the surrounding ``<td>`` so
     callers that need a specific cell background can wrap it themselves."""
     P = PALETTE
-    if day_val is None or (isinstance(day_val, float) and pd.isna(day_val)):
+    if is_missing(day_val):
         pill_txt, pill_col, pill_bg = "\u2014", P["muted"], P["page"]
         dv = None
     else:
@@ -764,7 +763,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         """Green if we beat the α/β benchmark by >0.25pp this period,
         amber within ±0.25pp (noise), red if we underperform. Falls back
         to sign-based coloring when the benchmark value is missing."""
-        if bench_value is None or (isinstance(bench_value, float) and pd.isna(bench_value)):
+        if is_missing(bench_value):
             return PALETTE["green"] if value >= 0 else PALETTE["red"]
         delta = value - float(bench_value)
         if abs(delta) <= 0.25:
@@ -776,7 +775,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         out: dict = {}
         for key in period_keys:
             val = source.get(key) if source else None
-            if val is None or (isinstance(val, float) and pd.isna(val)):
+            if is_missing(val):
                 out[key] = {"value": "\u2014", "color": PALETTE["subtle"]}
                 continue
             try:
@@ -935,7 +934,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
     def _color_sign(value) -> str:
         """Sign-aware color for a period return cell — used on benchmarks."""
-        if value is None or (isinstance(value, float) and pd.isna(value)):
+        if is_missing(value):
             return PALETTE["muted"]
         return PALETTE["green"] if float(value) >= 0 else PALETTE["red"]
 
@@ -964,7 +963,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         same period: green if we beat by >0.25pp, amber within ±0.25pp
         (statistical noise), red if we underperform. Falls back to
         sign-based when the benchmark value is unavailable."""
-        if value is None or (isinstance(value, float) and pd.isna(value)):
+        if is_missing(value):
             return PALETTE["muted"]
         if (bench_value is None
                 or (isinstance(bench_value, float) and pd.isna(bench_value))):
@@ -1183,12 +1182,12 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     geo_name = (ctx.benchmark_geo or "").strip().lower()
 
     def _fmt_pct(v) -> str:
-        if v is None or (isinstance(v, float) and pd.isna(v)):
+        if is_missing(v):
             return "—"
         return _pct(float(v))
 
     def _fmt_num(v) -> str:
-        if v is None or (isinstance(v, float) and pd.isna(v)):
+        if is_missing(v):
             return "—"
         return f"{float(v):.2f}"
 
