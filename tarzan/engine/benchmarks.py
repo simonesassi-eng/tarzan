@@ -23,6 +23,7 @@ from tarzan.engine.stats import (
     compute_ytd_return,
     _compute_beta_alpha,
     normalize_index,
+    rf_annual_pct,
     risk_metric_row,
 )
 
@@ -215,7 +216,10 @@ def _compute_single_benchmark_metrics(
         "beta": float("nan"),
     }
     if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
-        beta, alpha = _compute_beta_alpha(bench, ab_benchmark, metrics["cagr"])
+        beta, alpha = _compute_beta_alpha(
+            bench, ab_benchmark, metrics["cagr"],
+            risk_free=rf_annual_pct(rf_daily),
+        )
         metrics["alpha"] = alpha
         metrics["beta"] = beta
     return metrics
@@ -285,7 +289,9 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
             and len(s) > 1 and not daily_ret.empty):
         bench_win = _clip_to_window(bench_history, s.index.min(), s.index.max())
         if len(bench_win) > 1:
-            beta, alpha = _compute_beta_alpha(s, bench_win, cagr_val)
+            beta, alpha = _compute_beta_alpha(
+                s, bench_win, cagr_val, risk_free=rf_annual_pct(rf_daily),
+            )
             row["beta"] = beta
             row["alpha"] = alpha
 

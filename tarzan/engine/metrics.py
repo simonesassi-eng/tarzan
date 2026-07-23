@@ -39,6 +39,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     compute_var,
     compute_ytd_return,
     normalize_index,
+    rf_annual_pct,
     risk_metric_row,
     twror,
     xirr,
@@ -818,7 +819,10 @@ class MetricsEngine:
             else pd.Series(dtype=float)
         )
         if not bench_history.empty and len(bench_history) > 1:
-            beta, alpha = _compute_beta_alpha(ph, bench_history, block["cagr"])
+            beta, alpha = _compute_beta_alpha(
+                ph, bench_history, block["cagr"],
+                risk_free=rf_annual_pct(self._rf_daily(ctx)),
+            )
             result["beta"] = beta
             result["alpha"] = alpha
         ctx["risk"] = result

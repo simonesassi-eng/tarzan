@@ -282,6 +282,23 @@ def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
     return pd.Series(scalar / 100.0 / TRADING_DAYS, index=idx)
 
 
+def rf_annual_pct(rf_daily) -> float | None:
+    """Collapse a time-varying daily risk-free path to a single annualised
+    percent — the form Jensen's alpha needs (rf enters the CAPM regression as
+    a level, so a per-day path would only perturb beta; the window mean is the
+    right scalar and matches ``proxy_data.risk_free_annual``).
+
+    Returns ``None`` when no real series is available, so ``_compute_beta_alpha``
+    keeps its documented scalar ``RISK_FREE_RATE`` fallback — the same behaviour
+    Sharpe/Sortino use in a pinned run with no cached rate rows.
+    """
+    if isinstance(rf_daily, pd.Series):
+        return float(rf_daily.mean()) * TRADING_DAYS * 100.0 if not rf_daily.empty else None
+    if rf_daily is None:
+        return None
+    return float(rf_daily)
+
+
 def compute_sharpe_tv(daily_returns: pd.Series, rf_daily) -> float:
     """Annualised Sharpe from a TIME-VARYING daily risk-free path.
 
