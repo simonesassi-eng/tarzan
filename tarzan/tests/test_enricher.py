@@ -1040,3 +1040,60 @@ class TestMemoSurvivesEnrichPasses:
         # No active session (tool/test context) → each call starts fresh.
         enricher.enrich_holdings([self._holding()])
         assert resets["n"] == 1
+
+
+# ── Enrichment must preserve input order ────────────────────────────────────
+import time  # noqa: E402
+
+from tarzan.models.holding import Holding  # noqa: E402
+
+
+class TestEnrichHoldingsOrderIsInputOrder:
+    """``enrich_holdings`` runs on a ThreadPoolExecutor and used to append
+    results as futures completed, so the returned order followed thread
+    scheduling rather than the input.
+
+    That list is the rebalancer's coordinate order, and its iterated local
+    search accepts an improvement at 1e-9: two runs of the *same* deterministic
+    analysis converged on different local optima and recommended materially
+    different purchases from the same budget (CL2 +€16.6k vs +€14.3k, X25E
+    +€11.9k vs +€7.1k), while every other figure matched because sums and
+    weighted averages are order-independent.
+
+    These tests force completion order to be the reverse of input order, which
+    is the condition the old code silently failed under.
+    """
+
+    @staticmethod
+    def _holdings(n: int) -> list:
+        return [Holding(isin=f"TEST{i:08d}", ticker=f"T{i}.MI",
+                        name=f"Name {i}", quantity=1.0,
+                        cost_basis_eur=100.0, market_value_eur=110.0,
+                        currency="EUR") for i in range(n)]
+
+    def test_order_survives_reversed_completion(self, monkeypatch):
+        holdings = self._holdings(8)
+        order = {h.ticker: i for i, h in enumerate(holdings)}
+
+        def slow_by_index(h):
+            # Later inputs finish first, so completion order is reversed.
+            time.sleep(0.02 * (len(holdings) - order[h.ticker]))
+            return h
+
+        monkeypatch.setattr(enricher, "_enrich_and_classify", slow_by_index)
+        result = enricher.enrich_holdings(holdings)
+        assert [h.ticker for h in result] == [h.ticker for h in holdings]
+
+    def test_failed_holding_keeps_its_slot(self, monkeypatch):
+        holdings = self._holdings(5)
+
+        def fail_the_middle(h):
+            if h.ticker == "T2.MI":
+                raise RuntimeError("provider exploded")
+            return h
+
+        monkeypatch.setattr(enricher, "_enrich_and_classify", fail_the_middle)
+        result = enricher.enrich_holdings(holdings)
+        # The un-enriched holding is still returned, and still third.
+        assert [h.ticker for h in result] == [h.ticker for h in holdings]
+        assert len(result) == len(holdings)

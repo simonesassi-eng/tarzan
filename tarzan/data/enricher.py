@@ -3190,20 +3190,29 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
 
     logger.info("Enriching %d holdings (max %d workers)...", len(holdings), MAX_WORKERS)
 
-    enriched: list[Holding] = []
+    # Results are placed back at their INPUT index, not appended in completion
+    # order. Appending as futures complete made this list's order depend on
+    # thread scheduling, and that order is the rebalancer's coordinate order:
+    # its iterated local search accepts an improvement at 1e-9, so two runs of
+    # the same deterministic analysis converged on different local optima and
+    # recommended materially different purchases (CL2 +€16.6k vs +€14.3k,
+    # X25E +€11.9k vs +€7.1k) from the same budget. Every other figure matched,
+    # because sums and weighted averages do not care about order.
+    slots: list[Optional[Holding]] = [None] * len(holdings)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Context variables do not propagate to executor threads implicitly.
         # Give each task its own copied context so run mode, effective date,
         # active ledger, and transport policy remain authoritative in workers.
         futures = {
-            executor.submit(copy_context().run, _enrich_and_classify, h): h
-            for h in holdings
+            executor.submit(copy_context().run, _enrich_and_classify, h): index
+            for index, h in enumerate(holdings)
         }
         for future in as_completed(futures):
+            index = futures[future]
             try:
-                enriched.append(future.result())
+                slots[index] = future.result()
             except Exception as e:
-                h = futures[future]
+                h = holdings[index]
                 logger.error("Enrichment failed for %s: %s", h.ticker, e)
                 dq.error(
                     "enricher",
@@ -3211,7 +3220,8 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
                     "price/classification) — it may distort value, allocation and returns",
                     context=(h.ticker or h.isin),
                 )
-                enriched.append(h)
+                slots[index] = h
+    enriched: list[Holding] = [h for h in slots if h is not None]
 
     # Surface holdings that came through with no usable market price — they
     # fall back to their last-known/CSV EUR value, so their contribution is an
