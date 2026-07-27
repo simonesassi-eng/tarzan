@@ -197,3 +197,92 @@ def legend(items, size: int = 11) -> str:
         out.append(f'<span style="display:inline-block;margin:0 14px 2px 0;font-size:{size}px;'
                    f'font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
     return '<div style="margin-top:6px;line-height:1.35;">' + "".join(out) + "</div>"
+
+
+def waterfall(items, *, w: int = 544, h: int = 205, total_label: str = "Net",
+              footnote: str | None = None) -> str:
+    """Contribution waterfall: every bar starts where the previous one ended.
+
+    ``items`` is a list of ``(label, value_pct)``. The final bar is the running
+    total, so the caller must pass steps that genuinely add up to the number it
+    wants that bar to show — a waterfall whose parts do not reconcile with its
+    total is worse than two ranked lists, because it looks like it reconciles.
+
+    Two ranked lists let the reader compare within each list but not across
+    them, and never show how the parts make the whole; here the connectors do.
+    """
+    steps, run = [], 0.0
+    for label, val in items:
+        v = float(val or 0.0)
+        steps.append((str(label), v, run, run + v))
+        run += v
+    if not steps:
+        return ""
+    total = run
+
+    ML, MR, MT, MB = 40, 10, 16, 46
+    PW, PH = w - ML - MR, h - MT - MB
+    lo = min([0.0, total] + [min(s[2], s[3]) for s in steps])
+    hi = max([0.0, total] + [max(s[2], s[3]) for s in steps])
+    span = (hi - lo) or 1.0
+    lo, hi, ticks = nice_ticks(lo - span * 0.12, hi + span * 0.12, 4)
+    nb = len(steps) + 1
+    slot = PW / nb
+    bw = min(46.0, slot * 0.62)
+
+    def Y(v: float) -> float:
+        return MT + (1 - (v - lo) / ((hi - lo) or 1.0)) * PH
+
+    out = [f'<svg width="100%" viewBox="0 0 {w} {h}" '
+           f'preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg" style="display:block;'
+           f'width:100%;background:{_P["card_alt"]};">']
+    for t in ticks:
+        if t < lo - 1e-9 or t > hi + 1e-9:
+            continue
+        y, zero = Y(t), abs(t) < 1e-9
+        out.append(f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" '
+                   f'stroke="{SUBTLE if zero else BORDER}" '
+                   f'stroke-width="{1.2 if zero else 1}"/>')
+        sign = "+" if t > 0 else ("−" if t < 0 else "")
+        out.append(f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" '
+                   f'font-size="9" fill="{SUBTLE}">{sign}{abs(t):.1f}%</text>')
+
+    prev_x = None
+    for i, (label, val, y0, y1) in enumerate(steps):
+        cx = ML + slot * (i + 0.5)
+        x = cx - bw / 2
+        top, bot = Y(max(y0, y1)), Y(min(y0, y1))
+        col = GREEN if val >= 0 else _P["red"]
+        sign = "+" if val >= 0 else "−"
+        out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{bw:.1f}" '
+                   f'height="{max(1.5, bot - top):.1f}" fill="{col}" rx="1.5"/>')
+        out.append(f'<text x="{cx:.1f}" y="{(top - 4) if val >= 0 else (bot + 11):.1f}" '
+                   f'text-anchor="middle" font-size="9.5" font-weight="700" '
+                   f'fill="{col}">{sign}{abs(val):.2f}%</text>')
+        out.append(f'<text x="{cx:.1f}" y="{h - 24}" text-anchor="middle" '
+                   f'font-size="8.5" font-weight="700" fill="{MUTED}">{label}</text>')
+        # Connector from the previous bar's end to this bar's start: the line
+        # that makes it a waterfall rather than a row of floating bars.
+        if prev_x is not None:
+            out.append(f'<line x1="{prev_x:.1f}" y1="{Y(y0):.1f}" x2="{x:.1f}" '
+                       f'y2="{Y(y0):.1f}" stroke="{SUBTLE}" stroke-width="1" '
+                       f'stroke-dasharray="2,2"/>')
+        prev_x = x + bw
+
+    cx = ML + slot * (len(steps) + 0.5)
+    x = cx - bw / 2
+    top, bot = Y(max(0.0, total)), Y(min(0.0, total))
+    accent = _P["accent"]
+    out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{bw:.1f}" '
+               f'height="{max(1.5, bot - top):.1f}" fill="{accent}" rx="1.5"/>')
+    out.append(f'<text x="{cx:.1f}" y="{top - 4:.1f}" text-anchor="middle" '
+               f'font-size="10" font-weight="700" fill="{accent}">'
+               f'{"+" if total >= 0 else "−"}{abs(total):.2f}%</text>')
+    out.append(f'<text x="{cx:.1f}" y="{h - 24}" text-anchor="middle" '
+               f'font-size="8.5" font-weight="700" fill="{accent}">{total_label}</text>')
+    if footnote:
+        out.append(f'<text x="{ML}" y="{h - 8}" font-size="9" '
+                   f'fill="{SUBTLE}">{footnote}</text>')
+    out.append("</svg>")
+    return "".join(out)

@@ -12,6 +12,7 @@ from tarzan.export._format import (
     eur_smart as _eur_smart,
     short_instrument_name,
 )
+from tarzan.export._charts import waterfall as _wf_chart
 from tarzan.export._perf_series import (
     _norm_series,
     _perf_window,
@@ -1540,14 +1541,23 @@ def _build_return_contrib(ctx: _NewsletterContext) -> dict:
     if df.empty:
         return {"winners": [], "laggards": []}
 
+    # Contribution = the position's P&L over the portfolio's cost basis, so the
+    # parts sum to the portfolio's own return and the waterfall's total bar
+    # matches the headline. The previous measure, weight x gain, mixed two
+    # denominators (weight is a share of current value, gain is a return on
+    # cost) and summed to +6.23% against a +8.12% portfolio -- a gap nothing in
+    # the issue explained, and one the waterfall's total bar would now print.
+    cost_total = float(df["cost_basis_eur"].sum()) if "cost_basis_eur" in df else 0.0
+    if cost_total <= 0:
+        return {"winners": [], "laggards": [], "chart_html": ""}
     rows = []
     for _, r in df.iterrows():
-        contrib = float(r.get("weight_pct", 0) or 0) * float(r.get("gain_pct", 0) or 0) / 100
+        contrib = float(r.get("gain_eur", 0) or 0) / cost_total * 100.0
         rows.append({"name": r.get("name", ""), "ticker": r.get("ticker", ""), "contrib": contrib})
     rows.sort(key=lambda x: -x["contrib"])
 
-    top = rows[:3]
-    bottom = list(reversed(rows[-3:]))  # worst first
+    top = [r for r in rows[:3] if r["contrib"] > 0]
+    bottom = [r for r in reversed(rows[-3:]) if r["contrib"] < 0]  # worst first
     max_abs = max((abs(r["contrib"]) for r in (top + bottom)), default=0.0) or 1.0
 
     def _item(r: dict) -> dict:
@@ -1558,10 +1568,45 @@ def _build_return_contrib(ctx: _NewsletterContext) -> dict:
             "is_positive": r["contrib"] >= 0,
         }
 
+    # \u2500\u2500 Waterfall over the same contributions \u2500\u2500
+    # The named movers plus one bridging bar for everything else, so the bars
+    # reconcile with the total by construction. Drawing only the six movers and
+    # calling their sum "Total" would print a number that is not the
+    # portfolio's return and that ties to nothing else in the issue.
+    shown = top + bottom
+    grand = sum(r["contrib"] for r in rows)
+    residual = grand - sum(r["contrib"] for r in shown)
+    n_other = len(rows) - len(shown)
+    steps = [(_wf_label(r), r["contrib"]) for r in shown]
+    if n_other > 0 and abs(residual) >= 0.005:
+        steps.append((f"+{n_other} more", residual))
+    # The total bar is named for the figure it equals -- the unrealized return
+    # on the STATE tile -- not "Total", which the reader would try to match
+    # against the headline's total return (that one also carries realized gains
+    # and income, so it is a larger number).
+    chart_html = _wf_chart(
+        steps, total_label="Unrealized",
+        footnote="each position's P&amp;L over the portfolio's cost basis",
+    ) if steps else ""
+
     return {
         "winners": [_item(r) for r in top],
         "laggards": [_item(r) for r in bottom],
+        "chart_html": chart_html,
     }
+
+
+def _wf_label(row: dict) -> str:
+    """Bar label for the waterfall: the resolved ticker when there is one.
+
+    Exchange suffixes are kept -- ``_display_ticker`` treats them as part of
+    the instrument's identity -- with the name as fallback, clipped to what
+    fits under a 46px bar.
+    """
+    tick = _display_ticker(row.get("ticker"))
+    if tick:
+        return tick
+    return str(row.get("name") or "")[:9]
 
 def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
     """Preview text shown in inbox preview."""
