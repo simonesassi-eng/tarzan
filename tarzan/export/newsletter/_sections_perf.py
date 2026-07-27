@@ -16,6 +16,7 @@ from tarzan.export._format import (
 from tarzan.export import _charts as _charts
 from tarzan.export._perf_series import (
     _norm_series,
+    benchmark_gap_pp,
     _perf_full_series,
     _perf_vol_series,
     _perf_window,
@@ -182,7 +183,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 '</tr></table>')
     else:
         grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
-    return {"available": True, "html": grid}
+    # Section subtitle: which close the levels are, and how many indices. Both
+    # change what the table means and neither was stated.
+    close_label = _prev_session_label(m, "%d %b")
+    n = sum(1 for d in snap if isinstance(d, dict))
+    sub = (f'Session close \u00b7 {close_label} \u00b7 {n} indices'
+           if close_label else f'{n} indices')
+    return {"available": True, "html": grid, "sub": sub}
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
     """Performance section: a 1D / 7D / 30D / since-inception returns matrix
@@ -489,32 +496,33 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         except Exception as e:  # noqa: BLE001 — never break the newsletter
             logger.debug("Divergence note skipped: %s", e)
 
-        inner = (
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
-            f'text-transform:uppercase;">You vs the market</div>'
-            f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">Your return paths vs '
-            f'<strong style="color:{P["ink"]};">MSCI ACWI</strong>, since inception (cumulative) and '
-            f'the last 30 days (rebased).</div>{charts_tbl}{divergence_html}'
-        )
-        # Wrapped in the same card shell as the matrix above so the section
-        # reads consistently with the rest of the newsletter.
+        # No card kicker or subtitle here: this is a top-level section now and
+        # the template's heading carries both. Nested inside the performance
+        # card it needed its own title; as a section it would print two
+        # headings for one block.
         parts.append(
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+            f'style="background:{P["card_alt"]};border:1px solid {P["border"]};'
             f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
-            f'<tr><td style="padding:14px 16px;">{inner}</td></tr></table>'
+            f'<tr><td style="padding:14px 16px;">{charts_tbl}{divergence_html}</td></tr></table>'
         )
-    # The section kicker belongs to the template, which owns the ordinal
-    # counter. Baked in here it printed an unnumbered "Performance" at the top
-    # of the body while a different section lower down printed a numbered one.
-    # No subtitle: the sentence that used to sit here listed the table's own
-    # column headers and window rows back to the reader.
-    header = (f'<div style="margin-top:4px;font-size:18px;font-weight:700;'
-              f'color:{P["ink"]};">How your money moved</div>')
-    return {"available": True, "kicker": "Performance",
-            "html": header + matrix_card + "".join(parts)}
-
-    return {"available": True, "html": header + matrix_card + "".join(parts)}
+    # Two blocks, two sections. The window matrix belongs with the portfolio's
+    # own value chart; the benchmark comparison answers a different question and
+    # gets its own heading, as in the concept. Returned separately so the
+    # template can place each under its own ordinal rather than one section
+    # carrying both.
+    gap = benchmark_gap_pp(m, ctx.benchmark_geo)
+    gap_sub = None
+    if gap is not None:
+        word = "behind" if gap < 0 else ("ahead of" if gap > 0 else "level with")
+        sign = "+" if gap > 0 else ("\u2212" if gap < 0 else "")
+        col = P["red"] if gap < 0 else (P["green"] if gap > 0 else P["muted"])
+        gap_sub = (f'Now <strong style="color:{col};">{sign}{abs(gap):.2f}pp'
+                   f'</strong> {word} {ctx.benchmark_geo}.')
+    return {"available": True,
+            "matrix_html": matrix_card,
+            "vs_market_html": "".join(parts),
+            "vs_market_sub": gap_sub}
 
 def _intraday_quote_parts(quote) -> tuple[object, object]:
     """Return ``(series, baseline)`` from a preprocessed quote.
@@ -1482,7 +1490,13 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     return {
         "available": True,
         "title": "Historical risk profile",
-        "subtitle": "Full available history, per instrument",
+        # The section heading carries this now, so it names the one thing the
+        # reader needs before reading a column: the window each series covers.
+        "subtitle": (
+            f'Portfolio over {(port or {}).get("span_label") or "its"} of '
+            f'history; every instrument over its own full history, shown next '
+            f'to its name.'
+        ),
         "table_html": table_html,
         "description": description,
         # Backtest transparency note (holdings excluded / renormalized).

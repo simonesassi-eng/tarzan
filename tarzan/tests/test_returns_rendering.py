@@ -61,10 +61,11 @@ class TestNewsletterReturns:
     def test_html_shows_perf_section_only_when_set(self):
         html_off = render_newsletter(_minimal_metrics(False), _config())
         html_on = render_newsletter(_minimal_metrics(True), _config())
-        # The Performance section (returns matrix + annualized footer + charts)
-        # renders only when the order-derived returns and daily series exist.
-        assert "How your money moved" not in html_off
-        assert "How your money moved" in html_on
+        # The window matrix (+ annualized footer) renders only when the
+        # order-derived returns and daily series exist. Its footer is the anchor:
+        # the section heading above it is always present, because the PORTFOLIO
+        # section also carries the value chart.
+        assert "Annualized: TWROR" not in html_off
         assert "Annualized: TWROR" in html_on
         assert "TWROR" in html_on
 

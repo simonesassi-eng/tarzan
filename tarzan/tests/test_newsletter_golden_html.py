@@ -106,11 +106,36 @@ class TestNewsletterGoldenHtml:
 
     def test_golden_carries_every_section(self, rendered):
         """A structural floor, so a golden regenerated from a broken render
-        cannot quietly pass. These are the section kickers the template emits.
+        cannot quietly pass. These are the section labels the template emits on
+        the deterministic fixture; the backtest is skipped in a deterministic
+        run, so it is not on the list.
         """
         html, _m, _c = rendered
-        for kicker in ("Portfolio Digest", "Returns snapshot", "Legend"):
-            assert kicker in html, f"section {kicker!r} vanished from the render"
+        # Optimizer and Backtest are absent on this fixture (no rebalance
+        # suggestions, and a deterministic run skips the backtest), so they are
+        # not part of the floor; the ordering test covers them when present.
+        for label in ("State", "Portfolio", "Allocation", "The book",
+                      "Returns", "Watchlist", "Attribution", "Risk",
+                      "Appendix"):
+            assert f">{label}</span>" in html, (
+                f"section {label!r} vanished from the render")
+
+    def test_section_ordinals_match_the_concept_order(self, rendered):
+        """The order is the argument the document makes: what the portfolio is,
+        what it did, whether that beat the alternative, and so on. A section that
+        moves changes the reading, so the sequence is pinned rather than left to
+        whoever edits the template next.
+        """
+        html, _m, _c = rendered
+        labels = re.findall(
+            r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
+        expected = ["State", "Portfolio", "Vs the market", "Markets",
+                    "Allocation", "The book", "Returns", "Watchlist",
+                    "Attribution", "Risk", "Optimizer", "Backtest",
+                    "Appendix"]
+        # Sections the deterministic fixture cannot fill are absent, not
+        # reordered, so compare as a subsequence of the intended order.
+        assert labels == [x for x in expected if x in labels], labels
 
     def test_email_safety_floor(self, rendered):
         """No script, no remote asset, no webfont — the properties that make

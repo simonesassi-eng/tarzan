@@ -472,18 +472,16 @@ def _simulation_map(portfolios):
 # Assembly + guarded entry point
 # ---------------------------------------------------------------------------
 
-def _title():
-    return (f'<div style="margin-top:32px;font-size:13px;font-weight:700;letter-spacing:0.08em;'
-            f'color:{P["accent"]};text-transform:uppercase;">Backtesting</div>'
-            f'<div style="margin-top:2px;font-size:12px;color:{P["muted"]};">'
-            f'Long-history synthetic comparison of the candidate portfolios '
-            f'(reconstructed pre-inception from index proxies, net of TER).</div>')
+# The section heading and subtitle come from the template, which owns the
+# ordinal counter; baked in here they printed an unnumbered heading among
+# numbered ones.
+SUBTITLE = ("Candidate portfolios simulated over the long run, reconstructed "
+            "pre-inception from index proxies and net of TER.")
 
 
 def _render(portfolios, asset_target, geo_target, tol) -> str:
     from tarzan.backtest import ASSET_ORDER, GEO_ORDER
-    return (_title()
-            + _kicker("Instruments &times; portfolios")
+    return (_kicker("Instruments &times; portfolios")
             + _sub("Target weight of each instrument in each candidate portfolio.")
             + _instrument_matrix(portfolios)
             + _diversification(portfolios, asset_target, geo_target, tol,
@@ -520,7 +518,7 @@ def _render_and_cache(portfolios, cfg, cache_file) -> dict:
             cache_file.write_text(html, encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
-    return {"available": True, "html": html}
+    return {"available": True, "html": html, "subtitle": SUBTITLE}
 
 
 def _build_backtesting(ctx: _NewsletterContext, portfolios=None) -> dict:
@@ -550,7 +548,7 @@ def _build_backtesting(ctx: _NewsletterContext, portfolios=None) -> dict:
         try:
             html = cache_file.read_text(encoding="utf-8")
             if html.strip():
-                return {"available": True, "html": html}
+                return {"available": True, "html": html, "subtitle": SUBTITLE}
         except Exception:  # noqa: BLE001
             pass
     if not _enabled():

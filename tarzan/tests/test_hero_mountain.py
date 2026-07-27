@@ -100,11 +100,12 @@ class TestRender:
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         # Lean hero: the portfolio value band (scoreboard + mountain removed).
         assert "Portfolio" in html
-        # The Performance section carries the P&L / TWROR story. Its matrix is
-        # transposed -- windows are rows now, measures are columns -- so the
-        # column heads are what to look for, not the old row labels. The
-        # measures also appear as state tiles at the top of the issue.
-        assert "How your money moved" in html
+        # The window matrix sits in the PORTFOLIO section now, under the value
+        # chart, and the section heading is the only title it has -- the
+        # "How your money moved" line was dropped because the heading plus the
+        # matrix say it. Anchor on the matrix's own footer instead.
+        assert ">Portfolio</span>" in html
+        assert "Annualized: TWROR" in html
         # The matrix is built in Python, which writes the entity itself; the
         # tiles go through the template, where autoescape is off because the
         # filename ends in .j2, so their ampersand stays raw.

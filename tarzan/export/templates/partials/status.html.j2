@@ -1,24 +1,21 @@
-{# Status — the state tiles.
-   Every headline figure opens the issue: value, total and unrealized P&L, the
-   three return measures (TWROR, MWR, CAGR), the benchmark gap and the weighted
-   TER. They were previously scattered through the Performance section, so the
-   opening screen answered "how much do I have" but not "how am I doing", and a
-   reader had to scroll past two tables to find out. The tiles are built in
-   _sections_alloc.py::_build_hero as hero.tiles; the dual-axis value chart and
-   the cash-flow chips follow them. #}
-          <tr>
-            <td class="px-32" style="padding:28px 32px 8px 32px;background:{{ palette.card }};">
+{# [01] STATE — the figures the rest of the issue elaborates on.
+   Three rows of three: what the portfolio is worth and the profit in it, then
+   the three return measures, then the context each is judged against. Each tile
+   carries its own one-line caption; the definitions live in the appendix.
 
-              {# Lifetime-state band: portfolio value + cash + Unrealized PnL,
-                 with the dual-axis value/PnL chart and cash-flow chips. #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:14px;border-collapse:separate;border-spacing:0;">
+   The value chart and the cash-flow chips used to sit in this block. They moved
+   to [02] PORTFOLIO, next to the window matrix, because a chart of the value
+   over time and a table of returns over windows answer the same question and
+   belong under one heading. #}
+          <tr>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "State") }}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:16px 18px;">
-                    {# Nine state tiles in rows of three: value and profit,
-                       then the three return measures, then the context each is
-                       judged against. Optional tiles are absent from
-                       hero.tiles rather than blank, and the grid closes the row
-                       it is on, so a short list never leaves an empty box. #}
+                    {# Optional tiles are absent from hero.tiles rather than
+                       blank, and the grid closes the row it is on, so a short
+                       list never leaves an empty box. #}
                     {% for row in hero.tiles|batch(3) %}
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"{% if not loop.first %} style="margin-top:14px;"{% endif %}>
                       <tr>
@@ -35,10 +32,6 @@
                       </tr>
                     </table>
                     {% endfor %}
-                    {% if hero.value_chart %}
-                    <div style="margin-top:14px;">{{ hero.value_chart|safe }}</div>
-                    {% endif %}
-                    {% if hero.flow_chips_html %}{{ hero.flow_chips_html|safe }}{% endif %}
                   </td>
                 </tr>
               </table>
