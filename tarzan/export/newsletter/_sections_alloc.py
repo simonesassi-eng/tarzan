@@ -1424,7 +1424,11 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "cells": [
                 uni_cell(_eur(value, 2), width=72),
                 uni_cell(weight_str, width=50),
-                uni_cell(_pct(pct_class, decimals=1), color=cls_color, width=48),
+                # The class share is the faintest figure in the row: the class
+                # itself is named in the group header above, in its colour, so
+                # repeating that colour on every cell said it a second time.
+                uni_cell(_pct(pct_class, decimals=1),
+                         color=PALETTE["subtle"], width=48),
                 uni_cell(_pct(gain_pct, signed=True) if has_gain else "—",
                          color=gain_color, weight=700, width=50),
                 uni_cell(_eur_smart(gain_eur, signed=True)
@@ -1445,13 +1449,21 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                      for role, items in role_list])
          for cls, col, role_list in groups])
 
-    # Subtitle instead of the chip row that used to sit above the table: the
-    # chips carried a per-class instrument count, and the table below them is
-    # already grouped by class with the count implied by the rows. What was not
-    # stated anywhere is the total, so that is what the line carries.
-    subtitle = (f"{int(len(df))} positions \u00b7 "
-                f"{_eur(float(df['current_value'].sum()), 0)}")
-    return {"summary": summary, "table_html": table_html,
+    # Class chips above the table: a swatch, the class name and how many
+    # instruments are in it. Inline runs, not the boxed six-cell grid this used
+    # to be -- the grid claimed as much height as three table rows to say what
+    # fits on one line, and the swatch is what ties a class to its colour in the
+    # group headers below.
+    chips = " ".join(
+        f'<span style="display:inline-block;margin:0 10px 6px 0;font-size:10.5px;'
+        f'color:{PALETTE["muted"]};"><span style="display:inline-block;width:9px;'
+        f'height:9px;border-radius:2px;background:{it["color"]};'
+        f'vertical-align:middle;margin-right:5px;"></span>{it["name"]} '
+        f'<b style="color:{PALETTE["ink"]};">{it["count"]}</b></span>'
+        for it in summary)
+    subtitle = ""
+    return {"summary": summary, "chips_html": chips,
+            "table_html": table_html,
             "subtitle": subtitle, "total_count": int(len(df))}
 
 def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -> dict:

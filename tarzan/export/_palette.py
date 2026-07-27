@@ -13,6 +13,9 @@ substituted without renaming anything at the call sites:
 ``card``     surface a table row sits on
 ``row_rule`` horizontal rule under a table row
 ``col_rule`` vertical rule between value columns, lighter than ``row_rule``
+``zebra``    alternating row stripe
+``head_bg``  column-header band
+``group_bg`` group-header row (asset class · role)
 
 Those three existed only as literals inline in the shared table renderer
 (``#FFFFFF``, ``#F1F2F8``, ``#EFF1F8``), which is why the tables could not
@@ -31,6 +34,13 @@ PALETTE = {
     "page": "#05090D",
     "card": "#0C131B",
     "card_alt": "#111A24",
+    # Table furniture, distinct from ``card_alt``. The alternating row stripe
+    # used ``card_alt``, which is also the surface of every card, so a striped
+    # row read as a nested panel; and the group header row used ``card``, so it
+    # was invisible against the row below it.
+    "zebra": "#0F1720",
+    "head_bg": "#16212D",
+    "group_bg": "#0F1821",
     "border": "#22303F",
     "row_rule": "#1A2531",
     "col_rule": "#16212D",
