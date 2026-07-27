@@ -46,8 +46,8 @@ iShares Edge MSCI USA Minimum Volatility,MVUS,IE00B8FHGS14,etf,Equities,Equity F
 Xtrackers MSCI World Value,XDEV,IE00BL25JM42,etf,Equities,Equity Factor,,,,51.29,0.0,16.05,18.57,14.09,,,,,,,0.0025,MSCI World Value factor.,7/8/26
 Xtrackers MSCI World Quality,XDEQ,IE00BL25JL35,etf,Equities,Equity Factor,,,,73.38,0.0,8.89,3.21,14.52,,,,,,,0.0025,MSCI World Sector Neutral Quality factor.,7/8/26
 Xtrackers MSCI World Momentum,XDEM,IE00BL25JP72,etf,Equities,Equity Factor,,,,55.94,0.0,11.5,11.69,20.87,,,,,,,0.0025,MSCI World Momentum factor.,7/8/26
-Amundi MSCI World (2x) Leveraged,LVWC,,etf,Equities,Equity Leveraged,True,,,72.5,0.0,8.5,5.7,13.3,200.0,,,,,,,2x daily leveraged exposure to global developed markets (MSCI World).,6/24/26
-Amundi MSCI USA (2x) Leveraged,CL2,,etf,Equities,Equity Leveraged,True,,,100.0,0.0,0.0,0.0,0.0,200.0,,,,,,,2x daily leveraged exposure to large and mid-cap US equities (MSCI USA).,6/24/26
+Amundi MSCI World (2x) Leveraged,LVWC,,etf,Equities,Equity Leveraged,True,,,72.5,0.0,8.5,5.7,13.3,200.0,,,,,,0.016,"2x daily leveraged exposure to global developed markets (MSCI World). ter = all-in drag beyond financing: 0.6 TER + ~1.0 gross-to-net/swap drag (Rational Reminder est.), financing modeled separately.",7/27/26
+Amundi MSCI USA (2x) Leveraged,CL2,,etf,Equities,Equity Leveraged,True,,,100.0,0.0,0.0,0.0,0.0,200.0,,,,,,0.005,"2x daily leveraged exposure to large and mid-cap US equities (MSCI USA). ter = TER 0.35 + small swap drag (real cost ≈ TER per RR), financing modeled separately.",7/27/26
 Invesco Physical Gold,SGLD,IE00B579F325,etc,Gold,Gold,,,,,,,,,,,,,,,0.0012,Physical gold ETC.,7/8/26
 Xtrackers Global Inflation-Linked EUR Hedged,XGIN,LU0290357929,etf,Fixed Income,Govt Linkers,,,,,,,,,,,,,,,0.0025,Global inflation-linked government bonds - EUR hedged.,7/9/26
 Xtrackers II Eurozone Government Bond 7-10,X710,,etf,Fixed Income,Govt Nominal,True,,,,,,,,,,,,,,0.0015,Eurozone government bonds 7-10y.,7/8/26
