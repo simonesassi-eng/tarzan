@@ -171,6 +171,78 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
     invested_pct = (m.invested_value / m.total_value * 100) if m.total_value > 0 else 0.0
 
+    # ── The nine state tiles ────────────────────────────────────────────────
+    # Every headline figure at the top, in three rows of three: what the
+    # portfolio is worth and the profit in it, then the three return measures,
+    # then the context each is judged against. These lived scattered across the
+    # Performance section, which meant the opening screen answered "how much do
+    # I have" but not "how am I doing".
+    #
+    # Each tile is (label, value, caption, tone). ``tone`` is 'pos'/'neg'/'flat'
+    # and the template maps it to a colour, so no palette lookup leaks in here.
+    def _tone(value) -> str:
+        if value is None:
+            return "flat"
+        return "pos" if float(value) >= 0 else "neg"
+
+    perf = getattr(m, "performance", None) or {}
+    cagr_pct = perf.get("cagr")
+    gap = None
+    bc = getattr(m, "benchmark_comparison", None)
+    if bc is not None and not getattr(bc, "empty", True):
+        # The geo benchmark's lifetime delta, when the comparison frame carries
+        # one. Absent on a holdings-only run, so the tile is simply dropped.
+        for column in ("delta_pp", "delta", "gap_pp"):
+            if column in bc.columns:
+                try:
+                    gap = float(bc.iloc[0][column])
+                except (TypeError, ValueError, IndexError):
+                    gap = None
+                break
+
+    def _tile(label, value, caption, tone="flat"):
+        return {"label": label, "value": value, "caption": caption,
+                "tone": tone}
+
+    state_tiles = [
+        _tile("Portfolio", _eur(m.total_value, decimals=0),
+              f"invested {_eur_smart(m.invested_value)}"),
+        _tile("Total P&L", _eur_smart(total_pnl_eur, signed=True),
+              f"{_pct(total_pnl_pct, signed=True)} on contributed capital",
+              _tone(total_pnl_eur)),
+        _tile("Unrealized P&L", _eur_smart(unrealized_eur, signed=True),
+              f"{_pct(unrealized_pct, signed=True)} on open positions",
+              _tone(unrealized_eur)),
+    ]
+    if twror_pct is not None:
+        ann = m.twror_annualized_pct
+        state_tiles.append(_tile(
+            "TWROR", _pct(twror_pct, signed=True),
+            "time-weighted"
+            + (f" \u00b7 {_pct(ann, signed=True)} annualized"
+               if ann is not None else ""),
+            _tone(twror_pct)))
+    if m.xirr_pct is not None:
+        net = getattr(m, "xirr_net_tax_pct", None)
+        state_tiles.append(_tile(
+            "MWR", _pct(m.xirr_pct, signed=True),
+            "money-weighted (XIRR)"
+            + (f" \u00b7 {_pct(net, signed=True)} net of tax"
+               if net is not None else ""),
+            _tone(m.xirr_pct)))
+    if cagr_pct is not None:
+        state_tiles.append(_tile("CAGR", _pct(cagr_pct, signed=True),
+                                 "compound annual growth", _tone(cagr_pct)))
+    if gap is not None:
+        state_tiles.append(_tile(
+            f"vs {ctx.benchmark_geo}",
+            ("+" if gap >= 0 else "\u2212") + f"{abs(gap):.2f}pp",
+            "since inception", _tone(gap)))
+    if m.avg_ter is not None:
+        state_tiles.append(_tile("TER", f"{float(m.avg_ter) * 100:.3f}%",
+                                 "weighted average, annual"))
+
+
     # Dual-axis hero chart: 30-day portfolio value (€, left) + Unrealized
     # PnL % (right, flow-adjusted via the daily cost-basis series), with
     # cash-flow triangles. Empty string when the order-derived series are
@@ -287,6 +359,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "has_total_pnl": has_total_pnl,
         # "Since inception · Mon YYYY" caption (empty when inception unknown).
         "inception_label": inception_label,
+        # The nine state tiles, in display order. Optional ones are absent
+        # rather than blank, so the grid never shows an empty box.
+        "tiles": tuple(state_tiles),
         # Kept for the preheader/back-compat: the headline % is Total PnL.
         "gain_pct": _pct(total_pnl_pct, signed=True),
         # Cumulative time-weighted return since inception (order path only).

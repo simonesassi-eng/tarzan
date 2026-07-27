@@ -1,12 +1,11 @@
-{# Status — slim lifetime-state band (refactored).
-   The hero now carries only the "where I am" identity: portfolio value +
-   cash, plus the rebalance banner and the data-quality note. ALL P&L /
-   return numbers — Total P&L, Unrealized P&L and TWROR across 1D / 7D / 30D /
-   since inception, the annualized XIRR / TWROR rates and the net-of-tax
-   estimate — now live in the Performance section below (returns matrix +
-   30-day charts), so no figure appears twice. The old 30-day hero mountain is
-   superseded by that section's patrimony chart (which adds axes + deposit
-   markers). #}
+{# Status — the state tiles.
+   Every headline figure opens the issue: value, total and unrealized P&L, the
+   three return measures (TWROR, MWR, CAGR), the benchmark gap and the weighted
+   TER. They were previously scattered through the Performance section, so the
+   opening screen answered "how much do I have" but not "how am I doing", and a
+   reader had to scroll past two tables to find out. The tiles are built in
+   _sections_alloc.py::_build_hero as hero.tiles; the dual-axis value chart and
+   the cash-flow chips follow them. #}
           <tr>
             <td class="px-32" style="padding:28px 32px 8px 32px;background:{{ palette.card }};">
 
@@ -15,20 +14,27 @@
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:14px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:16px 18px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    {# Nine state tiles in rows of three: value and profit,
+                       then the three return measures, then the context each is
+                       judged against. Optional tiles are absent from
+                       hero.tiles rather than blank, and the grid closes the row
+                       it is on, so a short list never leaves an empty box. #}
+                    {% for row in hero.tiles|batch(3) %}
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"{% if not loop.first %} style="margin-top:14px;"{% endif %}>
                       <tr>
-                        <td style="vertical-align:top;">
-                          <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Portfolio{% if hero.inception_label %} · since {{ hero.inception_label }}{% endif %}</div>
-                          <div style="margin-top:4px;font-size:36px;font-weight:700;color:{{ palette.ink }};line-height:1.03;letter-spacing:-0.015em;">{{ hero.total_value }}</div>
-                          <div style="margin-top:3px;font-size:11px;color:{{ palette.muted }};">Cash <span style="color:{{ palette.ink }};font-weight:700;">{{ hero.cash_value }}</span></div>
+                        {% for t in row %}
+                        <td class="kpi-cell" width="33%" style="vertical-align:top;padding-right:10px;">
+                          <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:{{ palette.muted }};text-transform:uppercase;">{{ t.label }}</div>
+                          <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
+                          <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.4;">{{ t.caption }}</div>
                         </td>
-                        <td align="right" style="vertical-align:top;">
-                          <div style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:{{ palette.muted }};text-transform:uppercase;">Unrealized PnL</div>
-                          <div style="margin-top:2px;font-size:19px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">{{ hero.unrealized_eur }}</div>
-                          <div style="font-size:14px;font-weight:700;color:{{ palette.green if hero.unrealized_is_positive else palette.red }};">({{ hero.unrealized_pct }})</div>
-                        </td>
+                        {% endfor %}
+                        {% for _ in range(3 - row|length) %}
+                        <td width="33%">&nbsp;</td>
+                        {% endfor %}
                       </tr>
                     </table>
+                    {% endfor %}
                     {% if hero.value_chart %}
                     <div style="margin-top:14px;">{{ hero.value_chart|safe }}</div>
                     {% endif %}
