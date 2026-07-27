@@ -531,7 +531,7 @@ def run_and_send() -> int:
         stable_event_id=stable_event_id,
         purpose=DeliveryPurpose(publication.delivery_purpose.value),
         recipient_set_digest=recipient_set_digest([recipient]),
-        template_schema_version="newsletter-v1",
+        template_schema_version="newsletter-v2",
         authorized_resend_token=_env("AUTHORIZED_RESEND_TOKEN") or None,
     )
 
