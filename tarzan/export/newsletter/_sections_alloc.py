@@ -132,10 +132,43 @@ def _build_header(ctx: _NewsletterContext) -> dict:
             issue_number = now.isocalendar().week
     elif issue_number <= 1:
         issue_number = now.isocalendar().week
+    # ── The status bar ──────────────────────────────────────────────────────
+    # A single line above the masthead carrying the figures a reader checks
+    # before deciding whether to read at all. Terse by design: label, value,
+    # nothing else.
+    m = ctx.metrics
+    risk = ((m.historical_risk or {}).get("portfolio") or {}).get("metrics") or {}
+    perf = getattr(m, "performance", None) or {}
+
+    def _bar(label, value, tone="flat"):
+        return {"label": label, "value": value, "tone": tone}
+
+    def _tone(v):
+        if v is None:
+            return "flat"
+        return "pos" if float(v) >= 0 else "neg"
+
+    status_bar = [_bar("NAV", _eur(m.total_value, decimals=0))]
+    if perf.get("1d") is not None:
+        status_bar.append(_bar("1D", _pct(perf["1d"], signed=True),
+                               _tone(perf["1d"])))
+    if m.twror_pct is not None:
+        status_bar.append(_bar("TWROR", _pct(m.twror_pct, signed=True),
+                               _tone(m.twror_pct)))
+    # No "vs benchmark" entry: the engine exposes no lifetime portfolio-minus-
+    # benchmark delta, and the 30-day rebased gap in the charts below is a
+    # different measure. Showing one here would mean deriving a figure the
+    # engine does not compute.
+    if risk.get("beta") is not None:
+        status_bar.append(_bar("\u03b2", f'{float(risk["beta"]):.2f}'))
+    if risk.get("sharpe") is not None:
+        status_bar.append(_bar("SHARPE", f'{float(risk["sharpe"]):.2f}'))
+
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
         "issue_number": issue_number,
         "inception_date": inception_date,
+        "status_bar": tuple(status_bar),
     }
 
 def _build_hero(ctx: _NewsletterContext) -> dict:

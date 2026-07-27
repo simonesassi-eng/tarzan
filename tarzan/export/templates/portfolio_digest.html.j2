@@ -54,6 +54,28 @@
       <td align="center" style="padding:24px 12px;">
         <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:{{ palette.card }};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,0.06);">
 
+          {# ─── STATUS BAR ───────────────────────────────────────
+             One terse line above the masthead: the figures a reader checks
+             before deciding whether to read on. Built in
+             _sections_alloc.py::_build_header as header.status_bar; entries
+             that the engine cannot supply are absent, not blank. #}
+          {% if header.status_bar %}
+          <tr>
+            <td class="px-32" style="padding:14px 32px;background:{{ palette.page }};border-bottom:1px solid {{ palette.border }};">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  {% for b in header.status_bar %}
+                  <td align="{{ 'left' if loop.first else 'right' }}" style="white-space:nowrap;font-size:10px;">
+                    {# No text-transform here: CSS uppercase maps the beta label to capital Beta,
+   which renders as a plain "B". The labels are already written in caps. #}<span style="font-weight:700;letter-spacing:0.08em;color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="font-weight:700;font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>
+                  </td>
+                  {% endfor %}
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% endif %}
+
           {# ─── HEADER ───────────────────────────────────────── #}
           <tr>
             <td class="px-32" style="padding:28px 32px 20px 32px;background:{{ palette.card }};border-bottom:1px solid {{ palette.border }};">
