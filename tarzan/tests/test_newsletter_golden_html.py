@@ -200,3 +200,78 @@ class TestReturnsHeat:
         full = _heat.heat_bg(5.0, neg=-5.0, pos=5.0)
         damped = _heat.heat_bg(5.0, neg=-5.0, pos=5.0, damp=_heat.DAY_DAMP)
         assert full != damped
+
+
+class TestNoRaggedTables:
+    """Every row of every table must span the same number of columns.
+
+    A row one cell short does not fail to render: HTML lays it out happily and
+    every figure after the gap moves one column left, under a heading that is
+    not its own. The diversification total and cash rows shipped that way, and
+    the golden had recorded it as expected output — the defect is invisible in a
+    diff because the markup is exactly what the builder produced. So this gate
+    checks the structural invariant instead of the bytes.
+
+    Colspan counts as the columns it spans, so a group header row spanning the
+    whole table is not a short row.
+    """
+
+    @staticmethod
+    def _ragged(html: str) -> list[tuple[str, list[int]]]:
+        from html.parser import HTMLParser
+
+        class Scan(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__(convert_charrefs=True)
+                self.open: list[dict] = []
+                self.bad: list[tuple[str, list[int]]] = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "table":
+                    self.open.append({"rows": [], "label": None})
+                elif tag == "tr" and self.open:
+                    self.open[-1]["rows"].append(0)
+                elif tag in ("td", "th") and self.open and self.open[-1]["rows"]:
+                    span = 1
+                    for key, value in attrs:
+                        if key == "colspan":
+                            try:
+                                span = max(1, int(value))
+                            except (TypeError, ValueError):
+                                span = 1
+                    self.open[-1]["rows"][-1] += span
+
+            def handle_endtag(self, tag):
+                if tag == "table" and self.open:
+                    t = self.open.pop()
+                    widths = [r for r in t["rows"] if r]
+                    if len(widths) > 1 and len(set(widths)) > 1:
+                        self.bad.append((t["label"] or "?", widths))
+
+            def handle_data(self, data):
+                text = data.strip()
+                if (text and len(text) > 1 and self.open
+                        and self.open[-1]["label"] is None):
+                    self.open[-1]["label"] = text[:40]
+
+        scan = Scan()
+        scan.feed(html)
+        return scan.bad
+
+    def test_no_table_has_rows_of_differing_width(self, rendered):
+        html, _m, _c = rendered
+        ragged = self._ragged(html)
+        assert not ragged, "\n".join(
+            f"{label}: row widths {widths}" for label, widths in ragged)
+
+    def test_the_check_can_detect_a_short_row(self):
+        """Guard against a vacuous gate."""
+        short = ("<table><tr><td>a</td><td>b</td></tr>"
+                 "<tr><td>c</td></tr></table>")
+        assert self._ragged(short), "the detector must flag a short row"
+
+    def test_a_colspan_group_header_is_not_a_short_row(self):
+        grouped = ('<table><tr><td>a</td><td>b</td></tr>'
+                   '<tr><td colspan="2">group</td></tr>'
+                   '<tr><td>c</td><td>d</td></tr></table>')
+        assert not self._ragged(grouped)
