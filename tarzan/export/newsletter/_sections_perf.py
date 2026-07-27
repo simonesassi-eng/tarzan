@@ -504,12 +504,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
             f'<tr><td style="padding:14px 16px;">{inner}</td></tr></table>'
         )
-
-    header = (f'<div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
-              f'text-transform:uppercase;">Performance</div>'
-              f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{P["ink"]};">How your money moved</div>'
+    # The section kicker belongs to the template, which owns the ordinal
+    # counter. Baked in here it printed an unnumbered "Performance" at the top
+    # of the body while a different section lower down printed a numbered one.
+    header = (f'<div style="margin-top:4px;font-size:18px;font-weight:700;'
+              f'color:{P["ink"]};">How your money moved</div>'
               f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Total &amp; unrealized P&amp;L and your '
               f'time-weighted return across 1 day, 7 days, 30 days and since inception, then your return vs the market.</div>')
+    return {"available": True, "kicker": "Performance",
+            "html": header + matrix_card + "".join(parts)}
 
     return {"available": True, "html": header + matrix_card + "".join(parts)}
 
@@ -1263,7 +1266,9 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
     return {
         "title": "How markets moved",
-        "kicker": "Performance",
+        # Two sections cannot share a kicker: this one is the per-instrument
+        # grid, not the P&L matrix at the top of the body.
+        "kicker": "Returns by asset class",
         "subtitle_html": subtitle_html,
         "table_html": table_html,
         "portfolio_row": portfolio_row,

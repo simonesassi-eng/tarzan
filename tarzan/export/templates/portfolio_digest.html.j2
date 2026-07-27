@@ -110,6 +110,7 @@
           {% if performance30.available %}
           <tr>
             <td class="px-32" style="padding:28px 32px 0 32px;">
+              {{ sec(secn, performance30.kicker) }}
               {{ performance30.html|safe }}
             </td>
           </tr>
@@ -161,6 +162,7 @@
           {% if diversification.available %}
           <tr>
             <td class="px-32" style="padding:28px 32px 0 32px;">
+              {{ sec(secn, "Diversification") }}
               {{ diversification.html|safe }}
             </td>
           </tr>

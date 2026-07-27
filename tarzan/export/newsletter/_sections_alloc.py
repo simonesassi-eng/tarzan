@@ -1251,9 +1251,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         fi_rows = _holding_verif_rows(ctx, tol, hold_series, "per_holding_fi",
                                       ASSET_COLORS.get("Fixed Income", P["accent"]))
 
-    html = [
-        f'<div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};text-transform:uppercase;">Diversification</div>',
-    ]
+    # The section kicker is the template's job: baked in here it bypassed the
+    # ordinal counter, so this section printed an unnumbered header among
+    # numbered ones.
+    html: list[str] = []
     if asset_rows:
         html.append(_div_table(asset_rows, tol, base=invested_base,
                                show_leverage=True, first_label="Asset class"))
@@ -1364,7 +1365,14 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                      for role, items in role_list])
          for cls, col, role_list in groups])
 
-    return {"summary": summary, "table_html": table_html, "total_count": int(len(df))}
+    # Subtitle instead of the chip row that used to sit above the table: the
+    # chips carried a per-class instrument count, and the table below them is
+    # already grouped by class with the count implied by the rows. What was not
+    # stated anywhere is the total, so that is what the line carries.
+    subtitle = (f"{int(len(df))} positions \u00b7 "
+                f"{_eur(float(df['current_value'].sum()), 0)}")
+    return {"summary": summary, "table_html": table_html,
+            "subtitle": subtitle, "total_count": int(len(df))}
 
 def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -> dict:
     """Build one optimizer plan's render context (actions + totals) from a

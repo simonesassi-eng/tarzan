@@ -2,25 +2,17 @@
 {# Kept in a partial so section ordering stays explicit. The table is
    pre-rendered by newsletter/_sections_alloc.py::_build_holdings through the
    shared unified-table renderer used by Returns, Performance, Risk, and the
-   Optimizer. #}
+   Optimizer.
+
+   The per-class chip row that used to sit here is gone: it carried an
+   instrument count per asset class, and the table below it is already grouped
+   by asset class, so the counts were a caption on rows the reader can see. The
+   subtitle carries the one figure the chips did not state — the total. #}
           {% if holdings.table_html %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Holdings</div>
-
-              {# Summary chips by asset class #}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
-                <tr>
-                  {% for s in holdings.summary %}
-                  <td class="kpi-cell" style="vertical-align:top;padding:10px 12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:10px;">
-                    <div style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:{{ s.color }};text-transform:uppercase;">● {{ s.name|truncate(12, true, '') }}</div>
-                    <div style="margin-top:2px;font-size:14px;font-weight:700;color:{{ palette.ink }};">{{ s.count }} <span style="color:{{ palette.muted }};font-size:11px;font-weight:600;">{{ s.label }}</span></div>
-                  </td>
-                  {% if not loop.last %}<td width="6"></td>{% endif %}
-                  {% endfor %}
-                </tr>
-              </table>
-
+              {{ sec(secn, "Holdings") }}
+              <div style="margin-top:2px;font-size:12px;color:{{ palette.muted }};">{{ holdings.subtitle }}</div>
               {{ holdings.table_html|safe }}
             </td>
           </tr>
