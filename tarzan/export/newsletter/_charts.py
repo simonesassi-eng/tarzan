@@ -149,7 +149,7 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
         f'</svg>'
     )
 
-def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 196) -> str:
+def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> str:
     """Dual-axis hero chart with the same baseline semantics as Markets.
 
     Portfolio value is green above the window-start baseline and red below it;

@@ -45,7 +45,7 @@
     @media only screen and (max-width: 620px) {
       .container { width: 100% !important; }
       .kpi-cell  { display: block !important; width: 100% !important; box-sizing: border-box; }
-      .px-32     { padding-left: 20px !important; padding-right: 20px !important; }
+      .px-32     { padding-left: 18px !important; padding-right: 18px !important; }
     }
   </style>
 </head>
@@ -58,7 +58,7 @@
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ palette.page }};">
     <tr>
       <td align="center" style="padding:24px 12px;">
-        <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:{{ palette.card }};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,0.06);">
+        <table role="presentation" class="container" width="620" cellpadding="0" cellspacing="0" border="0" style="width:620px;max-width:620px;background:{{ palette.card }};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,0.06);">
 
           {# ─── MASTHEAD + STATUS BAR ─────────────────────────────
              One block, not two. The wordmark and the data stamp on the first
@@ -120,7 +120,7 @@
              _sections_alloc.py::_build_hero — inline SVG cannot be expressed
              in Jinja. #}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Portfolio") }}
               {% if hero.value_chart %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;border-collapse:separate;border-spacing:0;">
@@ -142,7 +142,7 @@
              returned, and the subtitle states the answer before the charts. #}
           {% if performance30.available and performance30.vs_market_html %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Vs the market", performance30.vs_market_sub) }}
               <div style="margin-top:12px;">{{ performance30.vs_market_html|safe }}</div>
             </td>
@@ -156,7 +156,7 @@
              its own it claimed an ordinal for three sentences. #}
           {% if markets.available or ai_summary %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Markets", markets.sub) }}
               {% if markets.available %}{{ markets.html|safe }}{% endif %}
               {% if ai_summary %}
@@ -179,7 +179,7 @@
              drift. Pre-rendered in _sections_alloc.py::_build_diversification. #}
           {% if diversification.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Allocation") }}
               {{ diversification.html|safe }}
             </td>
@@ -195,7 +195,7 @@
              Per-holding, session then every window to five years. #}
           {% if returns_snapshot.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Returns", "Grouped by asset class and sub-category. Colour is scaled per column over this table.") }}
               <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
               {{ returns_snapshot.table_html|safe }}
@@ -207,7 +207,7 @@
              The same columns over the instruments tracked but not held, scaled
              on this table's own columns so it never borrows the book's range. #}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Watchlist", "Instruments tracked, not held. Same columns, scaled on this table's own columns.") }}
               <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
               {{ performance.table_html|safe }}
@@ -217,7 +217,7 @@
           {# ─── [09] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Attribution", 'What moved the number. Each bar starts where the previous one ended, so the movers and everything else add up to the unrealized return in <strong style="color:' ~ palette.ink ~ ';">STATE</strong>.') }}
               {% if return_contrib.chart_html %}
               <div style="margin-top:12px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ return_contrib.chart_html|safe }}</div>
@@ -249,7 +249,7 @@
              optimizer, so the evidence precedes the action. #}
           {% if risk_profile.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Risk", risk_profile.subtitle) }}
               {% if risk_profile.portfolio_note %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
@@ -293,7 +293,7 @@
           {# ─── [11] OPTIMIZER (two plans: buy-only vs buy & sell) ─── #}
           {% if optimizer.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
@@ -361,7 +361,7 @@
              _sections_backtest.py). ── #}
           {% if backtesting.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Backtest", backtesting.subtitle) }}
               {{ backtesting.html|safe }}
             </td>
@@ -374,21 +374,21 @@
              afterthought rather than as the place to look things up. #}
           {% if tax_note.available or methodology.available or ticker_sources.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Appendix", "Tax estimate, return-window method, and the feed behind every instrument.") }}
             </td>
           </tr>
           {% endif %}
           {% if tax_note.available %}
           <tr>
-            <td class="px-32" style="padding:12px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 20px 0 20px;">
               {{ tax_note.html|safe }}
             </td>
           </tr>
           {% endif %}
           {% if methodology.available %}
           <tr>
-            <td class="px-32" style="padding:12px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 20px 0 20px;">
               {{ methodology.html|safe }}
             </td>
           </tr>
@@ -396,7 +396,7 @@
           {# ─── INSTRUMENT DATA SOURCES (compact audit) ───── #}
           {% if ticker_sources.available %}
           <tr>
-            <td class="px-32" style="padding:12px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 20px 0 20px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Instrument data sources</div>
               <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Canonical and intraday ticker · latest dated provider observation in UTC. Daily bars may use a midnight date anchor.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
@@ -430,7 +430,7 @@
 
           {# ─── FOOTER ────────────────────────────────────── #}
           <tr>
-            <td class="px-32" style="padding:24px 32px 32px 32px;border-top:1px solid {{ palette.border }};">
+            <td class="px-32" style="padding:24px 20px 32px 20px;border-top:1px solid {{ palette.border }};">
               <div style="font-size:10px;color:{{ palette.subtle }};line-height:1.7;text-align:center;">
                 generated {{ footer.generated_at }} · tarzan {{ footer.version }} · issue {{ header.issue_number }}<br>
                 personal portfolio analytics · not investment advice · point-in-time, may be revised

@@ -253,7 +253,7 @@ def legend(items, size: int = 11) -> str:
     return '<div style="margin-top:6px;line-height:1.35;">' + "".join(out) + "</div>"
 
 
-def waterfall(items, *, w: int = 544, h: int = 205, total_label: str = "Net",
+def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
               footnote: str | None = None) -> str:
     """Contribution waterfall: every bar starts where the previous one ended.
 
@@ -342,7 +342,7 @@ def waterfall(items, *, w: int = 544, h: int = 205, total_label: str = "Net",
     return "".join(out)
 
 
-def funding_flow(steps, *, w: int = 544, h: int = 94,
+def funding_flow(steps, *, w: int = 580, h: int = 94,
                  footnote: str | None = None) -> str:
     """The serialized-action funding proof drawn as an identity check.
 
