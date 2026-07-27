@@ -243,31 +243,83 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 f'font-weight:700;color:{_sgn(v)};font-variant-numeric:tabular-nums;">'
                 f'{_pct(v, signed=True) if v is not None else "—"}</td>')
 
-    def _label(txt) -> str:
-        return f'<td style="padding:7px 0;border-top:{bt};font-size:12px;color:{P["ink"]};">{txt}</td>'
-
-    # Flag the 1-Day column as live when the portfolio 1D is a market-open
-    # quote (set by the engine's _live_1d step).
+    # ── The matrix, windows as ROWS ──────────────────────────────────────
+    # Transposed from measures-as-rows. A reader asks "how did the last week
+    # go", which is one row here instead of one cell picked out of three rows,
+    # and it puts the four measures in a fixed column order that matches the
+    # returns grids below.
     _1d_live = bool((m.performance_full or {}).get("1d_live"))
-    head_1d = "1 Day \u25CF LIVE" if _1d_live else "1 Day"
-    heads = (head_1d, "7 Days", "30 Days", "Since inception")
-    head_html = '<tr><td></td>' + "".join(
-        f'<td align="right" style="padding:0 0 5px 10px;font-size:9px;font-weight:700;color:{P["muted"]};'
-        f'letter-spacing:0.04em;text-transform:uppercase;">{h}</td>' for h in heads) + '</tr>'
-    row_t = '<tr>' + _label("Total P&amp;L") + _money_cell(tot[1]) + _money_cell(tot[7]) + _money_cell(tot[30]) + _money_cell(tot_since) + '</tr>'
-    row_u = '<tr>' + _label("Unrealized P&amp;L") + _money_cell(unr[1]) + _money_cell(unr[7]) + _money_cell(unr[30]) + _money_cell(unr_since) + '</tr>'
-    row_w = '<tr>' + _label("TWROR") + _pct_cell(tw[1]) + _pct_cell(tw[7]) + _pct_cell(tw[30]) + _pct_cell(tw_since) + '</tr>'
-    matrix = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-              f'style="border-collapse:collapse;">{head_html}{row_t}{row_u}{row_w}</table>')
 
+    def _label(txt) -> str:
+        return (f'<td style="padding:7px 0;border-top:{bt};font-size:12px;'
+                f'font-weight:700;color:{P["ink"]};white-space:nowrap;">{txt}</td>')
+
+    def _money_pair(pair, *, eur_only=False, pct_only=False) -> str:
+        """One measure split across its own two columns, € then %."""
+        eur, pct = pair
+        c = _sgn(eur if not pct_only else pct)
+        if pct_only:
+            return (f'<td align="right" style="padding:7px 0 7px 10px;'
+                    f'border-top:{bt};font-size:13px;font-weight:700;color:{c};'
+                    f'font-variant-numeric:tabular-nums;">'
+                    f'{_pct(pct, decimals=2, signed=True) if pct is not None else "\u2014"}</td>')
+        return (f'<td align="right" style="padding:7px 0 7px 10px;'
+                f'border-top:{bt};font-size:13px;font-weight:700;color:{c};'
+                f'font-variant-numeric:tabular-nums;">'
+                f'{_eur_smart(eur, signed=True) if eur is not None else "\u2014"}</td>')
+
+    def _pct_cell(v) -> str:
+        return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};'
+                f'font-size:13px;font-weight:700;color:{_sgn(v)};'
+                f'font-variant-numeric:tabular-nums;">'
+                f'{_pct(v, signed=True) if v is not None else "\u2014"}</td>')
+
+    def _same(total, unreal, twror) -> bool:
+        """True when the three measures are the same number for a window.
+
+        With no external flow inside it, the P&L change, the unrealized change
+        and the time-weighted return coincide. Printing the same figure three
+        times invites the reader to look for a difference that is not there.
+        """
+        vals = [total[1], unreal[1], twror]
+        if any(v is None for v in vals):
+            return False
+        return max(vals) - min(vals) < 0.005
+
+    heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unrealized", "TWROR")
+    head_html = '<tr>' + "".join(
+        f'<td align="{"left" if i == 0 else "right"}" style="padding:0 0 5px'
+        f'{"" if i == 0 else " 10px"};font-size:9px;font-weight:700;'
+        f'color:{P["muted"]};letter-spacing:0.04em;text-transform:uppercase;">'
+        f'{h}</td>' for i, h in enumerate(heads)) + '</tr>'
+
+    windows = [
+        ("1 day" + (" \u25CF LIVE" if _1d_live else ""), tot[1], unr[1], tw[1]),
+        ("7 days", tot[7], unr[7], tw[7]),
+        ("30 days", tot[30], unr[30], tw[30]),
+        ("Since inception", tot_since, unr_since, tw_since),
+    ]
+    body = ""
+    for label, total, unreal, twror in windows:
+        coincide = _same(total, unreal, twror)
+        eq = (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};'
+              f'font-size:13px;font-weight:700;color:{P["subtle"]};">=</td>')
+        body += ('<tr>' + _label(label)
+                 + _money_pair(total)
+                 + _money_pair(total, pct_only=True)
+                 + (eq if coincide else _money_pair(unreal, pct_only=True))
+                 + (eq if coincide else _pct_cell(twror))
+                 + '</tr>')
+    matrix = (f'<table role="presentation" width="100%" cellpadding="0" '
+              f'cellspacing="0" border="0" style="border-collapse:collapse;">'
+              f'{head_html}{body}</table>')
     footer = (f'<div style="margin-top:12px;padding-top:10px;border-top:2px solid {P["border"]};'
               f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized: '
-              f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> · '
+              f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> \u00b7 '
               f'XIRR <strong style="color:{_sgn(m.xirr_pct)};">{_pct(m.xirr_pct, signed=True)}</strong>'
-              + (f' <span style="color:{P["subtle"]};">· net of tax: see note at the bottom &#8595;</span>'
+              + (f' <span style="color:{P["subtle"]};">\u00b7 net of tax: see note at the bottom &#8595;</span>'
                  if (m.xirr_net_tax_pct is not None or m.pnl_eur_net_tax is not None) else "")
               + '</div>')
-
     matrix_card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
                    f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
                    f'border-radius:12px;border-collapse:separate;border-spacing:0;">'

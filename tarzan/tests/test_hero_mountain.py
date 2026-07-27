@@ -100,11 +100,20 @@ class TestRender:
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         # Lean hero: the portfolio value band (scoreboard + mountain removed).
         assert "Portfolio" in html
-        # The Performance section now carries the P&L / TWROR story.
+        # The Performance section carries the P&L / TWROR story. Its matrix is
+        # transposed -- windows are rows now, measures are columns -- so the
+        # column heads are what to look for, not the old row labels. The
+        # measures also appear as state tiles at the top of the issue.
         assert "How your money moved" in html
-        assert "Total P&amp;L" in html
-        assert "Unrealized P&amp;L" in html
+        # The matrix is built in Python, which writes the entity itself; the
+        # tiles go through the template, where autoescape is off because the
+        # filename ends in .j2, so their ampersand stays raw.
+        assert "P&amp;L \u20ac" in html      # matrix column head
+        assert "Unrealized" in html
         assert "TWROR" in html
+        assert "Since inception" in html     # matrix row label
+        assert "Total P&L" in html           # state tile
+        assert "Unrealized P&L" in html      # state tile
         # The Portfolio value series follows the Markets contract: green above
         # the start baseline, red below it. Unrealized P&L is neutral/dashed.
         from tarzan.export.newsletter import PALETTE
