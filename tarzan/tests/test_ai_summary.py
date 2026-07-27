@@ -302,15 +302,23 @@ def test_divergence_note_is_terse():
     assert "-6.0pp" in note and "beta" in note.lower()
 
 
-def test_divergence_note_embedded_in_charts_section():
+def test_vs_the_market_draws_the_full_range_chart():
+    """The section's wide chart spans the whole history, not 30 days.
+
+    It used to be asserted alongside a "why you're diverging" block that also
+    lived here. That block is gone: the gap is in the section's subtitle, the
+    three lines carry their end values on the chart, and the beta it quoted is a
+    column in RISK -- what it added beyond that was an opinion on whether to
+    close the gap, which is advice this issue does not give. The chart itself is
+    still worth pinning, so the month-tick evidence stays.
+    """
     import re
     from tarzan.export.newsletter import render_newsletter
     html = render_newsletter(_divergence_metrics(), _config(),
                              benchmark_geo="iShares MSCI ACWI")
-    assert "Why you" in html and "diverging" in html
-    # The since-inception chart (LEFT) uses month ticks across the 2-year span,
-    # so several "<Mon> <yy>" / "<Mon>" axis labels appear — proving it is the
-    # full-range chart, not a 30-day one. (Format is %b %y, e.g. "Jul 24".)
+    assert "Why you" not in html
+    # Month ticks across the 2-year span prove it is the full-range chart rather
+    # than a 30-day one. (Format is %b %y, e.g. "Jul 24".)
     month_labels = re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', html)
     assert len([m for m in month_labels if re.fullmatch(r"[A-Z][a-z]{2} \d{2}", m)]) >= 2
 

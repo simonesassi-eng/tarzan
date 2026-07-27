@@ -163,8 +163,13 @@ def _instrument_matrix(portfolios):
 # ---------------------------------------------------------------------------
 
 def _per_class_lev(p, cls):
+    # cap == 0 with notional > 0 = fully synthetic exposure (e.g. FI held only
+    # via NTSG's futures overlay) → ∞, NOT "absent".
     cap = p.cap.get(cls, 0.0)
-    return (p.notl_gross.get(cls, 0.0) / cap) if cap > 0 else None
+    notl = p.notl_gross.get(cls, 0.0)
+    if cap > 0:
+        return notl / cap
+    return float("inf") if notl > 0 else None
 
 
 def _diversification(portfolios, asset_target, geo_target, tol, asset_order, geo_order):
@@ -203,8 +208,9 @@ def _diversification(portfolios, asset_target, geo_target, tol, asset_order, geo
     lev_headers = [(p.name, "right") for p in portfolios]
     lev_rows = []
     for cls in lev_labels:
-        vals = [("&mdash;" if _per_class_lev(p, cls) is None
-                 else f"{_per_class_lev(p, cls):.2f}x") for p in portfolios]
+        vals = [("&mdash;" if (lv := _per_class_lev(p, cls)) is None
+                 else "&infin;" if lv == float("inf")
+                 else f"{lv:.2f}x") for p in portfolios]
         lev_rows.append({"label_html": _div_label(cls, ASSET_COLORS.get(cls, P["accent"])),
                          "values": vals})
     lev_tbl = _grid_table("Leverage by class", lev_headers, lev_rows) if lev_rows else ""

@@ -63,12 +63,21 @@ def fmt_eur_tick(v: float) -> str:
 
 
 def fmt_pct_tick(v: float) -> str:
-    txt = f"{v:.0f}" if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
-    return f"{txt}%"
+    """Axis tick with the minus SIGN, not a hyphen.
+
+    Every other negative figure in the issue is written with U+2212; an axis
+    labelled "-5%" beside a table cell reading "\u22125%" is two glyphs for one
+    idea, and the hyphen is visibly shorter at 9px.
+    """
+    a = abs(v)
+    txt = f"{a:.0f}" if abs(a - round(a)) < 1e-9 else f"{a:.1f}"
+    sign = "\u2212" if v < 0 else ""
+    return f"{sign}{txt}%"
 
 
 def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
-                      date_fmt="%b %d", month_ticks=False, min_day_ticks=0) -> str:
+                      date_fmt="%b %d", month_ticks=False, min_day_ticks=0,
+                      end_gutter: int = 0) -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
     labels stay legible at ~half width. ``series``: list of
     ``{values, color, dash?}``. ``date_fmt`` sets the x-axis tick format.
@@ -88,7 +97,12 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     _rotate = bool(month_ticks or min_day_ticks)
     if _rotate:
         h = h + 12
-    ml, mr, mt, mb = 30, 8, 10, (32 if _rotate else 20)
+    # ``end_gutter`` reserves room to the right of the plot for a label at the
+    # end of each line, which replaces a legend underneath: a legend makes the
+    # reader match a colour swatch to a line, while a label at the line's own end
+    # needs no matching -- and it costs no vertical space, which across a
+    # three-panel section is a whole row of height.
+    ml, mr, mt, mb = 30, (8 + max(0, int(end_gutter))), 10, (32 if _rotate else 20)
     pw, ph = w - ml - mr, h - mt - mb
     allv = [v for s in series for v in s["values"]]
     dlo, dhi = min(allv), max(allv)
@@ -157,7 +171,19 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
         # current month.
         _room = max(1, int((pw) // 30))
         _step = max(1, -(-len(month_idx) // _room))
-        _labelled = set(month_idx[::_step]) | {month_idx[-1]}
+        _candidates = list(dict.fromkeys(month_idx[::_step] + [month_idx[-1]]))
+        # Thinning by count is not enough: a window that opens mid-month puts its
+        # first two boundaries days apart, and "Dec 25" printed over "Jan 26"
+        # whatever the count allowed. Keep a candidate only when it is 30px clear
+        # of the last one kept, and always keep the final boundary so the axis
+        # ends on the current month.
+        _labelled: set[int] = set()
+        _last_x = None
+        for k in _candidates:
+            if _last_x is not None and (X(k) - _last_x) < 30 and k != _candidates[-1]:
+                continue
+            _labelled.add(k)
+            _last_x = X(k)
         prev_year = None
         for j, k in enumerate(month_idx):
             _vgrid(k)
@@ -179,6 +205,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     else:
         for k in sorted({0, n - 1}):
             _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
+    _label_ys: list[float] = []
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
@@ -189,7 +216,22 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
         dash = ' stroke-dasharray="5,4"' if s.get("dash") else ""
         out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="1.5"{dash} stroke-linejoin="round"/>')
         lx, ly = pts[-1]
-        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" fill="{s["color"]}" stroke="#fff" stroke-width="1"/>')
+        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" '
+                   f'fill="{s["color"]}" stroke="{_P["card_alt"]}" '
+                   f'stroke-width="1"/>')
+        label = s.get("end_label")
+        if label and end_gutter:
+            # Nudged apart when two lines end within a label's height of each
+            # other, so a tight finish does not print one label over another.
+            ey = ly + 3.2
+            for taken in _label_ys:
+                if abs(ey - taken) < 11:
+                    ey = taken + 11
+            _label_ys.append(ey)
+            ey = min(h - 4, max(10.0, ey))
+            out.append(f'<text x="{lx + 6:.1f}" y="{ey:.1f}" '
+                       f'text-anchor="start" font-size="9" font-weight="700" '
+                       f'fill="{s["color"]}">{label}</text>')
     out.append("</svg>")
     return "".join(out)
 
