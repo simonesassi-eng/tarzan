@@ -824,7 +824,11 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     # Column widths. The value columns lost two thirds of their width when the
     # euro amount moved under the percentage instead of beside it, and the row
     # labels got it: asset-class and instrument names no longer wrap.
-    W_VAL, W_BULLET, W_TREND, W_DRIFT = 70, 80, 76, 74
+    # The concept's proportions: the two marks that carry meaning (the bullet
+    # against its band, and the trend line) get the width, and the two numeric
+    # columns get only what a stacked figure and its euro amount need.
+    W_VAL, W_BULLET, W_TREND, W_DRIFT = 62, 96, 88, 70
+    BULLET_W, SPARK_W, MARK_H = 88, 84, 26
 
     def _trend_pp(vals) -> str:
         """The window's change in weight, in percentage points, for the line
@@ -862,7 +866,8 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             return ""
         # One shared scale across the sub-table's rows, so a 78% sleeve and a
         # 2% sleeve are comparable bars rather than each filling its own cell.
-        return _bullet(a, t, tol=tol, w=68, h=18, scale_max=_bullet_scale)
+        return _bullet(a, t, tol=tol, w=BULLET_W, h=MARK_H,
+                       scale_max=_bullet_scale)
 
     def _stack(main: str, sub: str, *, color: str, weight: int = 700,
                size: float = 12) -> str:
@@ -908,7 +913,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             tgt = float(r.get("target", 0.0) or 0.0)
             drift = now - tgt
             vals = r.get("spark_vals")
-            sp = _spark(vals, tgt, P["accent"], 56, 18) if vals else ""
+            sp = _spark(vals, tgt, P["accent"], SPARK_W, MARK_H) if vals else ""
             sp = _stack(sp, _trend_pp(vals), color=P["accent"]) if sp else ""
             body.append(
                 f'<tr>'
@@ -953,7 +958,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         drift = now - tgt
         dcol = _semaphore_color(_semaphore(drift, tol))
         vals = r.get("spark_vals")
-        sp = _spark(vals, tgt, r.get("color", P["accent"]), 56, 18) if vals else ""
+        sp = _spark(vals, tgt, r.get("color", P["accent"]), SPARK_W, MARK_H) if vals else ""
         # The sparkline's own change over the window, on the line beneath it
         # rather than inline beside it. Inline it landed against the drift
         # figure in the next column -- two signed pp numbers touching, one
