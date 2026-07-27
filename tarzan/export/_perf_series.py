@@ -414,3 +414,36 @@ def benchmark_gap_pp(m: PortfolioMetrics,
         return float(m.twror_pct) - float(full["acwi"][-1])
     except (TypeError, ValueError, IndexError):
         return None
+
+
+def benchmark_gap_history(m: PortfolioMetrics,
+                          geo_name: Optional[str] = None) -> Optional[dict]:
+    """How the gap against the geography benchmark got to where it is.
+
+    Returns ``{now_pp, peak_pp, peak_when, turn_when}`` where ``peak_when`` is
+    the month the lead was widest and ``turn_when`` the month the gap first went
+    negative after that peak (``None`` while the portfolio is still ahead). All
+    of it is read off the same two cumulative series the since-inception chart
+    already draws, so nothing here is estimated -- the figures are the distance
+    between two lines the reader can see.
+    """
+    full = _perf_full_series(m, geo_name)
+    if not full or not full.get("acwi") or not full.get("twror"):
+        return None
+    dates, port, bench = full["dates"], full["twror"], full["acwi"]
+    n = min(len(dates), len(port), len(bench))
+    if n < 2:
+        return None
+    gaps = [float(port[i]) - float(bench[i]) for i in range(n)]
+    peak_i = max(range(n), key=lambda i: gaps[i])
+    turn_i = next((i for i in range(peak_i, n) if gaps[i] < 0), None)
+
+    def _month(i):
+        return pd.Timestamp(dates[i]).strftime("%b")
+
+    return {
+        "now_pp": gaps[-1],
+        "peak_pp": gaps[peak_i],
+        "peak_when": _month(peak_i),
+        "turn_when": _month(turn_i) if turn_i is not None else None,
+    }

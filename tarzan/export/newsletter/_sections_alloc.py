@@ -19,6 +19,7 @@ from tarzan.export._charts import (
 )
 from tarzan.export._perf_series import (
     _norm_series,
+    benchmark_gap_history,
     benchmark_gap_pp,
     _perf_window,
     _window_money_pnl,
@@ -252,11 +253,14 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
     perf = getattr(m, "performance", None) or {}
     cagr_pct = perf.get("cagr")
-    # No benchmark-gap tile: benchmark_comparison is a per-benchmark metrics
-    # frame (cagr, vol, sharpe, alpha, beta, per-window returns) and carries no
-    # delta-vs-portfolio column, so there is no computed lifetime gap to show.
-    # Deriving one here would invent a figure the engine does not produce.
     session_pct = perf.get("1d")
+    # The session move in euros, for the tile caption: the same window-1
+    # money P&L the performance matrix prints, so the two agree.
+    session_eur = None
+    if m.pnl_series is not None and m.actual_value_series is not None:
+        pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
+        if pair and pair[0] is not None:
+            session_eur = float(pair[0])
     def _tile(label, value, caption, tone="flat"):
         return {"label": label, "value": value, "caption": caption,
                 "tone": tone}
@@ -290,10 +294,31 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     if cagr_pct is not None:
         state_tiles.append(_tile("CAGR", _pct(cagr_pct, signed=True),
                                  "compound annual growth", _tone(cagr_pct)))
+    # The gap against the geography benchmark, and how it got there. An earlier
+    # pass left this tile out on the grounds that the engine computes no such
+    # delta; both cumulative series are computed and drawn side by side in the
+    # since-inception chart, so the gap is the distance between two lines the
+    # reader can already see.
+    gap = benchmark_gap_history(m, ctx.benchmark_geo)
+    if gap is not None:
+        now_pp = gap["now_pp"]
+        sign = "+" if now_pp > 0 else ("\u2212" if now_pp < 0 else "")
+        caption = (f'peak {"+" if gap["peak_pp"] >= 0 else "\u2212"}'
+                   f'{abs(gap["peak_pp"]):.1f}pp {gap["peak_when"]}')
+        if gap["turn_when"]:
+            caption += f' \u00b7 turned {gap["turn_when"]}'
+        state_tiles.append(_tile(
+            f"vs {ctx.benchmark_geo}", f"{sign}{abs(now_pp):.2f}pp",
+            caption, _tone(now_pp)))
     if session_pct is not None:
+        # What the session was worth and whether it is over: a percentage alone
+        # does not say either.
+        market = "open" if bool(perf.get("1d_live")) else "closed"
+        caption = (f'{_eur_smart(session_eur, signed=True)} \u00b7 market {market}'
+                   if session_eur is not None else f'market {market}')
         state_tiles.append(_tile(
             "Session", _pct(session_pct, signed=True),
-            "latest close vs the previous one", _tone(session_pct)))
+            caption, _tone(session_pct)))
     if m.avg_ter is not None:
         # avg_ter arrives already in percent (metrics.py multiplies the stored
         # fractions by 100), so it must not be scaled again here. The synthetic
