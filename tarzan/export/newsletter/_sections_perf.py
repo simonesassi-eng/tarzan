@@ -80,95 +80,108 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     if not snap:
         return {"available": False, "html": ""}
 
-    # Card width: equal share of the row minus the 1% spacers between cards.
-    cw = f"{(100 - (COLS - 1)) // COLS}%"
-
     def _rc(cat) -> str:
         return MARKET_REGION_COLORS.get(cat, P["subtle"])
 
-    def _card(d: dict) -> str:
-        up = d["pct"] >= 0
-        col = P["green"] if up else P["red"]
-        bg = P["green_bg"] if up else P["red_bg"]
-        val = f'{d["value"]:,.2f}'
-        chg = f'{d["change"]:+,.2f} ({d["pct"]:+.2f}%)'
+    def _spark_for(d: dict) -> str:
+        """Session path for one index: the timestamped intraday series when
+        there is one, else the daily fallback. Narrow, because this is context
+        rather than subject matter."""
         sym = d.get("symbol", "")
-        # Tag futures with "(FUT)" so a full-width sparkline reads as a
-        # continuously-traded contract (change vs previous settlement), not a
-        # finished equity session.
-        name = d["name"]
-        if sym.upper().endswith("=F"):
-            name = f"{name} (FUT)"
-        # Intraday time-axis sparkline (line grows through the session, with
-        # an endpoint dot) when a timestamped series is available; otherwise
-        # the stretched daily fallback.
         ss = d.get("spark_series")
         if ss is not None and len(ss) >= 2:
             # Continuous instruments (futures/FX/crypto) have no bounded cash
-            # session → draw the sparkline full-width (in_progress=False).
-            # Exchange-listed instruments grow through their session when open
-            # (market_open_now True), else render full width (closed session).
-            _ip = False if is_continuous_market(sym) else market_open_now(sym)
-            spark = _intraday_spark(ss, d.get("baseline", d["value"]), w=90, h=26,
-                                    in_progress=_ip)
-        else:
-            spark = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                               w=90, h=26, stretch=True)
+            # session, so they draw full width; exchange-listed ones grow
+            # through their session while it is open.
+            in_progress = (False if is_continuous_market(sym)
+                           else market_open_now(sym))
+            return _intraday_spark(ss, d.get("baseline", d["value"]),
+                                   w=46, h=18, in_progress=in_progress)
+        return _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
+                          w=46, h=18, stretch=False)
+
+    def _row(d: dict) -> str:
+        up = d["pct"] >= 0
+        col = P["green"] if up else P["red"]
+        name = d["name"]
+        # Tag futures so a full-width sparkline reads as a continuously traded
+        # contract (change vs previous settlement), not a finished session.
+        if str(d.get("symbol", "")).upper().endswith("=F"):
+            name = f"{name} (FUT)"
+        level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
+                 else f'{d["value"]:,.2f}')
+        td = (f'padding:4px 5px;border-bottom:1px solid {P["row_rule"]};'
+              f'font-variant-numeric:tabular-nums;')
         return (
-            f'<td width="{cw}" style="vertical-align:top;padding:6px 10px;'
-            f'background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;">'
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:0.02em;'
-            f'color:{P["muted"]};text-transform:uppercase;white-space:nowrap;overflow:hidden;">{name}</div>'
-            f'<div style="margin-top:1px;font-size:11px;font-weight:700;color:{P["ink"]};'
-            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{val}</div>'
-            f'<div style="margin-top:3px;"><span style="font-size:11px;font-weight:700;color:{col};'
-            f'background:{bg};padding:2px 7px;border-radius:999px;font-variant-numeric:tabular-nums;'
-            f'white-space:nowrap;">{chg}</span></div>'
-            f'<div style="margin-top:5px;">{spark}</div></td>'
-        )
+            f'<tr>'
+            f'<td style="{td}font-size:10px;font-weight:600;color:{P["ink"]};'
+            f'white-space:nowrap;">{name}</td>'
+            f'<td align="right" style="{td}">{_spark_for(d)}</td>'
+            f'<td align="right" style="{td}font-size:10px;color:{P["muted"]};'
+            f'white-space:nowrap;">{level}</td>'
+            f'<td align="right" style="{td}font-size:10px;font-weight:700;'
+            f'color:{col};white-space:nowrap;">{d["pct"]:+.2f}%'
+            f'<div style="font-size:8.5px;font-weight:600;color:{P["subtle"]};">'
+            f'{d["change"]:+,.2f}</div></td>'
+            f'</tr>')
 
-    # Row-break groups: each region starts on a new row. Categories outside
-    # CATEGORY_ORDER become their own group (never dropped). MERGE folds a
-    # small category into another group's row (currently none).
-    MERGE: dict[str, str] = {}
-    group_order, group_members = [], {}
-    for cat in CATEGORY_ORDER:
-        if cat in MERGE:
-            continue  # folded into its target group
-        group_order.append(cat)
-        group_members[cat] = [cat] + [c for c in CATEGORY_ORDER if MERGE.get(c) == cat]
+    def _region_head(cat: str) -> str:
+        return (f'<tr><td colspan="4" style="padding:6px 5px 4px;'
+                f'border-bottom:1px solid {P["row_rule"]};font-size:9px;'
+                f'font-weight:700;letter-spacing:0.06em;'
+                f'text-transform:uppercase;color:{_rc(cat)};">{cat}</td></tr>')
+
+    def _table(entries: list) -> str:
+        """One column of the strip: region heads interleaved with their rows."""
+        head = (f'<tr>' + "".join(
+            f'<td align="{al}" style="padding:5px 5px;background:{P["card_alt"]};'
+            f'border-bottom:1px solid {P["border"]};font-size:9px;'
+            f'font-weight:700;letter-spacing:0.05em;text-transform:uppercase;'
+            f'color:{P["muted"]};">{lbl}</td>'
+            for lbl, al in (("Index", "left"), ("Session", "right"),
+                            ("Level", "right"), ("Chg %", "right"))) + '</tr>')
+        body, last = [], None
+        for cat, d in entries:
+            if cat != last:
+                body.append(_region_head(cat))
+                last = cat
+            body.append(_row(d))
+        return ('<table role="presentation" width="100%" cellpadding="0" '
+                'cellspacing="0" border="0" style="border:1px solid '
+                f'{P["border"]};border-radius:8px;overflow:hidden;'
+                'border-collapse:separate;border-spacing:0;">'
+                + head + "".join(body) + '</table>')
+
+    # Region order: the configured order first, then any category the snapshot
+    # carries that the configuration does not know about, so nothing is dropped.
+    order = list(CATEGORY_ORDER)
     for d in snap:
-        c = d.get("category")
-        if c not in CATEGORY_ORDER and c not in group_order:
-            group_order.append(c)
-            group_members[c] = [c]
+        if d.get("category") not in order:
+            order.append(d.get("category"))
+    entries = [(cat, d) for cat in order
+               for d in snap if d.get("category") == cat]
+    if not entries:
+        return {"available": False, "html": ""}
 
-    # Each region: an underlined heading (region-accent colour) followed by its
-    # own card grid. Colour lives in the heading, so the cards stay neutral and
-    # no separate legend is needed.
-    blocks = []
-    for g in group_order:
-        cards = []
-        for cat in group_members[g]:
-            cards += [_card(d) for d in snap if d.get("category") == cat]
-        if not cards:
-            continue
-        while len(cards) % COLS != 0:
-            cards.append(f'<td width="{cw}"></td>')
-        rows = []
-        for i in range(0, len(cards), COLS):
-            rows.append("<tr>" + '<td width="1%"></td>'.join(cards[i:i + COLS]) + "</tr>")
-        heading = (f'<div style="margin:14px 0 6px;font-size:11px;font-weight:700;'
-                   f'color:{P["ink"]};letter-spacing:0.02em;">'
-                   f'<span style="display:inline-block;width:10px;height:10px;background:{_rc(g)};'
-                   f'border-radius:3px;vertical-align:middle;margin-right:6px;"></span>{g}</div>')
-        grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                'border="0" style="border-collapse:separate;">' + "".join(rows) + '</table>')
-        blocks.append(heading + grid)
-
-    header = (f'<div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
-              f'text-transform:uppercase;">Markets</div>')
-    return {"available": True, "html": header + "".join(blocks)}
+    # Two side-by-side columns instead of a five-wide card grid: the same
+    # indices cost roughly half the height, and this section is the backdrop a
+    # reader glances at, not the subject of the issue. The split lands on a
+    # region boundary so neither column starts mid-region.
+    half = len(entries) // 2
+    cut = next((i for i in range(half, len(entries))
+                if entries[i][0] != entries[i - 1][0]), half)
+    left, right = entries[:cut], entries[cut:]
+    if right:
+        grid = ('<table role="presentation" width="100%" cellpadding="0" '
+                'cellspacing="0" border="0" style="margin-top:10px;">'
+                '<tr>'
+                f'<td width="49%" valign="top">{_table(left)}</td>'
+                '<td width="2%"></td>'
+                f'<td width="49%" valign="top">{_table(right)}</td>'
+                '</tr></table>')
+    else:
+        grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
+    return {"available": True, "html": grid}
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
     """Performance section: a 1D / 7D / 30D / since-inception returns matrix

@@ -93,13 +93,16 @@
           </tr>
           {% endif %}
 
-          {# ─── MARKETS (yfinance-style index strip) ─────────────
-             Major indices with level, daily change and a mini sparkline,
-             from the already-fetched benchmark histories. Sits above the
-             AI market-context note so the data backs the narrative. #}
+          {# ─── MARKETS (compact two-column strip) ───────────────
+             Every index with its session path, level and change, in two
+             columns split on a region boundary. Sits above the AI
+             market-context note so the data backs the narrative. The kicker
+             lives here, with the shared numbering, rather than inside the
+             builder's HTML. #}
           {% if markets.available %}
           <tr>
             <td class="px-32" style="padding:28px 32px 0 32px;">
+              {{ sec(secn, "Markets") }}
               {{ markets.html|safe }}
             </td>
           </tr>
