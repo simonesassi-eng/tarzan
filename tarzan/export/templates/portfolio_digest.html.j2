@@ -141,6 +141,10 @@
           </tr>
           {% endif %}
 
+          {# ─── HOLDINGS (All positions) — the book, placed before the grids that
+   dissect it: a reader meets the positions, then their returns. #}
+          {% include "partials/holdings.html.j2" %}
+
           {# ─── RETURNS SNAPSHOT (per-holding × period) ─────── #}
           {% if returns_snapshot.available %}
           <tr>
@@ -164,50 +168,6 @@
               {{ performance.table_html|safe }}
             </td>
           </tr>
-
-          {# ─── RISK PROFILE — UNIFIED TABLE ────────────────── #}
-          {% if risk_profile.available %}
-          <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
-              {{ sec(secn, risk_profile.title) }}
-              {% if risk_profile.portfolio_note %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
-                <tr>
-                  <td style="padding:9px 12px;background:{{ palette.accent_bg }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;font-size:11px;color:{{ palette.ink }};line-height:1.5;">&#9432; {{ risk_profile.portfolio_note }}</td>
-                </tr>
-              </table>
-              {% endif %}
-              {# Unified instrument table (same shell as Holdings / Returns /
-                 Performance / Optimizer), pre-rendered in
-                 _sections_perf.py::_build_risk_profile. #}
-              {{ risk_profile.table_html|safe }}
-              {% if risk_profile.alpha_beta_note %}
-              <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
-              {% endif %}
-
-              {# Legend — same content as the Excel Performance tab Legend #}
-              {% if risk_profile.legend %}
-              <div style="margin-top:20px;">{{ sec(secn, "Legend") }}</div>
-              <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
-                {% for r in risk_profile.legend %}
-                {% if loop.index0 % 2 == 0 %}<tr>{% endif %}
-                <td width="50%" valign="top" style="padding:8px 10px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:9px;">
-                  <div style="line-height:1.6;">
-                    <span style="font-size:12px;font-weight:700;color:{{ palette.ink }};">{{ r.label }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span>
-                  </div>
-                  <div style="margin-top:3px;font-size:10px;line-height:1.45;color:{{ palette.muted }};">{{ r.description }}</div>
-                </td>
-                {% if loop.index0 % 2 == 1 or loop.last %}</tr>{% endif %}
-                {% endfor %}
-              </table>
-              {% endif %}
-            </td>
-          </tr>
-          {% endif %}
-
-          {# ─── HOLDINGS (All positions) — rendered after Risk profile. #}
-          {% include "partials/holdings.html.j2" %}
 
           {# ─── RETURN CONTRIBUTION — ranked diverging bars ──────── #}
           {% if return_contrib.winners or return_contrib.laggards %}
@@ -245,6 +205,48 @@
                   </td>
                   <td width="64" align="right" style="padding:5px 0 5px 10px;font-weight:700;color:{{ palette.red }};font-variant-numeric:tabular-nums;vertical-align:middle;">{{ l.value }}</td>
                 </tr>
+                {% endfor %}
+              </table>
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
+
+          {# ─── RISK PROFILE — UNIFIED TABLE — after attribution and immediately
+   before the optimizer, so the evidence precedes the action. #}
+          {% if risk_profile.available %}
+          <tr>
+            <td class="px-32" style="padding:24px 32px 0 32px;">
+              {{ sec(secn, risk_profile.title) }}
+              {% if risk_profile.portfolio_note %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
+                <tr>
+                  <td style="padding:9px 12px;background:{{ palette.accent_bg }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;font-size:11px;color:{{ palette.ink }};line-height:1.5;">&#9432; {{ risk_profile.portfolio_note }}</td>
+                </tr>
+              </table>
+              {% endif %}
+              {# Unified instrument table (same shell as Holdings / Returns /
+                 Performance / Optimizer), pre-rendered in
+                 _sections_perf.py::_build_risk_profile. #}
+              {{ risk_profile.table_html|safe }}
+              {% if risk_profile.alpha_beta_note %}
+              <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
+              {% endif %}
+
+              {# Legend — same content as the Excel Performance tab Legend #}
+              {% if risk_profile.legend %}
+              <div style="margin-top:20px;">{{ sec(secn, "Legend") }}</div>
+              <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
+                {% for r in risk_profile.legend %}
+                {% if loop.index0 % 2 == 0 %}<tr>{% endif %}
+                <td width="50%" valign="top" style="padding:8px 10px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:9px;">
+                  <div style="line-height:1.6;">
+                    <span style="font-size:12px;font-weight:700;color:{{ palette.ink }};">{{ r.label }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span>
+                  </div>
+                  <div style="margin-top:3px;font-size:10px;line-height:1.45;color:{{ palette.muted }};">{{ r.description }}</div>
+                </td>
+                {% if loop.index0 % 2 == 1 or loop.last %}</tr>{% endif %}
                 {% endfor %}
               </table>
               {% endif %}
