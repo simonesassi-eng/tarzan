@@ -19,6 +19,7 @@ import pandas as pd
 # local copies existed to avoid an import cycle (the newsletter package imports
 # this module), but they meant chart axes could drift from the tables beside
 # them whenever the palette changed in only one place.
+from tarzan.export._format import eur_smart as _eur_smart
 from tarzan.export._palette import PALETTE as _P
 
 INK = _P["ink"]
@@ -284,5 +285,66 @@ def waterfall(items, *, w: int = 544, h: int = 205, total_label: str = "Net",
     if footnote:
         out.append(f'<text x="{ML}" y="{h - 8}" font-size="9" '
                    f'fill="{SUBTLE}">{footnote}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def funding_flow(steps, *, w: int = 544, h: int = 94,
+                 footnote: str | None = None) -> str:
+    """The serialized-action funding proof drawn as an identity check.
+
+    ``steps`` is a list of ``(label, value, kind)`` where ``kind`` is one of
+    ``"neutral"``, ``"in"``, ``"out"`` or ``"total"``. A ``"total"`` step takes
+    the running sum instead of its own value, so the last bar is the arithmetic
+    result of the ones before it: if the terms do not close, the picture cannot
+    pretend they do.
+    """
+    if not steps:
+        return ""
+    COLOUR = {"neutral": MUTED, "in": _P["accent"], "out": _P["red"],
+              "total": GREEN}
+    ML, MR, MT = 8, 8, 20
+    PW = w - ML - MR
+    slot = PW / len(steps)
+    run = 0.0
+    vals = []
+    for label, val, kind in steps:
+        if kind == "total":
+            vals.append((str(label), run, COLOUR["total"], True))
+        else:
+            run += float(val or 0.0)
+            vals.append((str(label), float(val or 0.0),
+                         COLOUR.get(kind, MUTED), False))
+    peak = max(abs(v) for _l, v, _c, _t in vals) or 1.0
+    bh = 30
+
+    out = [f'<svg width="100%" viewBox="0 0 {w} {h}" '
+           f'preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg" style="display:block;'
+           f'width:100%;background:{_P["card_alt"]};">']
+    for i, (label, val, col, is_total) in enumerate(vals):
+        cx = ML + slot * (i + 0.5)
+        bw = min(74.0, slot * 0.78)
+        # Floor the width so a genuinely small term (fees) still reads as a
+        # labelled step rather than a sliver its own number cannot sit in.
+        sw = max(38.0, abs(val) / peak * bw)
+        x = cx - sw / 2
+        out.append(f'<rect x="{x:.1f}" y="{MT}" width="{sw:.1f}" height="{bh}" '
+                   f'fill="{col}" fill-opacity="{1.0 if is_total else 0.20}" '
+                   f'stroke="{col}" stroke-width="{2 if is_total else 1}" rx="3"/>')
+        out.append(f'<text x="{cx:.1f}" y="{MT + bh / 2 + 3.8:.1f}" '
+                   f'text-anchor="middle" font-size="10.5" font-weight="700" '
+                   f'fill="{_P["card"] if is_total else INK}" '
+                   f'style="font-variant-numeric:tabular-nums;">'
+                   f'{_eur_smart(abs(val))}</text>')
+        out.append(f'<text x="{cx:.1f}" y="{MT - 7}" text-anchor="middle" '
+                   f'font-size="9" fill="{MUTED}">{label}</text>')
+        if i < len(vals) - 1:
+            out.append(f'<text x="{cx + slot / 2:.1f}" y="{MT + bh / 2 + 4:.1f}" '
+                       f'text-anchor="middle" font-size="11" '
+                       f'fill="{SUBTLE}">\u2192</text>')
+    if footnote:
+        out.append(f'<text x="{ML}" y="{h - 6}" font-size="9.5" '
+                   f'fill="{MUTED}">{footnote}</text>')
     out.append("</svg>")
     return "".join(out)

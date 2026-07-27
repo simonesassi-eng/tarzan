@@ -12,7 +12,10 @@ from tarzan.export._format import (
     eur_smart as _eur_smart,
     short_instrument_name,
 )
-from tarzan.export._charts import waterfall as _wf_chart
+from tarzan.export._charts import (
+    funding_flow as _funding_chart,
+    waterfall as _wf_chart,
+)
 from tarzan.export._perf_series import (
     _norm_series,
     _perf_window,
@@ -1504,6 +1507,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             "funding_shortfall_eur": (
                 _eur_smart(abs(residual)) if residual < -0.005 else None
             ),
+            "funding_flow_html": _funding_flow_html(funding),
         })
 
     if plans_src:
@@ -1594,6 +1598,54 @@ def _build_return_contrib(ctx: _NewsletterContext) -> dict:
         "laggards": [_item(r) for r in bottom],
         "chart_html": chart_html,
     }
+
+
+def _funding_flow_html(funding: dict) -> str:
+    """The funding proof as a flow diagram: every term of the cash identity as
+    a bar, ending on the cash the plan actually leaves behind.
+
+    Zero terms are dropped rather than drawn as empty bars -- a no-sell plan
+    has no sales and no capital-gains tax, and two 0 bars would suggest the
+    check simply was not run. The engine's own ``equation_residual_eur`` is
+    drawn when it is non-zero: if the terms do not close, the diagram says so
+    instead of quietly rounding the last bar into agreement.
+    """
+    def _f(key: str) -> float:
+        return float(funding.get(key) or 0.0)
+
+    steps: list[tuple[str, float, str]] = [
+        ("Cash", _f("initial_cash_eur"), "neutral"),
+    ]
+    for label, value, kind in (
+        ("+ Contribution", _f("external_contribution_eur"), "in"),
+        ("+ Sales", _f("gross_sales_eur"), "in"),
+        ("\u2212 Purchases", -_f("gross_purchases_eur"), "out"),
+        ("\u2212 Tax", -_f("estimated_tax_eur"), "out"),
+        ("\u2212 Fees", -_f("fees_eur"), "out"),
+    ):
+        if abs(value) >= 0.005:
+            steps.append((label, value, kind))
+    unexplained = _f("equation_residual_eur")
+    if abs(unexplained) >= 0.005:
+        steps.append(("\u00b1 Unexplained", unexplained, "out"))
+    steps.append(("= Ending cash", 0.0, "total"))
+
+    invariants = all(
+        bool(funding.get(k))
+        for k in ("position_invariants_satisfied", "protected_cash_satisfied",
+                  "frozen_positions_satisfied")
+    )
+    # The residual is a reconciliation, so it is printed to the cent: eur_smart
+    # would round a 40-cent miss to "€0" and the note would claim the identity
+    # closed when it did not.
+    resid = _f("residual_eur")
+    resid_txt = f'{"+" if resid >= 0 else "\u2212"}\u20ac{abs(resid):,.2f}'
+    note = (
+        f'Protected buffer {_eur_smart(_f("protected_cash_eur"))} '
+        f'\u00b7 residual {resid_txt} '
+        f'\u00b7 invariants {"satisfied" if invariants else "NOT satisfied"}'
+    )
+    return _funding_chart(steps, footnote=note)
 
 
 def _wf_label(row: dict) -> str:
