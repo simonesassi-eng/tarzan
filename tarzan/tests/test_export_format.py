@@ -4,6 +4,8 @@ newsletter binds to."""
 
 from __future__ import annotations
 
+import re
+
 from tarzan.export import _format
 from tarzan.export import newsletter as nl
 
@@ -133,10 +135,15 @@ class TestRiskProfileBenchmarkLabels:
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
         assert profile["available"]
-        labels = [t["label"] for t in profile["tiles"]]
+        # Greek letters are wrapped so a CSS uppercase transform cannot fold
+        # them onto capitals drawn like Latin A and B, so strip the markup here.
+        labels = [re.sub(r"<[^>]+>", "", t["label"]) for t in profile["tiles"]]
         assert labels == ["CAGR", "Volatility", "Sharpe", "Sortino", "Max DD",
                           "Ulcer", "VaR 95%", "CVaR 95%",
                           "\u03b1*", "\u03b2*"], labels
+        alpha = next(t["label"] for t in profile["tiles"]
+                     if "\u03b1" in t["label"])
+        assert "text-transform:none" in alpha
         assert "MSCI World" in profile["alpha_beta_note"]
 
     def test_tiles_carry_the_portfolio_values(self):

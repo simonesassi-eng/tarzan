@@ -260,3 +260,21 @@ def base_symbol(symbol: Optional[str]) -> str:
     from tarzan.models.instrument_key import normalize_ticker
 
     return normalize_ticker(symbol) or ""
+
+
+def greek_safe(label: str) -> str:
+    """Wrap Greek letters so a CSS uppercase transform cannot fold them.
+
+    ``text-transform:uppercase`` maps α to Α and β to Β — the Greek capitals,
+    which in most fonts are drawn identically to Latin A and B. A tile labelled
+    "α" then reads "A", and the reader has no way to know it was alpha. Uppercase
+    is the right treatment for the Latin labels beside it, so the exception is
+    scoped to the characters that break rather than dropped for the whole label.
+    """
+    out = []
+    for ch in str(label or ""):
+        if "\u0370" <= ch <= "\u03ff":
+            out.append(f'<span style="text-transform:none;">{ch}</span>')
+        else:
+            out.append(ch)
+    return "".join(out)

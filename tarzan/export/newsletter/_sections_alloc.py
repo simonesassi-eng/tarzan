@@ -808,12 +808,20 @@ def _div_pin(ticker: Optional[str]) -> str:
             f'color:{P["accent"]};">{ticker}</span>'
             f'<span style="padding-left:7px;"></span>')
 
-def _div_label(name: str, color: str, ticker: Optional[str] = None) -> str:
-    """Row label for the diversification tables: a small colour swatch, an
-    optional ticker pin, then the name."""
+def _div_label(name: str, color: Optional[str] = None,
+               ticker: Optional[str] = None) -> str:
+    """Row label for the diversification tables: an optional colour swatch, an
+    optional ticker pin, then the name.
+
+    The swatch is only drawn when it keys something: in the asset-class and
+    geography tables it is the colour of that row's trend line. In the
+    per-holding tables every row was the same accent blue, so nine identical
+    squares keyed nothing and took the width the name needed.
+    """
     P = PALETTE
-    sw = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;'
-          f'background:{color};vertical-align:middle;margin-right:6px;"></span>')
+    sw = (f'<span style="display:inline-block;width:9px;height:9px;'
+          f'border-radius:2px;background:{color};vertical-align:middle;'
+          f'margin-right:6px;"></span>') if color else ""
     return f'{sw}{_div_pin(ticker)}<span style="color:{P["ink"]};">{name}</span>'
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
@@ -1035,17 +1043,17 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     head = (
         f'<tr>'
         f'<td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;'
-        f'text-transform:uppercase;color:{P["subtle"]};">{first_label}</td>'
+        f'text-transform:uppercase;color:{P["muted"]};">{first_label}</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["subtle"]};width:{W_VAL}px;">Now</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Now</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["subtle"]};width:{W_VAL}px;">Target</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Target</td>'
         f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["subtle"]};width:{W_BULLET}px;">vs target</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_BULLET}px;">vs target</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["subtle"]};width:{W_TREND}px;">Trend</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_TREND}px;">Trend</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["subtle"]};width:{W_DRIFT}px;">{_drift_label}</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_DRIFT}px;">{_drift_label}</td>'
         + '</tr>'
     )
     return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
@@ -1136,10 +1144,12 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
         # not equal the current weight — a not-yet-held target reads 0%.
         now = cur_by_isin.get(_isin_for(it), 0.0)
         rows.append({
+            # No swatch: every per-holding row would carry the same accent
+            # square, keying nothing and taking the width the name needs.
             "label_html": _div_label(
                 display_instrument_name(_isin_for(it), key,
                                         it.get("category") or key, 42),
-                P["accent"], ticker=tk),
+                ticker=tk),
             "now": now,
             "target": float(it.get("target_pct", 0.0) or 0.0),
             "spark_vals": _trend_for(it),
@@ -1208,7 +1218,7 @@ def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
                 "label_html": _div_label(
                     display_instrument_name(it.get("isin"), ticker,
                                             it.get("category") or ticker, 42),
-                    color, ticker=tk),
+                    ticker=tk),
                 "now": float(it.get("actual_pct", 0.0)),
                 "target": float(it.get("target_pct", 0.0)),
                 "spark_vals": vals,

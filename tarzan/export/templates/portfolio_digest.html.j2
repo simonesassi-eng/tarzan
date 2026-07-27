@@ -196,8 +196,11 @@
           {% if returns_snapshot.available %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Returns", "Grouped by asset class and sub-category. Colour is scaled per column over this table.") }}
-              <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
+              {# No subtitle and no colour key. The grouping is visible in the
+                 group header rows, the per-column scaling is what conditional
+                 formatting means, and the beat/in-line/under key described the
+                 portfolio row's three colours -- one row out of eighteen. #}
+              {{ sec(secn, "Returns") }}
               {{ returns_snapshot.table_html|safe }}
             </td>
           </tr>
@@ -209,7 +212,6 @@
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Watchlist", "Instruments tracked, not held. Same columns, scaled on this table's own columns.") }}
-              <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
               {{ performance.table_html|safe }}
             </td>
           </tr>
@@ -218,7 +220,9 @@
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Attribution", 'What moved the number. Each bar starts where the previous one ended, so the movers and everything else add up to the unrealized return in <strong style="color:' ~ palette.ink ~ ';">STATE</strong>.') }}
+              {# No subtitle: the waterfall's connectors show that the bars add
+                 up, and its own footnote states the measure. #}
+              {{ sec(secn, "Attribution") }}
               {% if return_contrib.chart_html %}
               <div style="margin-top:12px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ return_contrib.chart_html|safe }}</div>
               {% endif %}

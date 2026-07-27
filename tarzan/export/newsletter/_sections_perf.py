@@ -11,6 +11,7 @@ import pandas as pd
 from tarzan.models.instrument_key import normalize_ticker
 from tarzan.export._format import (
     display_instrument_name,
+    greek_safe,
     eur_smart as _eur_smart,
     short_instrument_name,
 )
@@ -340,7 +341,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
 
     def _colcap(t: str) -> str:
-        return f'<div style="font-size:11px;font-weight:700;color:{P["ink"]};margin-bottom:3px;">{t}</div>'
+        """Panel caption, in the concept's form: 9px uppercase subtle with wide
+        tracking, not 11px ink. At ink weight it competed with the section
+        heading above it for the same job."""
+        return (f'<div style="font-size:9px;font-weight:700;letter-spacing:0.08em;'
+                f'text-transform:uppercase;color:{P["subtle"]};'
+                f'margin-bottom:5px;">{t}</div>')
 
     # Last-30-day labels come from the exact arrays passed to the chart. The
     # shared-close endpoint is therefore the only number that can describe a
@@ -452,8 +458,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         left_ret = _charts.chart_pct_compact(
             ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
             month_ticks=True, end_gutter=G_WIDE) if ssi else ""
-        right_ret = (_colcap("Last 30 days <span style='font-weight:400;"
-                             f"color:{P['subtle']};'>\u00b7 rebased</span>")
+        right_ret = (_colcap("Last 30 days \u00b7 rebased")
                      # Five date ticks, not twelve: at half width twelve
                      # rotated labels overlapped into a grey band, which is
                      # worse than no axis at all.
@@ -708,7 +713,7 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
     port_pct = agg / wsum
     return (1.0 + port_pct / 100.0) * 100.0
 
-def _returns_table_html(period_cols, portfolio: dict, groups: list,
+def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
                         *, day_label: str = "1D") -> str:
     """Shared renderer for the grouped per-instrument returns tables.
 
@@ -732,8 +737,9 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
     # rows THIS table renders (see tarzan.export._heat for why per column and
     # per table). Collected before any cell is built, since a cell cannot know
     # its column's range.
-    every_row = ([portfolio] + [inst for _c, _col, role_list in groups
-                                for _r, insts in role_list for inst in insts])
+    every_row = (([portfolio] if portfolio else [])
+                 + [inst for _c, _col, role_list in groups
+                    for _r, insts in role_list for inst in insts])
     scales = {}
     for p in period_cols:
         scales[p] = _heat.column_scale(
@@ -775,10 +781,10 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
                + [(p.upper(), "right", W_PERIOD) for p in period_cols])
     portfolio_row = {
         "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
-                      f'font-size:12px;">\u2605 {portfolio["name"]}</span>'),
+                      f'font-size:10.5px;">\u2605 {portfolio["name"]}</span>'),
         "cells": _cells(portfolio["returns"], portfolio.get("spark_inner", ""),
                         weight=700, day_raw=portfolio.get("day_raw")),
-    }
+    } if portfolio else None
     uni_groups = [
         (cls, col, [(role, [{"name_html": inst["name_html"],
                              "cells": _cells(inst["returns"],
@@ -1288,11 +1294,14 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             rendered_roles.append((role, insts))
         groups.append((ac, col, rendered_roles))
 
+    # No portfolio row in the watchlist. The table lists instruments that are
+    # NOT held; the portfolio's own returns are the whole of RETURNS one section
+    # up, and repeating them here invited a comparison between the portfolio and
+    # a list of things it does not own.
     table_html = _returns_table_html(
-        period_cols, portfolio, groups,
+        period_cols, None, groups,
         day_label=day_column_label(
-            m, live=bool(pf.get("1d_live"))
-            or any(bool(r.get("live")) for r in benchmark_rows)))
+            m, live=any(bool(r.get("live")) for r in benchmark_rows)))
 
     subtitle_html = (
         f'Portfolio vs {ctx.benchmark_alpha_beta or "S&amp;P 500"}: '
@@ -1532,7 +1541,10 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
                 warn=abs(float(thresholds[1])),
                 invert=bool(band.get("invert", False)))
         tiles.append({
-            "label": f"{label}{note}",
+            # The label is uppercased by CSS, which folds a Greek alpha onto a
+            # capital that is drawn like a Latin A. greek_safe scopes the
+            # exception to the characters that break.
+            "label": greek_safe(f"{label}{note}"),
             "value": _fmt_pct(value) if is_pct else _fmt_num(value),
             "gauge": gauge,
         })
