@@ -1352,17 +1352,21 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     # instead of a second copy that can drift from the legend beside it.
     # Beta carries None: the configured bands rate it as market exposure, which
     # is a property to know rather than a score to win, so it stays uncoloured.
+    # Full names, not abbreviations. "Vol", "VaR" and "CVaR" were squeezed for
+    # an eleven-column table that no longer exists; a tile has room to say what
+    # the metric is, and the confidence level on the two tail measures is part of
+    # their definition rather than a footnote.
     metric_cols = [
         ("CAGR", "cagr", True, "", "cagr"),
-        ("Vol", "volatility", True, "", "volatility"),
+        ("Volatility", "volatility", True, "", "volatility"),
         ("Sharpe", "sharpe", False, "", "sharpe"),
         ("Sortino", "sortino", False, "", "sortino"),
         ("Max DD", "max_drawdown", True, "", "max_drawdown"),
         ("Ulcer", "ulcer_index", True, "", "ulcer_index"),
-        # "95%" is spelled out in the legend below; drop it from the column
-        # header so these two cells stay narrow in the 10-column table.
-        ("VaR", "var_95", True, "", "var_pct"),
-        ("CVaR", "cvar_95", True, "", "cvar_pct"),
+        ("VaR 95%", "var_95", True, "", "var_pct"),
+        ("CVaR 95%", "cvar_95", True, "", "cvar_pct"),
+        # The asterisk points at the footnote naming the index these two are
+        # measured against, which is their definition, not a comparison.
         ("\u03b1", "alpha", True, "*", "alpha"),
         ("\u03b2", "beta", False, "*", None),
     ]
@@ -1604,8 +1608,13 @@ def _build_risk_legend() -> list[dict]:
         v = float(value)
         # Drop the ".0" on integer thresholds so the bands read tight
         # ("<3%" not "< 3.0%") — they sit inline next to the metric name.
-        num = f"{int(round(v))}" if abs(v - round(v)) < 1e-9 else f"{v:.1f}"
-        return f"{num}{unit}"
+        # The minus SIGN, like every other negative figure in the issue: a band
+        # chip reading "-15%" beside a tile reading "\u221215%" is two glyphs for
+        # one idea.
+        a = abs(v)
+        num = f"{int(round(a))}" if abs(a - round(a)) < 1e-9 else f"{a:.1f}"
+        sign = "\u2212" if v < 0 else ""
+        return f"{sign}{num}{unit}"
 
     legend_rows = []
     for label, key, description in legend_specs:
