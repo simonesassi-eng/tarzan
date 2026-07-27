@@ -794,16 +794,19 @@ def _recent_timeline(series: Optional[list], dates: Optional[list],
     return [series[i] for i in keep]
 
 def _div_pin(ticker: Optional[str]) -> str:
-    """Small monospace ticker pin, identical to the Holdings/Risk/Returns
-    sections, so the ticker looks the same everywhere."""
+    """The ticker as accent-coloured monospace text, matching ``uni_name``.
+
+    It was a bordered chip. The border, background and padding cost about 34px
+    of every row, taken out of the name column, which is what made instrument
+    names wrap onto two and three lines here.
+    """
     if not ticker:
         return ""
     P = PALETTE
-    return (f'<span style="display:inline-block;margin-right:5px;padding:1px 5px;'
-            f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
-            f'border-radius:4px;font-size:9px;font-weight:700;'
-            f'font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;'
-            f'vertical-align:middle;">{ticker}</span>')
+    return (f'<span style="font-family:SFMono-Regular,Menlo,Consolas,monospace;'
+            f'font-size:10px;font-weight:700;letter-spacing:0.02em;'
+            f'color:{P["accent"]};">{ticker}</span>'
+            f'<span style="padding-left:7px;"></span>')
 
 def _div_label(name: str, color: str, ticker: Optional[str] = None) -> str:
     """Row label for the diversification tables: a small colour swatch, an
@@ -814,7 +817,8 @@ def _div_label(name: str, color: str, ticker: Optional[str] = None) -> str:
     return f'{sw}{_div_pin(ticker)}<span style="color:{P["ink"]};">{name}</span>'
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
-               show_leverage: bool = False, first_label: str = "Name") -> str:
+               show_leverage: bool = False, first_label: str = "Name",
+               subs: bool = True) -> str:
     """Unified diversification table (asset class / geography / by holding).
 
     One row per slice — current weight, target, the weight against its target
@@ -850,10 +854,11 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     # Column widths. The value columns lost two thirds of their width when the
     # euro amount moved under the percentage instead of beside it, and the row
     # labels got it: asset-class and instrument names no longer wrap.
-    # The concept's proportions: the two marks that carry meaning (the bullet
-    # against its band, and the trend line) get the width, and the two numeric
-    # columns get only what a stacked figure and its euro amount need.
-    W_VAL, W_BULLET, W_TREND, W_DRIFT = 62, 96, 88, 70
+    # The concept's own column widths, now that the content box is 580px rather
+    # than 536: 58 for each numeric column, 96 for the bullet, 88 for the trend
+    # and 56 for the drift. That leaves 224px for the row label, which is what
+    # stops asset-class and instrument names wrapping.
+    W_VAL, W_BULLET, W_TREND, W_DRIFT = 58, 96, 88, 56
     BULLET_W, SPARK_W, MARK_H = 88, 84, 26
 
     def _no_series() -> str:
@@ -872,7 +877,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         No arrow: the sparkline above it already points, and the sign on the
         number says the same thing a third time.
         """
-        if not vals or len(vals) < 2:
+        if not subs or not vals or len(vals) < 2:
             return ""
         return f"{_signed_pp(float(vals[-1]) - float(vals[0]))}pp"
 
@@ -885,7 +890,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         line it is legible at every value, so it no longer has to be suppressed
         below 1.05x to dodge the collision.
         """
-        if not show_leverage or lev is None:
+        if not subs or not show_leverage or lev is None:
             return ""
         try:
             return f"{float(lev):.2f}\u00d7"
@@ -906,8 +911,10 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         return _bullet(a, t, tol=tol, w=BULLET_W, h=MARK_H,
                        scale_max=_bullet_scale)
 
+    FS = 11  # one type size across the row, label included
+
     def _stack(main: str, sub: str, *, color: str, weight: int = 700,
-               size: float = 12) -> str:
+               size: float = FS) -> str:
         """A value and its qualifier, stacked.
 
         The qualifier used to sit inline after a middot ("77.6% \u00b7 \u20ac177k"),
@@ -925,12 +932,12 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                       f'color:{P["subtle"]};font-variant-numeric:tabular-nums;'
                       f'white-space:nowrap;">{sub}</div>')
 
-    def _num_cell(pct_val: float, color: str) -> str:
+    def _num_cell(pct_val: float, color: str, weight: int = 700) -> str:
         """A Now/Target cell: the weight, with its euro amount underneath when a
-        EUR base for 100% is known."""
+        EUR base for 100% is known and this table shows sub-lines."""
         eur = (_eur_smart(pct_val / 100.0 * base)
-               if (base and base > 0) else "")
-        return _stack(_pct_smart(pct_val), eur, color=color)
+               if (subs and base and base > 0) else "")
+        return _stack(_pct_smart(pct_val), eur, color=color, weight=weight)
 
     def _eur_cell(eur_val: float, color: str, weight: int = 700,
                   signed: bool = False) -> str:
@@ -954,7 +961,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             sp = _stack(sp, _trend_pp(vals), color=P["accent"]) if sp else ""
             body.append(
                 f'<tr>'
-                f'<td style="padding:8px;background:{abg};font-size:12px;font-weight:700;'
+                f'<td style="padding:8px;background:{abg};font-size:{FS}px;font-weight:700;'
                 f'color:{P["accent"]};">{r.get("label_html", "")}</td>'
                 f'<td align="right" style="padding:8px;background:{abg};width:{W_VAL}px;">'
                 f'{_num_cell(now, P["accent"])}</td>'
@@ -980,14 +987,14 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             ddcol = r.get("delta_color", P["muted"])
             body.append(
                 f'<tr>'
-                f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
+                f'<td style="padding:5px 8px;{bb}font-size:{FS}px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
                 f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_eur_cell(r.get("now_eur", 0.0), P["ink"])}</td>'
                 f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_eur_cell(r.get("target_eur", 0.0), P["muted"])}</td>'
                 # Cash has no target corridor and no trend, but both cells have
                 # to be present so the EUR drift lands under its own header.
                 f'<td style="padding:6px 6px;{bb}width:{W_BULLET}px;"></td>'
                 f'<td style="padding:6px 4px;{bb}width:{W_TREND}px;"></td>'
-                f'<td align="right" style="padding:6px 8px;{bb}font-size:12px;font-weight:700;'
+                f'<td align="right" style="padding:6px 8px;{bb}font-size:{FS}px;font-weight:700;'
                 f'color:{ddcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:{W_DRIFT}px;">'
                 f'{_eur_smart(r.get("delta_eur", 0.0), signed=True)}</td>'
                 f'</tr>'
@@ -1009,9 +1016,9 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         # holding) line up on the same grid regardless of their content.
         body.append(
             f'<tr>'
-            f'<td style="padding:6px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
+            f'<td style="padding:6px 8px;{bb}font-size:{FS}px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
             f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_num_cell(now, P["ink"])}</td>'
-            f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_num_cell(tgt, P["muted"])}</td>'
+            f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_num_cell(tgt, P["muted"], weight=600)}</td>'
             f'<td align="right" valign="middle" style="padding:6px 6px;{bb}'
             f'width:{W_BULLET}px;">{_bullet_cell(now, tgt)}</td>'
             f'<td align="right" valign="middle" style="padding:6px 4px;{bb}width:{W_TREND}px;'
@@ -1353,16 +1360,19 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             f'total 100%.</div>'
         )
     if holding_rows:
-        html.append(_div_table(holding_rows, tol, base=invested_base,
-                               first_label="Per-holding target"))
+        # Percentages only: this table is a list of targets, and the euro
+        # amount under every weight doubled its height to restate what the
+        # asset-class table above already puts in context.
+        html.append(_div_table(holding_rows, tol, base=None,
+                               first_label="Per-holding target", subs=False))
         if exits_note:
             html.append(exits_note)
     if eq_rows:
-        html.append(_div_table(eq_rows, tol, base=equity_base,
-                               first_label="Equities holding"))
+        html.append(_div_table(eq_rows, tol, base=None,
+                               first_label="Equities holding", subs=False))
     if fi_rows:
-        html.append(_div_table(fi_rows, tol, base=fi_base,
-                               first_label="Fixed Income holding"))
+        html.append(_div_table(fi_rows, tol, base=None,
+                               first_label="Fixed Income holding", subs=False))
     return {"available": True, "html": "".join(html)}
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
@@ -1422,18 +1432,18 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                 _display_ticker(h.get("ticker")) or "",
             ),
             "cells": [
-                uni_cell(_eur(value, 2), width=72),
+                uni_cell(_eur(value, 2), width=78),
                 uni_cell(weight_str, width=50),
                 # The class share is the faintest figure in the row: the class
                 # itself is named in the group header above, in its colour, so
                 # repeating that colour on every cell said it a second time.
                 uni_cell(_pct(pct_class, decimals=1),
-                         color=PALETTE["subtle"], width=48),
+                         color=PALETTE["subtle"], width=52),
                 uni_cell(_pct(gain_pct, signed=True) if has_gain else "—",
-                         color=gain_color, weight=700, width=50),
+                         color=gain_color, weight=700, width=62),
                 uni_cell(_eur_smart(gain_eur, signed=True)
                          if (gain_eur is not None and not pd.isna(gain_eur)) else "—",
-                         color=gain_color, weight=700, width=64),
+                         color=gain_color, weight=700, width=58),
             ],
         })
     groups = group_by_class_role(
@@ -1442,8 +1452,12 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
 
     table_html = render_unified_table(
         "Holding",
-        [("Value €", "right", 72), ("% Inv.", "right", 50),
-         ("% Class", "right", 48), ("Gain %", "right", 50), ("Gain €", "right", 64)],
+        # The concept's widths, now that the content box is 580px: the value and
+        # the two gains get the room, the two shares get only what a percentage
+        # needs, and what is left goes to the name.
+        [("Value \u20ac", "right", 78), ("% Inv.", "right", 50),
+         ("% Class", "right", 52), ("Gain %", "right", 62),
+         ("Gain \u20ac", "right", 58)],
         [(cls, col, [(role, [{"name_html": it["name_html"], "cells": it["cells"]}
                              for it in items])
                      for role, items in role_list])

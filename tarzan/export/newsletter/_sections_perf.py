@@ -417,12 +417,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     vol_full = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
     vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
 
-    # Panel sizes. The card's content box is 544px wide; with the 8px gutter
-    # between the two half cells each of them gets 264px. These are passed
+    # Panel sizes. The card's content box is 580px wide; with the 8px gutter
+    # between the two half cells each of them gets 282px. These are passed
     # explicitly because the SVG carries its own width — putting a chart in a
     # wider table cell does not make the chart wider.
-    W_WIDE, H_WIDE = 544, 166
-    W_HALF, H_HALF = 264, 138
+    W_WIDE, H_WIDE = 580, 166
+    W_HALF, H_HALF = 282, 138
     # Room for the end labels: "MSCI ACWI +14.16%" needs ~110px, the bare
     # percentages on the half panels ~54px.
     G_WIDE, G_HALF = 132, 52
@@ -789,9 +789,9 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
 
 def _perf_name_html(name: str, ticker: str, tags: list) -> str:
     """Instrument label used in the returns tables. Delegates to the shared
-    :func:`uni_name` (ticker trails the name, role lives in the group header),
-    so names wrap cleanly to ~2 lines without a hard clamp — matching the
-    earlier layout the user preferred."""
+    :func:`uni_name`, so the ticker leads the name here exactly as it does in
+    the book, the risk table and the optimizer, and the role stays in the group
+    header rather than stacking a caption under every name."""
     from tarzan.export.newsletter._constants import uni_name
     return uni_name(name, ticker or "", tags=tuple(tags or ()))
 

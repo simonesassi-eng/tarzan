@@ -141,28 +141,31 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
 # data) differ. Before, four separate renderers had drifted.
 
 def uni_name(name, ticker="", *, tags=(), pill="", span=""):
-    """Canonical instrument label for the unified table: an optional action
-    pill (BUY/SELL), the name, a trailing ticker pin, reference tags (α/β, GEO)
-    and a faint history-span chip — so every table's name cell reads
-    identically."""
+    """Canonical instrument label: an optional action pill (BUY/SELL), the
+    ticker, then the name, then reference tags and a faint history-span chip.
+
+    The ticker is accent-coloured monospace text, not a bordered chip. As a chip
+    it carried a border, a background and 10px of horizontal padding -- about
+    34px of furniture per row -- and that width came out of the name, which is
+    why instrument names wrapped onto two and three lines in every table. As
+    text it costs its own glyphs and nothing else, and it leads the row, so the
+    column reads as a list of tickers with names attached rather than as a list
+    of names with badges stuck on the end.
+    """
     P = PALETTE
-    pin = (f'<span style="display:inline-block;margin-right:5px;padding:1px 5px;'
-           f'background:{P["page"]};color:{P["muted"]};border:1px solid {P["border"]};'
-           f'border-radius:4px;font-size:9px;font-weight:700;'
-           f'font-family:SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:0.02em;'
-           f'vertical-align:middle;">{ticker}</span>') if ticker else ""
+    tk = (f'<span style="font-family:SFMono-Regular,Menlo,Consolas,monospace;'
+          f'font-size:10px;font-weight:700;letter-spacing:0.02em;'
+          f'color:{P["accent"]};">{ticker}</span>'
+          f'<span style="padding-left:7px;"></span>') if ticker else ""
     tag_html = "".join(
         f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
         f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;font-weight:700;'
         f'letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>' for t in (tags or ()))
-    span_html = (f'<span style="display:inline-block;margin-left:6px;font-size:9px;'
-                 f'font-weight:600;color:{P["subtle"]};vertical-align:middle;">{span}</span>'
+    span_html = (f'<span style="margin-left:6px;font-size:9px;'
+                 f'font-weight:600;color:{P["subtle"]};">{span}</span>'
                  if span else "")
-    # Ticker chip sits AFTER the name (matching the earlier layout the user
-    # found neat): the name leads each line and wraps cleanly, the chip trails.
-    # A leading action pill (BUY/SELL) still leads, as it labels the whole row.
-    inner = f'{pill}<span>{name}</span>{pin}{tag_html}{span_html}'
-    return (f'<div style="font-size:12px;font-weight:600;line-height:1.3;'
+    inner = f'{pill}{tk}<span>{name}</span>{tag_html}{span_html}'
+    return (f'<div style="font-size:10.5px;font-weight:600;line-height:1.35;'
             f'color:{P["ink"]};">{inner}</div>')
 
 
