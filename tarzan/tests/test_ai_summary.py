@@ -126,7 +126,7 @@ def test_render_shows_ai_summary_when_present():
         _metrics(), _config(),
         ai_summary="Your portfolio is up 20% since inception, steady this month.",
     )
-    assert "Market context" in html
+    assert "AI-generated market context" in html
     assert "up 20% since inception" in html
     assert "not financial advice" in html
 
@@ -138,7 +138,7 @@ def test_render_without_ai_has_no_market_context():
     assert ctx["ai_summary"] is None
     assert "smart_insights" not in ctx
     html = render_newsletter(_metrics(), _config(), ai_summary=None)
-    assert "Market context" not in html
+    assert "AI-generated market context" not in html
     assert "worth your attention" not in html
 
 
@@ -151,7 +151,7 @@ def test_render_auto_resolves_ai_summary_when_none(monkeypatch):
         lambda m, c: "Auto-resolved market note for the render path.",
     )
     html = render_newsletter(_metrics(), _config())  # ai_summary defaults to None
-    assert "Market context" in html
+    assert "AI-generated market context" in html
     assert "Auto-resolved market note" in html
 
 
@@ -163,7 +163,7 @@ def test_render_empty_string_forces_block_off(monkeypatch):
         lambda m, c: (_ for _ in ()).throw(AssertionError("must not auto-resolve on empty string")),
     )
     html = render_newsletter(_metrics(), _config(), ai_summary="")
-    assert "Market context" not in html
+    assert "AI-generated market context" not in html
 
 
 # ── Benchmark-divergence note (charts section) ───────────────────────────────

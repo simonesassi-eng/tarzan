@@ -18,6 +18,7 @@ from tarzan.export._charts import (
 )
 from tarzan.export._perf_series import (
     _norm_series,
+    benchmark_gap_pp,
     _perf_window,
     _window_money_pnl,
 )
@@ -47,6 +48,7 @@ from tarzan.export.newsletter._format import (
 from tarzan.export.newsletter._charts import (
     _hero_flow_chips,
     _hero_value_chart,
+    _prev_session_label,
     _spark,
     _timeline_vals,
     bullet as _bullet,
@@ -161,21 +163,44 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     if m.twror_pct is not None:
         status_bar.append(_bar("TWROR", _pct(m.twror_pct, signed=True),
                                _tone(m.twror_pct)))
-    # No "vs benchmark" entry: the engine exposes no lifetime portfolio-minus-
-    # benchmark delta, and the 30-day rebased gap in the charts below is a
-    # different measure. Showing one here would mean deriving a figure the
-    # engine does not compute.
+    # The gap against the geography benchmark. An earlier pass left this out on
+    # the grounds that the engine computes no such delta -- wrong: both terms are
+    # computed and already printed side by side in the since-inception chart's
+    # legend, so the entry is their difference, not a new estimate.
+    gap = benchmark_gap_pp(m, ctx.benchmark_geo)
+    if gap is not None:
+        status_bar.append(_bar(
+            f"VS {_bench_short(ctx.benchmark_geo)}",
+            f'{"+" if gap > 0 else ("\u2212" if gap < 0 else "")}'
+            f'{abs(gap):.2f}pp', _tone(gap)))
     if risk.get("beta") is not None:
         status_bar.append(_bar("\u03b2", f'{float(risk["beta"]):.2f}'))
     if risk.get("sharpe") is not None:
         status_bar.append(_bar("SHARPE", f'{float(risk["sharpe"]):.2f}'))
 
+    # Data stamp: the issue date, the close every 1D figure is measured
+    # against, and whether a session is open. All three change what the numbers
+    # below mean, and none of them was stated before.
+    close_label = _prev_session_label(m, "%d %b")
+    live = bool((perf or {}).get("1d_live"))
+    stamp = now.strftime("%a, %d %b %Y")
+    if close_label:
+        stamp += f" \u00b7 close {close_label}"
+    stamp += f' \u00b7 market {"LIVE" if live else "CLOSED"}'
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
+        "stamp": stamp,
         "issue_number": issue_number,
         "inception_date": inception_date,
         "status_bar": tuple(status_bar),
     }
+
+
+def _bench_short(name: Optional[str]) -> str:
+    """The benchmark's last word, upper-cased, for a label that has to fit a
+    status-bar cell: "iShares MSCI ACWI" -> "ACWI"."""
+    parts = [w for w in str(name or "").replace("-", " ").split() if w]
+    return (parts[-1] if parts else "BENCHMARK").upper()
 
 def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
@@ -1528,7 +1553,8 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             plans.append(pc)
         if not any(pc["actions"] for pc in plans):
             return {"available": False}
-        return {"available": True, "plans": plans}
+        return {"available": True, "plans": plans,
+                "subtitle": _optimizer_subtitle(plans)}
 
     # Back-compat: single plan.
     suggestions = list(m.rebalancing_suggestions or [])
@@ -1538,7 +1564,32 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     pc["label"] = "Suggested actions"
     pc["no_sell"] = None
     _attach_execution(pc, m.rebalancing_verifications)
-    return {"available": True, "plans": [pc]}
+    return {"available": True, "plans": [pc],
+            "subtitle": _optimizer_subtitle([pc])}
+
+def _optimizer_subtitle(plans: list[dict]) -> str:
+    """One line saying how many plans there are and which one is live.
+
+    A reader who sees two trade lists needs to know whether both are proposals
+    before reading either. The wording is derived from the plans themselves, so
+    it cannot claim a plan is executable when the funding proof says otherwise.
+    """
+    n = len(plans)
+    if n == 1:
+        one = plans[0]
+        state = ("executable as it stands" if one.get("executable")
+                 else "a draft until cash funding is resolved")
+        return f"One plan, {state}."
+    live = [p for p in plans if p.get("executable")]
+    if len(live) == n:
+        return (f"{n} plans, both executable as they stand. The first buys "
+                f"only, because selling is switched off in the configuration.")
+    if not live:
+        return (f"{n} plans, neither executable until cash funding is "
+                f"resolved. Do not treat either list as instructions.")
+    return (f"{n} plans, {len(live)} executable as it stands. The first buys "
+            f"only, because selling is switched off in the configuration.")
+
 
 def _build_return_contrib(ctx: _NewsletterContext) -> dict:
     """Build winners / laggards by return contribution.

@@ -17,9 +17,15 @@
    numbers the sections actually rendered. A static number per section left
    holes in the sequence whenever an optional block (market context, optimizer)
    was unavailable. #}
-{% macro sec(ns, label) -%}
+{% macro sec(ns, label, sub=None) -%}
 {%- set ns.n = ns.n + 1 -%}
-<div style="font-size:12.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:{{ palette.ink }};"><span style="color:{{ palette.accent }};">[{{ "%02d"|format(ns.n) }}]</span>&nbsp;&nbsp;{{ label }}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td align="left" style="white-space:nowrap;"><span style="font-size:10px;font-weight:700;color:{{ palette.accent }};">[{{ "%02d"|format(ns.n) }}]</span>&nbsp;&nbsp;<span style="font-size:12.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:{{ palette.ink }};">{{ label }}</span></td>
+{# The rule fills whatever the label leaves, so the heading reads as a ruled
+   band across the column instead of a floating word. #}
+<td width="100%" style="padding-left:12px;"><div style="height:1px;background:{{ palette.border }};font-size:0;line-height:0;">&nbsp;</div></td>
+</tr></table>
+{%- if sub %}<div style="margin-top:7px;font-size:11px;line-height:1.6;color:{{ palette.muted }};">{{ sub|safe }}</div>{% endif -%}
 {%- endmacro %}
 <!DOCTYPE html>
 <html lang="en">
@@ -54,92 +60,106 @@
       <td align="center" style="padding:24px 12px;">
         <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:{{ palette.card }};border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(15,23,42,0.06);">
 
-          {# ─── STATUS BAR ───────────────────────────────────────
-             One terse line above the masthead: the figures a reader checks
-             before deciding whether to read on. Built in
-             _sections_alloc.py::_build_header as header.status_bar; entries
-             that the engine cannot supply are absent, not blank. #}
-          {% if header.status_bar %}
+          {# ─── MASTHEAD + STATUS BAR ─────────────────────────────
+             One block, not two. The wordmark and the data stamp on the first
+             line, the figures a reader checks before deciding to read on the
+             second. There is no "Portfolio Digest" title line: the document is
+             the digest, and the line cost a third of the opening screen to
+             restate the subject. The issue number lives in the footer, next to
+             the version and the run stamp it belongs with.
+             Built in _sections_alloc.py::_build_header; entries the engine
+             cannot supply are absent, not blank. #}
           <tr>
-            <td class="px-32" style="padding:14px 32px;background:{{ palette.page }};border-bottom:1px solid {{ palette.border }};">
+            <td class="px-32" style="padding:11px 20px 9px 20px;background:{{ palette.page }};border-bottom:1px solid {{ palette.border }};">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
+                  <td align="left" style="white-space:nowrap;"><span style="font-size:11px;font-weight:700;letter-spacing:0.22em;color:{{ palette.accent }};">TARZAN</span></td>
+                  <td align="right" style="font-size:10px;color:{{ palette.subtle }};white-space:nowrap;">{{ header.stamp }}</td>
+                </tr>
+              </table>
+              {% if header.status_bar %}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:9px;">
+                <tr>
                   {% for b in header.status_bar %}
-                  <td align="{{ 'left' if loop.first else 'right' }}" style="white-space:nowrap;font-size:10px;">
-                    {# No text-transform here: CSS uppercase maps the beta label to capital Beta,
-   which renders as a plain "B". The labels are already written in caps. #}<span style="font-weight:700;letter-spacing:0.08em;color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="font-weight:700;font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>
+                  <td style="padding:0 8px 0 0;white-space:nowrap;">
+                    {# No text-transform: CSS uppercase maps the beta label to a
+                       capital Beta, which renders as a plain "B". The labels are
+                       already written in caps. #}<span style="font-size:8.5px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>{% if not loop.last %}<span style="color:{{ palette.border }};padding-left:8px;">│</span>{% endif %}
                   </td>
                   {% endfor %}
                 </tr>
               </table>
+              {% endif %}
             </td>
           </tr>
-          {% endif %}
+          {# ═══ BODY ORDER ═══════════════════════════════════════════
+             Thirteen sections, each with one question:
+               01 state        what the portfolio is
+               02 portfolio    what it did, over time and by window
+               03 vs the market whether that beat the alternative
+               04 markets      what the market did, and why
+               05 allocation   where the money sits vs where it should
+               06 the book     the positions themselves
+               07 returns      how each position performed
+               08 watchlist    how the instruments not held performed
+               09 attribution  which positions moved the number
+               10 risk         what the shape of the ride was
+               11 optimizer    what to do about it
+               12 backtest     what the alternatives would have done
+               13 appendix     tax, method, feeds, evidence
+             The ordinals come from the shared counter in sec(), so a section
+             the engine cannot fill leaves no hole in the sequence. #}
 
-          {# ─── HEADER ───────────────────────────────────────── #}
+          {# ─── [01] STATE ─────────────────────────────────── #}
+          {% include "partials/status.html.j2" %}
+
+          {# ─── [02] PORTFOLIO ──────────────────────────────
+             The value chart with unrealized P&L on the right axis, then the
+             same story by window. Pre-rendered in
+             newsletter/_sections_perf.py::_build_performance30 and
+             _sections_alloc.py::_build_hero — inline SVG cannot be expressed
+             in Jinja. #}
           <tr>
-            <td class="px-32" style="padding:28px 32px 20px 32px;background:{{ palette.card }};border-bottom:1px solid {{ palette.border }};">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Portfolio") }}
+              {% if hero.value_chart %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;border-collapse:separate;border-spacing:0;">
                 <tr>
-                  <td align="left" style="vertical-align:middle;">
-                    <div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:{{ palette.accent }};text-transform:uppercase;">🌿&nbsp;Tarzan</div>
-                    <div style="margin-top:4px;font-size:22px;font-weight:700;color:{{ palette.ink }};line-height:1.2;">Portfolio Digest</div>
-                  </td>
-                  <td align="right" style="vertical-align:middle;font-size:12px;color:{{ palette.muted }};line-height:1.4;">
-                    <div>{{ header.date_short }}</div>
-                    <div>Issue #{{ header.issue_number }}</div>
+                  <td style="padding:14px 16px;">
+                    {{ hero.value_chart|safe }}
+                    {% if hero.flow_chips_html %}{{ hero.flow_chips_html|safe }}{% endif %}
                   </td>
                 </tr>
               </table>
+              {% endif %}
+              {% if performance30.available %}{{ performance30.matrix_html|safe }}{% endif %}
             </td>
           </tr>
 
-          {# ─── STATUS ─────────────────────────────────────── #}
-          {# Chart-led hero + Profit&Losses / TWROR scoreboard + annualized
-             cards + slim rebalance banner. See partials/status.html.j2. #}
-          {% include "partials/status.html.j2" %}
-
-
-          {# ─── PERFORMANCE (1D/7D/30D/since matrix + 30-day charts) ─────────
-             Owns the multi-horizon P&L / TWROR numbers and the recent
-             trajectory. The hero above is now a slim lifetime-state band so
-             no figure appears twice. SVG charts render in Gmail/Apple Mail;
-             legacy Outlook shows the matrix + chips (PNG fallback is a TODO).
-             Pre-rendered in newsletter.py::_build_performance30 (SVG can't be
-             expressed in Jinja), injected as safe HTML. #}
-          {% if performance30.available %}
+          {# ─── [03] VS THE MARKET ──────────────────────────
+             Its own section rather than a card inside performance: whether the
+             portfolio beat the alternative is a different question from what it
+             returned, and the subtitle states the answer before the charts. #}
+          {% if performance30.available and performance30.vs_market_html %}
           <tr>
-            <td class="px-32" style="padding:28px 32px 0 32px;">
-              {{ sec(secn, performance30.kicker) }}
-              {{ performance30.html|safe }}
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Vs the market", performance30.vs_market_sub) }}
+              <div style="margin-top:12px;">{{ performance30.vs_market_html|safe }}</div>
             </td>
           </tr>
           {% endif %}
 
-          {# ─── MARKETS (compact two-column strip) ───────────────
-             Every index with its session path, level and change, in two
-             columns split on a region boundary. Sits above the AI
-             market-context note so the data backs the narrative. The kicker
-             lives here, with the shared numbering, rather than inside the
-             builder's HTML. #}
-          {% if markets.available %}
+          {# ─── [04] MARKETS ────────────────────────────────
+             Every index with its session path, level and change, in two columns
+             split on a region boundary, then the AI market context. One section:
+             the note reads as a gloss on the table above it, and as a section of
+             its own it claimed an ordinal for three sentences. #}
+          {% if markets.available or ai_summary %}
           <tr>
-            <td class="px-32" style="padding:28px 32px 0 32px;">
-              {{ sec(secn, "Markets") }}
-              {{ markets.html|safe }}
-            </td>
-          </tr>
-          {% endif %}
-
-          {# ─── MARKET CONTEXT (AI) ─────────────────────────────
-             Macro recap of the last 24-48h tied to the portfolio's
-             exposures, grounded via Google Search. Renders directly below
-             the "How your money moved" charts. When unavailable (no API key)
-             no market-context block is shown. #}
-          {% if ai_summary %}
-          <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
-              {{ sec(secn, "Market context") }}
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Markets", markets.sub) }}
+              {% if markets.available %}{{ markets.html|safe }}{% endif %}
+              {% if ai_summary %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
@@ -148,60 +168,57 @@
                   </td>
                 </tr>
               </table>
+              {% endif %}
             </td>
           </tr>
           {% endif %}
 
-
-          {# ─── DIVERSIFICATION (tile dashboard: asset class + geography +
-             by holding) — pre-rendered in newsletter.py::_build_diversification
-             (SVG donut gauges + 1-month trend sparklines can't be expressed in
-             Jinja), injected as safe HTML. Each tile shows the actual weight, a
-             donut gauge whose fill is that weight with an ink notch at the
-             target, a drift pill, and a last-month trend vs target. ── #}
+          {# ─── [05] ALLOCATION ─────────────────────────────
+             Asset class, geography and per-holding targets: weight now, target,
+             the weight against its target on a shared axis, the trend and the
+             drift. Pre-rendered in _sections_alloc.py::_build_diversification. #}
           {% if diversification.available %}
           <tr>
-            <td class="px-32" style="padding:28px 32px 0 32px;">
-              {{ sec(secn, "Diversification") }}
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Allocation") }}
               {{ diversification.html|safe }}
             </td>
           </tr>
           {% endif %}
 
-          {# ─── HOLDINGS (All positions) — the book, placed before the grids that
-   dissect it: a reader meets the positions, then their returns. #}
+          {# ─── [06] THE BOOK ───────────────────────────────
+             The positions, before the grids that dissect them: a reader meets
+             the holdings, then their returns. #}
           {% include "partials/holdings.html.j2" %}
 
-          {# ─── RETURNS SNAPSHOT (per-holding × period) ─────── #}
+          {# ─── [07] RETURNS ────────────────────────────────
+             Per-holding, session then every window to five years. #}
           {% if returns_snapshot.available %}
           <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
-              {{ sec(secn, "Returns snapshot") }}
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Returns", "Grouped by asset class and sub-category. Colour is scaled per column over this table, so the darkest cell in a window is that window's best or worst here.") }}
+              <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
               {{ returns_snapshot.table_html|safe }}
             </td>
           </tr>
           {% endif %}
 
-          {# ─── PERFORMANCE — RETURNS BY ASSET CLASS & ROLE ──────
-             Sectioned table (asset class · role) with a 1D intraday
-             sparkline. Pre-rendered in newsletter.py::_build_performance
-             (SVG sparklines + grouping can't be expressed in Jinja),
-             injected as safe HTML — same pattern as Markets. #}
+          {# ─── [08] WATCHLIST ──────────────────────────────
+             The same columns over the instruments tracked but not held, scaled
+             on this table's own columns so it never borrows the book's range. #}
           <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
-              {{ sec(secn, performance.kicker) }}
-              <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Watchlist", "Instruments tracked, not held. Same columns, scaled on this table's own columns.") }}
+              <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
               {{ performance.table_html|safe }}
             </td>
           </tr>
 
-          {# ─── RETURN CONTRIBUTION — waterfall, then the two ranked lists ─ #}
+          {# ─── [09] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
-              {{ sec(secn, "Return contribution") }}
-              <div style="margin-top:2px;font-size:12px;color:{{ palette.muted }};">What moved the number. Each bar starts where the previous one ended, so the movers and everything else add up to the unrealized return in <strong style="color:{{ palette.ink }};">STATE</strong>.</div>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Attribution", 'What moved the number. Each bar starts where the previous one ended, so the movers and everything else add up to the unrealized return in <strong style="color:' ~ palette.ink ~ ';">STATE</strong>.') }}
               {% if return_contrib.chart_html %}
               <div style="margin-top:12px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ return_contrib.chart_html|safe }}</div>
               {% endif %}
@@ -228,12 +245,12 @@
             </td>
           </tr>
           {% endif %}
-          {# ─── RISK PROFILE — UNIFIED TABLE — after attribution and immediately
-   before the optimizer, so the evidence precedes the action. #}
+          {# ─── [10] RISK — after attribution and immediately before the
+             optimizer, so the evidence precedes the action. #}
           {% if risk_profile.available %}
           <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
-              {{ sec(secn, risk_profile.title) }}
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Risk", risk_profile.subtitle) }}
               {% if risk_profile.portfolio_note %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
                 <tr>
@@ -251,7 +268,10 @@
 
               {# Legend — same content as the Excel Performance tab Legend #}
               {% if risk_profile.legend %}
-              <div style="margin-top:20px;">{{ sec(secn, "Legend") }}</div>
+              {# The legend glosses the table above it, so it is a sub-block of
+                 this section rather than a section of its own: an ordinal for a
+                 glossary put it on the same footing as the risk table itself. #}
+              <div style="margin-top:20px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
               <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
                 {% for r in risk_profile.legend %}
@@ -270,11 +290,11 @@
           </tr>
           {% endif %}
 
-          {# ─── OPTIMIZER ACTION (two plans: buy-only vs buy & sell) ─── #}
+          {# ─── [11] OPTIMIZER (two plans: buy-only vs buy & sell) ─── #}
           {% if optimizer.available %}
           <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
-              {{ sec(secn, "Optimizer") }}
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
                 {{ plan.label }}
@@ -336,35 +356,42 @@
              _sections_backtest.py). ── #}
           {% if backtesting.available %}
           <tr>
-            <td class="px-32" style="padding:32px 32px 0 32px;">
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Backtest", backtesting.subtitle) }}
               {{ backtesting.html|safe }}
             </td>
           </tr>
           {% endif %}
 
-          {# ─── NET-OF-TAX NOTE (estimate) — moved to the very bottom so it
-             does not crowd the Performance headline numbers. ── #}
+          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
+             Three reference blocks under one heading. They were three unnumbered
+             blocks trailing off the end of the document, which read as an
+             afterthought rather than as the place to look things up. #}
+          {% if tax_note.available or methodology.available or ticker_sources.available %}
+          <tr>
+            <td class="px-32" style="padding:20px 32px 0 32px;">
+              {{ sec(secn, "Appendix", "Tax estimate, return-window method, and the feed behind every instrument.") }}
+            </td>
+          </tr>
+          {% endif %}
           {% if tax_note.available %}
           <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 32px 0 32px;">
               {{ tax_note.html|safe }}
             </td>
           </tr>
           {% endif %}
-
-          {# ─── METHODOLOGY (actual return-window spans) ───── #}
           {% if methodology.available %}
           <tr>
-            <td class="px-32" style="padding:24px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 32px 0 32px;">
               {{ methodology.html|safe }}
             </td>
           </tr>
           {% endif %}
-
           {# ─── INSTRUMENT DATA SOURCES (compact audit) ───── #}
           {% if ticker_sources.available %}
           <tr>
-            <td class="px-32" style="padding:20px 32px 0 32px;">
+            <td class="px-32" style="padding:12px 32px 0 32px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Instrument data sources</div>
               <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Canonical and intraday ticker · latest dated provider observation in UTC. Daily bars may use a midnight date anchor.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
@@ -399,10 +426,9 @@
           {# ─── FOOTER ────────────────────────────────────── #}
           <tr>
             <td class="px-32" style="padding:24px 32px 32px 32px;border-top:1px solid {{ palette.border }};">
-              <div style="font-size:11px;color:{{ palette.muted }};line-height:1.6;text-align:center;">
-                Generated {{ footer.generated_at }} · Tarzan {{ footer.version }}<br>
-                {{ holdings.total_count }} holdings tracked<br>
-                Personal portfolio analytics. Not investment advice.
+              <div style="font-size:10px;color:{{ palette.subtle }};line-height:1.7;text-align:center;">
+                generated {{ footer.generated_at }} · tarzan {{ footer.version }} · issue {{ header.issue_number }}<br>
+                personal portfolio analytics · not investment advice · point-in-time, may be revised
               </div>
             </td>
           </tr>

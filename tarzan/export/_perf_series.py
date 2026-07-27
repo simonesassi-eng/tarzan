@@ -392,3 +392,25 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         acwi_vol_full = _rolling_ann_vol(acwi_full, vol_window)
         acwi = list(acwi_vol_full.reindex(idx, method="ffill").bfill().values.astype(float))
     return {"dates": list(idx), "port": port, "acwi": acwi}
+
+
+def benchmark_gap_pp(m: PortfolioMetrics,
+                     geo_name: Optional[str] = None) -> Optional[float]:
+    """Lifetime TWROR minus the geography benchmark's lifetime cumulative, in
+    percentage points. None when either side is unavailable.
+
+    Both terms are already computed and already printed side by side in the
+    since-inception chart's legend ("TWROR +11.28%" next to "MSCI ACWI
+    +14.16%"), so the difference is a subtraction rather than a new estimate.
+    One helper so the masthead, the state tile and the section subtitle cannot
+    disagree about the same number.
+    """
+    if m.twror_pct is None:
+        return None
+    full = _perf_full_series(m, geo_name)
+    if not full or not full.get("acwi"):
+        return None
+    try:
+        return float(m.twror_pct) - float(full["acwi"][-1])
+    except (TypeError, ValueError, IndexError):
+        return None
