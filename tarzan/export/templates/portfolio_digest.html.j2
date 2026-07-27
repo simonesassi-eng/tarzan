@@ -17,8 +17,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
+  {# The palette is dark, so declare it: a client told "light" may auto-invert
+     a dark document and produce colours nobody chose. #}
+  <meta name="color-scheme" content="dark">
+  <meta name="supported-color-schemes" content="dark">
   <title>Tarzan Portfolio Digest</title>
   <style>
     body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif; }
