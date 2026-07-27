@@ -1317,33 +1317,54 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     # α and β carry a "*" footnote marker because they are referenced to
     # a specific market index. Ulcer Index sits next to Max DD as a
     # duration-aware companion (RMS of drawdowns).
-    # (label, key, is_pct, note, higher_is_better). The last field drives the
-    # per-column tint: it cannot be inferred from the sign, because a positive
-    # volatility is not good news and a negative drawdown of -7% beats -21%.
-    # Beta carries None -- it has no better direction, only a meaning.
+    # (label, metrics key, is_pct, note, ratings key). The last field says
+    # which ``metric_ratings`` entry in constants.yaml describes the metric;
+    # its ``invert`` flag is what drives the per-column tint direction. That
+    # direction cannot be inferred from the sign -- a positive volatility is
+    # not good news, and a -7% drawdown beats a -21% one -- and it is already
+    # declared in configuration, so reading it here keeps one source of truth
+    # instead of a second copy that can drift from the legend beside it.
+    # Beta carries None: the configured bands rate it as market exposure, which
+    # is a property to know rather than a score to win, so it stays uncoloured.
     metric_cols = [
-        ("CAGR", "cagr", True, "", True),
-        ("Vol", "volatility", True, "", False),
-        ("Sharpe", "sharpe", False, "", True),
-        ("Sortino", "sortino", False, "", True),
-        ("Max DD", "max_drawdown", True, "", True),
-        ("Ulcer", "ulcer_index", True, "", False),
+        ("CAGR", "cagr", True, "", "cagr"),
+        ("Vol", "volatility", True, "", "volatility"),
+        ("Sharpe", "sharpe", False, "", "sharpe"),
+        ("Sortino", "sortino", False, "", "sortino"),
+        ("Max DD", "max_drawdown", True, "", "max_drawdown"),
+        ("Ulcer", "ulcer_index", True, "", "ulcer_index"),
         # "95%" is spelled out in the legend below; drop it from the column
         # header so these two cells stay narrow in the 10-column table.
-        ("VaR", "var_95", True, "", True),
-        ("CVaR", "cvar_95", True, "", True),
-        ("\u03b1", "alpha", True, "*", True),
+        ("VaR", "var_95", True, "", "var_pct"),
+        ("CVaR", "cvar_95", True, "", "cvar_pct"),
+        ("\u03b1", "alpha", True, "*", "alpha"),
         ("\u03b2", "beta", False, "*", None),
     ]
+
+    # ``invert: true`` in constants.yaml means "a smaller magnitude is better",
+    # and it is written against the metric's ABSOLUTE value: max_drawdown is
+    # banded at [-15, -30] and VaR at [0.8, 1.5] while both carry the flag. So
+    # an inverted metric is ranked on |value| with lower better, and every other
+    # metric on its signed value with higher better. Ranking VaR on the signed
+    # number instead greens the worst daily loss in the table, which is what a
+    # first pass at reading the flag did.
+    from tarzan import config as _rating_cfg
+    _ratings = _rating_cfg.metric_ratings() or {}
+
+    def _inverted(rating_key) -> Optional[bool]:
+        """True when smaller-is-better, None when the metric is not rated."""
+        if not rating_key or rating_key not in _ratings:
+            return None
+        return bool((_ratings.get(rating_key) or {}).get("invert", False))
 
     def _raw_from(metrics: dict) -> list:
         return [None if is_missing((metrics or {}).get(key))
                 else float((metrics or {}).get(key))
-                for _label, key, _p, _n, _hib in metric_cols]
+                for _label, key, _p, _n, _rk in metric_cols]
 
     def _cells_from(metrics: dict) -> list[str]:
         out = []
-        for _label, key, is_pct, _note, _hib in metric_cols:
+        for _label, key, is_pct, _note, _rk in metric_cols:
             v = (metrics or {}).get(key)
             out.append(_fmt_pct(v) if is_pct else _fmt_num(v))
         return out
@@ -1369,21 +1390,34 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     # question the section exists to answer.
     _scale_rows = [_raw_from((hr.get("portfolio") or {}).get("metrics"))] if hr.get("portfolio") else []
     _scale_rows += [_raw_from(inst.get("metrics")) for inst in hr.get("instruments", [])]
-    _scales = []
-    for j, (_l, _k, _p, _n, hib) in enumerate(metric_cols):
-        _scales.append(None if hib is None
-                       else _heat.rank_scale([r[j] for r in _scale_rows]))
+    def _scale_value(j: int, v):
+        """The number the column is ranked on: magnitude for an inverted
+        metric, the signed value otherwise."""
+        if v is None:
+            return None
+        return abs(v) if _inv[j] else v
+
+    _inv = [_inverted(rk) for (_l, _k, _p, _n, rk) in metric_cols]
+    _scales, _dirs = [], []
+    for j in range(len(metric_cols)):
+        # Beta is rated but excluded on purpose: the bands describe market
+        # exposure, which is a property to know rather than a score to win.
+        rated = _inv[j] is not None and metric_cols[j][1] != "beta"
+        _dirs.append(None if not rated else (not _inv[j]))
+        _scales.append(_heat.rank_scale([_scale_value(j, r[j]) for r in _scale_rows])
+                       if rated else None)
 
     def _metric_cells(metrics, *, weight, color):
         raw = _raw_from(metrics)
         cells = []
         for j, txt in enumerate(_cells_from(metrics)):
-            sc, hib = _scales[j], metric_cols[j][4]
+            sc, hib = _scales[j], _dirs[j]
             bg = ink = None
             if sc is not None:
                 lo, hi = sc
-                bg = _heat.rank_bg(raw[j], lo=lo, hi=hi, higher_is_better=hib)
-                ink = _heat.rank_ink(raw[j], lo=lo, hi=hi, higher_is_better=hib)
+                v = _scale_value(j, raw[j])
+                bg = _heat.rank_bg(v, lo=lo, hi=hi, higher_is_better=hib)
+                ink = _heat.rank_ink(v, lo=lo, hi=hi, higher_is_better=hib)
             cells.append(uni_cell(txt, color=ink or color, weight=weight, bg=bg))
         return cells
 
@@ -1427,7 +1461,7 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         uni_groups.append((ac, gc, rendered))
 
     columns = [(f"{label}{note}", "right")
-               for (label, _k, _p, note, _hib) in metric_cols]
+               for (label, _k, _p, note, _rk) in metric_cols]
     # Compact mode: 10 numeric columns, so tighten value-cell padding to keep
     # the instrument-name column wide enough. Faint vertical separators help
     # the reader track which metric a number belongs to across the wide row.
@@ -1483,17 +1517,17 @@ def _build_risk_legend() -> list[dict]:
          "Compound Annual Growth Rate. Yearly return that would grow your "
          "portfolio from start to end value, with compounding."),
         ("Volatility", "volatility",
-         "Annualized standard deviation of daily returns. Equity indexes "
-         "~15-20%, bonds ~3-7%."),
+         "Annualized standard deviation of daily returns, scaled from daily "
+         "to yearly."),
         ("Sharpe", "sharpe",
          "(CAGR − risk-free rate) / Volatility. Return per unit of total "
-         "risk. >1 is good, >2 excellent."),
+         "risk."),
         ("Sortino", "sortino",
          "Like Sharpe but penalizes only downside volatility. Usually "
          "higher than Sharpe; the gap shows good (upside) volatility."),
         ("Max Drawdown", "max_drawdown",
-         "Worst peak-to-trough loss over the period. -20% is typical for "
-         "diversified equity; deeper drops signal concentration risk."),
+         "Worst peak-to-trough loss over the period, measured from the "
+         "running high to the low that followed it."),
         ("Ulcer Index", "ulcer_index",
          "Root-mean-square of drawdowns from the running peak; captures both "
          "depth and time spent underwater. Lower is smoother; penalizes long "
