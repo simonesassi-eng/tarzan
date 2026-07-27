@@ -856,14 +856,25 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     W_VAL, W_BULLET, W_TREND, W_DRIFT = 62, 96, 88, 70
     BULLET_W, SPARK_W, MARK_H = 88, 84, 26
 
+    def _no_series() -> str:
+        """An explicit placeholder where a trend has no history.
+
+        A blank cell is ambiguous: it reads as a flat weight rather than as an
+        instrument that has not been held long enough to have a trend.
+        """
+        return (f'<span style="font-size:9px;color:{P["subtle"]};'
+                f'font-style:normal;">no series</span>')
+
     def _trend_pp(vals) -> str:
         """The window's change in weight, in percentage points, for the line
-        under the sparkline. Empty when there is no window to measure."""
+        under the sparkline. Empty when there is no window to measure.
+
+        No arrow: the sparkline above it already points, and the sign on the
+        number says the same thing a third time.
+        """
         if not vals or len(vals) < 2:
             return ""
-        pp = float(vals[-1]) - float(vals[0])
-        arrow = "\u25b2" if pp > 0.05 else ("\u25bc" if pp < -0.05 else "\u2192")
-        return f"{arrow}{_signed_pp(pp)}"
+        return f"{_signed_pp(float(vals[-1]) - float(vals[0]))}pp"
 
     def _lev_sub(lev) -> str:
         """The leverage factor as the drift cell's sub-line: how much notional
@@ -949,14 +960,17 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                 f'{_num_cell(now, P["accent"])}</td>'
                 f'<td align="right" style="padding:8px;background:{abg};width:{W_VAL}px;">'
                 f'{_num_cell(tgt, P["accent"])}</td>'
-                # No bullet on the total row -- there is no corridor for a sum --
-                # but the cell has to exist or every column after it shifts left
-                # of its own header.
-                f'<td style="padding:8px 6px;background:{abg};width:{W_BULLET}px;"></td>'
+                # The total gets a bullet like every other row, with a second,
+                # fainter mark at 100% of capital: that is the reference the
+                # overshoot is read against, and an empty cell here left the
+                # sleeves' sum with nothing to compare to.
+                f'<td align="right" valign="middle" style="padding:8px 6px;'
+                f'background:{abg};width:{W_BULLET}px;">'
+                f'{_bullet(now, tgt, tol=tol, w=BULLET_W, h=MARK_H, scale_max=max(now, tgt) * 1.06, ref=100.0)}</td>'
                 f'<td align="right" valign="middle" style="padding:8px 4px;background:{abg};'
                 f'width:{W_TREND}px;white-space:nowrap;">{sp}</td>'
                 f'<td align="right" style="padding:8px;background:{abg};width:{W_DRIFT}px;">'
-                f'{_stack(_signed_pp(drift), _lev_sub(r.get("leverage")), color=P["accent"])}</td>'
+                f'{_stack(f"{_signed_pp(drift)}pp", _lev_sub(r.get("leverage")), color=P["accent"])}</td>'
                 f'</tr>'
             )
             continue
@@ -989,7 +1003,8 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         # rather than inline beside it. Inline it landed against the drift
         # figure in the next column -- two signed pp numbers touching, one
         # movement over time and the other distance from target.
-        trend_inner = _stack(sp, _trend_pp(vals), color=P["ink"]) if sp else ""
+        trend_inner = (_stack(sp, _trend_pp(vals), color=P["ink"]) if sp
+                       else _no_series())
         # Fixed column widths so the sub-tables (asset class / geography / by
         # holding) line up on the same grid regardless of their content.
         body.append(
@@ -1002,7 +1017,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             f'<td align="right" valign="middle" style="padding:6px 4px;{bb}width:{W_TREND}px;'
             f'white-space:nowrap;">{trend_inner}</td>'
             f'<td align="right" style="padding:6px 8px;{bb}width:{W_DRIFT}px;">'
-            f'{_stack(f"\u25cf {_signed_pp(drift)}", _lev_sub(r.get("leverage")), color=dcol)}</td>'
+            f'{_stack(f"{_signed_pp(drift)}pp", _lev_sub(r.get("leverage")), color=dcol)}</td>'
             f'</tr>'
         )
     # The first column is named after what the table lists ("Asset class",
@@ -1325,8 +1340,9 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         html.append(
             f'<div style="margin-top:8px;font-size:10.5px;color:{P["muted"]};">'
             f'Band {tol:.1f}pp tolerance \u00b7 tick target \u00b7 faint rule '
-            f'100% of capital \u00b7 \u00d7 is notional exposure per euro of '
-            f'capital.</div>'
+            f'100% of capital \u00b7 trend is the weight over the last month '
+            f'against its target, green closing, red widening \u00b7 '
+            f'\u00d7 is notional exposure per euro of capital.</div>'
         )
     if geo_rows:
         html.append(_div_table(geo_rows, tol, base=equity_base,

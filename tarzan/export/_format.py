@@ -158,8 +158,11 @@ def short_instrument_name(
     # ("... 1C", "... 5Dis"): a digit run followed by 1–3 letters. Anchored
     # at the end so a mid-name token like "3M" or "500" is never eaten.
     s = re.sub(r"\s+\d+[A-Za-z]{1,3}\s*$", " ", s)
-    # Normalize separators and whitespace, trim dangling punctuation.
-    s = re.sub(r"\s*[-–·]\s*", " ", s)
+    # Separators become spaces, EXCEPT a hyphen between digits: that one is part
+    # of the name. "Eurozone Government Bond 7-10" is a maturity band, and
+    # collapsing it printed "Bond 7 10", which reads as two separate numbers.
+    s = re.sub(r"(?<!\d)\s*[-\u2013\u00b7]\s*(?!\d)", " ", s)
+    s = re.sub(r"(?<=\d)\s*[\u2013\u00b7]\s*(?=\d)", "-", s)
     s = re.sub(r"\s+", " ", s).strip(" -–·")
     # Fallback: if stripping emptied the name (it was entirely
     # boilerplate/share-class tokens), keep the original rather than
