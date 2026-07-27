@@ -1302,24 +1302,33 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     # α and β carry a "*" footnote marker because they are referenced to
     # a specific market index. Ulcer Index sits next to Max DD as a
     # duration-aware companion (RMS of drawdowns).
+    # (label, key, is_pct, note, higher_is_better). The last field drives the
+    # per-column tint: it cannot be inferred from the sign, because a positive
+    # volatility is not good news and a negative drawdown of -7% beats -21%.
+    # Beta carries None -- it has no better direction, only a meaning.
     metric_cols = [
-        ("CAGR", "cagr", True, ""),
-        ("Vol", "volatility", True, ""),
-        ("Sharpe", "sharpe", False, ""),
-        ("Sortino", "sortino", False, ""),
-        ("Max DD", "max_drawdown", True, ""),
-        ("Ulcer", "ulcer_index", True, ""),
+        ("CAGR", "cagr", True, "", True),
+        ("Vol", "volatility", True, "", False),
+        ("Sharpe", "sharpe", False, "", True),
+        ("Sortino", "sortino", False, "", True),
+        ("Max DD", "max_drawdown", True, "", True),
+        ("Ulcer", "ulcer_index", True, "", False),
         # "95%" is spelled out in the legend below; drop it from the column
         # header so these two cells stay narrow in the 10-column table.
-        ("VaR", "var_95", True, ""),
-        ("CVaR", "cvar_95", True, ""),
-        ("\u03b1", "alpha", True, "*"),
-        ("\u03b2", "beta", False, "*"),
+        ("VaR", "var_95", True, "", True),
+        ("CVaR", "cvar_95", True, "", True),
+        ("\u03b1", "alpha", True, "*", True),
+        ("\u03b2", "beta", False, "*", None),
     ]
+
+    def _raw_from(metrics: dict) -> list:
+        return [None if is_missing((metrics or {}).get(key))
+                else float((metrics or {}).get(key))
+                for _label, key, _p, _n, _hib in metric_cols]
 
     def _cells_from(metrics: dict) -> list[str]:
         out = []
-        for _label, key, is_pct, _note in metric_cols:
+        for _label, key, is_pct, _note, _hib in metric_cols:
             v = (metrics or {}).get(key)
             out.append(_fmt_pct(v) if is_pct else _fmt_num(v))
         return out
@@ -1338,9 +1347,30 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     from tarzan.export.newsletter._constants import (
         render_unified_table, uni_cell, uni_name)
 
+    # ── Conditional formatting, one scale per column ────────────────────
+    # Collected in a first pass over every series that will be drawn, so a
+    # column's greenest cell is the best of the series actually shown. The
+    # portfolio row takes part: where it sits among the alternatives is the
+    # question the section exists to answer.
+    _scale_rows = [_raw_from((hr.get("portfolio") or {}).get("metrics"))] if hr.get("portfolio") else []
+    _scale_rows += [_raw_from(inst.get("metrics")) for inst in hr.get("instruments", [])]
+    _scales = []
+    for j, (_l, _k, _p, _n, hib) in enumerate(metric_cols):
+        _scales.append(None if hib is None
+                       else _heat.rank_scale([r[j] for r in _scale_rows]))
+
     def _metric_cells(metrics, *, weight, color):
-        return [uni_cell(v, color=color, weight=weight)
-                for v in _cells_from(metrics)]
+        raw = _raw_from(metrics)
+        cells = []
+        for j, txt in enumerate(_cells_from(metrics)):
+            sc, hib = _scales[j], metric_cols[j][4]
+            bg = ink = None
+            if sc is not None:
+                lo, hi = sc
+                bg = _heat.rank_bg(raw[j], lo=lo, hi=hi, higher_is_better=hib)
+                ink = _heat.rank_ink(raw[j], lo=lo, hi=hi, higher_is_better=hib)
+            cells.append(uni_cell(txt, color=ink or color, weight=weight, bg=bg))
+        return cells
 
     port = hr.get("portfolio")
     if not (port or hr.get("instruments")):
@@ -1381,7 +1411,8 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
             rendered.append((role, block))
         uni_groups.append((ac, gc, rendered))
 
-    columns = [(f"{label}{note}", "right") for (label, _k, _p, note) in metric_cols]
+    columns = [(f"{label}{note}", "right")
+               for (label, _k, _p, note, _hib) in metric_cols]
     # Compact mode: 10 numeric columns, so tighten value-cell padding to keep
     # the instrument-name column wide enough. Faint vertical separators help
     # the reader track which metric a number belongs to across the wide row.
@@ -1393,7 +1424,10 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         "Each instrument is measured over its full available price history "
         "\u2014 the span is shown next to its name. Your portfolio is a "
         "backtest at today's weights held constant, over the longest window "
-        "where every holding with at least 1 year of history overlaps."
+        "where every holding with at least 1 year of history overlaps. "
+        "Colour is scaled per column over the series shown, green toward the "
+        "better end of each metric, so the spans being unequal is visible in "
+        "the span labels rather than hidden by the shading."
     )
 
     return {
