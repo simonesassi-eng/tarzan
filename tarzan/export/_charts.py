@@ -205,7 +205,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
     else:
         for k in sorted({0, n - 1}):
             _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
-    _label_ys: list[float] = []
+    _end_labels: list[tuple] = []
     for s in series:
         pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
         line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
@@ -221,17 +221,43 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
                    f'stroke-width="1"/>')
         label = s.get("end_label")
         if label and end_gutter:
-            # Nudged apart when two lines end within a label's height of each
-            # other, so a tight finish does not print one label over another.
-            ey = ly + 3.2
-            for taken in _label_ys:
-                if abs(ey - taken) < 11:
-                    ey = taken + 11
-            _label_ys.append(ey)
-            ey = min(h - 4, max(10.0, ey))
+            _end_labels.append((lx, ly, s["color"], label))
+
+    # Place the end labels together, once every line is drawn. Each wants to sit
+    # at its own endpoint (ly + 3.2 centres the text on the dot); labels closer
+    # than GAP would overprint, so the crowded ones are spread by GAP and the
+    # block is then shifted to sit centred on the endpoints rather than pushed
+    # entirely downward -- otherwise the topmost line's label drifts far below
+    # its dot. Ordering by endpoint keeps the labels in the same top-to-bottom
+    # order as the lines, and a hair-line leader ties a nudged label to its dot.
+    if _end_labels:
+        GAP = 11.0
+        order = sorted(range(len(_end_labels)), key=lambda i: _end_labels[i][1])
+        targets = [_end_labels[i][1] + 3.2 for i in order]
+        placed, prev = [], None
+        for t in targets:
+            y = t if prev is None else max(t, prev + GAP)
+            placed.append(y)
+            prev = y
+        shift = (sum(targets) - sum(placed)) / len(targets)
+        placed = [y + shift for y in placed]
+        top_over = 10.0 - placed[0]
+        if top_over > 0:
+            placed = [y + top_over for y in placed]
+        bot_over = placed[-1] - (h - 4)
+        if bot_over > 0:
+            placed = [y - bot_over for y in placed]
+        for pos, i in enumerate(order):
+            lx, ly, color, label = _end_labels[i]
+            ey = placed[pos]
+            if abs(ey - (ly + 3.2)) > 2.5:
+                out.append(f'<line x1="{lx + 2.4:.1f}" y1="{ly:.1f}" '
+                           f'x2="{lx + 6:.1f}" y2="{ey - 3:.1f}" '
+                           f'stroke="{color}" stroke-width="0.75" '
+                           f'stroke-opacity="0.5"/>')
             out.append(f'<text x="{lx + 6:.1f}" y="{ey:.1f}" '
                        f'text-anchor="start" font-size="9" font-weight="700" '
-                       f'fill="{s["color"]}">{label}</text>')
+                       f'fill="{color}">{label}</text>')
     out.append("</svg>")
     return "".join(out)
 
