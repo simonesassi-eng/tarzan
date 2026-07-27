@@ -28,6 +28,7 @@ from tarzan.export.newsletter._constants import (
     role_for,
     uni_cell,
     uni_name,
+    geo_label,
 )
 from tarzan.export.newsletter._format import (
     _display_ticker,
@@ -44,6 +45,7 @@ from tarzan.export.newsletter._charts import (
     _hero_value_chart,
     _spark,
     _timeline_vals,
+    bullet as _bullet,
 )
 
 def _funding_verification(verifications) -> Optional[dict[str, Any]]:
@@ -779,6 +781,17 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
 
     _bb = f'border-bottom:1px solid {P["border"]};'
 
+    # One bar scale across this sub-table's rows, so a 78% sleeve and a 2% one
+    # are comparable bars instead of each filling its own cell.
+    _weights = []
+    for _r in rows:
+        for _k in ("now", "target"):
+            try:
+                _weights.append(float(_r.get(_k)))
+            except (TypeError, ValueError):
+                pass
+    _bullet_scale = (max(_weights) * 1.08) if _weights else None
+
     def _lev_cell(lev) -> str:
         if not show_leverage:
             return ""
@@ -792,6 +805,19 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         return (f'<td align="right" style="padding:5px 6px;{_bb}font-size:11px;'
                 f'font-weight:700;color:{col};white-space:nowrap;'
                 f'font-variant-numeric:tabular-nums;width:46px;">{txt}</td>')
+
+    def _bullet_cell(now_pct, tgt_pct) -> str:
+        """The weight against its target on a shared axis, with the tolerance
+        corridor drawn. A drift figure alone cannot say whether the position is
+        inside the band: -2.0pp reads the same against a 1pp corridor and a 5pp
+        one."""
+        try:
+            a, t = float(now_pct), float(tgt_pct)
+        except (TypeError, ValueError):
+            return ""
+        # One shared scale across the sub-table's rows, so a 78% sleeve and a
+        # 2% sleeve are comparable bars rather than each filling its own cell.
+        return _bullet(a, t, tol=tol, w=80, h=18, scale_max=_bullet_scale)
 
     def _num_cell(pct_val: float, color: str) -> str:
         """A Now/Target value cell: the % (bold, right-aligned) and, when a
@@ -902,19 +928,21 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         # Trend cell: sparkline + badge in one inline row (no extra vertical).
         trend_inner = (f'<span style="display:inline-block;vertical-align:middle;">{sp}</span>'
                        f'{badge}') if (sp or badge) else ""
-        # Fixed column widths (Now/Target/Drift/Trend) so the three
+        # Fixed column widths (Now/Target/vs target/Drift/Trend) so the three
         # Diversification sub-tables (asset class / geography / by holding)
         # line up on the same grid regardless of their content.
         body.append(
             f'<tr>'
             f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
             f'{_lev_cell(r.get("leverage"))}'
-            f'<td style="padding:5px 8px;{bb}width:118px;">{_num_cell(now, P["muted"])}</td>'
-            f'<td style="padding:5px 8px;{bb}width:118px;">{_num_cell(tgt, P["ink"])}</td>'
+            f'<td style="padding:5px 8px;{bb}width:92px;">{_num_cell(now, P["muted"])}</td>'
+            f'<td style="padding:5px 8px;{bb}width:92px;">{_num_cell(tgt, P["ink"])}</td>'
+            f'<td align="right" valign="middle" style="padding:5px 6px;{bb}'
+            f'width:88px;">{_bullet_cell(now, tgt)}</td>'
             f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
             f'color:{dcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:74px;">'
             f'\u25cf {_signed_pp(drift)}</td>'
-            f'<td align="right" valign="middle" style="padding:5px 4px;{bb}width:100px;'
+            f'<td align="right" valign="middle" style="padding:5px 4px;{bb}width:86px;'
             f'white-space:nowrap;">{trend_inner}</td>'
             f'</tr>'
         )
@@ -926,13 +954,15 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
            f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:46px;">Lev</td>'
            if show_leverage else "")
         + f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:118px;">Now</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:92px;">Now</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:118px;">Target</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:92px;">Target</td>'
+        f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:88px;">vs target</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:74px;">Drift</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:100px;">Trend (1M)</td>'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:86px;">Trend (1M)</td>'
         + '</tr>'
     )
     return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
@@ -1170,8 +1200,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         asset_rows = _cls_rows + [total_row] + _cash_rows
 
     # ── Geography rows ──
+    # geo_label shortens the display form only; the long name stays the
+    # configuration key it is, and _timeline_vals still looks up by that key.
     geo_rows = [{
-        "label_html": _div_label(r["name"], r["color"]),
+        "label_html": _div_label(geo_label(r["name"]), r["color"]),
         "now": r.get("actual_pct_raw"),
         "target": r.get("target_left"),
         "spark_vals": _timeline_vals(geo_series, r["name"]),

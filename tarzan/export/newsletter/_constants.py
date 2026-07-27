@@ -30,6 +30,18 @@ ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
 
 GEO_COLORS = {k: css(v) for k, v in _GEO_COLORS.items()}
 
+
+# Display-only shortening for geography buckets. The long form is a
+# CONFIGURATION KEY in constants.yaml, mapped to from dozens of countries, so it
+# cannot be renamed -- but "Dev ex-USA ex-EMU ex-JP" wraps to four lines in a
+# table cell and starves the columns beside it.
+GEO_DISPLAY = {"Dev ex-USA ex-EMU ex-JP": "Dev ex-USA/EMU/JP"}
+
+
+def geo_label(name) -> str:
+    """The display form of a geography bucket; the key itself when unmapped."""
+    return GEO_DISPLAY.get(str(name), str(name))
+
 MARKET_REGION_COLORS = {
     "US": "#2563EB",           # blue
     "Europe": "#D97706",       # amber

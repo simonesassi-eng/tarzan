@@ -426,3 +426,47 @@ def _prev_session_label(m) -> str:
         pass
     return ""
 
+
+
+def bullet(actual: float, target: float, *, tol: float, w: int = 96,
+           h: int = 18, scale_max: Optional[float] = None,
+           ref: Optional[float] = None) -> str:
+    """Stephen-Few bullet: the bar is the actual weight, the rule is the
+    target, the pale band is the tolerance corridor.
+
+    Answers "am I inside the band?" at a glance, which a drift figure alone
+    does not: -2.0pp reads the same whether the corridor is 1pp or 5pp wide.
+    ``ref`` marks a second, fainter reference on the same axis (used for 100%
+    of invested capital under a notional total).
+    """
+    P = PALETTE
+    smax = scale_max or (max(actual, target) * 1.25) or 1.0
+
+    def X(v: float) -> float:
+        return max(0.0, min(float(w), v / smax * w))
+
+    inside = abs(actual - target) <= tol
+    bar = (P["green"] if inside
+           else (P["amber"] if abs(actual - target) <= 2 * tol else P["red"]))
+    bh, by = 8, (h - 8) / 2
+    band_lo, band_hi = X(max(0.0, target - tol)), X(target + tol)
+    ref_mark = ""
+    if ref is not None:
+        ref_mark = (f'<line x1="{X(ref):.1f}" y1="{by - 3:.1f}" '
+                    f'x2="{X(ref):.1f}" y2="{by + bh + 3:.1f}" '
+                    f'stroke="{P["muted"]}" stroke-width="1.2"/>')
+    return (
+        f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block;">'
+        f'<rect x="0" y="{by:.1f}" width="{w}" height="{bh}" '
+        f'fill="{P["row_rule"]}" rx="2"/>'
+        f'<rect x="{band_lo:.1f}" y="{by - 2:.1f}" '
+        f'width="{max(1.0, band_hi - band_lo):.1f}" height="{bh + 4}" '
+        f'fill="{P["col_rule"]}"/>'
+        f'<rect x="0" y="{by:.1f}" width="{X(actual):.1f}" height="{bh}" '
+        f'fill="{bar}" rx="2"/>'
+        f'{ref_mark}'
+        f'<line x1="{X(target):.1f}" y1="{by - 4:.1f}" '
+        f'x2="{X(target):.1f}" y2="{by + bh + 4:.1f}" '
+        f'stroke="{P["ink"]}" stroke-width="2"/>'
+        f'</svg>')
