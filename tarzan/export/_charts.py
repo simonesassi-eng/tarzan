@@ -404,7 +404,7 @@ def funding_flow(steps, *, w: int = 580, h: int = 94,
 
 
 def band_gauge(value: float, *, good: float, warn: float,
-               invert: bool = False, w: int = 92, h: int = 26) -> str:
+               invert: bool = False, w: int = 92, h: int = 24) -> str:
     """A metric on its own rating scale: weak / fair / strong zones as the
     track, the value as a needle.
 

@@ -134,8 +134,9 @@ class TestRiskProfileBenchmarkLabels:
         profile = nl._build_risk_profile(ctx)
         assert profile["available"]
         labels = [t["label"] for t in profile["tiles"]]
-        assert labels == ["CAGR", "Vol", "Sharpe", "Sortino", "Max DD",
-                         "Ulcer", "VaR", "CVaR", "\u03b1*", "\u03b2*"], labels
+        assert labels == ["CAGR", "Volatility", "Sharpe", "Sortino", "Max DD",
+                          "Ulcer", "VaR 95%", "CVaR 95%",
+                          "\u03b1*", "\u03b2*"], labels
         assert "MSCI World" in profile["alpha_beta_note"]
 
     def test_tiles_carry_the_portfolio_values(self):
@@ -151,11 +152,11 @@ class TestRiskProfileBenchmarkLabels:
         scale shown is the configured one rather than one invented here."""
         ctx = self._ctx("MSCI World", "FTSE All-World")
         tiles = {t["label"]: t["gauge"] for t in nl._build_risk_profile(ctx)["tiles"]}
-        for label in ("Vol", "Sharpe", "Sortino", "Max DD", "CAGR"):
+        for label in ("Volatility", "Sharpe", "Sortino", "Max DD", "CAGR"):
             assert "<svg" in tiles[label], label
         # Lower-is-better metrics put the strong zone on the left, so the end
         # captions swap with it.
-        assert tiles["Vol"].index("strong") < tiles["Vol"].index("weak")
+        assert tiles["Volatility"].index("strong") < tiles["Volatility"].index("weak")
         assert tiles["Sharpe"].index("weak") < tiles["Sharpe"].index("strong")
 
 
