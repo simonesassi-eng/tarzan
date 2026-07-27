@@ -1228,7 +1228,8 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
 
     def _pill(direction):
         c = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
-        return (f'<span style="display:inline-block;padding:1px 6px;background:#FFFFFF;'
+        return (f'<span style="display:inline-block;padding:1px 6px;'
+                f'background:{PALETTE["card"]};'
                 f'color:{c};border:1px solid {c}33;border-radius:999px;font-weight:700;'
                 f'font-size:9px;letter-spacing:0.04em;vertical-align:middle;'
                 f'margin-right:5px;">{direction}</span>')

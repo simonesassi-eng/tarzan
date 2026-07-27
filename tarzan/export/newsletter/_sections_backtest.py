@@ -103,7 +103,8 @@ def _grid_table(first_col_label, headers, rows, *, first_w=150):
             role_html = (f'&nbsp;&middot;&nbsp;<span style="color:{P["muted"]};font-weight:700;">'
                          f'{role}</span>' if role and role != "—" else "")
             out.append(f'<tr><td colspan="{ncols}" style="padding:5px 8px 5px 10px;'
-                       f'background:#FFFFFF;{_BB}border-left:4px solid {color};font-size:10px;'
+                       f'background:{PALETTE["card"]};{_BB}'
+                       f'border-left:4px solid {color};font-size:10px;'
                        f'letter-spacing:0.04em;text-transform:uppercase;">'
                        f'<span style="color:{color};font-weight:700;">{cls}</span>{role_html}</td></tr>')
             continue

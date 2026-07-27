@@ -14,15 +14,20 @@ import math
 
 import pandas as pd
 
-# ── Palette (mirrors tarzan.export.newsletter.PALETTE; kept local to avoid a
-#    circular import, since newsletter.py imports this module). ──────────────
-INK = "#1E293B"
-MUTED = "#64748B"
-SUBTLE = "#94A3B8"
-BORDER = "#E5E7EF"
-GREEN = "#15803D"
-BENCH = "#94A3B8"   # benchmark grey
-PNL = "#0EA5E9"     # P&L cyan
+# ── Palette ──────────────────────────────────────────────────────────────────
+# Read from the leaf palette module rather than duplicated here. The previous
+# local copies existed to avoid an import cycle (the newsletter package imports
+# this module), but they meant chart axes could drift from the tables beside
+# them whenever the palette changed in only one place.
+from tarzan.export._palette import PALETTE as _P
+
+INK = _P["ink"]
+MUTED = _P["muted"]
+SUBTLE = _P["subtle"]
+BORDER = _P["border"]
+GREEN = _P["green"]
+BENCH = _P["bench"]
+PNL = _P["pnl"]
 
 
 # ── axis helpers ─────────────────────────────────────────────────────────────
