@@ -51,17 +51,9 @@
               </div>
               {% endif %}
 
-              {# Slim, colored rebalance banner (only when action is needed). #}
-              {% if hero.rebal_label and hero.rebal_label != 'Aligned' %}
-              <div style="margin-top:10px;padding:7px 12px;background:{{ hero.rebal_bg }};border-radius:8px;font-size:11px;font-weight:700;color:{{ hero.rebal_color }};">
-                {% if hero.rebal_label == 'Not executable' %}
-                ● Rebalance · not executable · cash funding must be resolved before trading
-                {% elif hero.rebal_label == 'Infeasible' %}
-                ● Rebalance · no feasible plan
-                {% else %}
-                ● Rebalance · {{ hero.rebal_n_actions }} action{{ 's' if hero.rebal_n_actions != 1 else '' }} · see optimizer below
-                {% endif %}
-              </div>
-              {% endif %}
+              {# No rebalance banner. It duplicated the optimizer section it
+                 pointed at, and the concept does not carry one: a reader who
+                 needs to know there are trades to make finds them under
+                 OPTIMIZER, with the funding proof beside them. #}
             </td>
           </tr>
