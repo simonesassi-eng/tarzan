@@ -354,6 +354,28 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 f'text-transform:uppercase;color:{P["subtle"]};'
                 f'margin-bottom:5px;">{t}</div>')
 
+    def _mini_legend(items: list) -> str:
+        """A one-line colour key under a half-panel caption: a small swatch and
+        a name per line.
+
+        The half panels draw only the end value on each line, to keep the plot
+        wide at 282px, so the colours named nothing on their own. It matters
+        most on the volatility panel, whose portfolio line is a colour (amber)
+        that appears nowhere in the since-inception chart above, so there was no
+        way to learn the mapping from anywhere on the page.
+        """
+        if not items:
+            return ""
+        parts = [
+            (f'<span style="display:inline-block;width:7px;height:7px;'
+             f'border-radius:2px;background:{color};vertical-align:baseline;'
+             f'margin-right:4px;"></span>'
+             f'<span style="color:{P["muted"]};">{label}</span>')
+            for color, label in items
+        ]
+        return ('<div style="font-size:9px;line-height:1.5;margin:-2px 0 5px;">'
+                + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
+
     # Last-30-day labels come from the exact arrays passed to the chart. The
     # shared-close endpoint is therefore the only number that can describe a
     # line; generic 1M return buckets are intentionally not consulted here.
@@ -378,19 +400,24 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         legend_labels[key] = label
         return label
 
-    # The label is drawn at the end of its own line rather than in a legend
-    # underneath. The audited string is unchanged, so the semantic gate still
+    # The value is drawn at the end of each line; the line's NAME is in the
+    # colour key built alongside here and rendered under the caption. The
+    # audited string is the end-value %, unchanged, so the semantic gate still
     # finds it verbatim in the rendered HTML -- it is inside the SVG now.
     s30 = []
+    ret_leg = []
     if win["twror"] is not None and endpoints.get("twror") is not None:
         s30.append({"values": win["twror"], "color": GREEN,
                     "end_label": _window_label("twror", "TWROR")})
+        ret_leg.append((GREEN, "TWROR"))
     if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL,
                     "end_label": _window_label("pnl_pct", "Total P&L %")})
+        ret_leg.append((PNL, "P&amp;L"))
     if win["acwi"] is not None and endpoints.get("acwi") is not None:
         s30.append({"values": win["acwi"], "color": BENCH,
                     "end_label": _window_label("acwi", "MSCI ACWI")})
+        ret_leg.append((BENCH, ctx.benchmark_geo))
 
     if ctx.semantic_audit is not None:
         ctx.semantic_audit["performance_30d"] = {
@@ -467,6 +494,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
             month_ticks=True, end_gutter=G_WIDE) if ssi else ""
         right_ret = (_colcap("Return \u00b7 last 30 days")
+                     + _mini_legend(ret_leg)
                      # Five date ticks, not twelve: at half width twelve
                      # rotated labels overlapped into a grey band, which is
                      # worse than no axis at all.
@@ -482,7 +510,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         vol_panel = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
                                month_ticks=False, min_day_ticks=5)
         if vol_panel:
-            vol_panel = _colcap("Volatility \u00b7 last 30 days") + vol_panel
+            vol_leg = []
+            if vol_30 and vol_30.get("port"):
+                vol_leg.append((VOL, "Portfolio"))
+            if vol_30 and vol_30.get("acwi"):
+                vol_leg.append((BENCH, ctx.benchmark_geo))
+            vol_panel = (_colcap("Volatility \u00b7 last 30 days")
+                         + _mini_legend(vol_leg) + vol_panel)
 
         def _row(l, r):
             return (f'<tr>'
