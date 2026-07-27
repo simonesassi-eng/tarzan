@@ -306,11 +306,13 @@
               </div>
               {% if plan.cost_total_eur %}
               {# Estimated cost of executing the plan: CGT on the sells + fixed
-                 commission fees. Only shown when non-zero. #}
+                 commission fees. The breakdown is only worth printing when
+                 there is more than one component — a buy-only plan pays no
+                 CGT, so it used to read "Est. cost €57 · fees €57", the same
+                 number twice. #}
               <div style="margin-top:3px;font-size:12px;color:{{ palette.muted }};">
                 Est. cost <span style="color:{{ palette.red }};font-weight:700;">{{ plan.cost_total_eur }}</span>
-                {% if plan.cgt_eur %}&nbsp;·&nbsp; tax (CGT) {{ plan.cgt_eur }}{% endif %}
-                {% if plan.fees_eur %}&nbsp;·&nbsp; fees {{ plan.fees_eur }}{% endif %}
+                {% if plan.cgt_eur and plan.fees_eur %}&nbsp;·&nbsp; tax (CGT) {{ plan.cgt_eur }}&nbsp;·&nbsp; fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}&nbsp;·&nbsp; all tax (CGT){% else %}&nbsp;·&nbsp; all commission fees{% endif %}
               </div>
               {% endif %}
               {% if plan.actions %}
