@@ -81,3 +81,52 @@ class TestRankInk:
 
     def test_blanks_keep_their_colour(self):
         assert rank_ink(None, lo=0.0, hi=10.0, higher_is_better=True) is None
+
+
+class TestConfiguredPolarity:
+    """The risk table takes its direction from ``metric_ratings`` in
+    constants.yaml rather than a second copy in the renderer.
+
+    The flag is written against the metric's ABSOLUTE value: max drawdown is
+    banded at [-15, -30] and VaR at [0.8, 1.5], and both carry ``invert``. A
+    reading that applies the flag to the signed number greens the worst daily
+    loss in the table, so these tests pin the convention itself.
+    """
+
+    def test_every_metric_in_the_table_is_rated(self):
+        from tarzan import config as cfg
+
+        rated = cfg.metric_ratings() or {}
+        for key in ("cagr", "volatility", "sharpe", "sortino", "max_drawdown",
+                    "ulcer_index", "var_pct", "cvar_pct", "alpha", "beta"):
+            assert key in rated, f"{key} has no configured rating"
+
+    def test_loss_metrics_are_inverted_in_config(self):
+        from tarzan import config as cfg
+
+        rated = cfg.metric_ratings() or {}
+        for key in ("volatility", "max_drawdown", "ulcer_index", "var_pct",
+                    "cvar_pct"):
+            assert rated[key].get("invert") is True, key
+
+    def test_reward_metrics_are_not_inverted_in_config(self):
+        from tarzan import config as cfg
+
+        rated = cfg.metric_ratings() or {}
+        for key in ("cagr", "sharpe", "sortino", "alpha"):
+            assert not rated[key].get("invert", False), key
+
+    def test_a_shallower_loss_ranks_better_than_a_deeper_one(self):
+        # The var/cvar/max-drawdown case: all values negative, ranked on
+        # magnitude with lower better.
+        shallow = rank_bg(abs(-0.74), lo=0.74, hi=3.19, higher_is_better=False)
+        deep = rank_bg(abs(-3.19), lo=0.74, hi=3.19, higher_is_better=False)
+        assert _closer_to(shallow, GREEN, RED)
+        assert _closer_to(deep, RED, GREEN)
+
+    def test_ranking_a_loss_on_its_signed_value_would_invert_the_verdict(self):
+        """Guard on the bug this convention exists to prevent: applying the
+        config flag straight to the signed number greens the worst loss."""
+        wrong_shallow = rank_bg(-0.74, lo=-3.19, hi=-0.74, higher_is_better=False)
+        assert _closer_to(wrong_shallow, RED, GREEN), (
+            "signed ranking must be the wrong answer, or this guard is vacuous")
