@@ -431,14 +431,14 @@ def run_and_send() -> int:
             if _ai_on() else "disabled (no GEMINI_API_KEY / pinned mode)",
         )
         _seed_manual_proxies()
-        from tarzan.backtest import newsletter_portfolios
-        backtest_portfolios = newsletter_portfolios()
+        # No candidate-portfolio backtest here: the newsletter no longer carries
+        # that section, and it was the most expensive computation in the send
+        # path. The What-If workbook still builds it, from the CLI run.
         semantic_audit: dict = {}
         html = render_newsletter(
             metrics=metrics,
             config=config,
             issue_number=issue_number,
-            backtest_portfolios=backtest_portfolios,
             semantic_audit=semantic_audit,
         )
         from tarzan.export.newsletter._semantic import validate_newsletter_semantics

@@ -37,14 +37,12 @@ GOLDEN_PATH = Path(__file__).parent / "golden" / "newsletter.html"
 def _render(metrics, config) -> str:
     # ai_summary="" forces the market-context block off explicitly rather than
     # relying on the absence of a key, so the golden cannot depend on the
-    # environment. backtest_portfolios stays None: the backtest section is
-    # skipped in a deterministic run anyway.
+    # environment.
     return render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=31,
         ai_summary="",
-        backtest_portfolios=None,
     )
 
 
@@ -107,13 +105,11 @@ class TestNewsletterGoldenHtml:
     def test_golden_carries_every_section(self, rendered):
         """A structural floor, so a golden regenerated from a broken render
         cannot quietly pass. These are the section labels the template emits on
-        the deterministic fixture; the backtest is skipped in a deterministic
-        run, so it is not on the list.
+        the deterministic fixture.
         """
         html, _m, _c = rendered
-        # Optimizer and Backtest are absent on this fixture (no rebalance
-        # suggestions, and a deterministic run skips the backtest), so they are
-        # not part of the floor; the ordering test covers them when present.
+        # Optimizer is absent on this fixture (no rebalance suggestions), so it
+        # is not part of the floor; the ordering test covers it when present.
         for label in ("State", "Portfolio", "Allocation", "The book",
                       "Returns", "Watchlist", "Attribution", "Risk",
                       "Appendix"):
@@ -131,8 +127,7 @@ class TestNewsletterGoldenHtml:
             r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
         expected = ["State", "Portfolio", "Vs the market", "Markets",
                     "Allocation", "The book", "Returns", "Watchlist",
-                    "Attribution", "Risk", "Optimizer", "Backtest",
-                    "Appendix"]
+                    "Attribution", "Risk", "Optimizer", "Appendix"]
         # Sections the deterministic fixture cannot fill are absent, not
         # reordered, so compare as a subsequence of the intended order.
         assert labels == [x for x in expected if x in labels], labels
@@ -173,7 +168,7 @@ class TestSectionNumbering:
         _html, metrics, config = rendered
         with_ai = render_newsletter(
             metrics=metrics, config=config, issue_number=31,
-            ai_summary="A market context note.", backtest_portfolios=None,
+            ai_summary="A market context note.",
         )
         ordinals = self._ordinals(with_ai)
         assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
