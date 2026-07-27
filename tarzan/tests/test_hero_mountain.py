@@ -105,7 +105,10 @@ class TestRender:
         # "How your money moved" line was dropped because the heading plus the
         # matrix say it. Anchor on the matrix's own footer instead.
         assert ">Portfolio</span>" in html
-        assert "Annualized: TWROR" in html
+        # The matrix's own first column header. The "Annualized: TWROR / XIRR"
+        # footer that used to be the anchor is gone: it repeated the captions of
+        # the TWROR and MWR tiles in STATE.
+        assert ">Window<" in html
         # The matrix is built in Python, which writes the entity itself; the
         # tiles go through the template, where autoescape is off because the
         # filename ends in .j2, so their ampersand stays raw.
