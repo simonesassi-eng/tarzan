@@ -155,13 +155,18 @@ def uni_name(name, ticker="", *, tags=(), pill="", span=""):
 
 
 def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
-             width=None, pad=None, valign="top"):
+             width=None, pad=None, valign="top", bg=None):
     """One value cell for :func:`render_unified_table`. ``html`` is the cell's
     ready-to-render inner content; ``sub`` is an optional muted sub-line (e.g.
-    the € under a %). Returns a plain dict the renderer turns into a ``<td>``
-    with the row background applied."""
+    the € under a %).
+
+    ``bg`` overrides the row background for this cell alone, which is what lets
+    a returns column carry a conditional-formatting tint. Without it the
+    renderer could only paint whole rows.
+    """
     return {"html": html, "align": align, "color": color or PALETTE["ink"],
-            "weight": weight, "sub": sub, "width": width, "pad": pad, "valign": valign}
+            "weight": weight, "sub": sub, "width": width, "pad": pad,
+            "valign": valign, "bg": bg}
 
 
 # Barely-there vertical rule between value columns — lighter than the
@@ -179,7 +184,8 @@ def _uni_td(cell, rbg, default_pad="8px 8px", fs="", sep=False):
     sub = (f'<div style="font-size:9px;color:{P["subtle"]};'
            f'font-variant-numeric:tabular-nums;">{cell["sub"]}</div>'
            if cell.get("sub") else "")
-    return (f'<td align="{cell["align"]}" style="padding:{pad};background:{rbg};'
+    bg = cell.get("bg") or rbg
+    return (f'<td align="{cell["align"]}" style="padding:{pad};background:{bg};'
             f'border-bottom:1px solid {P["row_rule"]};{lb}'
             f'font-variant-numeric:tabular-nums;{fs}'
             f'font-weight:{cell["weight"]};color:{cell["color"]};'

@@ -23,6 +23,7 @@ from tarzan.export._perf_series import (
     _window_twror,
     market_snapshot,
 )
+from tarzan.export import _heat
 from tarzan.export.newsletter._constants import (
     ASSET_COLORS,
     MARKET_REGION_COLORS,
@@ -629,6 +630,17 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
     """
     P = PALETTE
 
+    # Conditional formatting, scaled on each column's own extremes across the
+    # rows THIS table renders (see tarzan.export._heat for why per column and
+    # per table). Collected before any cell is built, since a cell cannot know
+    # its column's range.
+    every_row = ([portfolio] + [inst for _c, _col, role_list in groups
+                                for _r, insts in role_list for inst in insts])
+    scales = {}
+    for p in period_cols:
+        scales[p] = _heat.column_scale(
+            row.get("returns", {}).get(p, {}).get("raw") for row in every_row)
+
     def _cells(returns_dict, spark_inner, *, weight):
         # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
         # the gap after the name closes and the period columns get that width.
@@ -636,7 +648,10 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
                           pad="6px 4px 6px 0")]
         for p in period_cols:
             r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
-            cells.append(uni_cell(r["value"], color=r["color"], weight=weight))
+            neg, pos = scales[p]
+            cells.append(uni_cell(
+                r["value"], color=r["color"], weight=weight,
+                bg=_heat.heat_bg(r.get("raw"), neg=neg, pos=pos)))
         return cells
 
     # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
@@ -750,21 +765,29 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         return PALETTE["green"] if delta > 0 else PALETTE["red"]
 
     def _returns_dict(source: dict, *, is_portfolio: bool) -> dict:
-        """Per-period ``{value, color}`` map for the shared table renderer."""
+        """Per-period ``{value, color, raw}`` map for the shared table renderer.
+
+        ``raw`` is the signed percent the cell displays. The renderer needs it
+        to scale the conditional-formatting ramp on the column's own extremes;
+        formatted strings cannot be compared.
+        """
         out: dict = {}
         for key in period_keys:
             val = source.get(key) if source else None
             if is_missing(val):
-                out[key] = {"value": "\u2014", "color": PALETTE["subtle"]}
+                out[key] = {"value": "\u2014", "color": PALETTE["subtle"],
+                            "raw": None}
                 continue
             try:
                 v = float(val)
             except (TypeError, ValueError):
-                out[key] = {"value": "\u2014", "color": PALETTE["subtle"]}
+                out[key] = {"value": "\u2014", "color": PALETTE["subtle"],
+                            "raw": None}
                 continue
             color = (_vs_bench_color(v, ab_bench_returns.get(key)) if is_portfolio
                      else (PALETTE["green"] if v >= 0 else PALETTE["red"]))
-            out[key] = {"value": _pct_compact(v, signed=True), "color": color}
+            out[key] = {"value": _pct_compact(v, signed=True), "color": color,
+                        "raw": v}
         return out
 
     df = m.holdings_df
@@ -911,6 +934,16 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # Performance tab): 1D first, then progressively longer windows.
     periods = ("1d", "1w", "1m", "3m", "ytd", "1y", "3y", "5y")
 
+    def _as_float(value):
+        """The signed percent behind a cell, or None. The heat ramp needs the
+        number; the cell only keeps a formatted string."""
+        if is_missing(value):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     def _color_sign(value) -> str:
         """Sign-aware color for a period return cell — used on benchmarks."""
         if is_missing(value):
@@ -957,6 +990,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             p: {
                 "value": _pct_compact(source.get(p), signed=True),
                 "color": _color_vs_bench(source.get(p), ab_bench_returns.get(p)),
+                "raw": _as_float(source.get(p)),
             }
             for p in periods
         }
@@ -966,6 +1000,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             p: {
                 "value": _pct_compact(source.get(p), signed=True),
                 "color": _color_sign(source.get(p)),
+                "raw": _as_float(source.get(p)),
             }
             for p in periods
         }
