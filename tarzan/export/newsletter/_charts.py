@@ -226,19 +226,42 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 196) -> 
             if i is None:
                 continue
             x, y = X(i), Yv(values[i])
-            col = P["green"] if v >= 0 else P["muted"]
+            # Accent for money in, muted for money out. Green was wrong: it is
+            # the value line's own colour, so a deposit marker read as part of
+            # the line rather than as an event on it. The triangle also stands
+            # 9px clear of the line and points away from it, which is what keeps
+            # five of them legible on a 30-day window.
+            col = P["accent"] if v >= 0 else P["muted"]
             if v >= 0:
                 marks += (
-                    f'<polygon points="{x:.1f},{y-5:.1f} {x-4:.1f},{y+3:.1f} '
-                    f'{x+4:.1f},{y+3:.1f}" fill="{col}" stroke="#fff" '
-                    f'stroke-width="0.8"/>'
+                    f'<polygon points="{x:.1f},{y - 9:.1f} '
+                    f'{x - 4.2:.1f},{y - 16:.1f} {x + 4.2:.1f},{y - 16:.1f}" '
+                    f'fill="{col}"/>'
                 )
             else:
                 marks += (
-                    f'<polygon points="{x:.1f},{y+5:.1f} {x-4:.1f},{y-3:.1f} '
-                    f'{x+4:.1f},{y-3:.1f}" fill="{col}" stroke="#fff" '
-                    f'stroke-width="0.8"/>'
+                    f'<polygon points="{x:.1f},{y + 9:.1f} '
+                    f'{x - 4.2:.1f},{y + 16:.1f} {x + 4.2:.1f},{y + 16:.1f}" '
+                    f'fill="{col}"/>'
                 )
+    # A dot on the last value, so the series has a stated end rather than
+    # running off the plot.
+    endpoint = (
+        f'<circle cx="{X(n - 1):.1f}" cy="{Yv(values[-1]):.1f}" r="3.4" '
+        f'fill="{P["green"] if values[-1] >= base else P["red"]}" '
+        f'stroke="{P["card_alt"]}" stroke-width="1.8"/>'
+    )
+    # Two labels inside the plot instead of a legend underneath. The legend
+    # spent a line naming the axes; naming the baseline where it is drawn and
+    # the right axis where it is read says the same thing in the place the
+    # reader is already looking.
+    labels = (
+        f'<text x="{ML + 5}" y="{max(9.0, baseline_y - 5):.1f}" '
+        f'text-anchor="start" font-size="8.5" font-weight="700" '
+        f'fill="{P["muted"]}">window open {_eur_smart(base)}</text>'
+        f'<text x="{ML + PW + 6}" y="{h - 6}" text-anchor="start" '
+        f'font-size="8.5" font-weight="700" fill="{P["muted"]}">unreal.</text>'
+    )
 
     return (
         f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
@@ -262,20 +285,9 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 196) -> 
         f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
         + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" '
         f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
-        + marks + xlab + "</svg>"
-        # Legend: which axis each series is read against, and what the two
-        # value colours mean. "start baseline" said where the split is without
-        # saying which side is which, so the swatch order now carries it.
-        + f'<div style="margin-top:6px;font-size:10px;color:{P["muted"]};">'
-        f'<span style="margin-right:14px;"><span style="display:inline-block;'
-        f'width:10px;height:5px;background:{P["green"]};vertical-align:middle;'
-        f'"></span><span style="display:inline-block;width:10px;height:5px;'
-        f'background:{P["red"]};vertical-align:middle;margin-right:5px;"></span>'
-        f'Value, left axis \u00b7 above / below the window open</span>'
-        f'<span><span style="display:inline-block;width:20px;height:0;'
-        f'border-top:2px dashed {P["muted"]};vertical-align:middle;'
-        f'margin-right:5px;"></span>Unrealized P&amp;L, right axis</span></div>'
+        + marks + endpoint + labels + xlab + "</svg>"
     )
+
 
 def _hero_flow_chips(flows) -> str:
     """The window's cash flows as filled chips: date, then amount.

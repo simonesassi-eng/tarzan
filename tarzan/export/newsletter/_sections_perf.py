@@ -322,13 +322,10 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     matrix = (f'<table role="presentation" width="100%" cellpadding="0" '
               f'cellspacing="0" border="0" style="border-collapse:collapse;">'
               f'{head_html}{body}</table>')
-    footer = (f'<div style="margin-top:12px;padding-top:10px;border-top:2px solid {P["border"]};'
-              f'font-size:12px;color:{P["muted"]};line-height:1.5;">Annualized: '
-              f'TWROR <strong style="color:{_sgn(m.twror_annualized_pct)};">{_pct(m.twror_annualized_pct, signed=True)}</strong> \u00b7 '
-              f'XIRR <strong style="color:{_sgn(m.xirr_pct)};">{_pct(m.xirr_pct, signed=True)}</strong>'
-              + (f' <span style="color:{P["subtle"]};">\u00b7 net of tax: see note at the bottom &#8595;</span>'
-                 if (m.xirr_net_tax_pct is not None or m.pnl_eur_net_tax is not None) else "")
-              + '</div>')
+    # No footer under the matrix. It repeated the annualized TWROR and the XIRR,
+    # which are the captions of the TWROR and MWR tiles in STATE, and pointed at
+    # a tax note that has its own place in the appendix.
+    footer = ""
     matrix_card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
                    f'style="margin-top:14px;background:{P["card_alt"]};border:1px solid {P["border"]};'
                    f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
