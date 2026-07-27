@@ -401,3 +401,48 @@ def funding_flow(steps, *, w: int = 580, h: int = 94,
                    f'fill="{MUTED}">{footnote}</text>')
     out.append("</svg>")
     return "".join(out)
+
+
+def band_gauge(value: float, *, good: float, warn: float,
+               invert: bool = False, w: int = 92, h: int = 26) -> str:
+    """A metric on its own rating scale: weak / fair / strong zones as the
+    track, the value as a needle.
+
+    Replaces three chips of threshold text per metric. The thresholds are the
+    configured ones (``metric_ratings`` in constants.yaml, with its citations),
+    so this draws a rating the project already declares rather than inventing
+    one.
+
+    ``invert`` marks a smaller-is-better metric, in which case the strong zone
+    is on the LEFT — and the end captions swap with it, or the words would
+    contradict the colours.
+    """
+    hi = max(abs(value) * 1.35, abs(good) * 1.6, abs(warn) * 1.6) or 1.0
+
+    def X(v: float) -> float:
+        return max(0.0, min(float(w), abs(v) / hi * w))
+
+    green, amber, red = _P["green"], _P["amber"], _P["red"]
+    if invert:
+        zones = [(0.0, X(good), green), (X(good), X(warn), amber),
+                 (X(warn), float(w), red)]
+    else:
+        zones = [(0.0, X(warn), red), (X(warn), X(good), amber),
+                 (X(good), float(w), green)]
+    ty, th = 8, 8
+    out = [f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+           f'xmlns="http://www.w3.org/2000/svg" style="display:block;">']
+    for x0, x1, colour in zones:
+        out.append(f'<rect x="{x0:.1f}" y="{ty}" width="{max(0.0, x1 - x0):.1f}" '
+                   f'height="{th}" fill="{colour}" fill-opacity="0.22"/>')
+    vx = X(value)
+    inzone = next((c for x0, x1, c in zones if x0 <= vx <= x1), MUTED)
+    out.append(f'<line x1="{vx:.1f}" y1="{ty - 4}" x2="{vx:.1f}" '
+               f'y2="{ty + th + 4}" stroke="{inzone}" stroke-width="2.6"/>')
+    left_cap, right_cap = ("strong", "weak") if invert else ("weak", "strong")
+    out.append(f'<text x="0" y="{h - 1}" font-size="8" fill="{SUBTLE}">'
+               f'{left_cap}</text>')
+    out.append(f'<text x="{w}" y="{h - 1}" text-anchor="end" font-size="8" '
+               f'fill="{SUBTLE}">{right_cap}</text>')
+    out.append("</svg>")
+    return "".join(out)

@@ -258,10 +258,26 @@
                 </tr>
               </table>
               {% endif %}
-              {# Unified instrument table (same shell as Holdings / Returns /
-                 Performance / Optimizer), pre-rendered in
-                 _sections_perf.py::_build_risk_profile. #}
-              {{ risk_profile.table_html|safe }}
+              {# Ten tiles, five to a row: the figure and, where the
+                 configuration rates the metric, a gauge putting it on its own
+                 weak/fair/strong scale. This was a 36-row table -- the
+                 portfolio plus every reference instrument -- which answered a
+                 comparison nobody asked for at a quarter of the issue's
+                 height. #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;border-collapse:separate;border-spacing:0;">
+                {% for row in risk_profile.tiles|batch(5) %}
+                <tr>
+                  {% for t in row %}
+                  <td class="stack" width="20%" valign="top" style="padding:9px 10px;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
+                    <div style="font-size:9px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:{{ palette.subtle }};">{{ t.label }}</div>
+                    <div style="margin-top:2px;font-size:15px;font-weight:700;color:{{ palette.ink }};font-variant-numeric:tabular-nums;">{{ t.value }}</div>
+                    {% if t.gauge %}<div style="margin-top:5px;">{{ t.gauge|safe }}</div>{% endif %}
+                  </td>
+                  {% endfor %}
+                  {% for _ in range(5 - row|length) %}<td width="20%">&nbsp;</td>{% endfor %}
+                </tr>
+                {% endfor %}
+              </table>
               {% if risk_profile.alpha_beta_note %}
               <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
               {% endif %}

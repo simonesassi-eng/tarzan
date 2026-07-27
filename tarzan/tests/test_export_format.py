@@ -120,38 +120,43 @@ class TestRiskProfileBenchmarkLabels:
             benchmark_alpha_beta=ab_name, benchmark_geo=geo_name,
         )
 
-    def test_benchmarks_become_rows_with_configured_names(self):
+    def test_portfolio_metrics_become_tiles(self):
+        """The section is the portfolio's own ten metrics, as tiles.
+
+        It used to be a 36-row table -- the portfolio plus every reference
+        instrument, over eleven columns -- which answered a comparison nobody
+        asked for at a quarter of the issue's height. The reference benchmarks
+        are no longer rendered here; ``alpha_beta_note`` still names the index
+        alpha and beta are measured against, because that one is not a
+        comparison but the definition of two of the figures.
+        """
         ctx = self._ctx("MSCI World", "FTSE All-World")
         profile = nl._build_risk_profile(ctx)
         assert profile["available"]
-        # The risk table is now pre-rendered through the shared unified
-        # renderer, so we assert on the produced HTML (the row/column dicts are
-        # gone). Portfolio row first, then the configured benchmarks.
-        html = profile["table_html"]
-        assert "Your portfolio" in html
-        # Display labels go through short_instrument_name (which normalizes the
-        # hyphen: "FTSE All-World" → "FTSE All World"); tag-matching still uses
-        # the raw configured name.
-        assert "MSCI World" in html and "FTSE All World" in html
-        # 10 metric columns now (Ulcer added), with α/β carrying the marker.
-        assert "CAGR" in html and "Ulcer" in html
-        assert "α*" in html and "β*" in html  # α*, β* column headers
+        labels = [t["label"] for t in profile["tiles"]]
+        assert labels == ["CAGR", "Vol", "Sharpe", "Sortino", "Max DD",
+                         "Ulcer", "VaR", "CVaR", "\u03b1*", "\u03b2*"], labels
         assert "MSCI World" in profile["alpha_beta_note"]
-        # The ticker pin drops the exchange suffix: no two instruments in an
-        # issue share a base symbol, and the full provider listing -- canonical
-        # and intraday -- is in the appendix's instrument reference.
-        assert "SWDA" in html and "VWCE" in html
-        assert "SWDA.MI" not in html and "VWCE.MI" not in html
-        assert "10.0Y" in html  # span chip
 
-    def test_benchmark_values_populated_in_rows(self):
-        # The rendered table must carry real values (not blank), proving the
-        # metrics are read straight from historical_risk.
+    def test_tiles_carry_the_portfolio_values(self):
         ctx = self._ctx("MSCI World", "FTSE All-World")
-        profile = nl._build_risk_profile(ctx)
-        html = profile["table_html"]
-        # CAGR values from the fixture appear as formatted percentages.
-        assert "4.00%" in html and "4.50%" in html
+        tiles = {t["label"]: t["value"] for t in nl._build_risk_profile(ctx)["tiles"]}
+        # The fixture's portfolio row, not a benchmark's.
+        assert tiles["CAGR"] == "5.00%"
+        assert tiles["Sharpe"] == "1.00"
+        assert tiles["Sortino"] == "1.20"
+
+    def test_rated_metrics_get_a_gauge_and_beta_does_not(self):
+        """A gauge is drawn wherever constants.yaml rates the metric, so the
+        scale shown is the configured one rather than one invented here."""
+        ctx = self._ctx("MSCI World", "FTSE All-World")
+        tiles = {t["label"]: t["gauge"] for t in nl._build_risk_profile(ctx)["tiles"]}
+        for label in ("Vol", "Sharpe", "Sortino", "Max DD", "CAGR"):
+            assert "<svg" in tiles[label], label
+        # Lower-is-better metrics put the strong zone on the left, so the end
+        # captions swap with it.
+        assert tiles["Vol"].index("strong") < tiles["Vol"].index("weak")
+        assert tiles["Sharpe"].index("weak") < tiles["Sharpe"].index("strong")
 
 
 class TestShortInstrumentName:

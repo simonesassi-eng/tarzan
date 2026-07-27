@@ -1708,7 +1708,15 @@ def _build_return_contrib(ctx: _NewsletterContext) -> dict:
     rows = []
     for _, r in df.iterrows():
         contrib = float(r.get("gain_eur", 0) or 0) / cost_total * 100.0
-        rows.append({"name": r.get("name", ""), "ticker": r.get("ticker", ""), "contrib": contrib})
+        # The ranked lists under the waterfall showed the broker's order-export
+        # description ("XTR S&P 500 SW 5CHC") while every other table in the
+        # issue showed the taxonomy name. Same resolver here.
+        rows.append({
+            "name": display_instrument_name(r.get("isin"), r.get("ticker"),
+                                            r.get("name", ""), 26),
+            "ticker": r.get("ticker", ""),
+            "contrib": contrib,
+        })
     rows.sort(key=lambda x: -x["contrib"])
 
     top = [r for r in rows[:3] if r["contrib"] > 0]
