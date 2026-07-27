@@ -194,49 +194,38 @@
             </td>
           </tr>
 
-          {# ─── RETURN CONTRIBUTION — ranked diverging bars ──────── #}
+          {# ─── RETURN CONTRIBUTION — waterfall, then the two ranked lists ─ #}
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
               {{ sec(secn, "Return contribution") }}
-
-              {% if return_contrib.winners %}
-              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;">
-                {% for w in return_contrib.winners %}
-                <tr>
-                  <td width="42%" style="padding:5px 8px 5px 0;color:{{ palette.ink }};vertical-align:middle;">{{ w.name|truncate(26, true, '…') }}</td>
-                  <td style="padding:5px 0;vertical-align:middle;">
-                    <div style="background:{{ palette.green_bg }};border-radius:4px;font-size:0;line-height:0;">
-                      <div style="height:9px;width:{{ w.bar_pct }}%;min-width:2px;background:{{ palette.green }};border-radius:4px;font-size:0;line-height:0;">&nbsp;</div>
-                    </div>
-                  </td>
-                  <td width="64" align="right" style="padding:5px 0 5px 10px;font-weight:700;color:{{ palette.green }};font-variant-numeric:tabular-nums;vertical-align:middle;">{{ w.value }}</td>
-                </tr>
-                {% endfor %}
-              </table>
+              <div style="margin-top:2px;font-size:12px;color:{{ palette.muted }};">What moved the number. Each bar starts where the previous one ended, so the movers and everything else add up to the unrealized return in <strong style="color:{{ palette.ink }};">STATE</strong>.</div>
+              {% if return_contrib.chart_html %}
+              <div style="margin-top:12px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ return_contrib.chart_html|safe }}</div>
               {% endif %}
-
-              {% if return_contrib.laggards %}
-              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.red }};text-transform:uppercase;">▼ Laggards</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;font-size:12px;">
-                {% for l in return_contrib.laggards %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
                 <tr>
-                  <td width="42%" style="padding:5px 8px 5px 0;color:{{ palette.ink }};vertical-align:middle;">{{ l.name|truncate(26, true, '…') }}</td>
-                  <td style="padding:5px 0;vertical-align:middle;">
-                    <div style="background:{{ palette.red_bg }};border-radius:4px;font-size:0;line-height:0;">
-                      <div style="height:9px;width:{{ l.bar_pct }}%;min-width:2px;background:{{ palette.red }};border-radius:4px;font-size:0;line-height:0;">&nbsp;</div>
-                    </div>
+                  <td width="50%" valign="top" style="padding:0 9px 0 0;">
+                    {% if return_contrib.winners %}
+                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
+                    {% for w in return_contrib.winners %}
+                    <div style="margin-top:6px;font-size:11px;color:{{ palette.ink }};">{{ w.name|truncate(26, true, '…') }}<b style="color:{{ palette.green }};float:right;font-variant-numeric:tabular-nums;">{{ w.value }}</b></div>
+                    {% endfor %}
+                    {% endif %}
                   </td>
-                  <td width="64" align="right" style="padding:5px 0 5px 10px;font-weight:700;color:{{ palette.red }};font-variant-numeric:tabular-nums;vertical-align:middle;">{{ l.value }}</td>
+                  <td width="50%" valign="top" style="padding:0 0 0 9px;border-left:1px solid {{ palette.border }};">
+                    {% if return_contrib.laggards %}
+                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.red }};text-transform:uppercase;">▼ Laggards</div>
+                    {% for l in return_contrib.laggards %}
+                    <div style="margin-top:6px;font-size:11px;color:{{ palette.ink }};">{{ l.name|truncate(26, true, '…') }}<b style="color:{{ palette.red }};float:right;font-variant-numeric:tabular-nums;">{{ l.value }}</b></div>
+                    {% endfor %}
+                    {% endif %}
+                  </td>
                 </tr>
-                {% endfor %}
               </table>
-              {% endif %}
             </td>
           </tr>
           {% endif %}
-
           {# ─── RISK PROFILE — UNIFIED TABLE — after attribution and immediately
    before the optimizer, so the evidence precedes the action. #}
           {% if risk_profile.available %}
