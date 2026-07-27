@@ -46,6 +46,7 @@ from tarzan.export.newsletter._charts import (
     _flat_dashed_spark,
     _intraday_spark,
     _prev_session_label,
+    day_column_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -699,7 +700,8 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
     port_pct = agg / wsum
     return (1.0 + port_pct / 100.0) * 100.0
 
-def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
+def _returns_table_html(period_cols, portfolio: dict, groups: list,
+                        *, day_label: str = "1D") -> str:
     """Shared renderer for the grouped per-instrument returns tables.
 
     Used by both the Performance ("How markets moved") and the Returns
@@ -749,7 +751,7 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
 
     # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
     # ruled period grid.
-    columns = ([("1D / Intraday", "left", 84, True)]
+    columns = ([(day_label, "left", 84, True)]
                + [(p.upper(), "right") for p in period_cols])
     portfolio_row = {
         "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
@@ -947,7 +949,11 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
 
     return {
         "available": True,
-        "table_html": _returns_table_html(period_keys, portfolio, groups),
+        "table_html": _returns_table_html(
+            period_keys, portfolio, groups,
+            day_label=day_column_label(
+                m, live=bool(port_full.get("1d_live"))
+                or any(_live1d.values()))),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }
@@ -1242,7 +1248,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             rendered_roles.append((role, insts))
         groups.append((ac, col, rendered_roles))
 
-    table_html = _returns_table_html(period_cols, portfolio, groups)
+    table_html = _returns_table_html(
+        period_cols, portfolio, groups,
+        day_label=day_column_label(
+            m, live=bool(pf.get("1d_live"))
+            or any(bool(r.get("live")) for r in benchmark_rows)))
 
     subtitle_html = (
         f'Portfolio vs {ctx.benchmark_alpha_beta or "S&amp;P 500"}: '
