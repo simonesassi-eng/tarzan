@@ -21,27 +21,10 @@ from tarzan.export._format import (
     css,
 )
 
-PALETTE = {
-    "accent": "#5B5BD6",
-    "ink": "#1E293B",
-    "muted": "#64748B",
-    "subtle": "#94A3B8",
-    "page": "#F1F2F8",
-    "card_alt": "#F8FAFF",
-    "border": "#E5E7EF",
-    "green": "#15803D",
-    "amber": "#D97706",
-    "red": "#DC2626",
-    "green_bg": "#DCFCE7",
-    "green_border": "#BBF7D0",
-    # Very light action tints for whole-row BUY/SELL backgrounds in the
-    # Optimizer (green-50 / red-50) — softer than the *_bg pills above.
-    "green_tint": "#ECFDF5",
-    "red_tint": "#FEF2F2",
-    "amber_bg": "#FFF7ED",
-    "red_bg": "#FEE2E2",
-    "accent_bg": "#EEF2FF",
-}
+# The palette lives in a leaf module so tarzan.export._charts can read the
+# same colours without closing an import cycle through this package.
+from tarzan.export._palette import PALETTE  # noqa: E402 (re-exported)
+
 
 ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
 
@@ -182,9 +165,10 @@ def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
 
 
 # Barely-there vertical rule between value columns — lighter than the
-# horizontal row rule (#F1F2F8), so it guides the eye down a period column
-# without drawing a grid.
-_COL_RULE = "#EFF1F8"
+# horizontal row rule, so it guides the eye down a period column without
+# drawing a grid. Both rules and the row surface are palette roles now; they
+# were inline literals, which is why these tables could not follow a palette.
+_COL_RULE = PALETTE["col_rule"]
 
 
 def _uni_td(cell, rbg, default_pad="8px 8px", fs="", sep=False):
@@ -196,7 +180,8 @@ def _uni_td(cell, rbg, default_pad="8px 8px", fs="", sep=False):
            f'font-variant-numeric:tabular-nums;">{cell["sub"]}</div>'
            if cell.get("sub") else "")
     return (f'<td align="{cell["align"]}" style="padding:{pad};background:{rbg};'
-            f'border-bottom:1px solid #F1F2F8;{lb}font-variant-numeric:tabular-nums;{fs}'
+            f'border-bottom:1px solid {P["row_rule"]};{lb}'
+            f'font-variant-numeric:tabular-nums;{fs}'
             f'font-weight:{cell["weight"]};color:{cell["color"]};'
             f'vertical-align:{cell.get("valign", "top")};{w}">{cell["html"]}{sub}</td>')
 
@@ -299,17 +284,20 @@ def render_unified_table(first_col_label, columns, groups, *,
             role_html = (f'&nbsp;&middot;&nbsp;<span style="color:{P["muted"]};'
                          f'font-weight:700;">{role}</span>' if has_role else "")
             out.append(
-                f'<tr><td colspan="{ncols}" style="padding:8px 12px 8px 14px;background:#FFFFFF;'
+                f'<tr><td colspan="{ncols}" style="padding:8px 12px 8px 14px;'
+                f'background:{P["card"]};'
                 f'border-bottom:1px solid {P["border"]};border-left:4px solid {col};'
                 f'font-size:11px;letter-spacing:0.04em;text-transform:uppercase;">'
                 f'<span style="color:{col};font-weight:700;">{cls}</span>{role_html}</td></tr>')
             fw = f'width:{first_col_width}px;' if first_col_width else ""
             for row in rows:
-                rbg = row.get("row_bg") or ("#FFFFFF" if ri % 2 == 0 else P["card_alt"])
+                rbg = row.get("row_bg") or (
+                    P["card"] if ri % 2 == 0 else P["card_alt"])
                 ri += 1
                 out.append(
                     f'<tr><td style="padding:8px 12px 8px 14px;background:{rbg};'
-                    f'border-bottom:1px solid #F1F2F8;border-left:4px solid {col};'
+                    f'border-bottom:1px solid {P["row_rule"]};'
+                    f'border-left:4px solid {col};'
                     f'vertical-align:top;{fw}">{row["name_html"]}</td>'
                     + _cells_html(row["cells"], rbg) + '</tr>')
     out.append("</table>")
