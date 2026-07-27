@@ -113,7 +113,9 @@ def rolling_return_distribution(nav: pd.Series, window_days: int = 252) -> dict:
         "n": int(ann.size),
         "min": float(ann.min()),
         "p05": float(np.percentile(ann, 5)),
+        "p25": float(np.percentile(ann, 25)),
         "median": float(np.median(ann)),
+        "p75": float(np.percentile(ann, 75)),
         "p95": float(np.percentile(ann, 95)),
         "max": float(ann.max()),
         "pct_positive": float((ann > 0).mean() * 100.0),
@@ -246,7 +248,9 @@ def block_bootstrap(nav: pd.Series, *, n_sims: int = 2000, block_days: int = 21,
         a = x[np.isfinite(x)]
         return {
             "p05": float(np.percentile(a, 5)),
+            "p25": float(np.percentile(a, 25)),
             "median": float(np.median(a)),
+            "p75": float(np.percentile(a, 75)),
             "p95": float(np.percentile(a, 95)),
         }
 
@@ -256,4 +260,28 @@ def block_bootstrap(nav: pd.Series, *, n_sims: int = 2000, block_days: int = 21,
         "cagr": _ci(cagrs * 100.0),
         "sharpe": _ci(sharpes),
         "max_drawdown": _ci(mdds * 100.0),
+        # P(total return < 0 at the horizon), percent of sims.
+        "prob_loss": float((cagrs[np.isfinite(cagrs)] < 0).mean() * 100.0),
     }
+
+
+# Investor-facing horizons (years) shared by the multi-horizon view.
+HORIZON_YEARS = (1, 3, 5, 10, 15)
+
+
+def multi_horizon(nav: pd.Series, *, horizons=HORIZON_YEARS,
+                  rf_annual=None) -> dict[int, dict]:
+    """Rolling + Monte-Carlo outcome distributions per investor horizon.
+
+    For each horizon (years) returns {"rolling": rolling_return_distribution,
+    "mc": block_bootstrap} computed on the SAME NAV — the single entry point
+    for "what does N years in this portfolio look like" questions.
+    """
+    out: dict[int, dict] = {}
+    for yrs in horizons:
+        days = int(round(yrs * TRADING_DAYS))
+        out[yrs] = {
+            "rolling": rolling_return_distribution(nav, days),
+            "mc": block_bootstrap(nav, horizon_days=days, rf_annual=rf_annual),
+        }
+    return out

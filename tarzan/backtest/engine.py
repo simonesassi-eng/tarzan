@@ -221,6 +221,10 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                     "sharpe": rob.rolling_sharpe_range(nav, 252, rf_daily=rf_daily),
                     "stress": rob.stress_scenarios(nav),
                     "bootstrap": rob.block_bootstrap(nav, rf_annual=rf),
+                    # Rolling + MC outcome distributions across investor
+                    # horizons (1/3/5/10/15y) — one source for the CLI report
+                    # and the Excel "Horizons" sheet.
+                    "horizons": rob.multi_horizon(nav, rf_annual=rf),
                 }
 
     proxy_data.set_target_currency(default_ccy)

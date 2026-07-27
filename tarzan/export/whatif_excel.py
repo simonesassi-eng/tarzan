@@ -74,6 +74,7 @@ def _show_axes(chart, x_title: str, y_title: str) -> None:
         chart.legend.position = "b"                            # legend at bottom
 
 from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
+from tarzan.engine.robustness import HORIZON_YEARS as _HORIZON_YEARS
 
 _ASSET_ORDER = list(_ORDER_WHATIF)
 # The what-if workbook also renders an explicit "Other" geo bucket at the end.
@@ -458,6 +459,7 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     row = _risk_matrix(ws, row, portfolios)
 
     _robustness_sheet(wb, portfolios)
+    _horizons_sheet(wb, portfolios)
     if sim_rows:
         _simulation_sheet(wb, sim_rows)
     if testfol:
@@ -588,6 +590,111 @@ def _robustness_sheet(wb, portfolios) -> None:
         "SDMX); the header % is the window average of that path."))
     note.font = _font(8, italic=True, color=_C["muted"])
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncol)
+
+
+def _horizons_sheet(wb, portfolios) -> None:
+    """Multi-horizon sheet: rolling + Monte-Carlo outcome distributions for the
+    1/3/5/10/15-year horizons an investor plans around. Renders ``p.rob['horizons']``
+    (:func:`tarzan.engine.robustness.multi_horizon`) — same source as the CLI
+    ``scripts.horizon_analysis`` report, so the two never diverge."""
+    if not any(p.rob.get("horizons") for p in portfolios):
+        return
+    ws = wb.create_sheet("Horizons")
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.tabColor = _C["header"]
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 26
+    for j in range(len(portfolios)):
+        ws.column_dimensions[get_column_letter(_PCOL0 + j)].width = 16
+    ncol = _PCOL0 + len(portfolios) - 1
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+    t = ws.cell(row=1, column=1, value="OUTCOMES BY INVESTMENT HORIZON")
+    t.font = _font(15, bold=True, color=_C["white"])
+    t.fill = _fill(_C["header"])
+    ws.row_dimensions[1].height = 24
+
+    def _cell(row, col, value, bg):
+        c = ws.cell(row=row, column=col, value=value)
+        c.alignment = _align("center"); c.fill = _fill(bg)
+        c.border = _border(); c.font = _font(9)
+        return c
+
+    def block(row, title, rows):
+        row = _section_header(ws, row, title, ncol)
+        _col_headers(ws, row, portfolios, "Metric", with_target=False)
+        row += 1
+        for i, (label, fn) in enumerate(rows):
+            bg = _C["alt"] if i % 2 else _C["white"]
+            _merge_label(ws, row, label, bold=True, bg=bg)
+            for j, p in enumerate(portfolios):
+                _cell(row, _PCOL0 + j, fn(p), bg)
+            row += 1
+        return row + 1
+
+    def _pct(v, dec=1):
+        return "—" if v is None else f"{v * 100:.{dec}f}%"
+
+    def _pctp(v, dec=1):   # already in percent units (MC dicts)
+        return "—" if v is None else f"{v:.{dec}f}%"
+
+    for yrs in _HORIZON_YEARS:
+        rows = [
+            (f"Rolling {yrs}Y p05", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p05"))),
+            (f"Rolling {yrs}Y p25", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p25"))),
+            (f"Rolling {yrs}Y median", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "median"))),
+            (f"Rolling {yrs}Y p75", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p75"))),
+            (f"Rolling {yrs}Y p95", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p95"))),
+            ("  % windows positive", lambda p, y=yrs: _pctp(_hz(p, y, "rolling", "pct_positive"))),
+            ("  MC CAGR p05", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "p05"))),
+            ("  MC CAGR median", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "median"))),
+            ("  MC CAGR p95", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "p95"))),
+            ("  MC MaxDD median", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "max_drawdown", "median"))),
+            ("  MC MaxDD p05 (worst)", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "max_drawdown", "p05"))),
+            ("  P(loss at horizon)", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "prob_loss"))),
+        ]
+        block(3 if yrs == _HORIZON_YEARS[0] else ws.max_row + 2,
+              f"{yrs}-year horizon", rows)
+
+    row = _section_header(ws, ws.max_row + 2, "How to read this sheet", ncol)
+    legend = [
+        ("Rolling NY (p05 · median · p95)",
+         "Annualised return over EVERY overlapping N-year window in the reconstructed history. "
+         "p05 = unlucky start, median = typical, p95 = lucky start. The gap between p05 and median "
+         "is sequence risk — how much your outcome depends on WHEN you start."),
+        ("% windows positive",
+         "Share of overlapping N-year windows that ended above water. Approaches 100% as N grows."),
+        ("MC CAGR (p05 / median / p95)",
+         "Block-bootstrap Monte-Carlo (2000 paths, 21-day blocks): the CAGR distribution over the "
+         "next N years if history's return blocks recur in a reshuffled order. Fat tails preserved."),
+        ("MC MaxDD (median / p05)",
+         "Worst peak-to-trough drop experienced ALONG each simulated N-year path — median and "
+         "bad-case (p05). The path hurts even when the endpoint is fine."),
+        ("P(loss at horizon)",
+         "Share of Monte-Carlo paths whose total return is negative at N years — the honest "
+         "probability of ending underwater after holding for that long."),
+    ]
+    for i, (term, desc) in enumerate(legend):
+        bg = _C["alt"] if i % 2 else _C["white"]
+        a = ws.cell(row=row, column=1, value=term)
+        a.font = _font(9, bold=True); a.fill = _fill(bg); a.border = _border()
+        a.alignment = _align("left", "top")
+        b = ws.cell(row=row, column=2, value=desc)
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
+        b.font = _font(9, color=_C["muted"]); b.fill = _fill(bg); b.border = _border()
+        b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        ws.row_dimensions[row].height = 42
+        row += 1
+
+
+def _hz(p, yrs, kind, *keys):
+    """Safe getter into p.rob['horizons'][yrs][kind][key...] → None if absent."""
+    d = (p.rob.get("horizons", {}) or {}).get(yrs, {}).get(kind, {})
+    for k in keys:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
 
 
 def _robustness_charts(ws, portfolios, start_row, ncol) -> int:
