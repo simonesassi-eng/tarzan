@@ -120,3 +120,36 @@ class TestNewsletterGoldenHtml:
         assert "<script" not in html.lower()
         assert not re.search(r'src\s*=\s*["\']https?://', html, re.I)
         assert not re.search(r'@import|<link[^>]+stylesheet', html, re.I)
+
+
+class TestSectionNumbering:
+    """Section ordinals must run 1..N over the sections actually rendered.
+
+    The kicker macro increments a namespace counter rather than taking a fixed
+    number per section, because optional blocks (market context, optimizer) come
+    and go: a static ordinal left holes in the sequence — [02] with no [01] —
+    whenever one was unavailable.
+    """
+
+    @staticmethod
+    def _ordinals(html: str) -> list[int]:
+        return [int(n) for n in re.findall(
+            r'\[(\d\d)\]</span>&nbsp;&nbsp;', html)]
+
+    def test_sequence_has_no_holes_without_optional_blocks(self, rendered):
+        html, _m, _c = rendered
+        ordinals = self._ordinals(html)
+        assert ordinals, "no numbered section kickers rendered"
+        assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
+
+    def test_sequence_absorbs_an_optional_block(self, rendered):
+        """Adding the market-context block shifts the rest by one and still
+        leaves a gapless run."""
+        _html, metrics, config = rendered
+        with_ai = render_newsletter(
+            metrics=metrics, config=config, issue_number=31,
+            ai_summary="A market context note.", backtest_portfolios=None,
+        )
+        ordinals = self._ordinals(with_ai)
+        assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
+        assert len(ordinals) == len(self._ordinals(_html)) + 1
