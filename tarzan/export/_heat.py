@@ -97,3 +97,59 @@ def heat_ink(value: Optional[float], *, neg: float, pos: float,
     if _intensity(value, neg=neg, pos=pos, damp=damp) >= _INK_ABOVE:
         return PALETTE["ink"]
     return None
+
+
+def rank_scale(values: Iterable[Optional[float]]) -> Optional[tuple[float, float]]:
+    """``(lo, hi)`` over one column, or None when there is nothing to rank."""
+    nums = [float(v) for v in values if v is not None]
+    if len(nums) < 2:
+        return None
+    lo, hi = min(nums), max(nums)
+    return None if hi - lo < 1e-12 else (lo, hi)
+
+
+def rank_bg(value: Optional[float], *, lo: float, hi: float,
+            higher_is_better: bool) -> Optional[str]:
+    """Background for a cell whose colour is a rank, not a sign.
+
+    ``heat_bg`` reads the sign: positive is green, negative is red. That is the
+    right rule for returns and the wrong one for risk. A volatility of 10% is
+    positive and not good; a max drawdown of −7% is negative and better than
+    −21%. Here the colour comes from where the value sits inside its column's
+    observed range, with the direction stated by the caller — so the greenest
+    cell in a column is the best of the series shown, whatever its sign.
+
+    The midpoint of the range is the neutral point. That is a property of the
+    values present, not a threshold anyone set: nothing in the engine says what
+    a "good" Sharpe is, and inventing one would print an opinion as a fact.
+    """
+    if value is None:
+        return None
+    span = hi - lo
+    if span < 1e-12:
+        return None
+    t = (float(value) - lo) / span
+    good = t if higher_is_better else 1.0 - t
+    # Distance from the middle, so the ends of the range saturate and the
+    # middle stays on the card surface.
+    strength = abs(good - 0.5) * 2.0
+    if strength <= 0.02:
+        return None
+    target = PALETTE["green"] if good >= 0.5 else PALETTE["red"]
+    return _mix(PALETTE["card"], target, 0.08 + 0.52 * (strength ** 0.9))
+
+
+def rank_ink(value: Optional[float], *, lo: float, hi: float,
+             higher_is_better: bool) -> Optional[str]:
+    """Palette ink once the rank tint is strong enough to swallow a coloured
+    figure, otherwise None so the caller keeps its own colour."""
+    if value is None:
+        return None
+    span = hi - lo
+    if span < 1e-12:
+        return None
+    t = (float(value) - lo) / span
+    good = t if higher_is_better else 1.0 - t
+    if abs(good - 0.5) * 2.0 >= _INK_ABOVE:
+        return PALETTE["ink"]
+    return None
