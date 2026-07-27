@@ -290,6 +290,12 @@
               {% elif plan.execution_status == 'EXECUTABLE' %}
               <div style="margin-top:6px;padding:6px 10px;background:{{ palette.green_bg }};border-radius:7px;font-size:11px;color:{{ palette.green }};">Funding verified · ending cash {{ plan.funding_ending_cash_eur }} · protected buffer {{ plan.funding_protected_cash_eur }}</div>
               {% endif %}
+              {% if plan.funding_flow_html %}
+              {# The same proof as a picture: each term of the cash identity is
+                 a bar and the last one is their sum, so the reader can see the
+                 plan pay for itself instead of taking the sentence on faith. #}
+              <div style="margin-top:8px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ plan.funding_flow_html|safe }}</div>
+              {% endif %}
               <div style="margin-top:5px;font-size:12px;color:{{ palette.muted }};">
                 {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} BUY &nbsp;·&nbsp; {{ plan.n_sell }} SELL &nbsp;·&nbsp; total
                 <span style="color:{{ palette.green }};font-weight:600;">{{ plan.total_buy }}</span> in,
