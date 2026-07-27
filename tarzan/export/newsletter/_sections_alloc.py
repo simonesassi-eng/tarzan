@@ -9,6 +9,7 @@ import pandas as pd
 
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.export._format import (
+    display_instrument_name,
     eur_smart as _eur_smart,
     short_instrument_name,
 )
@@ -1089,7 +1090,8 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
         now = cur_by_isin.get(_isin_for(it), 0.0)
         rows.append({
             "label_html": _div_label(
-                short_instrument_name(it.get("category") or key, 42),
+                display_instrument_name(_isin_for(it), key,
+                                        it.get("category") or key, 42),
                 P["accent"], ticker=tk),
             "now": now,
             "target": float(it.get("target_pct", 0.0) or 0.0),
@@ -1157,7 +1159,8 @@ def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
                     vals = xs
             rows.append({
                 "label_html": _div_label(
-                    short_instrument_name(it.get("category") or ticker, 42),
+                    display_instrument_name(it.get("isin"), ticker,
+                                            it.get("category") or ticker, 42),
                     color, ticker=tk),
                 "now": float(it.get("actual_pct", 0.0)),
                 "target": float(it.get("target_pct", 0.0)),
@@ -1373,7 +1376,8 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "_isin": h.get("isin", ""),
             "_ticker": h.get("ticker", ""),
             "name_html": uni_name(
-                short_instrument_name(h.get("name", ""), 40),
+                display_instrument_name(h.get("isin"), h.get("ticker"),
+                                        h.get("name", ""), 40),
                 _display_ticker(h.get("ticker")) or "",
             ),
             "cells": [
@@ -1462,8 +1466,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
             "_row_bg": row_bg,
             # Name cell: action pill + ticker pin + shortened name, via the
             # shared uni_name so it matches every other table.
-            "name_html": uni_name(short_instrument_name(s.get("name", "")), tk,
-                                   pill=_pill(direction)),
+            "name_html": uni_name(
+                display_instrument_name(isin, ticker, s.get("name", "")), tk,
+                pill=_pill(direction)),
             # Trade -> Now -> After -> Target, each abs + %. The trade leads
             # because it is what the table is for, and After sits next to
             # Target so "does this trade get me there?" is a glance rather

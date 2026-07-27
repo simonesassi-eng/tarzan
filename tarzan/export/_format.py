@@ -205,3 +205,55 @@ def eur_smart(amount: Optional[float], signed: bool = False) -> str:
     if amount < 0:
         return f"−{body}"
     return body
+
+
+def _taxonomy_names() -> dict:
+    """Cached ISIN/ticker → curated name map. Empty when the taxonomy is
+    unreadable, so presentation degrades to the broker's string rather than
+    failing."""
+    global _NAME_CACHE
+    if _NAME_CACHE is None:
+        try:
+            from tarzan import config as _cfg
+            _NAME_CACHE = _cfg.instrument_display_names() or {}
+        except Exception:  # noqa: BLE001 — never break a render over a name
+            _NAME_CACHE = {}
+    return _NAME_CACHE
+
+
+_NAME_CACHE: Optional[dict] = None
+
+
+def display_instrument_name(isin: Optional[str], ticker: Optional[str],
+                            raw_name: Optional[str] = None,
+                            max_len: int = 40) -> str:
+    """The instrument's readable name, preferring the curated taxonomy one.
+
+    The holdings frame carries the broker's order-export description, and no
+    amount of string cleaning turns "WS GL EFF C USD" into "WisdomTree Global
+    Efficient Core" — the words are simply not there. The taxonomy names every
+    instrument the portfolio can hold, so that is the source; the broker string
+    is the fallback for an instrument the taxonomy has never seen, which is a
+    real case worth reading rather than blanking.
+    """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    names = _taxonomy_names()
+    for key in (normalize_isin(isin), normalize_ticker(ticker)):
+        if key and key in names:
+            return short_instrument_name(names[key], max_len)
+    return short_instrument_name(raw_name, max_len)
+
+
+def base_symbol(symbol: Optional[str]) -> str:
+    """The provider symbol without its exchange suffix: ``XDEV.MI`` → ``XDEV``.
+
+    Used for the ticker pins in the body, where the suffix is noise: no two
+    instruments in an issue share a base symbol, and the full symbol — with the
+    canonical and intraday feed it came from — is in the appendix's instrument
+    reference. Stripping it in the body while keeping it in the audit table is
+    the concept's rule, and it is what makes a ticker pin readable at 9px.
+    """
+    from tarzan.models.instrument_key import normalize_ticker
+
+    return normalize_ticker(symbol) or ""

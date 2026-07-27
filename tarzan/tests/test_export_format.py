@@ -137,8 +137,11 @@ class TestRiskProfileBenchmarkLabels:
         assert "CAGR" in html and "Ulcer" in html
         assert "α*" in html and "β*" in html  # α*, β* column headers
         assert "MSCI World" in profile["alpha_beta_note"]
-        # Ticker pins preserve the exact provider listing selected upstream.
-        assert "SWDA.MI" in html and "VWCE.MI" in html
+        # The ticker pin drops the exchange suffix: no two instruments in an
+        # issue share a base symbol, and the full provider listing -- canonical
+        # and intraday -- is in the appendix's instrument reference.
+        assert "SWDA" in html and "VWCE" in html
+        assert "SWDA.MI" not in html and "VWCE.MI" not in html
         assert "10.0Y" in html  # span chip
 
     def test_benchmark_values_populated_in_rows(self):
