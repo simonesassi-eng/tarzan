@@ -763,7 +763,7 @@ def _div_label(name: str, color: str, ticker: Optional[str] = None) -> str:
     return f'{sw}{_div_pin(ticker)}<span style="color:{P["ink"]};">{name}</span>'
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
-               show_leverage: bool = False) -> str:
+               show_leverage: bool = False, first_label: str = "Name") -> str:
     """Unified diversification table (asset class / geography / by holding).
 
     One row per slice — current weight, target, drift and a 1-month trend
@@ -796,19 +796,23 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                 pass
     _bullet_scale = (max(_weights) * 1.08) if _weights else None
 
-    def _lev_cell(lev) -> str:
-        if not show_leverage:
+    def _lev_suffix(lev) -> str:
+        """The leverage factor appended to the drift cell rather than given a
+        column of its own. It qualifies one number -- how much notional the
+        sleeve carries per unit of capital -- and a column of its own cost 46px
+        in a table that has none to spare.
+        """
+        if not show_leverage or lev is None:
             return ""
-        if lev is None:
-            txt = "\u2014"
-            col = P["subtle"]
-        else:
-            txt = f"{float(lev):.2f}\u00d7"
-            # Emphasise real leverage (>1.05×); ~1.0× stays muted.
-            col = P["ink"] if float(lev) > 1.05 else P["subtle"]
-        return (f'<td align="right" style="padding:5px 6px;{_bb}font-size:11px;'
-                f'font-weight:700;color:{col};white-space:nowrap;'
-                f'font-variant-numeric:tabular-nums;width:46px;">{txt}</td>')
+        try:
+            f = float(lev)
+        except (TypeError, ValueError):
+            return ""
+        # Only real leverage is worth the ink; ~1.0x is the default state.
+        if f <= 1.05:
+            return ""
+        return (f'<span style="font-weight:700;color:{P["subtle"]};">'
+                f' \u00b7 {f:.2f}\u00d7</span>')
 
     def _bullet_cell(now_pct, tgt_pct) -> str:
         """The weight against its target on a shared axis, with the tolerance
@@ -876,23 +880,23 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                 _badge = ""
             sp = (f'<span style="display:inline-block;vertical-align:middle;">{sp}</span>'
                   f'{_badge}') if (sp or _badge) else ""
+            # Total row: same column order as the value rows, and the sleeve's
+            # blended leverage rides on the drift cell like everywhere else.
             lev = r.get("leverage")
-            lev_txt = f"{float(lev):.2f}\u00d7" if lev is not None else "\u2014"
-            lev_td = (f'<td align="right" style="padding:7px 6px;background:{abg};font-size:11px;'
-                      f'font-weight:700;color:{P["accent"]};font-variant-numeric:tabular-nums;'
-                      f'width:46px;">{lev_txt}</td>' if show_leverage else "")
+            lev_txt = (f'<span style="color:{P["accent"]};"> \u00b7 '
+                       f'{float(lev):.2f}\u00d7</span>'
+                       if (show_leverage and lev is not None) else "")
             body.append(
                 f'<tr>'
                 f'<td style="padding:7px 8px;background:{abg};font-size:12px;font-weight:700;'
                 f'color:{P["accent"]};">{r.get("label_html", "")}</td>'
-                f'{lev_td}'
                 f'<td align="right" style="padding:7px 8px;background:{abg};width:118px;">{_num_cell(now, P["accent"])}</td>'
                 f'<td align="right" style="padding:7px 8px;background:{abg};width:118px;">{_num_cell(tgt, P["accent"])}</td>'
-                f'<td align="right" style="padding:7px 8px;background:{abg};font-size:12px;'
-                f'font-weight:700;color:{P["accent"]};white-space:nowrap;font-variant-numeric:tabular-nums;'
-                f'width:74px;">{_signed_pp(drift)}</td>'
                 f'<td align="right" valign="middle" style="padding:7px 4px;background:{abg};'
                 f'width:100px;white-space:nowrap;">{sp}</td>'
+                f'<td align="right" style="padding:7px 8px;background:{abg};font-size:12px;'
+                f'font-weight:700;color:{P["accent"]};white-space:nowrap;font-variant-numeric:tabular-nums;'
+                f'width:92px;">{_signed_pp(drift)}{lev_txt}</td>'
                 f'</tr>'
             )
             continue
@@ -903,13 +907,12 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             body.append(
                 f'<tr>'
                 f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
-                f'{_lev_cell(r.get("leverage"))}'
                 f'<td align="right" style="padding:5px 8px;{bb}width:118px;">{_eur_cell(r.get("now_eur", 0.0), P["muted"])}</td>'
                 f'<td align="right" style="padding:5px 8px;{bb}width:118px;">{_eur_cell(r.get("target_eur", 0.0), P["ink"])}</td>'
-                f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
-                f'color:{ddcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:74px;">'
-                f'{_eur_smart(r.get("delta_eur", 0.0), signed=True)}</td>'
                 f'<td style="padding:5px 4px;{bb}width:100px;"></td>'
+                f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
+                f'color:{ddcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:92px;">'
+                f'{_eur_smart(r.get("delta_eur", 0.0), signed=True)}</td>'
                 f'</tr>'
             )
             continue
@@ -938,39 +941,40 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         body.append(
             f'<tr>'
             f'<td style="padding:5px 8px;{bb}font-size:12px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
-            f'{_lev_cell(r.get("leverage"))}'
             f'<td style="padding:5px 8px;{bb}width:92px;">{_num_cell(now, P["muted"])}</td>'
             f'<td style="padding:5px 8px;{bb}width:92px;">{_num_cell(tgt, P["ink"])}</td>'
             f'<td align="right" valign="middle" style="padding:5px 6px;{bb}'
             f'width:88px;">{_bullet_cell(now, tgt)}</td>'
-            f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
-            f'color:{dcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:74px;">'
-            f'\u25cf {_signed_pp(drift)}</td>'
             f'<td align="right" valign="middle" style="padding:5px 4px;{bb}width:86px;'
             f'white-space:nowrap;">{trend_inner}</td>'
+            f'<td align="right" style="padding:5px 8px;{bb}font-size:12px;font-weight:700;'
+            f'color:{dcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:92px;">'
+            f'\u25cf {_signed_pp(drift)}{_lev_suffix(r.get("leverage"))}</td>'
             f'</tr>'
         )
+    # The first column is named after what the table lists ("Asset class",
+    # "Equity geography", ...) rather than a generic "Name": that made the
+    # kicker above each sub-table pure duplication, so it is gone and the table
+    # is a line shorter.
+    _drift_label = "Drift \u00b7 lev" if show_leverage else "Drift"
     head = (
         f'<tr>'
         f'<td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;'
-        f'text-transform:uppercase;color:{P["subtle"]};">Name</td>'
-        + (f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
-           f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:46px;">Lev</td>'
-           if show_leverage else "")
-        + f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'text-transform:uppercase;color:{P["subtle"]};">{first_label}</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:92px;">Now</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:92px;">Target</td>'
         f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:88px;">vs target</td>'
         f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:74px;">Drift</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
         f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:86px;">Trend (1M)</td>'
+        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:{P["subtle"]};width:92px;">{_drift_label}</td>'
         + '</tr>'
     )
     return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'style="margin-top:8px;background:{P["card_alt"]};border:1px solid {P["border"]};'
+            f'style="margin-top:16px;background:{P["card_alt"]};border:1px solid {P["border"]};'
             f'border-radius:10px;border-collapse:separate;overflow:hidden;">{head}{"".join(body)}</table>')
 
 def _ph_target_rows(ctx: _NewsletterContext, tol: float,
@@ -1247,16 +1251,12 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         fi_rows = _holding_verif_rows(ctx, tol, hold_series, "per_holding_fi",
                                       ASSET_COLORS.get("Fixed Income", P["accent"]))
 
-    def sub(title):
-        return (f'<div style="margin-top:20px;font-size:11px;font-weight:700;letter-spacing:0.06em;'
-                f'color:{P["muted"]};text-transform:uppercase;">{title}</div>')
-
     html = [
         f'<div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};text-transform:uppercase;">Diversification</div>',
     ]
     if asset_rows:
-        html.append(sub("By asset class"))
-        html.append(_div_table(asset_rows, tol, base=invested_base, show_leverage=True))
+        html.append(_div_table(asset_rows, tol, base=invested_base,
+                               show_leverage=True, first_label="Asset class"))
         # Notional note: when capital-efficient/leveraged funds push total
         # exposure past 100% of capital, make the leverage explicit. Sum only
         # the per-class rows (exclude the Total and cash rows).
@@ -1270,19 +1270,19 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                 f'(e.g. efficient-core 90/60).</div>'
             )
     if geo_rows:
-        html.append(sub("By geography"))
-        html.append(_div_table(geo_rows, tol, base=equity_base))
+        html.append(_div_table(geo_rows, tol, base=equity_base,
+                               first_label="Equity geography"))
     if holding_rows:
-        html.append(sub("By holding"))
-        html.append(_div_table(holding_rows, tol, base=invested_base))
+        html.append(_div_table(holding_rows, tol, base=invested_base,
+                               first_label="Per-holding target"))
         if exits_note:
             html.append(exits_note)
     if eq_rows:
-        html.append(sub("By holding · Equities"))
-        html.append(_div_table(eq_rows, tol, base=equity_base))
+        html.append(_div_table(eq_rows, tol, base=equity_base,
+                               first_label="Equities holding"))
     if fi_rows:
-        html.append(sub("By holding · Fixed Income"))
-        html.append(_div_table(fi_rows, tol, base=fi_base))
+        html.append(_div_table(fi_rows, tol, base=fi_base,
+                               first_label="Fixed Income holding"))
     return {"available": True, "html": "".join(html)}
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
@@ -1421,14 +1421,18 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
             # shared uni_name so it matches every other table.
             "name_html": uni_name(short_instrument_name(s.get("name", "")), tk,
                                    pill=_pill(direction)),
-            # Now → Target → Trade → After, each abs + %.
+            # Trade -> Now -> After -> Target, each abs + %. The trade leads
+            # because it is what the table is for, and After sits next to
+            # Target so "does this trade get me there?" is a glance rather
+            # than a comparison across two intervening columns.
             "cells": [
-                _pct_eur_cell(s.get("current_pct"), s.get("current_eur")),
-                _pct_eur_cell(s.get("target_pct"), s.get("target_eur"),
-                              color=PALETTE["muted"]),
                 uni_cell(_eur_smart(signed_amount, signed=True),
                          color=dir_color, weight=700),
+                _pct_eur_cell(s.get("current_pct"), s.get("current_eur"),
+                              color=PALETTE["muted"]),
                 _pct_eur_cell(s.get("after_pct"), s.get("after_eur")),
+                _pct_eur_cell(s.get("target_pct"), s.get("target_eur"),
+                              color=PALETTE["muted"]),
             ],
         })
 
@@ -1437,9 +1441,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
     raw_groups = group_by_class_role(
         actions, asset_class=lambda a: a["asset_class"], role=lambda a: a["role"])
     table_html = render_unified_table(
-        "Holding",
-        [("Now", "right", 66), ("Target", "right", 66),
-         ("Trade", "right", 64), ("After", "right", 66)],
+        "Action",
+        [("Trade", "right", 70), ("Now", "right", 62),
+         ("After", "right", 62), ("Target", "right", 62)],
         [(ac, col, [(role, [{"name_html": a["name_html"], "cells": a["cells"],
                              "row_bg": a["_row_bg"]} for a in items])
                     for role, items in role_list])

@@ -423,20 +423,39 @@ def _flat_dashed_spark(w: int = 84, h: int = 18) -> str:
         f'stroke-width="1" stroke-dasharray="3,2"/></svg>'
     )
 
-def _prev_session_label(m) -> str:
-    """Report-level 'previous session' date as ``dd/mm`` for the PREV. DAY tag
-    — the last completed trading day in the portfolio history (the close the
-    non-live 1D moves are measured against). Empty when unavailable."""
+def _prev_session_label(m, fmt: str = "%d/%m") -> str:
+    """Report-level 'previous session' date for the PREV. DAY tag and the 1D
+    column header — the last completed trading day in the portfolio history
+    (the close the non-live 1D moves are measured against). Empty when
+    unavailable.
+
+    ``fmt`` lets a caller ask for a longer form; both callers must read the
+    same date, which is why this is a parameter rather than a second function.
+    """
     ph = getattr(m, "portfolio_history", None)
     try:
         if ph is not None and len(ph) >= 1:
             today = pd.Timestamp.now().normalize()
             past = [d for d in ph.index if pd.Timestamp(d).normalize() < today]
             d = pd.Timestamp(past[-1]) if past else pd.Timestamp(ph.index[-1])
-            return d.strftime("%d/%m")
+            return d.strftime(fmt)
     except Exception:  # noqa: BLE001
         pass
     return ""
+
+
+def day_column_label(m, *, live: bool) -> str:
+    """Header for the 1D column, naming what the column is measured against.
+
+    "1D / Intraday" read as two columns. There is only one: while a session is
+    open it carries the live move against the previous close, and once every
+    session has closed it carries the close-to-close return. The header says
+    which of the two the reader is looking at, and against which close.
+    """
+    if live:
+        return "1D \u00b7 intraday"
+    when = _prev_session_label(m, "%d %b")
+    return f"1D \u00b7 close {when}" if when else "1D"
 
 
 
