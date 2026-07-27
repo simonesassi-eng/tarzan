@@ -423,11 +423,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                         "end_label": f'{ctx.benchmark_geo} '
                                      f'{_pct(full["acwi"][-1], signed=True)}'})
 
-    # ── Volatility row (You vs the market, second row): rolling annualized
-    #    volatility over the same two windows. Grey line = the benchmark, so the
-    #    reader sees whether they run calmer or bumpier.
+    # ── Volatility row (You vs the market, second row): annualized volatility
+    #    on a rolling 21-day window, plotted over the last 30 days -- the same
+    #    window as the return panel beside it, so the two half panels sit on one
+    #    timeline instead of pairing a 30-day return with a whole-history
+    #    volatility. Grey line = the benchmark, so the reader sees whether they
+    #    run calmer or bumpier.
     VOL = "#B45309"  # amber-brown, distinct from the return lines
-    vol_full = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
     vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
 
     # Panel sizes. The card's content box is 580px wide; with the 8px gutter
@@ -464,7 +466,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         left_ret = _charts.chart_pct_compact(
             ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
             month_ticks=True, end_gutter=G_WIDE) if ssi else ""
-        right_ret = (_colcap("Last 30 days \u00b7 rebased")
+        right_ret = (_colcap("Return \u00b7 last 30 days")
                      # Five date ticks, not twelve: at half width twelve
                      # rotated labels overlapped into a grey band, which is
                      # worse than no axis at all.
@@ -472,14 +474,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                                                  w=W_HALF, h=H_HALF,
                                                  min_day_ticks=5,
                                                  end_gutter=G_HALF)) if s30 else ""
-        # One volatility panel, over the whole history. The 30-day rolling twin
-        # was dropped: two volatility charts side by side invite a comparison
-        # between two windows of the same measure, which is not the question
-        # this section asks, and it cost a quarter of the section's height.
-        vol_panel = _vol_panel(vol_full, vol_full["dates"] if vol_full else si_dates,
-                               month_ticks=True, min_day_ticks=0)
+        # The volatility panel shares the return panel's 30-day window and its
+        # five day-ticks, so the two half panels read on one x-axis. The caption
+        # names the measure (annualized volatility, same units as the risk tile)
+        # and the window, rather than the "rolling 1M" of the internal 21-day
+        # estimator, which named the window the reader could not see.
+        vol_panel = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
+                               month_ticks=False, min_day_ticks=5)
         if vol_panel:
-            vol_panel = _colcap("Rolling 1M volatility") + vol_panel
+            vol_panel = _colcap("Volatility \u00b7 last 30 days") + vol_panel
 
         def _row(l, r):
             return (f'<tr>'
