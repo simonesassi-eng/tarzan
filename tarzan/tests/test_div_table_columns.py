@@ -140,13 +140,16 @@ class TestHeaderContract:
         assert "1.38\u00d7" in rows[1][-1], "leverage belongs in the drift cell"
         assert ">Lev<" not in html
 
-    def test_leverage_at_one_is_not_printed(self):
+    def test_leverage_is_printed_at_every_value(self):
+        """It used to be suppressed at ~1.0x, but only because inline beside the
+        drift figure it read as part of it. On its own line under the drift, a
+        sleeve carrying exactly its own capital is worth stating."""
         html = _div_table([_value_row(leverage=1.0)], tol=2.0,
                           show_leverage=True)
-        assert "1.00\u00d7" not in html
+        assert "1.00\u00d7" in html
 
     def test_trend_sits_before_drift(self):
         html = _div_table([_value_row()], tol=2.0)
         header = _rows(html)[0]
         labels = header
-        assert labels.index("Trend (1M)") < labels.index("Drift")
+        assert labels.index("Trend") < labels.index("Drift")
