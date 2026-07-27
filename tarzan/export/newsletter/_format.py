@@ -6,6 +6,7 @@ from typing import Optional
 
 import pandas as pd
 
+from tarzan.export._format import base_symbol
 from tarzan.export.newsletter._constants import PALETTE
 
 
@@ -101,20 +102,27 @@ def _signed_pp(value: Optional[float], decimals: int = 1) -> str:
     return f"{_sign_for(value, decimals)}{abs(value):.{decimals}f}"
 
 def _display_ticker(symbol: Optional[str]) -> Optional[str]:
-    """Return the exact resolved provider ticker for human-facing output.
+    """The ticker pin shown in the body: the resolved provider symbol without
+    its exchange suffix.
 
-    Exchange suffixes and index markers are part of the instrument identity
-    and must not be stripped after preprocessing.  Synthetic portfolio/mix
-    labels remain hidden because they are not provider tickers.
+    The suffix is part of the instrument's identity and is never dropped from
+    the DATA -- the appendix's instrument reference prints the full canonical
+    and intraday symbols, and the semantic gate checks the frames rather than
+    this string. In the body it is noise: no two instruments in an issue share a
+    base symbol, and ".MI" on every pin costs three characters of a 9px label
+    that has to sit beside a name.
+
+    Synthetic portfolio/mix labels stay hidden because they are not provider
+    tickers.
     """
     if not symbol:
         return None
     ticker = str(symbol).strip()
-    if not ticker or ticker.upper() in ("PORTFOLIO", "—", "NAN"):
+    if not ticker or ticker.upper() in ("PORTFOLIO", "\u2014", "NAN"):
         return None
     if "/" in ticker or " " in ticker:
         return None
-    return ticker
+    return base_symbol(ticker) or ticker
 
 def _semaphore(delta: Optional[float], tolerance: float) -> str:
     """Return 'green' / 'amber' / 'red' based on |delta| vs tolerance."""

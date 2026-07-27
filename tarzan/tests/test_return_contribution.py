@@ -93,10 +93,12 @@ class TestContributionMeasure:
         assert "more" not in svg
         assert svg.count("<rect") == 3
 
-    def test_bars_are_labelled_with_the_resolved_ticker(self):
-        df = _df([("XDEV.MI", 10_000.0, 900.0)])
-        svg = _build_return_contrib(_Ctx(df))["chart_html"]
-        assert "XDEV.MI" in svg, "the exchange suffix is part of the identity"
+    def test_bars_are_labelled_with_the_base_ticker(self):
+        """The bar label is the base symbol. A 46px bar cannot hold "XDEV.MI" at
+        8.5px, and the appendix carries the full provider listing."""
+        svg = _build_return_contrib(_Ctx(_df([("XDEV.MI", 10_000.0, 900.0)])))["chart_html"]
+        assert "XDEV" in svg
+        assert "XDEV.MI" not in svg
 
     def test_zero_cost_basis_yields_no_section(self):
         df = _df([("A", 0.0, 0.0)])

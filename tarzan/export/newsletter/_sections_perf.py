@@ -10,6 +10,7 @@ import pandas as pd
 
 from tarzan.models.instrument_key import normalize_ticker
 from tarzan.export._format import (
+    display_instrument_name,
     eur_smart as _eur_smart,
     short_instrument_name,
 )
@@ -953,8 +954,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         row_items.append({
             "_ac": str(h.get("asset_class", "") or "") or "Other",
             "_isin": isin, "_ticker": ticker,
-            "name_html": _perf_name_html(short_instrument_name(raw_name),
-                                         display_tk, []),
+            "name_html": _perf_name_html(
+                display_instrument_name(isin, ticker, raw_name),
+                display_tk, []),
             "spark_inner": inner,
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
         })
@@ -1154,7 +1156,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 # Display name goes through the SAME shortener as the holding
                 # rows so "iShares Nasdaq 100 UCITS ETF" reads like the rest of
                 # the table (tag-matching above uses the raw name, not this).
-                "name": short_instrument_name(name),
+                "name": display_instrument_name(r.get("isin"), raw_ticker, name),
                 "ticker": _display_ticker(r.get("ticker")),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
@@ -1462,7 +1464,9 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         for role, insts in role_list:
             block = [{
                 "name_html": uni_name(
-                    short_instrument_name(inst.get("label", "")),
+                    display_instrument_name(inst.get("isin"),
+                                            inst.get("ticker"),
+                                            inst.get("label", "")),
                     _display_ticker(inst.get("ticker")) or "",
                     tags=_tags_for(inst.get("label", "")),
                     span=inst.get("span_label", "\u2014")),
