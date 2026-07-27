@@ -196,7 +196,7 @@
           {% if returns_snapshot.available %}
           <tr>
             <td class="px-32" style="padding:20px 32px 0 32px;">
-              {{ sec(secn, "Returns", "Grouped by asset class and sub-category. Colour is scaled per column over this table, so the darkest cell in a window is that window's best or worst here.") }}
+              {{ sec(secn, "Returns", "Grouped by asset class and sub-category. Colour is scaled per column over this table.") }}
               <div style="margin-top:6px;font-size:11px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
               {{ returns_snapshot.table_html|safe }}
             </td>
@@ -298,8 +298,13 @@
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
                 {{ plan.label }}
+                {# Which plan the configuration runs, then whether it can be
+                   executed. Both plans are computed every run and both can be
+                   executable, so the status alone left the reader with two trade
+                   lists and no way to tell which one is the proposal. #}
+                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.accent_bg if plan.active else palette.card_alt }};color:{{ palette.accent if plan.active else palette.muted }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span>
                 {% if plan.execution_status %}
-                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{{ plan.execution_status|replace('_', ' ') }}</span>
+                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{% if plan.executable %}✓ {% endif %}{{ plan.execution_status|replace('_', ' ') }}</span>
                 {% endif %}
               </div>
               {% if plan.execution_status == 'NON_EXECUTABLE' %}
