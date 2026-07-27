@@ -1065,13 +1065,34 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
     note = ""
     held_exits = [it for it in exits if cur_by_isin.get(_isin_for(it), 0.0) > 0.05]
     if held_exits:
-        names = ", ".join(
-            (_display_ticker(it.get("ticker") or "")
-             or short_instrument_name(it.get("category") or "", 16))
-            for it in held_exits
-        )
-        note = (f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
-                f'To exit (0% target): <b>{names}</b></div>')
+        # How much money the instruction actually moves, not just which tickers
+        # it names: a list of seven symbols does not say whether this is a
+        # rounding trim or half the book.
+        #
+        # cur_by_isin holds each position's WEIGHT as a percent of invested
+        # capital, not its euro value (see where it is built above), so the
+        # share is the sum of those weights and the amount is derived from it.
+        # Summing it as euros produced "7 positions worth €54".
+        share = sum(cur_by_isin.get(_isin_for(it), 0.0) for it in held_exits)
+        invested = float(getattr(ctx.metrics, "invested_value", 0.0) or 0.0)
+        exit_eur = invested * share / 100.0 if invested > 0 else None
+        pills = " ".join(
+            f'<span style="display:inline-block;margin:0 4px 4px 0;'
+            f'padding:1px 6px;border-radius:5px;background:{P["red_bg"]};'
+            f'color:{P["red"]};font-size:10px;font-weight:700;'
+            f'white-space:nowrap;">'
+            f'{(_display_ticker(it.get("ticker") or "") or short_instrument_name(it.get("category") or "", 16))}'
+            f'</span>'
+            for it in held_exits)
+        note = (
+            f'<div style="margin-top:8px;font-size:11px;color:{P["muted"]};'
+            f'line-height:1.6;">'
+            f'<b style="color:{P["red"]};">Targeted to 0%:</b> '
+            f'{len(held_exits)} position{"s" if len(held_exits) != 1 else ""} '
+            + (f'worth <b style="color:{P["ink"]};">{_eur_smart(exit_eur)}</b>, '
+               if exit_eur is not None else "")
+            + f'{share:.1f}% of invested capital'
+            + f'.<div style="margin-top:5px;">{pills}</div></div>')
     return rows, note
 
 def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
