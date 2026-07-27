@@ -418,7 +418,13 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     # partly synthetic). Shown as a ratio (like the newsletter), only when some
     # class is levered.
     def _lev(p, c):
-        return (p.notl_gross.get(c, 0.0) / p.cap[c]) if p.cap.get(c, 0.0) > 0 else None
+        # cap == 0 with notional > 0 = fully synthetic exposure (e.g. FI held
+        # only via NTSG's futures overlay) → ∞, NOT "absent".
+        notl = p.notl_gross.get(c, 0.0)
+        cap = p.cap.get(c, 0.0)
+        if cap > 0:
+            return notl / cap
+        return float("inf") if notl > 0 else None
     lev_labels = [c for c in _ASSET_ORDER
                   if any((_lev(p, c) or 0) > 1.001 for p in portfolios)]
     if lev_labels:
@@ -432,7 +438,9 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
             for j, p in enumerate(portfolios):
                 lv = _lev(p, cls)
                 c = ws.cell(row=row, column=_PCOL0 + j,
-                            value=("\u2014" if lv is None else f"{lv:.2f}x"))
+                            value=("\u2014" if lv is None
+                                   else "\u221e (all synthetic)" if lv == float("inf")
+                                   else f"{lv:.2f}x"))
                 c.alignment = _align("center")
                 c.fill = _fill(bg)
                 c.border = _border()

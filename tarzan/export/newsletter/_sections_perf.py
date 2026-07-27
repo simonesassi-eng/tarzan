@@ -348,23 +348,36 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     legend_values: dict[str, float] = {}
     legend_labels: dict[str, str] = {}
 
-    def _window_label(key: str, prefix: str) -> str:
+    def _window_label(key: str, _prefix: str) -> str:
+        """The visible end label for a 30-day line: the signed percentage, and
+        nothing else.
+
+        It carried the series name too, but at half width the gutter that would
+        hold "Total P&L % -0.97%" leaves the plot 148px wide. The three colours
+        are named in full on the since-inception chart directly above, so the
+        mapping is established once for the section. The audited string is this
+        same string -- the gate checks that what is drawn agrees with the
+        endpoint, and it still does.
+        """
         value = float(endpoints[key])
-        label = f'{prefix} {_pct(value, signed=True)}'
+        label = _pct(value, signed=True)
         legend_values[key] = value
         legend_labels[key] = label
         return label
 
-    s30, l30 = [], []
+    # The label is drawn at the end of its own line rather than in a legend
+    # underneath. The audited string is unchanged, so the semantic gate still
+    # finds it verbatim in the rendered HTML -- it is inside the SVG now.
+    s30 = []
     if win["twror"] is not None and endpoints.get("twror") is not None:
-        s30.append({"values": win["twror"], "color": GREEN})
-        l30.append((_window_label("twror", "TWROR"), GREEN, False))
+        s30.append({"values": win["twror"], "color": GREEN,
+                    "end_label": _window_label("twror", "TWROR")})
     if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
-        s30.append({"values": win["pnl_pct"], "color": PNL})
-        l30.append((_window_label("pnl_pct", "Total P&L %"), PNL, False))
+        s30.append({"values": win["pnl_pct"], "color": PNL,
+                    "end_label": _window_label("pnl_pct", "Total P&L %")})
     if win["acwi"] is not None and endpoints.get("acwi") is not None:
-        s30.append({"values": win["acwi"], "color": BENCH})
-        l30.append((_window_label("acwi", "MSCI ACWI"), BENCH, False))
+        s30.append({"values": win["acwi"], "color": BENCH,
+                    "end_label": _window_label("acwi", "MSCI ACWI")})
 
     if ctx.semantic_audit is not None:
         ctx.semantic_audit["performance_30d"] = {
@@ -382,19 +395,20 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # Since inception (cumulative), over the WHOLE inception→today range — its
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
     # authoritative fields (m.twror_pct, m.pnl_pct).
-    ssi, lsi = [], []
+    ssi = []
     full = _perf_full_series(m, ctx.benchmark_geo)
     si_dates = full["dates"] if full else dates
     if full is not None:
         if full["twror"] is not None:
-            ssi.append({"values": full["twror"], "color": GREEN})
-            lsi.append((f'TWROR {_pct(m.twror_pct, signed=True)}', GREEN, False))
+            ssi.append({"values": full["twror"], "color": GREEN,
+                        "end_label": f'TWROR {_pct(m.twror_pct, signed=True)}'})
         if full["pnl_pct"] is not None:
-            ssi.append({"values": full["pnl_pct"], "color": PNL})
-            lsi.append((f'Total P&L % {_pct(m.pnl_pct, signed=True)}', PNL, False))
+            ssi.append({"values": full["pnl_pct"], "color": PNL,
+                        "end_label": f'P&L {_pct(m.pnl_pct, signed=True)}'})
         if full["acwi"] is not None:
-            ssi.append({"values": full["acwi"], "color": BENCH})
-            lsi.append((f'MSCI ACWI {_pct(full["acwi"][-1], signed=True)}', BENCH, False))
+            ssi.append({"values": full["acwi"], "color": BENCH,
+                        "end_label": f'{ctx.benchmark_geo} '
+                                     f'{_pct(full["acwi"][-1], signed=True)}'})
 
     # ── Volatility row (You vs the market, second row): rolling annualized
     #    volatility over the same two windows. Grey line = the benchmark, so the
@@ -409,39 +423,43 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # wider table cell does not make the chart wider.
     W_WIDE, H_WIDE = 544, 166
     W_HALF, H_HALF = 264, 138
+    # Room for the end labels: "MSCI ACWI +14.16%" needs ~110px, the bare
+    # percentages on the half panels ~54px.
+    G_WIDE, G_HALF = 132, 52
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
                    w=W_HALF, h=H_HALF) -> str:
-        series, leg = [], []
+        series = []
         if vs and vs.get("port"):
-            series.append({"values": vs["port"], "color": VOL})
-            leg.append((f'You {_pct(vs["port"][-1], signed=False)}', VOL, False))
+            series.append({"values": vs["port"], "color": VOL,
+                           "end_label": _pct(vs["port"][-1], signed=False)})
         if vs and vs.get("acwi"):
-            series.append({"values": vs["acwi"], "color": BENCH})
-            leg.append((f'MSCI ACWI {_pct(vs["acwi"][-1], signed=False)}', BENCH, False))
+            series.append({"values": vs["acwi"], "color": BENCH,
+                           "end_label": _pct(vs["acwi"][-1], signed=False)})
         if not series:
             return ""
-        return (_charts.chart_pct_compact(series, dates_, include_zero=False,
-                                          w=w, h=h, month_ticks=month_ticks,
-                                          min_day_ticks=min_day_ticks)
-                + _charts.legend(leg, 9))
+        return _charts.chart_pct_compact(series, dates_, include_zero=False,
+                                         w=w, h=h, month_ticks=month_ticks,
+                                         min_day_ticks=min_day_ticks,
+                                         end_gutter=G_HALF)
 
     parts = []
     if s30 or ssi:
-        # LEFT column = since inception (month grid); RIGHT column = last 30
-        # days (>=12 day grid). Row 1 = cumulative return, row 2 = rolling
-        # annualized volatility — each return chart sits above its vol twin.
-        left_ret = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
-                    + _charts.chart_pct_compact(ssi, si_dates, include_zero=False,
-                                                w=W_WIDE, h=H_WIDE, month_ticks=True)
-                    + _charts.legend(lsi, 9)) if ssi else ""
-        right_ret = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
+        # No caption on the wide chart: it is the section's subject and the
+        # section heading names it. The two half panels keep one, because they
+        # are not the subject -- the caption says which window and which measure.
+        # Each line carries its own end label instead of a legend underneath.
+        left_ret = _charts.chart_pct_compact(
+            ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
+            month_ticks=True, end_gutter=G_WIDE) if ssi else ""
+        right_ret = (_colcap("Last 30 days <span style='font-weight:400;"
+                             f"color:{P['subtle']};'>\u00b7 rebased</span>")
                      # Five date ticks, not twelve: at half width twelve
                      # rotated labels overlapped into a grey band, which is
                      # worse than no axis at all.
                      + _charts.chart_pct_compact(s30, dates, include_zero=True,
                                                  w=W_HALF, h=H_HALF,
-                                                 min_day_ticks=5)
-                     + _charts.legend(l30, 9)) if s30 else ""
+                                                 min_day_ticks=5,
+                                                 end_gutter=G_HALF)) if s30 else ""
         # One volatility panel, over the whole history. The 30-day rolling twin
         # was dropped: two volatility charts side by side invite a comparison
         # between two windows of the same measure, which is not the question
@@ -449,9 +467,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         vol_panel = _vol_panel(vol_full, vol_full["dates"] if vol_full else si_dates,
                                month_ticks=True, min_day_ticks=0)
         if vol_panel:
-            vol_panel = _colcap(
-                f"Volatility <span style='font-weight:400;color:{P['subtle']};'>"
-                f"\u00b7 annualized, rolling 1-month</span>") + vol_panel
+            vol_panel = _colcap("Rolling 1M volatility") + vol_panel
 
         def _row(l, r):
             return (f'<tr>'
@@ -476,28 +492,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             f'cellspacing="0" border="0" style="margin-top:12px;">'
             + rows + '</table>'
         )
-        # Quantitative "why are we diverging?" note, encapsulated in this card
-        # right under the two charts. AI writes the prose when available; a
-        # deterministic rule-based note (same figures) is used otherwise, so
-        # the block is always present and never trivial.
+        # No "why you're diverging" block. The concept does not carry one, and
+        # it restated the section: the gap is in the heading's subtitle, the
+        # three lines are on the chart with their end values, and the beta is a
+        # column in RISK. What it added beyond that was an opinion about whether
+        # to close the gap, which is advice this issue does not give.
         divergence_html = ""
-        try:
-            from tarzan.export.ai_summary import divergence_note
-            note = divergence_note(m, ctx.config, ctx.benchmark_geo)
-            if note:
-                divergence_html = (
-                    f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid {P["border"]};">'
-                    f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{P["accent"]};'
-                    f'text-transform:uppercase;">Why you’re diverging</div>'
-                    f'<div style="margin-top:6px;font-size:13px;color:{P["ink"]};line-height:1.55;">'
-                    f'{_colorize_pct(note)}</div>'
-                    f'<div style="margin-top:8px;font-size:10px;color:{P["subtle"]};">'
-                    f'✨ Quantitative attribution vs {ctx.benchmark_geo} · '
-                    f'informational, not financial advice</div></div>'
-                )
-        except Exception as e:  # noqa: BLE001 — never break the newsletter
-            logger.debug("Divergence note skipped: %s", e)
-
         # No card kicker or subtitle here: this is a top-level section now and
         # the template's heading carries both. Nested inside the performance
         # card it needed its own title; as a section it would print two
