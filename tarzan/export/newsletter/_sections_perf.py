@@ -19,7 +19,6 @@ from tarzan.export._format import (
 from tarzan.export import _charts as _charts
 from tarzan.export._perf_series import (
     _norm_series,
-    benchmark_gap_pp,
     _perf_full_series,
     _perf_vol_series,
     _perf_window,
@@ -355,14 +354,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 f'margin-bottom:5px;">{t}</div>')
 
     def _mini_legend(items: list) -> str:
-        """A one-line colour key under a half-panel caption: a small swatch and
-        a name per line.
+        """A one-line colour key under a chart: a small swatch and a name per
+        line, so the lines carry only their end value and are named once here.
 
-        The half panels draw only the end value on each line, to keep the plot
-        wide at 282px, so the colours named nothing on their own. It matters
-        most on the volatility panel, whose portfolio line is a colour (amber)
-        that appears nowhere in the since-inception chart above, so there was no
-        way to learn the mapping from anywhere on the page.
+        Each chart draws only the end value on each line, to keep the plot
+        wide, so the colours named nothing on their own. It matters most on the
+        volatility panel, whose portfolio line is a colour (amber) that appears
+        on no other chart, so there was no way to learn the mapping from
+        anywhere on the page.
         """
         if not items:
             return ""
@@ -373,7 +372,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
              f'<span style="color:{P["muted"]};">{label}</span>')
             for color, label in items
         ]
-        return ('<div style="font-size:9px;line-height:1.5;margin:-2px 0 5px;">'
+        return ('<div style="font-size:9px;line-height:1.5;margin:7px 0 0;">'
                 + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
     # Last-30-day labels come from the exact arrays passed to the chart. The
@@ -436,19 +435,26 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
     # authoritative fields (m.twror_pct, m.pnl_pct).
     ssi = []
+    si_leg = []
     full = _perf_full_series(m, ctx.benchmark_geo)
     si_dates = full["dates"] if full else dates
     if full is not None:
+        # Bare value at each line end; the name is in the colour key below the
+        # chart. The name sat beside the line too ("iShares MSCI ACWI +14.16%"),
+        # which repeated the key for no gain and forced a 132px right gutter
+        # that ate a fifth of the plot.
         if full["twror"] is not None:
             ssi.append({"values": full["twror"], "color": GREEN,
-                        "end_label": f'TWROR {_pct(m.twror_pct, signed=True)}'})
+                        "end_label": _pct(m.twror_pct, signed=True)})
+            si_leg.append((GREEN, "TWROR"))
         if full["pnl_pct"] is not None:
             ssi.append({"values": full["pnl_pct"], "color": PNL,
-                        "end_label": f'P&L {_pct(m.pnl_pct, signed=True)}'})
+                        "end_label": _pct(m.pnl_pct, signed=True)})
+            si_leg.append((PNL, "P&amp;L"))
         if full["acwi"] is not None:
             ssi.append({"values": full["acwi"], "color": BENCH,
-                        "end_label": f'{ctx.benchmark_geo} '
-                                     f'{_pct(full["acwi"][-1], signed=True)}'})
+                        "end_label": _pct(full["acwi"][-1], signed=True)})
+            si_leg.append((BENCH, ctx.benchmark_geo))
 
     # ── Volatility row (You vs the market, second row): annualized volatility
     #    on a rolling 21-day window, plotted over the last 30 days -- the same
@@ -465,9 +471,10 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # wider table cell does not make the chart wider.
     W_WIDE, H_WIDE = 580, 166
     W_HALF, H_HALF = 282, 138
-    # Room for the end labels: "MSCI ACWI +14.16%" needs ~110px, the bare
-    # percentages on the half panels ~54px.
-    G_WIDE, G_HALF = 132, 52
+    # Room for the end labels: bare signed percentages on every chart now that
+    # the names live in the colour keys, so ~54px is enough on all three (the
+    # wide chart used to reserve 132px for "MSCI ACWI +14.16%").
+    G_WIDE, G_HALF = 54, 52
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
                    w=W_HALF, h=H_HALF) -> str:
         series = []
@@ -486,22 +493,25 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     parts = []
     if s30 or ssi:
-        # No caption on the wide chart: it is the section's subject and the
-        # section heading names it. The two half panels keep one, because they
-        # are not the subject -- the caption says which window and which measure.
-        # Each line carries its own end label instead of a legend underneath.
-        left_ret = _charts.chart_pct_compact(
-            ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
-            month_ticks=True, end_gutter=G_WIDE) if ssi else ""
+        # Every chart reads the same way: a caption naming measure and window on
+        # top, the plot, then a colour key naming the lines at the bottom. The
+        # wide chart is the same measure as the left half panel over a longer
+        # window, so it is "Return · since inception" to the half panel's
+        # "Return · last 30 days".
+        left_ret = (_colcap("Return \u00b7 since inception")
+                    + _charts.chart_pct_compact(
+                        ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
+                        month_ticks=True, end_gutter=G_WIDE)
+                    + _mini_legend(si_leg)) if ssi else ""
         right_ret = (_colcap("Return \u00b7 last 30 days")
-                     + _mini_legend(ret_leg)
                      # Five date ticks, not twelve: at half width twelve
                      # rotated labels overlapped into a grey band, which is
                      # worse than no axis at all.
                      + _charts.chart_pct_compact(s30, dates, include_zero=True,
                                                  w=W_HALF, h=H_HALF,
                                                  min_day_ticks=5,
-                                                 end_gutter=G_HALF)) if s30 else ""
+                                                 end_gutter=G_HALF)
+                     + _mini_legend(ret_leg)) if s30 else ""
         # The volatility panel shares the return panel's 30-day window and its
         # five day-ticks, so the two half panels read on one x-axis. The caption
         # names the measure (annualized volatility, same units as the risk tile)
@@ -516,7 +526,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             if vol_30 and vol_30.get("acwi"):
                 vol_leg.append((BENCH, ctx.benchmark_geo))
             vol_panel = (_colcap("Volatility \u00b7 last 30 days")
-                         + _mini_legend(vol_leg) + vol_panel)
+                         + vol_panel + _mini_legend(vol_leg))
 
         def _row(l, r):
             return (f'<tr>'
@@ -562,18 +572,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # gets its own heading, as in the concept. Returned separately so the
     # template can place each under its own ordinal rather than one section
     # carrying both.
-    gap = benchmark_gap_pp(m, ctx.benchmark_geo)
-    gap_sub = None
-    if gap is not None:
-        word = "behind" if gap < 0 else ("ahead of" if gap > 0 else "level with")
-        sign = "+" if gap > 0 else ("\u2212" if gap < 0 else "")
-        col = P["red"] if gap < 0 else (P["green"] if gap > 0 else P["muted"])
-        gap_sub = (f'Now <strong style="color:{col};">{sign}{abs(gap):.2f}pp'
-                   f'</strong> {word} {ctx.benchmark_geo}.')
+    # No subtitle. The lead vs the benchmark is the distance between the TWROR
+    # and benchmark lines on the since-inception chart directly below, both now
+    # named in its colour key and labelled with their value, so a sentence
+    # restating it in points was a third copy of the same fact.
     return {"available": True,
             "matrix_html": matrix_card,
             "vs_market_html": "".join(parts),
-            "vs_market_sub": gap_sub}
+            "vs_market_sub": None}
 
 def _intraday_quote_parts(quote) -> tuple[object, object]:
     """Return ``(series, baseline)`` from a preprocessed quote.
