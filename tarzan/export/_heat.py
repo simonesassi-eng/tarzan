@@ -73,3 +73,27 @@ def heat_bg(value: Optional[float], *, neg: float, pos: float,
     # Ease the low end so near-zero values stay close to the surface instead of
     # picking up a tint that reads as a signal.
     return _mix(PALETTE["card"], target, 0.10 + 0.62 * (t ** 0.85))
+
+
+# Above this share of the ramp the background carries enough colour that a
+# green figure on green (or red on red) loses contrast, so the text switches to
+# the palette ink instead.
+_INK_ABOVE = 0.45
+
+
+def _intensity(value: Optional[float], *, neg: float, pos: float,
+               damp: float = 1.0) -> float:
+    if value is None:
+        return 0.0
+    v = float(value)
+    span = (abs(pos) if v >= 0 else abs(neg)) * damp or 1.0
+    return min(1.0, abs(v) / span)
+
+
+def heat_ink(value: Optional[float], *, neg: float, pos: float,
+             damp: float = 1.0) -> Optional[str]:
+    """Palette ink when the tint is strong enough to swallow a coloured figure,
+    otherwise None so the caller keeps its own sign colour."""
+    if _intensity(value, neg=neg, pos=pos, damp=damp) >= _INK_ABOVE:
+        return PALETTE["ink"]
+    return None
