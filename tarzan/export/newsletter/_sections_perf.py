@@ -98,9 +98,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             in_progress = (False if is_continuous_market(sym)
                            else market_open_now(sym))
             return _intraday_spark(ss, d.get("baseline", d["value"]),
-                                   w=46, h=18, in_progress=in_progress)
+                                   w=44, h=20, in_progress=in_progress)
         return _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                          w=46, h=18, stretch=False)
+                          w=44, h=20, stretch=False)
 
     def _row(d: dict) -> str:
         up = d["pct"] >= 0
@@ -409,8 +409,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # between the two half cells each of them gets 264px. These are passed
     # explicitly because the SVG carries its own width — putting a chart in a
     # wider table cell does not make the chart wider.
-    W_WIDE, H_WIDE = 544, 178
-    W_HALF, H_HALF = 264, 150
+    W_WIDE, H_WIDE = 544, 166
+    W_HALF, H_HALF = 264, 138
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
                    w=W_HALF, h=H_HALF) -> str:
         series, leg = [], []

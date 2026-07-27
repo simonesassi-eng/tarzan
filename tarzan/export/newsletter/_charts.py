@@ -149,7 +149,7 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
         f'</svg>'
     )
 
-def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> str:
+def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 196) -> str:
     """Dual-axis hero chart with the same baseline semantics as Markets.
 
     Portfolio value is green above the window-start baseline and red below it;
@@ -313,7 +313,7 @@ def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
     return vals if any(v > 0 for v in vals) else None
 
 def _intraday_spark(intra: "pd.Series", baseline: float,
-                    w: int = 84, h: int = 18,
+                    w: int = 62, h: int = 22,
                     in_progress: Optional[bool] = None) -> str:
     """Intraday sparkline on a full-session time axis.
 
@@ -410,7 +410,7 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
         f'</svg>'
     )
 
-def _flat_dashed_spark(w: int = 84, h: int = 18) -> str:
+def _flat_dashed_spark(w: int = 62, h: int = 22) -> str:
     """Placeholder sparkline for instruments with no intraday trades: a single
     dashed horizontal line (the previous-close reference). Keeps the 1D cell
     the same height as the intraday rows so the pill stays aligned, while
