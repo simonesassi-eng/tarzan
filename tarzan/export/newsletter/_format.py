@@ -44,13 +44,33 @@ def _sign_for(value: float, decimals: int) -> str:
     return "+" if value > 0 else "\u2212"
 
 
+def _signed(value: float, decimals: int = 2, *, thousands: bool = False) -> str:
+    """A signed bare number with the typographic minus.
+
+    Python's ``:+`` format flag emits an ASCII hyphen, which is narrower and
+    sits lower than the U+2212 every other figure in the issue uses. This is the
+    plain-number counterpart of :func:`_pct`.
+    """
+    grp = "," if thousands else ""
+    sign = _sign_for(value, decimals) or "+"
+    return f"{sign}{abs(float(value)):{grp}.{decimals}f}"
+
+
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
-    """Format a percentage. Already in pp (e.g. 8.59 means 8.59%)."""
+    """Format a percentage. Already in pp (e.g. 8.59 means 8.59%).
+
+    ``signed=False`` still routes a negative through :func:`_sign_for`, so it
+    prints the minus SIGN rather than an ASCII hyphen and a value that rounds to
+    zero prints as zero. A position sold to nothing came out as "-0.0%": a
+    hyphen where the rest of the issue uses U+2212, in front of a negative zero
+    that reads as a small move down rather than as nothing.
+    """
     if is_missing(value):
         return "—"
     if signed:
         return f"{_sign_for(value, decimals)}{abs(value):.{decimals}f}%"
-    return f"{value:.{decimals}f}%"
+    sign = "\u2212" if _sign_for(value, decimals) == "\u2212" else ""
+    return f"{sign}{abs(value):.{decimals}f}%"
 
 def _pct_compact(value: Optional[float], signed: bool = True) -> str:
     """Percentage with width-aware precision for the dense returns grids.

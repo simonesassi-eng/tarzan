@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from html import escape as _esc
 from typing import Optional
 
 import pandas as pd
@@ -42,6 +43,7 @@ from tarzan.export.newsletter._format import (
     _display_ticker,
     _pct,
     _pct_compact,
+    _signed,
     is_missing,
 )
 from tarzan.export.newsletter._charts import (
@@ -123,10 +125,14 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'<td align="right" style="{td}">{_spark_for(d)}</td>'
             f'<td align="right" style="{td}font-size:10px;color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'
+            # The minus SIGN, as everywhere else in the issue: Python's "+"
+            # format flag emits an ASCII hyphen, so this strip was the one table
+            # drawing negatives with a different, shorter glyph than the
+            # thirty-odd other tables around it.
             f'<td align="right" style="{td}font-size:10px;font-weight:700;'
-            f'color:{col};white-space:nowrap;">{d["pct"]:+.2f}%'
+            f'color:{col};white-space:nowrap;">{_signed(d["pct"], 2)}%'
             f'<div style="font-size:8.5px;font-weight:600;color:{P["subtle"]};">'
-            f'{d["change"]:+,.2f}</div></td>'
+            f'{_signed(d["change"], 2, thousands=True)}</div></td>'
             f'</tr>')
 
     def _region_head(cat: str) -> str:
@@ -1576,53 +1582,40 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     }
 
 def _build_risk_legend() -> list[dict]:
-    """Build the Risk Profile legend rows mirroring the Excel Performance
-    tab Legend. Sources thresholds and units from
-    ``constants.yaml::metric_ratings`` so the two stay in sync.
+    """Build the Risk Profile legend rows. Sources thresholds and units from
+    ``constants.yaml::metric_ratings`` so the bands quoted here are the ones
+    the ratings are actually computed from.
 
-    Each entry: {label, strong, fair, weak, description}. The α and β
-    rows here describe the metrics in general; the specific benchmark
-    used for α/β is shown in the table label above (e.g. "α (vs S&P 500)")
-    so the legend stays generic and reusable across configurations.
+    Each entry: {label, strong, fair, weak, description}. One line per metric:
+    the description says what the number IS and stops there. Calibration --
+    whether a given value is good -- is the gauge drawn on the tile above and
+    the three band chips beside the name, so the prose no longer repeats it
+    ("equity indexes ~15-20%", ">1 is good, >2 excellent"). Ten boxed cards
+    with three-line glosses were taller than the ten tiles they explained.
+
+    The α and β rows describe the metrics in general; the benchmark they are
+    measured against is named in the tile note above, so the legend stays
+    reusable across configurations.
     """
     from tarzan import config as cfg
     ratings = cfg.metric_ratings() or {}
 
-    # (label, ratings_key, description). Order matches the Risk Profile
-    # table above. Descriptions are kept short to fit a compact layout
-    # — the Excel Legend has the longer phrasing.
+    # (label, ratings_key, description). Order matches the tiles above. One
+    # clause each: what the number is, not how to feel about it.
     legend_specs = [
-        ("CAGR", "cagr",
-         "Compound Annual Growth Rate. Yearly return that would grow your "
-         "portfolio from start to end value, with compounding."),
+        ("CAGR", "cagr", "Yearly return, compounded, start to end value."),
         ("Volatility", "volatility",
-         "Annualized standard deviation of daily returns, scaled from daily "
-         "to yearly."),
-        ("Sharpe", "sharpe",
-         "(CAGR − risk-free rate) / Volatility. Return per unit of total "
-         "risk."),
-        ("Sortino", "sortino",
-         "Like Sharpe but penalizes only downside volatility. Usually "
-         "higher than Sharpe; the gap shows good (upside) volatility."),
-        ("Max Drawdown", "max_drawdown",
-         "Worst peak-to-trough loss over the period, measured from the "
-         "running high to the low that followed it."),
+         "Annualized standard deviation of daily returns."),
+        ("Sharpe", "sharpe", "(CAGR \u2212 risk-free rate) / volatility."),
+        ("Sortino", "sortino", "Sharpe counting downside volatility only."),
+        ("Max Drawdown", "max_drawdown", "Worst peak-to-trough loss."),
         ("Ulcer Index", "ulcer_index",
-         "Root-mean-square of drawdowns from the running peak; captures both "
-         "depth and time spent underwater. Lower is smoother; penalizes long "
-         "slumps more than a one-point Max DD."),
-        ("VaR 95%", "var_pct",
-         "Daily loss exceeded only 5% of the time (historical sim). "
-         "Non-parametric: no normal-distribution assumption."),
-        ("CVaR 95%", "cvar_pct",
-         "Average loss on the worst 5% of days. More negative than VaR; "
-         "captures tail risk."),
-        (f"\u03b1", "alpha",
-         "Extra annual return vs the benchmark, after adjusting for "
-         "portfolio risk (CAPM). Positive = beat the market on risk-adjusted basis."),
-        (f"\u03b2", "beta",
-         "How much the portfolio moves when the benchmark moves 1%. "
-         "β=1 in line, β=0.5 half as reactive, β≈0 uncorrelated."),
+         "RMS of drawdowns: depth and time underwater together."),
+        ("VaR 95%", "var_pct", "Daily loss exceeded on 5% of days."),
+        ("CVaR 95%", "cvar_pct", "Average loss on the worst 5% of days."),
+        ("\u03b1", "alpha",
+         "Return above the benchmark once risk is accounted for (CAPM)."),
+        ("\u03b2", "beta", "Portfolio move per 1% benchmark move."),
     ]
 
     def _fmt(value: Optional[float], unit: str) -> str:
@@ -1661,9 +1654,13 @@ def _build_risk_legend() -> list[dict]:
 
         legend_rows.append({
             "label": label,
-            "strong": strong,
-            "fair": fair,
-            "weak": weak,
+            # Escaped here, not in the template: the digest template is
+            # ``.html.j2``, whose extension select_autoescape() does not
+            # recognise, so autoescape is off and "<10%" reached the document as
+            # a bare angle bracket in a text node.
+            "strong": _esc(strong),
+            "fair": _esc(fair),
+            "weak": _esc(weak),
             "description": description,
         })
     return legend_rows

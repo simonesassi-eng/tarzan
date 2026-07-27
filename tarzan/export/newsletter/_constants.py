@@ -250,7 +250,10 @@ def render_unified_table(first_col_label, columns, groups, *,
             column separator on that column).
         groups: ``[(class_name, class_color, [(role_name, [row, ...]), ...]),
             ...]`` — exactly what :func:`group_by_class_role` returns, with each
-            ``row`` built by the caller.
+            ``row`` built by the caller. A falsy ``class_name`` renders that
+            block flat, with no group header row: a table whose rows are already
+            ordered by something else (the Optimizer sorts by trade size) gains
+            nothing from headers that name a grouping it does not use.
         portfolio_row: optional highlighted top row rendered before the groups.
         compact: tighten the value-cell horizontal padding + font (used by the
             Risk profile with 10 columns and the returns tables with 8) so the
@@ -313,6 +316,21 @@ def render_unified_table(first_col_label, columns, groups, *,
             has_role = bool(role and role != "—")
             role_html = (f'&nbsp;&middot;&nbsp;<span style="color:{P["muted"]};'
                          f'font-weight:700;">{role}</span>' if has_role else "")
+            if not cls:
+                # Flat block: no class name, so no header row to carry it.
+                fw = f'width:{first_col_width}px;' if first_col_width else ""
+                for row in rows:
+                    rbg = row.get("row_bg") or (
+                        P["card_alt"] if not zebra
+                        else (P["card"] if ri % 2 == 0 else P["zebra"]))
+                    ri += 1
+                    out.append(
+                        f'<tr><td style="padding:7px 10px;background:{rbg};'
+                        f'border-bottom:1px solid {P["row_rule"]};'
+                        f'font-size:10.5px;vertical-align:middle;{fw}">'
+                        f'{row["name_html"]}</td>'
+                        + _cells_html(row["cells"], rbg) + '</tr>')
+                continue
             # The group header sits on its own surface rather than on the card,
             # where it was the same colour as the row under it. The class colour
             # is carried by the class name; the 4px bar down the left of every

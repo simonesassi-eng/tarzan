@@ -5,7 +5,7 @@
    Context authority: tarzan.export.newsletter.build_context.
 
    The context contains palette/header/hero data plus the preformatted
-   performance, market, diversification, holdings, risk, optimizer, backtest,
+   performance, market, diversification, holdings, risk, optimizer,
    contribution, tax, and methodology sections consumed below. Section HTML
    is built by the focused newsletter modules before template rendering.
 
@@ -93,7 +93,7 @@
             </td>
           </tr>
           {# ═══ BODY ORDER ═══════════════════════════════════════════
-             Thirteen sections, each with one question:
+             Twelve sections, each with one question:
                01 state        what the portfolio is
                02 portfolio    what it did, over time and by window
                03 vs the market whether that beat the alternative
@@ -105,8 +105,7 @@
                09 attribution  which positions moved the number
                10 risk         what the shape of the ride was
                11 optimizer    what to do about it
-               12 backtest     what the alternatives would have done
-               13 appendix     tax, method, feeds, evidence
+               12 appendix      tax, method, feeds
              The ordinals come from the shared counter in sec(), so a section
              the engine cannot fill leaves no hole in the sequence. #}
 
@@ -286,23 +285,28 @@
               <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
               {% endif %}
 
-              {# Legend — same content as the Excel Performance tab Legend #}
               {% if risk_profile.legend %}
-              {# The legend glosses the table above it, so it is a sub-block of
+              {# The legend glosses the tiles above it, so it is a sub-block of
                  this section rather than a section of its own: an ordinal for a
-                 glossary put it on the same footing as the risk table itself. #}
-              <div style="margin-top:20px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
-              <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
+                 glossary put it on the same footing as the risk figures.
+
+                 One row per metric: name, its three bands, one clause of
+                 definition. Ten boxed cards in two columns, each with a
+                 three-line gloss, were taller than the ten tiles they
+                 explained. #}
+              <div style="margin-top:18px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;border-collapse:collapse;">
+                <tr>
+                  <td style="padding:0 8px 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};">Metric</td>
+                  <td style="padding:0 8px 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};white-space:nowrap;"><span style="color:{{ palette.green }};">strong</span> &middot; <span style="color:{{ palette.amber }};">fair</span> &middot; <span style="color:{{ palette.red }};">weak</span></td>
+                  <td style="padding:0 0 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};">Reads as</td>
+                </tr>
                 {% for r in risk_profile.legend %}
-                {% if loop.index0 % 2 == 0 %}<tr>{% endif %}
-                <td width="50%" valign="top" style="padding:8px 10px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:9px;">
-                  <div style="line-height:1.6;">
-                    <span style="font-size:12px;font-weight:700;color:{{ palette.ink }};">{{ r.label }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:3px;padding:0 5px;border-radius:4px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span>
-                  </div>
-                  <div style="margin-top:3px;font-size:10px;line-height:1.45;color:{{ palette.muted }};">{{ r.description }}</div>
-                </td>
-                {% if loop.index0 % 2 == 1 or loop.last %}</tr>{% endif %}
+                <tr>
+                  <td valign="top" style="padding:3px 8px 3px 0;font-size:10.5px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.label }}</td>
+                  <td valign="top" style="padding:3px 8px 3px 0;white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span></td>
+                  <td valign="top" style="padding:3px 0;font-size:10px;line-height:1.4;color:{{ palette.muted }};{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.description }}</td>
+                </tr>
                 {% endfor %}
               </table>
               {% endif %}
@@ -334,32 +338,14 @@
                   The funding proof ends with {{ plan.funding_ending_cash_eur }} cash against a protected {{ plan.funding_protected_cash_eur }} buffer{% if plan.funding_shortfall_eur %}, a {{ plan.funding_shortfall_eur }} shortfall{% endif %}. Do not treat the trades below as executable instructions.
                 </td></tr>
               </table>
-              {% elif plan.execution_status == 'EXECUTABLE' %}
-              <div style="margin-top:6px;padding:6px 10px;background:{{ palette.green_bg }};border-radius:7px;font-size:11px;color:{{ palette.green }};">Funding verified · ending cash {{ plan.funding_ending_cash_eur }} · protected buffer {{ plan.funding_protected_cash_eur }}</div>
               {% endif %}
-              {% if plan.funding_flow_html %}
-              {# The same proof as a picture: each term of the cash identity is
-                 a bar and the last one is their sum, so the reader can see the
-                 plan pay for itself instead of taking the sentence on faith. #}
-              <div style="margin-top:8px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ plan.funding_flow_html|safe }}</div>
-              {% endif %}
-              <div style="margin-top:5px;font-size:12px;color:{{ palette.muted }};">
-                {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} BUY &nbsp;·&nbsp; {{ plan.n_sell }} SELL &nbsp;·&nbsp; total
-                <span style="color:{{ palette.green }};font-weight:600;">{{ plan.total_buy }}</span> in,
-                <span style="color:{{ palette.red }};font-weight:600;">{{ plan.total_sell }}</span> out,
-                net <span style="color:{{ plan.net_color }};font-weight:600;">{{ plan.net }}</span>
+              {# One summary line, the concept's: how many trades, the money in
+                 and out, and what executing costs. It was three lines -- a
+                 green "funding verified" strip repeating the EXECUTABLE pill
+                 beside the plan name, a totals line, and a cost line. #}
+              <div style="margin-top:6px;font-size:11px;line-height:1.6;color:{{ palette.muted }};">
+                {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} buy &middot; {{ plan.n_sell }} sell &middot; in <strong style="color:{{ palette.green }};">{{ plan.total_buy }}</strong> &middot; out <strong style="color:{{ palette.red }};">{{ plan.total_sell }}</strong>{% if plan.cost_total_eur %} &middot; estimated cost <strong style="color:{{ palette.red }};">{{ plan.cost_total_eur }}</strong>{% if plan.cgt_eur and plan.fees_eur %} of which CGT {{ plan.cgt_eur }} and fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}, all tax (CGT){% else %}, all commission fees{% endif %}{% endif %}
               </div>
-              {% if plan.cost_total_eur %}
-              {# Estimated cost of executing the plan: CGT on the sells + fixed
-                 commission fees. The breakdown is only worth printing when
-                 there is more than one component — a buy-only plan pays no
-                 CGT, so it used to read "Est. cost €57 · fees €57", the same
-                 number twice. #}
-              <div style="margin-top:3px;font-size:12px;color:{{ palette.muted }};">
-                Est. cost <span style="color:{{ palette.red }};font-weight:700;">{{ plan.cost_total_eur }}</span>
-                {% if plan.cgt_eur and plan.fees_eur %}&nbsp;·&nbsp; tax (CGT) {{ plan.cgt_eur }}&nbsp;·&nbsp; fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}&nbsp;·&nbsp; all tax (CGT){% else %}&nbsp;·&nbsp; all commission fees{% endif %}
-              </div>
-              {% endif %}
               {% if plan.actions %}
               {# Unified instrument table: per instrument, Now → Target → Trade
                  → After. A non-executable plan remains visible as diagnostic
@@ -375,20 +361,14 @@
           </tr>
           {% endif %}
 
-          {# ─── BACKTESTING (long-history synthetic comparison of candidate
-             portfolios) — rendered right after the Optimizer. Guarded and
-             cached: only present when the backtest ran (see
-             _sections_backtest.py). ── #}
-          {% if backtesting.available %}
-          <tr>
-            <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Backtest", backtesting.subtitle) }}
-              {{ backtesting.html|safe }}
-            </td>
-          </tr>
-          {% endif %}
+          {# No BACKTEST section. The long-history synthetic comparison ran to
+             4,700px -- 28% of the issue, more than the eleven sections about
+             the portfolio that actually exists -- to compare candidate
+             portfolios the reader does not hold. It stays in the Excel export,
+             where a reader who wants to compare candidates is already looking.
+             ── #}
 
-          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
+          {# ─── [12] APPENDIX — tax, method, feeds ─────────────
              Three reference blocks under one heading. They were three unnumbered
              blocks trailing off the end of the document, which read as an
              afterthought rather than as the place to look things up. #}

@@ -317,8 +317,10 @@ def main(argv=None) -> int:
             logger.error("No portfolio value computed. Check input data.")
             return 1
 
-        # Long-history backtest of the candidate portfolios — computed ONCE
-        # and shared by both the newsletter and the local-only What-If workbook.
+        # Long-history backtest of the candidate portfolios — for the local-only
+        # What-If workbook. The newsletter does not carry a backtest section:
+        # comparing portfolios the reader does not hold took 28% of the issue,
+        # and a reader who wants that comparison opens the workbook.
         from tarzan.backtest import newsletter_portfolios
         backtest_portfolios = newsletter_portfolios(
             deterministic=(args.deterministic or as_of is not None))
@@ -329,7 +331,6 @@ def main(argv=None) -> int:
         newsletter_html = render_newsletter(
             metrics=metrics,
             config=config,
-            backtest_portfolios=backtest_portfolios,
         )
 
         if backtest_portfolios:

@@ -50,7 +50,6 @@ from tarzan.export.newsletter._sections_perf import (
     _build_markets,
     _build_risk_profile,
 )
-from tarzan.export.newsletter._sections_backtest import _build_backtesting
 
 # Preserve the _perf_series re-export surface BY IDENTITY (test_audit asserts
 # ``newsletter.<name> is _perf_series.<name>``).
@@ -77,7 +76,6 @@ def build_context(
     benchmark_alpha_beta: str = "S&P 500",
     benchmark_geo: str = "MSCI ACWI",
     ai_summary: Optional[str] = None,
-    backtest_portfolios: Optional[list] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build the full Jinja2 context dict for the newsletter template.
@@ -89,7 +87,6 @@ def build_context(
         benchmark_alpha_beta: Display name of α/β benchmark (from constants.yaml).
         benchmark_geo: Display name of geographic allocation benchmark.
         ai_summary: Optional precomputed market-context narrative.
-        backtest_portfolios: Optional candidate portfolios for the backtest section.
         semantic_audit: Optional mutable mapping populated with the exact raw
             intraday request and rendered chart-label sources.
 
@@ -150,7 +147,6 @@ def build_context(
         "markets": _build_markets(nctx),
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
-        "backtesting": _build_backtesting(nctx, backtest_portfolios),
         "return_contrib": _build_return_contrib(nctx),
         "tax_note": _build_tax_note(nctx),
         "methodology": _build_methodology(nctx),
@@ -172,7 +168,6 @@ def render_newsletter(
     benchmark_alpha_beta: Optional[str] = None,
     benchmark_geo: Optional[str] = None,
     ai_summary: Optional[str] = None,
-    backtest_portfolios: Optional[list] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
 ) -> str:
     """Render the newsletter HTML to a string.
@@ -227,8 +222,7 @@ def render_newsletter(
     template = env.get_template("portfolio_digest.html.j2")
     context = build_context(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
-        ai_summary=ai_summary, backtest_portfolios=backtest_portfolios,
-        semantic_audit=semantic_audit,
+        ai_summary=ai_summary, semantic_audit=semantic_audit,
     )
     return template.render(**context)
 
@@ -240,7 +234,6 @@ def generate_newsletter(
     issue_number: int = 1,
     benchmark_alpha_beta: Optional[str] = None,
     benchmark_geo: Optional[str] = None,
-    backtest_portfolios: Optional[list] = None,
 ) -> str:
     """Render the newsletter and write it to disk.
 
@@ -267,7 +260,6 @@ def generate_newsletter(
     filepath = os.path.join(output_dir, f"portfolio_digest_{date_str}.html")
     html = render_newsletter(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
-        backtest_portfolios=backtest_portfolios,
     )
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
