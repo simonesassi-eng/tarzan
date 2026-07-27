@@ -437,8 +437,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                                                 w=W_WIDE, h=H_WIDE, month_ticks=True)
                     + _charts.legend(lsi, 9)) if ssi else ""
         right_ret = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
+                     # Five date ticks, not twelve: at half width twelve
+                     # rotated labels overlapped into a grey band, which is
+                     # worse than no axis at all.
                      + _charts.chart_pct_compact(s30, dates, include_zero=True,
-                                                 w=W_HALF, h=H_HALF, min_day_ticks=12)
+                                                 w=W_HALF, h=H_HALF,
+                                                 min_day_ticks=5)
                      + _charts.legend(l30, 9)) if s30 else ""
         # One volatility panel, over the whole history. The 30-day rolling twin
         # was dropped: two volatility charts side by side invite a comparison

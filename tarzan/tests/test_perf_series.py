@@ -217,17 +217,45 @@ def test_perf_vol_series_full_and_window():
 
 
 def test_chart_grid_density():
-    # Left (month) grid labels every month; right (30d) grid gives >=12 ticks.
+    """Every month boundary gets a gridline; the LABELS are thinned to what the
+    width can hold.
+
+    Labelling all of them was the old contract, and it printed the first two on
+    top of each other on a half-width panel, because a rotated label needs about
+    30px of horizontal room. The gridlines still mark every month, so no
+    information is lost -- only the text that had nowhere to go.
+    """
     import re
     from tarzan.export._charts import chart_pct_compact
     long_idx = pd.date_range("2025-11-15", "2026-07-13", freq="D")
-    svg_l = chart_pct_compact([{"values": list(range(len(long_idx))), "color": "#000"}],
-                              list(long_idx), include_zero=False, month_ticks=True)
-    months = re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', svg_l)
-    assert len(months) >= 8                            # ~9 months labelled
+
+    def _svg(w):
+        return chart_pct_compact(
+            [{"values": list(range(len(long_idx))), "color": "#000"}],
+            list(long_idx), include_zero=False, month_ticks=True, w=w)
+
+    def _labels(svg):
+        return re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', svg)
+
+    narrow, wide = _svg(264), _svg(544)
+    n_narrow, n_wide = len(_labels(narrow)), len(_labels(wide))
+
+    # 9 month boundaries in the range, each with its own gridline on both panels.
+    for svg in (narrow, wide):
+        assert svg.count('stroke-width="1"/>') >= 9
+
+    # The narrow panel thins its labels; the wide one has room for every month.
+    assert 3 <= n_narrow < 9, n_narrow
+    assert n_wide == 9, n_wide
+
+    # The axis still ends on the current month, and the first label carries the
+    # year so the reader can place the window.
+    assert _labels(narrow)[-1].startswith("Jul")
+    assert _labels(narrow)[0] == "Nov 25"
 
     short_idx = pd.date_range("2026-06-13", periods=23, freq="D")
     svg_r = chart_pct_compact([{"values": list(range(23)), "color": "#000"}],
-                              list(short_idx), include_zero=True, min_day_ticks=12)
+                              list(short_idx), include_zero=True,
+                              min_day_ticks=12)
     days = re.findall(r'>([A-Z][a-z]{2} \d{2})<', svg_r)
     assert len(days) >= 12

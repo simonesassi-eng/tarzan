@@ -150,12 +150,23 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
             month_idx = month_idx[1:]
         # Do NOT append a separate end anchor: the last month boundary already
         # labels the current month, and adding n-1 would repeat it ("Jul Jul").
-        # Every month gets exactly one tick at its first in-window day.
+        # Thin the LABELS to what the width can hold. Every month still gets its
+        # gridline, but a rotated label needs ~30px of horizontal room, and eight
+        # months across a 264px panel left the first two printed on top of each
+        # other. The last boundary is always kept, so the axis still ends on the
+        # current month.
+        _room = max(1, int((pw) // 30))
+        _step = max(1, -(-len(month_idx) // _room))
+        _labelled = set(month_idx[::_step]) | {month_idx[-1]}
         prev_year = None
         for j, k in enumerate(month_idx):
             _vgrid(k)
+            if k not in _labelled:
+                continue
             t = ts[k]
-            label = t.strftime("%b %y") if (prev_year != t.year or j == 0) else t.strftime("%b")
+            label = (t.strftime("%b %y")
+                     if (prev_year != t.year or prev_year is None)
+                     else t.strftime("%b"))
             prev_year = t.year
             _xlabel(k, label)
     elif min_day_ticks and n > 1:
