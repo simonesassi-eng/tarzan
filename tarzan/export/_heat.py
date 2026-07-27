@@ -49,54 +49,68 @@ def _mix(base: str, target: str, t: float) -> str:
     return "#{:02X}{:02X}{:02X}".format(*out)
 
 
-def heat_bg(value: Optional[float], *, neg: float, pos: float,
-            damp: float = 1.0) -> Optional[str]:
-    """Background for one cell, or None when there is nothing to shade.
+# The two ends of the ramp. Deliberately NOT the palette's signal green and red:
+# those are the colours a FIGURE is written in, and at full saturation behind a
+# figure they fight it. These are the same hues held back, so a saturated cell
+# still reads as a surface with a number on it.
+_GREEN_END = "#1E8C55"
+_RED_END = "#962D28"
 
-    ``value`` is signed percent. ``neg``/``pos`` are that column's extremes, so
-    the column's worst value reaches the saturated red and its best the
-    saturated green.
+# Above this share of the ramp a cell carries enough colour to hold the ink;
+# below it the figure steps back to a mid grey. Two values, applied to every
+# cell in the grid, so the ONLY thing that varies across the matrix is the
+# background. A grid where the text colour also varies has two signals for one
+# fact and reads as noise.
+_INK_ABOVE = 0.30
+_FIGURE_FAINT = "#A9BACD"
+
+
+def heat(value: Optional[float], *, neg: float, pos: float,
+         damp: float = 1.0) -> tuple[Optional[str], str]:
+    """``(background, figure_colour)`` for one cell of a returns grid.
+
+    ``value`` is signed percent; ``neg``/``pos`` are that column's extremes, so
+    the column's worst value reaches the saturated red end and its best the
+    saturated green end.
+
+    Both halves come from here on purpose. When the caller chose the figure's
+    colour itself -- green for a gain, red for a loss -- the grid carried the
+    sign twice, once in the cell and once in the text, and the text colour
+    changed from row to row for a reason unrelated to the tint. One ramp, one
+    rule: the background says which way and how far, the figure is either ink or
+    stepped back.
     """
     if value is None:
-        return None
+        return None, PALETTE["subtle"]
     span_neg = abs(neg) * damp or 1.0
     span_pos = abs(pos) * damp or 1.0
     v = float(value)
     if v >= 0:
         t = min(1.0, v / span_pos)
-        target = PALETTE["green"]
+        target = _GREEN_END
     else:
         t = min(1.0, -v / span_neg)
-        target = PALETTE["red"]
+        target = _RED_END
+    figure = PALETTE["ink"] if t > _INK_ABOVE else _FIGURE_FAINT
     if t <= 0.01:
-        return None
-    # Ease the low end so near-zero values stay close to the surface instead of
-    # picking up a tint that reads as a signal.
-    return _mix(PALETTE["card"], target, 0.10 + 0.62 * (t ** 0.85))
+        return None, figure
+    # Linear from the surface to the end of the ramp: the column's extreme is
+    # the saturated colour, and everything else sits proportionally between. An
+    # eased ramp with a floor made a +0.1% cell visibly tinted and a +8% cell
+    # only two thirds of the way to the end.
+    return _mix(PALETTE["card_alt"], target, t), figure
 
 
-# Above this share of the ramp the background carries enough colour that a
-# green figure on green (or red on red) loses contrast, so the text switches to
-# the palette ink instead.
-_INK_ABOVE = 0.45
+def heat_bg(value: Optional[float], *, neg: float, pos: float,
+            damp: float = 1.0) -> Optional[str]:
+    """Just the background from :func:`heat`, for callers that do not colour a
+    figure (the 1D cell, which carries a sparkline)."""
+    return heat(value, neg=neg, pos=pos, damp=damp)[0]
 
 
-def _intensity(value: Optional[float], *, neg: float, pos: float,
-               damp: float = 1.0) -> float:
-    if value is None:
-        return 0.0
-    v = float(value)
-    span = (abs(pos) if v >= 0 else abs(neg)) * damp or 1.0
-    return min(1.0, abs(v) / span)
-
-
-def heat_ink(value: Optional[float], *, neg: float, pos: float,
-             damp: float = 1.0) -> Optional[str]:
-    """Palette ink when the tint is strong enough to swallow a coloured figure,
-    otherwise None so the caller keeps its own sign colour."""
-    if _intensity(value, neg=neg, pos=pos, damp=damp) >= _INK_ABOVE:
-        return PALETTE["ink"]
-    return None
+# heat_ink is gone: it existed to decide when a SIGN-coloured figure had to give
+# way to ink, and the grids no longer sign-colour their figures at all. The
+# figure colour comes back from heat() with the background it belongs to.
 
 
 def rank_scale(values: Iterable[Optional[float]]) -> Optional[tuple[float, float]]:

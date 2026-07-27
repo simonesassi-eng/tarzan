@@ -226,6 +226,50 @@ class TestReturnsHeat:
         damped = _heat.heat_bg(5.0, neg=-5.0, pos=5.0, damp=_heat.DAY_DAMP)
         assert full != damped
 
+    def test_figure_colour_takes_two_values_and_never_the_sign(self):
+        """Across a grid only the BACKGROUND may vary.
+
+        The figures used to be sign-coloured, so a returns row carried the sign
+        twice -- once in the cell, once in the text -- and the text colour
+        changed from row to row for a reason unrelated to the tint. The ramp now
+        returns the figure colour with the background, and it has exactly two
+        values: ink on a cell strong enough to hold it, a mid grey otherwise.
+        """
+        from tarzan.export import _heat
+        from tarzan.export._palette import PALETTE
+
+        colours = {
+            _heat.heat(v, neg=-8.0, pos=8.0)[1]
+            for v in (0.0, 0.4, 2.0, 5.0, 8.0, -0.4, -2.0, -5.0, -8.0)
+        }
+        assert len(colours) == 2, colours
+        assert PALETTE["ink"] in colours
+        # Never the signal green or red: those are figure colours elsewhere, and
+        # in a tinted grid they would restate the background.
+        assert PALETTE["green"] not in colours
+        assert PALETTE["red"] not in colours
+
+    def test_the_ramp_ends_are_held_back_from_the_signal_colours(self):
+        """A cell at the end of its ramp is a surface with a number on it, not a
+        block of the same green the number would be written in."""
+        from tarzan.export import _heat
+        from tarzan.export._palette import PALETTE
+
+        end_up = _heat.heat(8.0, neg=-8.0, pos=8.0)[0]
+        end_down = _heat.heat(-8.0, neg=-8.0, pos=8.0)[0]
+        assert end_up.upper() != PALETTE["green"].upper()
+        assert end_down.upper() != PALETTE["red"].upper()
+
+    def test_the_returns_grid_has_no_alternating_stripe(self, rendered):
+        """The zebra stripe fights the heat: under a tinted matrix an uncoloured
+        cell has to be one surface, or the stripe reads as a signal too."""
+        html, _m, _c = rendered
+        start = html.find(">Returns</span>")
+        end = html.find(">Watchlist</span>")
+        assert start != -1 and end > start
+        from tarzan.export._palette import PALETTE
+        assert PALETTE["zebra"] not in html[start:end]
+
 
 class TestNoRaggedTables:
     """Every row of every table must span the same number of columns.

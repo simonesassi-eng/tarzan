@@ -750,31 +750,34 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
     # the cell also carries the session sparkline and a saturated background
     # competes with the line drawn on it.
     dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
+    # One width for every window column, so the tinted blocks form an even grid
+    # rather than columns sized by whatever their widest figure happened to be.
+    # Only the session column is wider, because it carries a chart.
+    W_PERIOD, W_DAY = 41, 68
 
     def _cells(returns_dict, spark_inner, *, weight, day_raw=None):
         # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
         # the gap after the name closes and the period columns get that width.
-        cells = [uni_cell(spark_inner, align="left", width=84, valign="middle",
-                          pad="6px 4px 6px 0",
+        cells = [uni_cell(spark_inner, align="right", width=W_DAY,
+                          valign="middle", pad="5px 4px",
                           bg=_heat.heat_bg(day_raw, neg=dneg, pos=dpos,
                                            damp=_heat.DAY_DAMP))]
         for p in period_cols:
             r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
             neg, pos = scales[p]
             raw = r.get("raw")
-            cells.append(uni_cell(
-                r["value"],
-                # On a saturated tint a green figure on green loses contrast, so
-                # the ink takes over; below that the sign colour is kept.
-                color=(_heat.heat_ink(raw, neg=neg, pos=pos) or r["color"]),
-                weight=weight,
-                bg=_heat.heat_bg(raw, neg=neg, pos=pos)))
+            # Background AND figure colour from the one ramp. The figure used to
+            # be sign-coloured, so the grid stated the sign twice and its text
+            # colour changed from row to row for a reason unrelated to the tint.
+            bg, fig = _heat.heat(raw, neg=neg, pos=pos)
+            cells.append(uni_cell(r["value"], color=fig, weight=weight,
+                                  bg=bg, width=W_PERIOD))
         return cells
 
     # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
     # ruled period grid.
-    columns = ([(day_label, "left", 84, True)]
-               + [(p.upper(), "right") for p in period_cols])
+    columns = ([(day_label, "right", W_DAY, True)]
+               + [(p.upper(), "right", W_PERIOD) for p in period_cols])
     portfolio_row = {
         "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
                       f'font-size:12px;">\u2605 {portfolio["name"]}</span>'),
@@ -794,16 +797,29 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
     # leave a gap before the sparkline) + faint vertical separators so a reader
     # can tell 1W from 1M from 1Y at a glance. Role lives in the group header
     # and the ticker trails the name, so names wrap cleanly.
+    # ``zebra=False``: the alternating row stripe fights the heat. Under a tinted
+    # matrix an uncoloured cell has to be ONE surface, or the eye reads the
+    # stripe as a signal too. ``dense``: 9.5px on 5px/4px padding, so the tint
+    # fills its column instead of floating in it.
     return render_unified_table("Instrument", columns, uni_groups,
                                 portfolio_row=portfolio_row, compact=True,
-                                first_col_width=150, separators=True)
+                                first_col_width=76, separators=False,
+                                zebra=False, dense=True, radius=4)
 
-def _perf_name_html(name: str, ticker: str, tags: list) -> str:
+def _perf_name_html(name: str, ticker: str, tags: list, *,
+                    name_chars: Optional[int] = None) -> str:
     """Instrument label used in the returns tables. Delegates to the shared
     :func:`uni_name`, so the ticker leads the name here exactly as it does in
     the book, the risk table and the optimizer, and the role stays in the group
     header rather than stacking a caption under every name."""
     from tarzan.export.newsletter._constants import uni_name
+    if name_chars == 0:
+        # Ticker only. THE BOOK, one section up, lists every holding's ticker
+        # against its name, so repeating the name on each row of a nine-column
+        # matrix bought nothing and cost the row two extra lines of height.
+        return uni_name("", ticker or "", tags=tuple(tags or ()))
+    if name_chars:
+        name = name[:name_chars]
     return uni_name(name, ticker or "", tags=tuple(tags or ()))
 
 def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
@@ -965,7 +981,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             "_isin": isin, "_ticker": ticker,
             "name_html": _perf_name_html(
                 display_instrument_name(isin, ticker, raw_name),
-                display_tk, []),
+                display_tk, [], name_chars=0),
             "spark_inner": inner,
             "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
@@ -1268,8 +1284,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                     r.get("d1"), r.get("raw_ticker"), intraday_map,
                     live=bool(r.get("live")), prev_label=_prev_lbl)
                 insts.append({
+                    # A short name here, not just the ticker: these instruments
+                    # are tracked and NOT held, so no other section in the issue
+                    # says what they are.
                     "name_html": _perf_name_html(r["name"], r.get("ticker"),
-                                                 r.get("tags")),
+                                                 r.get("tags"), name_chars=16),
                     "spark_inner": inner,
                     "day_raw": r.get("d1"),
                     "returns": r["returns"],
