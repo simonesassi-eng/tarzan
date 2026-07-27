@@ -187,19 +187,11 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
 
     perf = getattr(m, "performance", None) or {}
     cagr_pct = perf.get("cagr")
-    gap = None
-    bc = getattr(m, "benchmark_comparison", None)
-    if bc is not None and not getattr(bc, "empty", True):
-        # The geo benchmark's lifetime delta, when the comparison frame carries
-        # one. Absent on a holdings-only run, so the tile is simply dropped.
-        for column in ("delta_pp", "delta", "gap_pp"):
-            if column in bc.columns:
-                try:
-                    gap = float(bc.iloc[0][column])
-                except (TypeError, ValueError, IndexError):
-                    gap = None
-                break
-
+    # No benchmark-gap tile: benchmark_comparison is a per-benchmark metrics
+    # frame (cagr, vol, sharpe, alpha, beta, per-window returns) and carries no
+    # delta-vs-portfolio column, so there is no computed lifetime gap to show.
+    # Deriving one here would invent a figure the engine does not produce.
+    session_pct = perf.get("1d")
     def _tile(label, value, caption, tone="flat"):
         return {"label": label, "value": value, "caption": caption,
                 "tone": tone}
@@ -233,13 +225,15 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     if cagr_pct is not None:
         state_tiles.append(_tile("CAGR", _pct(cagr_pct, signed=True),
                                  "compound annual growth", _tone(cagr_pct)))
-    if gap is not None:
+    if session_pct is not None:
         state_tiles.append(_tile(
-            f"vs {ctx.benchmark_geo}",
-            ("+" if gap >= 0 else "\u2212") + f"{abs(gap):.2f}pp",
-            "since inception", _tone(gap)))
+            "Session", _pct(session_pct, signed=True),
+            "latest close vs the previous one", _tone(session_pct)))
     if m.avg_ter is not None:
-        state_tiles.append(_tile("TER", f"{float(m.avg_ter) * 100:.3f}%",
+        # avg_ter arrives already in percent (metrics.py multiplies the stored
+        # fractions by 100), so it must not be scaled again here. The synthetic
+        # fixture has a zero TER, which hid this: a real run printed 23.106%.
+        state_tiles.append(_tile("TER", f"{float(m.avg_ter):.3f}%",
                                  "weighted average, annual"))
 
 
