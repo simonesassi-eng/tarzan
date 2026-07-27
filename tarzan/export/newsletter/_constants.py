@@ -167,7 +167,7 @@ def uni_name(name, ticker="", *, tags=(), pill="", span=""):
 
 
 def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
-             width=None, pad=None, valign="top", bg=None):
+             width=None, pad=None, valign="middle", bg=None):
     """One value cell for :func:`render_unified_table`. ``html`` is the cell's
     ready-to-render inner content; ``sub`` is an optional muted sub-line (e.g.
     the € under a %).
@@ -179,6 +179,9 @@ def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
     return {"html": html, "align": align, "color": color or PALETTE["ink"],
             "weight": weight, "sub": sub, "width": width, "pad": pad,
             "valign": valign, "bg": bg}
+
+
+
 
 
 # Barely-there vertical rule between value columns — lighter than the
@@ -193,23 +196,23 @@ def _uni_td(cell, rbg, default_pad="8px 8px", fs="", sep=False):
     w = f'width:{cell["width"]}px;' if cell.get("width") else ""
     pad = cell.get("pad") or default_pad
     lb = f'border-left:1px solid {_COL_RULE};' if (sep and not cell.get("no_sep")) else ""
-    sub = (f'<div style="font-size:9px;color:{P["subtle"]};'
-           f'font-variant-numeric:tabular-nums;">{cell["sub"]}</div>'
-           if cell.get("sub") else "")
+    sub = (f'<div style="margin-top:2px;font-size:9.5px;font-weight:600;'
+           f'color:{P["subtle"]};font-variant-numeric:tabular-nums;">'
+           f'{cell["sub"]}</div>' if cell.get("sub") else "")
     bg = cell.get("bg") or rbg
     return (f'<td align="{cell["align"]}" style="padding:{pad};background:{bg};'
             f'border-bottom:1px solid {P["row_rule"]};{lb}'
             f'font-variant-numeric:tabular-nums;{fs}'
             f'font-weight:{cell["weight"]};color:{cell["color"]};'
-            f'vertical-align:{cell.get("valign", "top")};{w}">{cell["html"]}{sub}</td>')
+            f'vertical-align:{cell.get("valign", "middle")};{w}">{cell["html"]}{sub}</td>')
 
 
 def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
     P = PALETTE
     fw = f'width:{first_col_width}px;' if first_col_width else ""
-    hc = (f'<td style="padding:7px 12px 7px 14px;background:{P["card_alt"]};'
-          f'border-bottom:1px solid {P["border"]};font-size:10px;font-weight:700;'
-          f'letter-spacing:0.04em;color:{P["muted"]};text-transform:uppercase;{fw}">'
+    hc = (f'<td style="padding:7px 10px;background:{P["head_bg"]};'
+          f'border-bottom:1px solid {P["border"]};font-size:9.5px;font-weight:700;'
+          f'letter-spacing:0.06em;color:{P["muted"]};text-transform:uppercase;{fw}">'
           f'{first_col_label}</td>')
     for idx, col in enumerate(columns):
         label, align = col[0], col[1]
@@ -220,9 +223,9 @@ def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
         # (usually the 1D sparkline, which reads as part of the name block).
         lb = (f'border-left:1px solid {_COL_RULE};'
               if (sep and idx > 0 and not no_sep) else "")
-        hc += (f'<td align="{align}" style="padding:{vpad};background:{P["card_alt"]};'
-               f'border-bottom:1px solid {P["border"]};{lb}font-size:10px;font-weight:700;'
-               f'letter-spacing:0.04em;color:{P["muted"]};text-transform:uppercase;{w}">'
+        hc += (f'<td align="{align}" style="padding:{vpad};background:{P["head_bg"]};'
+               f'border-bottom:1px solid {P["border"]};{lb}font-size:9.5px;font-weight:700;'
+               f'letter-spacing:0.06em;color:{P["muted"]};text-transform:uppercase;{w}">'
                f'{label}</td>')
     return f"<tr>{hc}</tr>"
 
@@ -263,8 +266,8 @@ def render_unified_table(first_col_label, columns, groups, *,
     # Value-cell padding + font: tight/smaller for dense tables (Risk = 10
     # columns) so the name column keeps enough width; normal otherwise. The
     # name column keeps its wider padding regardless.
-    vpad = "8px 3px" if compact else "8px 8px"
-    fs = "font-size:11px;" if compact else ""
+    vpad = "7px 3px" if compact else "7px 8px"
+    fs = "font-size:10px;" if compact else "font-size:10.5px;"
     # Per-value-column separator flags: on for every column except the first
     # (the 1D sparkline / first metric), and honouring an explicit no_sep.
     seps = [separators and i > 0 and not (len(c) > 3 and c[3])
@@ -284,8 +287,8 @@ def render_unified_table(first_col_label, columns, groups, *,
         fw = f'width:{first_col_width}px;' if first_col_width else ""
         out.append(
             '<tr>'
-            f'<td style="padding:10px 12px 10px 14px;background:{abg};color:{P["accent"]};'
-            f'font-weight:700;font-size:12px;vertical-align:top;{fw}">'
+            f'<td style="padding:8px 10px;background:{abg};color:{P["accent"]};'
+            f'font-weight:700;font-size:11px;vertical-align:middle;{fw}">'
             f'{portfolio_row["name_html"]}</td>'
             + _cells_html(portfolio_row["cells"], abg) + '</tr>')
 
@@ -301,22 +304,27 @@ def render_unified_table(first_col_label, columns, groups, *,
             has_role = bool(role and role != "—")
             role_html = (f'&nbsp;&middot;&nbsp;<span style="color:{P["muted"]};'
                          f'font-weight:700;">{role}</span>' if has_role else "")
+            # The group header sits on its own surface rather than on the card,
+            # where it was the same colour as the row under it. The class colour
+            # is carried by the class name; the 4px bar down the left of every
+            # row was a second, louder statement of the same fact and it made
+            # each class read as a separate bordered block.
             out.append(
-                f'<tr><td colspan="{ncols}" style="padding:8px 12px 8px 14px;'
-                f'background:{P["card"]};'
-                f'border-bottom:1px solid {P["border"]};border-left:4px solid {col};'
-                f'font-size:11px;letter-spacing:0.04em;text-transform:uppercase;">'
+                f'<tr><td colspan="{ncols}" style="padding:8px 10px;'
+                f'background:{P["group_bg"]};'
+                f'border-bottom:1px solid {P["border"]};'
+                f'font-size:10px;letter-spacing:0.06em;text-transform:uppercase;">'
                 f'<span style="color:{col};font-weight:700;">{cls}</span>{role_html}</td></tr>')
             fw = f'width:{first_col_width}px;' if first_col_width else ""
             for row in rows:
                 rbg = row.get("row_bg") or (
-                    P["card"] if ri % 2 == 0 else P["card_alt"])
+                    P["card"] if ri % 2 == 0 else P["zebra"])
                 ri += 1
                 out.append(
-                    f'<tr><td style="padding:8px 12px 8px 14px;background:{rbg};'
+                    f'<tr><td style="padding:7px 10px;background:{rbg};'
                     f'border-bottom:1px solid {P["row_rule"]};'
-                    f'border-left:4px solid {col};'
-                    f'vertical-align:top;{fw}">{row["name_html"]}</td>'
+                    f'font-size:10.5px;vertical-align:middle;{fw}">'
+                    f'{row["name_html"]}</td>'
                     + _cells_html(row["cells"], rbg) + '</tr>')
     out.append("</table>")
     return "".join(out)
