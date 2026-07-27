@@ -397,7 +397,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     vol_full = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
     vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
 
-    def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks) -> str:
+    # Panel sizes. The card's content box is 544px wide; with the 8px gutter
+    # between the two half cells each of them gets 264px. These are passed
+    # explicitly because the SVG carries its own width — putting a chart in a
+    # wider table cell does not make the chart wider.
+    W_WIDE, H_WIDE = 544, 178
+    W_HALF, H_HALF = 264, 150
+    def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
+                   w=W_HALF, h=H_HALF) -> str:
         series, leg = [], []
         if vs and vs.get("port"):
             series.append({"values": vs["port"], "color": VOL})
@@ -408,7 +415,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if not series:
             return ""
         return (_charts.chart_pct_compact(series, dates_, include_zero=False,
-                                          month_ticks=month_ticks, min_day_ticks=min_day_ticks)
+                                          w=w, h=h, month_ticks=month_ticks,
+                                          min_day_ticks=min_day_ticks)
                 + _charts.legend(leg, 9))
 
     parts = []
@@ -417,31 +425,46 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # days (>=12 day grid). Row 1 = cumulative return, row 2 = rolling
         # annualized volatility — each return chart sits above its vol twin.
         left_ret = (_colcap(f"Since inception <span style='font-weight:400;color:{P['subtle']};'>· cumulative</span>")
-                    + _charts.chart_pct_compact(ssi, si_dates, include_zero=False, month_ticks=True)
+                    + _charts.chart_pct_compact(ssi, si_dates, include_zero=False,
+                                                w=W_WIDE, h=H_WIDE, month_ticks=True)
                     + _charts.legend(lsi, 9)) if ssi else ""
         right_ret = (_colcap(f"Last 30 days <span style='font-weight:400;color:{P['subtle']};'>· rebased to 0</span>")
-                     + _charts.chart_pct_compact(s30, dates, include_zero=True, min_day_ticks=12)
+                     + _charts.chart_pct_compact(s30, dates, include_zero=True,
+                                                 w=W_HALF, h=H_HALF, min_day_ticks=12)
                      + _charts.legend(l30, 9)) if s30 else ""
-        left_vol = _vol_panel(vol_full, vol_full["dates"] if vol_full else si_dates,
-                              month_ticks=True, min_day_ticks=0)
-        right_vol = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
-                               month_ticks=False, min_day_ticks=12)
-        if left_vol:
-            left_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· annualized, rolling 1-month</span>") + left_vol
-        if right_vol:
-            right_vol = _colcap(f"Volatility <span style='font-weight:400;color:{P['subtle']};'>· annualized, rolling 1-month</span>") + right_vol
+        # One volatility panel, over the whole history. The 30-day rolling twin
+        # was dropped: two volatility charts side by side invite a comparison
+        # between two windows of the same measure, which is not the question
+        # this section asks, and it cost a quarter of the section's height.
+        vol_panel = _vol_panel(vol_full, vol_full["dates"] if vol_full else si_dates,
+                               month_ticks=True, min_day_ticks=0)
+        if vol_panel:
+            vol_panel = _colcap(
+                f"Volatility <span style='font-weight:400;color:{P['subtle']};'>"
+                f"\u00b7 annualized, rolling 1-month</span>") + vol_panel
 
         def _row(l, r):
             return (f'<tr>'
                     f'<td width="50%" valign="top" style="padding:0 8px 0 0;">{l}</td>'
-                    f'<td width="50%" valign="top" style="padding:0 0 0 8px;border-left:1px solid {P["border"]};">{r}</td>'
+                    f'<td width="50%" valign="top" style="padding:0 0 0 8px;'
+                    f'border-left:1px solid {P["border"]};">{r}</td>'
                     f'</tr>')
-        vol_row = (f'<tr><td colspan="2" style="padding-top:12px;border-top:1px solid {P["border"]};"></td></tr>'
-                   + _row(left_vol, right_vol)) if (left_vol or right_vol) else ""
+
+        def _wide(cell):
+            return f'<tr><td colspan="2" valign="top">{cell}</td></tr>'
+
+        # Since-inception runs the full width: it is the chart that answers the
+        # section's question, and at half width its three series overlap into
+        # noise. The shorter window and the volatility share the row below.
+        rule = (f'<tr><td colspan="2" style="padding-top:12px;'
+                f'border-top:1px solid {P["border"]};"></td></tr>')
+        rows = _wide(left_ret) if left_ret else ""
+        if right_ret or vol_panel:
+            rows += (rule if rows else "") + _row(right_ret, vol_panel)
         charts_tbl = (
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">'
-            + _row(left_ret, right_ret) + vol_row +
-            '</table>'
+            f'<table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0" style="margin-top:12px;">'
+            + rows + '</table>'
         )
         # Quantitative "why are we diverging?" note, encapsulated in this card
         # right under the two charts. AI writes the prose when available; a

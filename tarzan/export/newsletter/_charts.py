@@ -263,33 +263,45 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 544, h: int = 180) -> 
         + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" '
         f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
         + marks + xlab + "</svg>"
-        + f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};">'
-        f'<span style="margin-right:16px;"><span style="display:inline-block;'
+        # Legend: which axis each series is read against, and what the two
+        # value colours mean. "start baseline" said where the split is without
+        # saying which side is which, so the swatch order now carries it.
+        + f'<div style="margin-top:6px;font-size:10px;color:{P["muted"]};">'
+        f'<span style="margin-right:14px;"><span style="display:inline-block;'
         f'width:10px;height:5px;background:{P["green"]};vertical-align:middle;'
-        f'margin-right:1px;"></span><span style="display:inline-block;width:10px;'
-        f'height:5px;background:{P["red"]};vertical-align:middle;margin-right:5px;'
-        f'"></span>Value (€) · left · start baseline</span>'
-        f'<span><span style="display:inline-block;width:22px;height:0;border-top:2px '
-        f'dashed {P["muted"]};vertical-align:middle;margin-right:5px;"></span>'
-        f'Unrealized PnL (%) · right</span></div>'
+        f'"></span><span style="display:inline-block;width:10px;height:5px;'
+        f'background:{P["red"]};vertical-align:middle;margin-right:5px;"></span>'
+        f'Value, left axis \u00b7 above / below the window open</span>'
+        f'<span><span style="display:inline-block;width:20px;height:0;'
+        f'border-top:2px dashed {P["muted"]};vertical-align:middle;'
+        f'margin-right:5px;"></span>Unrealized P&amp;L, right axis</span></div>'
     )
 
 def _hero_flow_chips(flows) -> str:
-    """Deposit/withdrawal chips with date + amount (green/grey), for the hero."""
+    """The window's cash flows as filled chips: date, then amount.
+
+    Date first because the chips read against the chart above them, where the
+    triangles sit on dates. Filled tints rather than a white pill with a
+    border: the old chips hardcoded ``background:#fff``, which on a dark
+    palette printed white lozenges over the card.
+    """
     if not flows:
         return ""
     P = PALETTE
     items = ""
     for d, v in sorted(flows, key=lambda t: t[0]):
-        col = P["green"] if v >= 0 else P["muted"]
-        arrow = "\u25b2" if v >= 0 else "\u25bc"
-        items += (f'<span style="display:inline-block;margin:4px 6px 0 0;padding:2px 9px;border-radius:999px;'
-                  f'background:#fff;border:1px solid {P["border"]};font-size:11px;white-space:nowrap;">'
-                  f'<span style="color:{col};font-weight:700;">{arrow} {_eur_smart(v, signed=True)}</span>'
-                  f'<span style="color:{P["subtle"]};"> &middot; {pd.Timestamp(d).strftime("%b %d")}</span></span>')
-    return (f'<div style="margin-top:8px;font-size:9px;font-weight:700;letter-spacing:0.04em;'
-            f'color:{P["muted"]};text-transform:uppercase;">Cash flows</div>'
-            f'<div style="margin-top:2px;">{items}</div>')
+        fg = P["accent"] if v >= 0 else P["muted"]
+        bg = P["accent_bg"] if v >= 0 else P["card_alt"]
+        items += (f'<span style="display:inline-block;margin:4px 6px 0 0;'
+                  f'padding:2px 8px;border-radius:6px;background:{bg};'
+                  f'font-size:10px;font-weight:700;color:{fg};'
+                  f'white-space:nowrap;font-variant-numeric:tabular-nums;">'
+                  f'{pd.Timestamp(d).strftime("%b %d")} '
+                  f'{_eur_smart(v, signed=True)}</span>')
+    return (f'<div style="margin-top:9px;font-size:9px;font-weight:700;'
+            f'letter-spacing:0.08em;color:{P["muted"]};'
+            f'text-transform:uppercase;">Cash flows in the window</div>'
+            f'<div style="margin-top:3px;">{items}</div>')
 
 def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
     """Extract the per-bucket weights for one category from an allocation
