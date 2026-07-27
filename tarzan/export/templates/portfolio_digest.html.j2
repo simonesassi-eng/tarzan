@@ -12,6 +12,15 @@
    Display values are preformatted; section mappings remain structured so the
    template can control availability and layout without recomputing analytics.
 ============================================================================= #}
+{# One definition for every section kicker: a running ordinal in accent, then
+   the label. The counter lives in a namespace and is incremented HERE, so it
+   numbers the sections actually rendered. A static number per section left
+   holes in the sequence whenever an optional block (market context, optimizer)
+   was unavailable. #}
+{% macro sec(ns, label) -%}
+{%- set ns.n = ns.n + 1 -%}
+<div style="font-size:12.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:{{ palette.ink }};"><span style="color:{{ palette.accent }};">[{{ "%02d"|format(ns.n) }}]</span>&nbsp;&nbsp;{{ label }}</div>
+{%- endmacro %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -23,7 +32,7 @@
   <meta name="supported-color-schemes" content="dark">
   <title>Tarzan Portfolio Digest</title>
   <style>
-    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif; }
+    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; }
     table { border-collapse: collapse; }
     img { display: block; border: 0; }
     a { color: {{ palette.accent }}; text-decoration: none; }
@@ -34,7 +43,8 @@
     }
   </style>
 </head>
-<body style="margin:0;padding:0;background:{{ palette.page }};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',Roboto,Helvetica,Arial,sans-serif;color:{{ palette.ink }};">
+{% set secn = namespace(n=0) %}
+<body style="margin:0;padding:0;background:{{ palette.page }};font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;color:{{ palette.ink }};">
 
   {# -- Preheader (hidden, shown as preview text in inbox) -- #}
   <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{{ preheader }}</div>
@@ -103,7 +113,7 @@
           {% if ai_summary %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Market context</div>
+              {{ sec(secn, "Market context") }}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
@@ -135,7 +145,7 @@
           {% if returns_snapshot.available %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Returns snapshot</div>
+              {{ sec(secn, "Returns snapshot") }}
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">Portfolio vs {{ returns_snapshot.benchmark_alpha_beta }}: <span style="color:{{ palette.green }};font-weight:700;">●</span> beat · <span style="color:{{ palette.amber }};font-weight:700;">●</span> in line · <span style="color:{{ palette.red }};font-weight:700;">●</span> under</div>
               {{ returns_snapshot.table_html|safe }}
             </td>
@@ -149,7 +159,7 @@
              injected as safe HTML — same pattern as Markets. #}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ performance.kicker }}</div>
+              {{ sec(secn, performance.kicker) }}
               <div style="margin-top:4px;font-size:12px;color:{{ palette.muted }};">{{ performance.subtitle_html|safe }}</div>
               {{ performance.table_html|safe }}
             </td>
@@ -159,7 +169,7 @@
           {% if risk_profile.available %}
           <tr>
             <td class="px-32" style="padding:24px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">{{ risk_profile.title }}</div>
+              {{ sec(secn, risk_profile.title) }}
               {% if risk_profile.portfolio_note %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
                 <tr>
@@ -177,7 +187,7 @@
 
               {# Legend — same content as the Excel Performance tab Legend #}
               {% if risk_profile.legend %}
-              <div style="margin-top:20px;font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
+              <div style="margin-top:20px;">{{ sec(secn, "Legend") }}</div>
               <div style="margin-top:2px;font-size:11px;color:{{ palette.muted }};">Bands next to each metric: <span style="color:{{ palette.green }};font-weight:700;">strong</span> &middot; <span style="color:{{ palette.amber }};font-weight:700;">fair</span> &middot; <span style="color:{{ palette.red }};font-weight:700;">weak</span>.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-collapse:separate;border-spacing:6px;">
                 {% for r in risk_profile.legend %}
@@ -203,7 +213,7 @@
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Return contribution</div>
+              {{ sec(secn, "Return contribution") }}
 
               {% if return_contrib.winners %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
@@ -246,7 +256,7 @@
           {% if optimizer.available %}
           <tr>
             <td class="px-32" style="padding:32px 32px 0 32px;">
-              <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{{ palette.accent }};text-transform:uppercase;">Optimizer</div>
+              {{ sec(secn, "Optimizer") }}
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
                 {{ plan.label }}
