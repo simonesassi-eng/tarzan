@@ -257,7 +257,6 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # go", which is one row here instead of one cell picked out of three rows,
     # and it puts the four measures in a fixed column order that matches the
     # returns grids below.
-    _1d_live = bool((m.performance_full or {}).get("1d_live"))
 
     def _label(txt) -> str:
         return (f'<td style="padding:7px 0;border-top:{bt};font-size:12px;'
@@ -303,7 +302,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         f'{h}</td>' for i, h in enumerate(heads)) + '</tr>'
 
     windows = [
-        ("1 day" + (" \u25CF LIVE" if _1d_live else ""), tot[1], unr[1], tw[1]),
+        # No "\u25cf LIVE" on the row label: the masthead states whether a
+        # session is open, and the 1 day row is live whenever it is.
+        ("1 day", tot[1], unr[1], tw[1]),
         ("7 days", tot[7], unr[7], tw[7]),
         ("30 days", tot[30], unr[30], tw[30]),
         ("Since inception", tot_since, unr_since, tw_since),
@@ -567,7 +568,7 @@ def _shared_performance_intraday(ctx: _NewsletterContext) -> dict:
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
-                     live: bool = False, prev_label: str = "") -> tuple:
+                     live: bool = False) -> tuple:
     """Render the 1D cell: a sign-colored % pill (the change vs the previous
     close) above a Markets-style intraday sparkline (green above the previous
     close, red below).
@@ -577,7 +578,7 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     market is closed and the vendor exposes no session), there is no chart —
     just the % pill vs the previous close — because a synthetic line would be
     misleading. Returns ``(cell_html, inner_html)``; ``inner_html`` is the
-    pill (+ optional LIVE tag) + sparkline without the surrounding ``<td>`` so
+    pill + sparkline without the surrounding ``<td>`` so
     callers that need a specific cell background can wrap it themselves."""
     P = PALETTE
     if is_missing(day_val):
@@ -622,18 +623,12 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
         spark = _flat_dashed_spark()
 
     bgc = f"background:{bg};" if bg else ""
-    # Tag the 1D basis: green "● LIVE" for a live market-open quote, else a
-    # muted "PREV. DAY" (last completed session / no intraday trades).
-    if live:
-        marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:800;'
-                  f'color:{P["green"]};letter-spacing:0.04em;vertical-align:middle;">'
-                  f'&#9679;&nbsp;LIVE</span>')
-    else:
-        _pd = prev_label if prev_label else ''
-        marker = (f'<span style="margin-left:4px;font-size:8px;font-weight:700;'
-                  f'color:{P["subtle"]};letter-spacing:0.04em;vertical-align:middle;">'
-                  f'{_pd}</span>') if _pd else ""
-    inner = f'<div>{pill}{marker}</div><div style="margin-top:3px;">{spark}</div>'
+    # No per-row basis tag. Every row of the table shares one basis -- either the
+    # session is open for all of them or it is closed for all of them -- so a
+    # "\u25cf LIVE" or "PREV. DAY" badge on each of seventeen rows repeated one
+    # fact seventeen times, in the width the figure needed. The column HEADER
+    # says it once: "Intraday" while a session is open, "1D" once it has closed.
+    inner = f'<div>{pill}</div><div style="margin-top:3px;">{spark}</div>'
     cell = f'<td width="96" align="center" style="padding:6px 8px;{bgc}">{inner}</td>'
     return cell, inner
 
@@ -951,15 +946,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     _pf_series = _portfolio_intraday_series(
         m, intraday_map=_snap_intraday, raw1d=_raw1d
     )
-    _prev_lbl = _prev_session_label(m)
     if _pf_series is not None and len(_pf_series) >= 2:
         _, port_inner = _perf_spark_cell(
             port_full.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
-            live=bool(port_full.get("1d_live")), prev_label=_prev_lbl)
+            live=bool(port_full.get("1d_live")))
     else:
         _, port_inner = _perf_spark_cell(
-            port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")),
-            prev_label=_prev_lbl)
+            port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")))
     portfolio = {"name": "Portfolio", "spark_inner": port_inner,
                  "day_raw": port_full.get("1d"),
                  "returns": _returns_dict(port_full, is_portfolio=True)}
@@ -975,7 +968,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         display_tk = _display_ticker(ticker) or ""
         _, inner = _perf_spark_cell(
             _raw1d.get(ticker), ticker, _snap_intraday,
-            live=bool(_live1d.get(ticker, False)), prev_label=_prev_lbl)
+            live=bool(_live1d.get(ticker, False)))
         row_items.append({
             "_ac": str(h.get("asset_class", "") or "") or "Other",
             "_isin": isin, "_ticker": ticker,
@@ -1257,14 +1250,13 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # ticker, but its holdings trade intraday); dashed placeholder when the
     # exact-symbol intraday data is unavailable.
     _pf_series = _portfolio_intraday_series(m, intraday_map=intraday_map)
-    _prev_lbl = _prev_session_label(m)
     if _pf_series is not None and len(_pf_series) >= 2:
         _, port_inner = _perf_spark_cell(
             pf.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
-            live=bool(pf.get("1d_live")), prev_label=_prev_lbl)
+            live=bool(pf.get("1d_live")))
     else:
         _, port_inner = _perf_spark_cell(
-            pf.get("1d"), "", {}, live=bool(pf.get("1d_live")), prev_label=_prev_lbl)
+            pf.get("1d"), "", {}, live=bool(pf.get("1d_live")))
     portfolio = {"name": portfolio_row["name"], "spark_inner": port_inner,
                  "day_raw": pf.get("1d"),
                  "returns": portfolio_row["returns"]}
@@ -1282,7 +1274,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             for r in rows:
                 _, inner = _perf_spark_cell(
                     r.get("d1"), r.get("raw_ticker"), intraday_map,
-                    live=bool(r.get("live")), prev_label=_prev_lbl)
+                    live=bool(r.get("live")))
                 insts.append({
                     # A short name here, not just the ticker: these instruments
                     # are tracked and NOT held, so no other section in the issue

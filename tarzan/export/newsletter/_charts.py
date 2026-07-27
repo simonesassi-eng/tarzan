@@ -462,17 +462,20 @@ def _prev_session_label(m, fmt: str = "%d/%m") -> str:
 
 
 def day_column_label(m, *, live: bool) -> str:
-    """Header for the 1D column, naming what the column is measured against.
+    """Header for the session column: ``Intraday`` or ``1D``.
 
-    "1D / Intraday" read as two columns. There is only one: while a session is
-    open it carries the live move against the previous close, and once every
-    session has closed it carries the close-to-close return. The header says
-    which of the two the reader is looking at, and against which close.
+    One word, because the header is the only place the basis needs saying. While
+    a session is open the column carries the live move against the previous
+    close; once every session has closed it carries the close-to-close return.
+    Every row shares that basis, so it used to be stated on each of them with a
+    "● LIVE" badge -- seventeen repetitions of one fact, in the width the figure
+    needed.
+
+    Which close the closed-market figure is measured against is in the masthead
+    stamp ("Mon, 27 Jul 2026 · close 24 Jul · market CLOSED"), so it is not lost
+    by keeping this to a word.
     """
-    if live:
-        return "1D \u00b7 intraday"
-    when = _prev_session_label(m, "%d %b")
-    return f"1D \u00b7 close {when}" if when else "1D"
+    return "Intraday" if live else "1D"
 
 
 
