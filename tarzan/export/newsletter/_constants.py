@@ -164,7 +164,9 @@ def uni_name(name, ticker="", *, tags=(), pill="", span=""):
     span_html = (f'<span style="margin-left:6px;font-size:9px;'
                  f'font-weight:600;color:{P["subtle"]};">{span}</span>'
                  if span else "")
-    inner = f'{pill}{tk}<span>{name}</span>{tag_html}{span_html}'
+    name_html = (f'<span style="color:{P["muted"]};">{name}</span>'
+                 if name else "")
+    inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'
     return (f'<div style="font-size:10.5px;font-weight:600;line-height:1.35;'
             f'color:{P["ink"]};">{inner}</div>')
 
@@ -235,7 +237,8 @@ def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
 
 def render_unified_table(first_col_label, columns, groups, *,
                          portfolio_row=None, compact=False,
-                         first_col_width=None, separators=False):
+                         first_col_width=None, separators=False,
+                         zebra=True, dense=False, radius=10):
     """Render the canonical instrument table shared by all five sections.
 
     Args:
@@ -269,15 +272,18 @@ def render_unified_table(first_col_label, columns, groups, *,
     # Value-cell padding + font: tight/smaller for dense tables (Risk = 10
     # columns) so the name column keeps enough width; normal otherwise. The
     # name column keeps its wider padding regardless.
-    vpad = "7px 3px" if compact else "7px 8px"
-    fs = "font-size:10px;" if compact else "font-size:10.5px;"
+    # ``dense`` is the returns-grid setting: the tint has to fill its column, so
+    # the padding is trimmed rather than the figure.
+    vpad = "5px 4px" if dense else ("7px 3px" if compact else "7px 8px")
+    fs = ("font-size:9.5px;" if dense
+          else ("font-size:10px;" if compact else "font-size:10.5px;"))
     # Per-value-column separator flags: on for every column except the first
     # (the 1D sparkline / first metric), and honouring an explicit no_sep.
     seps = [separators and i > 0 and not (len(c) > 3 and c[3])
             for i, c in enumerate(columns)]
     out = ['<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
            'border="0" style="margin-top:14px;border:1px solid '
-           f'{P["border"]};border-radius:10px;overflow:hidden;border-collapse:separate;'
+           f'{P["border"]};border-radius:{radius}px;overflow:hidden;border-collapse:separate;'
            f'border-spacing:0;font-size:12px;">',
            _uni_header(first_col_label, columns, vpad, first_col_width, separators)]
 
@@ -321,7 +327,8 @@ def render_unified_table(first_col_label, columns, groups, *,
             fw = f'width:{first_col_width}px;' if first_col_width else ""
             for row in rows:
                 rbg = row.get("row_bg") or (
-                    P["card"] if ri % 2 == 0 else P["zebra"])
+                    P["card_alt"] if not zebra
+                    else (P["card"] if ri % 2 == 0 else P["zebra"]))
                 ri += 1
                 out.append(
                     f'<tr><td style="padding:7px 10px;background:{rbg};'
