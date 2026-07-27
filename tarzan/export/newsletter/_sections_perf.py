@@ -744,11 +744,20 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
         scales[p] = _heat.column_scale(
             row.get("returns", {}).get(p, {}).get("raw") for row in every_row)
 
-    def _cells(returns_dict, spark_inner, *, weight):
+    # The 1D column is a window like any other and is tinted like any other. It
+    # was the one column left uncoloured, so it was the only cell in the row a
+    # reader had to evaluate by reading the number. Its scale is damped, because
+    # the cell also carries the session sparkline and a saturated background
+    # competes with the line drawn on it.
+    dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
+
+    def _cells(returns_dict, spark_inner, *, weight, day_raw=None):
         # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
         # the gap after the name closes and the period columns get that width.
         cells = [uni_cell(spark_inner, align="left", width=84, valign="middle",
-                          pad="6px 4px 6px 0")]
+                          pad="6px 4px 6px 0",
+                          bg=_heat.heat_bg(day_raw, neg=dneg, pos=dpos,
+                                           damp=_heat.DAY_DAMP))]
         for p in period_cols:
             r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
             neg, pos = scales[p]
@@ -770,12 +779,14 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list,
         "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
                       f'font-size:12px;">\u2605 {portfolio["name"]}</span>'),
         "cells": _cells(portfolio["returns"], portfolio.get("spark_inner", ""),
-                        weight=700),
+                        weight=700, day_raw=portfolio.get("day_raw")),
     }
     uni_groups = [
         (cls, col, [(role, [{"name_html": inst["name_html"],
                              "cells": _cells(inst["returns"],
-                                             inst.get("spark_inner", ""), weight=600)}
+                                             inst.get("spark_inner", ""),
+                                             weight=600,
+                                             day_raw=inst.get("day_raw"))}
                             for inst in insts])
                     for role, insts in role_list])
         for cls, col, role_list in groups]
@@ -934,6 +945,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")),
             prev_label=_prev_lbl)
     portfolio = {"name": "Portfolio", "spark_inner": port_inner,
+                 "day_raw": port_full.get("1d"),
                  "returns": _returns_dict(port_full, is_portfolio=True)}
 
     # Build one row per holding, then group via the SHARED engine (class → role,
@@ -955,6 +967,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
                 display_instrument_name(isin, ticker, raw_name),
                 display_tk, []),
             "spark_inner": inner,
+            "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
         })
     groups = group_by_class_role(
@@ -1237,6 +1250,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         _, port_inner = _perf_spark_cell(
             pf.get("1d"), "", {}, live=bool(pf.get("1d_live")), prev_label=_prev_lbl)
     portfolio = {"name": portfolio_row["name"], "spark_inner": port_inner,
+                 "day_raw": pf.get("1d"),
                  "returns": portfolio_row["returns"]}
 
     # Group benchmark rows by asset class → role, in the configured order,
@@ -1257,6 +1271,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                     "name_html": _perf_name_html(r["name"], r.get("ticker"),
                                                  r.get("tags")),
                     "spark_inner": inner,
+                    "day_raw": r.get("d1"),
                     "returns": r["returns"],
                 })
             rendered_roles.append((role, insts))
@@ -1475,22 +1490,39 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
 
     columns = [(f"{label}{note}", "right")
                for (label, _k, _p, note, _rk) in metric_cols]
-    # Compact mode: 10 numeric columns, so tighten value-cell padding to keep
-    # the instrument-name column wide enough. Faint vertical separators help
-    # the reader track which metric a number belongs to across the wide row.
-    table_html = render_unified_table("Series", columns, uni_groups,
-                                      portfolio_row=portfolio_row, compact=True,
-                                      first_col_width=132, separators=True)
+    # ── The portfolio's own ten metrics, as tiles ────────────────────────
+    # This section used to be a 36-row table: the portfolio plus every reference
+    # instrument, over eleven columns. The question it exists to answer is "what
+    # shape was the ride" for THIS portfolio, and the answer was one row out of
+    # thirty-six -- the other thirty-five set up a comparison nobody asked for
+    # and cost a quarter of the issue's height.
+    #
+    # Each tile carries the figure and, where the configuration rates the
+    # metric, a gauge placing it on its own weak/fair/strong scale. Those
+    # thresholds are metric_ratings in constants.yaml, with its citations, so
+    # the gauge draws a rating the project declares rather than one invented
+    # here.
+    port_metrics = (port or {}).get("metrics") or {}
+    tiles = []
+    for label, key, is_pct, note, rating_key in metric_cols:
+        value = port_metrics.get(key)
+        if is_missing(value):
+            continue
+        band = (_ratings.get(rating_key) or {}) if rating_key else {}
+        thresholds = band.get("thresholds") or []
+        gauge = ""
+        if len(thresholds) >= 2:
+            gauge = _charts.band_gauge(
+                abs(float(value)), good=abs(float(thresholds[0])),
+                warn=abs(float(thresholds[1])),
+                invert=bool(band.get("invert", False)))
+        tiles.append({
+            "label": f"{label}{note}",
+            "value": _fmt_pct(value) if is_pct else _fmt_num(value),
+            "gauge": gauge,
+        })
 
-    description = (
-        "Each instrument is measured over its full available price history "
-        "\u2014 the span is shown next to its name. Your portfolio is a "
-        "backtest at today's weights held constant, over the longest window "
-        "where every holding with at least 1 year of history overlaps. "
-        "Colour is scaled per column over the series shown, green toward the "
-        "better end of each metric, so the spans being unequal is visible in "
-        "the span labels rather than hidden by the shading."
-    )
+    description = ""
 
     return {
         "available": True,
@@ -1499,10 +1531,11 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         # reader needs before reading a column: the window each series covers.
         "subtitle": (
             f'Portfolio over {(port or {}).get("span_label") or "its"} of '
-            f'history; every instrument over its own full history, shown next '
-            f'to its name.'
+            f'history: a backtest at today\u2019s weights held constant, over '
+            f'the longest window where every holding with a year or more of '
+            f'history overlaps.'
         ),
-        "table_html": table_html,
+        "tiles": tuple(tiles),
         "description": description,
         # Backtest transparency note (holdings excluded / renormalized).
         "portfolio_note": (port or {}).get("note"),
