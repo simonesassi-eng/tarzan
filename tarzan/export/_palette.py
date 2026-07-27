@@ -22,30 +22,31 @@ follow the palette at all.
 from __future__ import annotations
 
 PALETTE = {
-    "accent": "#5B5BD6",
-    "ink": "#1E293B",
-    "muted": "#64748B",
-    "subtle": "#94A3B8",
-    "page": "#F1F2F8",
-    "card": "#FFFFFF",
-    "card_alt": "#F8FAFF",
-    "border": "#E5E7EF",
-    "row_rule": "#F1F2F8",
-    "col_rule": "#EFF1F8",
-    "green": "#15803D",
-    "amber": "#D97706",
-    "red": "#DC2626",
-    "green_bg": "#DCFCE7",
-    "green_border": "#BBF7D0",
-    # Very light action tints for whole-row BUY/SELL backgrounds in the
-    # Optimizer (green-50 / red-50) — softer than the *_bg pills above.
-    "green_tint": "#ECFDF5",
-    "red_tint": "#FEF2F2",
-    "amber_bg": "#FFF7ED",
-    "red_bg": "#FEE2E2",
-    "accent_bg": "#EEF2FF",
-    # Chart-only roles. The benchmark line and the P&L line are deliberately
-    # not `muted`/`accent`: they must stay distinguishable from axis furniture.
-    "bench": "#94A3B8",
-    "pnl": "#0EA5E9",
+    # Terminal palette: dark surfaces, monospace-friendly contrast. Roles are
+    # unchanged from the light set, so nothing at the ~140 call sites moved.
+    "accent": "#6E9BFF",
+    "ink": "#E6EDF6",
+    "muted": "#8FA3BC",
+    "subtle": "#66798F",
+    "page": "#05090D",
+    "card": "#0C131B",
+    "card_alt": "#111A24",
+    "border": "#22303F",
+    "row_rule": "#1A2531",
+    "col_rule": "#16212D",
+    "green": "#2FBF71",
+    "amber": "#E5A038",
+    "red": "#FF5F52",
+    "green_bg": "#0F2A1D",
+    "green_border": "#1B4332",
+    # Whole-row BUY/SELL tints in the Optimizer: a shade off the card rather
+    # than a wash, which on a dark surface would swamp the text.
+    "green_tint": "#0E1F18",
+    "red_tint": "#1E1211",
+    "amber_bg": "#2A1F0C",
+    "red_bg": "#2C1210",
+    "accent_bg": "#132038",
+    # Chart-only roles, kept distinguishable from axis furniture.
+    "bench": "#8FA3BC",
+    "pnl": "#38BDF8",
 }
