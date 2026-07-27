@@ -184,3 +184,43 @@ class TestShortInstrumentName:
 
     def test_issuer_abbreviation(self):
         assert self._s("Invesco Physical Gold ETC").startswith("Inv.")
+
+
+class TestSignedZeroIsNotSigned:
+    """A value that rounds to zero must not print a sign.
+
+    A residual weight of -0.004% used to render as "−0.0%", which reads as a
+    real move in the negative direction rather than as nothing. The optimizer's
+    After column showed it on the real order list: positions being sold to zero
+    printed "−0.0%" next to siblings printing "0.0%".
+    """
+
+    def test_pct_drops_the_sign_when_it_rounds_to_zero(self):
+        from tarzan.export.newsletter._format import _pct
+
+        assert _pct(-0.001, 1, True) == "0.0%"
+        assert _pct(0.0, 1, True) == "0.0%"
+
+    def test_pct_keeps_the_sign_on_a_real_value(self):
+        from tarzan.export.newsletter._format import _pct
+
+        assert _pct(-1.2, 1, True) == "\u22121.2%"
+        assert _pct(2.5, 2, True) == "+2.50%"
+
+    def test_a_value_below_the_printed_precision_is_still_signed_if_it_shows(self):
+        """-0.004 rounds away at 1 decimal but survives at 3, so the sign must
+        come back rather than being dropped on magnitude alone."""
+        from tarzan.export.newsletter._format import _pct
+
+        assert _pct(-0.004, 3, True) == "\u22120.004%"
+
+    def test_compact_and_smart_and_pp_agree(self):
+        from tarzan.export.newsletter._format import (
+            _pct_compact, _pct_smart, _signed_pp)
+
+        assert _pct_compact(-0.0004) == "0.00%"
+        assert _pct_compact(-1.23) == "\u22121.23%"
+        assert _pct_smart(-0.004, 1, True) == "0%"
+        assert _pct_smart(-1.6, 1, True) == "\u22121.6%"
+        assert _signed_pp(-0.02) == "0.0"
+        assert _signed_pp(-0.9) == "\u22120.9"

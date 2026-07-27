@@ -507,10 +507,10 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # The section kicker belongs to the template, which owns the ordinal
     # counter. Baked in here it printed an unnumbered "Performance" at the top
     # of the body while a different section lower down printed a numbered one.
+    # No subtitle: the sentence that used to sit here listed the table's own
+    # column headers and window rows back to the reader.
     header = (f'<div style="margin-top:4px;font-size:18px;font-weight:700;'
-              f'color:{P["ink"]};">How your money moved</div>'
-              f'<div style="margin-top:4px;font-size:12px;color:{P["muted"]};">Total &amp; unrealized P&amp;L and your '
-              f'time-weighted return across 1 day, 7 days, 30 days and since inception, then your return vs the market.</div>')
+              f'color:{P["ink"]};">How your money moved</div>')
     return {"available": True, "kicker": "Performance",
             "html": header + matrix_card + "".join(parts)}
 

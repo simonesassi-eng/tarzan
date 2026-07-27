@@ -31,13 +31,24 @@ def _eur(amount: Optional[float], decimals: int = 2, signed: bool = False) -> st
         return f"−{formatted}"
     return formatted
 
+def _sign_for(value: float, decimals: int) -> str:
+    """The sign to print for a value that will be rounded to ``decimals``.
+
+    Empty when the rounded figure is zero. Without it a residual weight of
+    -0.004% printed as "\u22120.0%", and a signed zero reads as a real, if tiny,
+    move in the negative direction rather than as nothing at all.
+    """
+    if abs(round(float(value), decimals)) < 10 ** -9:
+        return ""
+    return "+" if value > 0 else "\u2212"
+
+
 def _pct(value: Optional[float], decimals: int = 2, signed: bool = False) -> str:
     """Format a percentage. Already in pp (e.g. 8.59 means 8.59%)."""
     if is_missing(value):
         return "—"
     if signed:
-        sign = "+" if value >= 0 else "−"
-        return f"{sign}{abs(value):.{decimals}f}%"
+        return f"{_sign_for(value, decimals)}{abs(value):.{decimals}f}%"
     return f"{value:.{decimals}f}%"
 
 def _pct_compact(value: Optional[float], signed: bool = True) -> str:
@@ -62,8 +73,7 @@ def _pct_compact(value: Optional[float], signed: bool = True) -> str:
     av = abs(v)
     decimals = 2 if av < 100 else (1 if av < 1000 else 0)
     if signed:
-        sign = "+" if v >= 0 else "−"
-        return f"{sign}{av:.{decimals}f}%"
+        return f"{_sign_for(v, decimals)}{av:.{decimals}f}%"
     return f"{v:.{decimals}f}%"
 
 def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = False) -> str:
@@ -81,16 +91,14 @@ def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = Fal
     is_integer = abs(rounded - round(rounded)) < 10 ** (-(max_decimals + 1))
     decimals = 0 if is_integer else max_decimals
     if signed:
-        sign = "+" if value >= 0 else "−"
-        return f"{sign}{abs(value):.{decimals}f}%"
+        return f"{_sign_for(value, decimals)}{abs(value):.{decimals}f}%"
     return f"{value:.{decimals}f}%"
 
 def _signed_pp(value: Optional[float], decimals: int = 1) -> str:
     """Format a signed delta in percentage points (no % sign)."""
     if is_missing(value):
         return "—"
-    sign = "+" if value >= 0 else "−"
-    return f"{sign}{abs(value):.{decimals}f}"
+    return f"{_sign_for(value, decimals)}{abs(value):.{decimals}f}"
 
 def _display_ticker(symbol: Optional[str]) -> Optional[str]:
     """Return the exact resolved provider ticker for human-facing output.
