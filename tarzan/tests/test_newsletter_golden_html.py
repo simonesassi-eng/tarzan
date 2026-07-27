@@ -153,3 +153,50 @@ class TestSectionNumbering:
         ordinals = self._ordinals(with_ai)
         assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
         assert len(ordinals) == len(self._ordinals(_html)) + 1
+
+
+class TestReturnsHeat:
+    """Conditional formatting must be scaled on each column's own extremes.
+
+    The property that matters is saturation: within a column, the table's most
+    negative value has to reach the saturated red end and its most positive the
+    saturated green end. A scale pooled across columns, or across both grids,
+    leaves every cell pale and the formatting says nothing.
+    """
+
+    def test_column_extremes_saturate(self, rendered):
+        from tarzan.export import _heat
+
+        html, _m, _c = rendered
+        # Cell backgrounds in the returns grids carry tabular-nums; row and
+        # group surfaces do not, which keeps this off the table furniture.
+        tinted = re.findall(
+            r'background:(#[0-9A-Fa-f]{6});[^"]*font-variant-numeric', html)
+        assert tinted, "no returns cell carries a conditional-format tint"
+        saturated = {
+            _heat.heat_bg(1.0, neg=-1.0, pos=1.0).upper(),
+            _heat.heat_bg(-1.0, neg=-1.0, pos=1.0).upper(),
+        }
+        seen = {t.upper() for t in tinted}
+        assert seen & saturated, (
+            "no column reaches the end of its ramp; the scale is not "
+            f"normalised per column. saturated={sorted(saturated)}"
+        )
+
+    def test_blank_cell_is_not_tinted(self):
+        from tarzan.export import _heat
+        assert _heat.heat_bg(None, neg=-5.0, pos=5.0) is None
+
+    def test_near_zero_stays_on_the_surface(self):
+        """A value a hair off zero must not pick up a tint that reads as a
+        signal — the ramp has a dead zone at the bottom."""
+        from tarzan.export import _heat
+        assert _heat.heat_bg(0.01, neg=-20.0, pos=20.0) is None
+
+    def test_day_column_is_damped(self):
+        """The 1D cell also carries the session sparkline, so its tint is
+        capped to keep the chart on top readable."""
+        from tarzan.export import _heat
+        full = _heat.heat_bg(5.0, neg=-5.0, pos=5.0)
+        damped = _heat.heat_bg(5.0, neg=-5.0, pos=5.0, damp=_heat.DAY_DAMP)
+        assert full != damped
