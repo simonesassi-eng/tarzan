@@ -1621,6 +1621,11 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []), _tax)
             pc["label"] = p.get("label", "")
             pc["no_sell"] = p.get("no_sell")
+            # Which plan the configuration actually runs. Both are computed
+            # every run and both can be executable, so without this the reader
+            # has two trade lists and no way to tell which one is the proposal.
+            pc["active"] = bool(p.get("no_sell")) == bool(
+                getattr(ctx.config, "rebalancing_no_sell", False))
             _attach_cost(pc, p)
             _attach_execution(pc, p.get("verifications"))
             plans.append(pc)
@@ -1636,6 +1641,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     pc = _optimizer_plan_ctx(m, suggestions, _tax)
     pc["label"] = "Suggested actions"
     pc["no_sell"] = None
+    pc["active"] = True
     _attach_execution(pc, m.rebalancing_verifications)
     return {"available": True, "plans": [pc],
             "subtitle": _optimizer_subtitle([pc])}

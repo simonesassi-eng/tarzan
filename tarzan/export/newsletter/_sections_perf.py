@@ -933,7 +933,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         _, port_inner = _perf_spark_cell(
             port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")),
             prev_label=_prev_lbl)
-    portfolio = {"name": "Total Portfolio", "spark_inner": port_inner,
+    portfolio = {"name": "Portfolio", "spark_inner": port_inner,
                  "returns": _returns_dict(port_full, is_portfolio=True)}
 
     # Build one row per holding, then group via the SHARED engine (class → role,

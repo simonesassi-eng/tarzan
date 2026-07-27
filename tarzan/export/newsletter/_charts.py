@@ -428,11 +428,16 @@ def _flat_dashed_spark(w: int = 62, h: int = 22) -> str:
     the same height as the intraday rows so the pill stays aligned, while
     signalling 'no intraday, this is the previous-day change'."""
     y = h / 2.0
+    # The rule alone was ambiguous: a flat dashed line reads as a session that
+    # went nowhere. Saying "no intraday" on it is the difference between "the
+    # price did not move" and "there is no intraday series to draw".
     return (
         f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
         f'<line x1="0" y1="{y:.1f}" x2="{w}" y2="{y:.1f}" stroke="{PALETTE["subtle"]}" '
-        f'stroke-width="1" stroke-dasharray="3,2"/></svg>'
+        f'stroke-width="1" stroke-dasharray="3,2"/>'
+        f'<text x="{w / 2.0:.1f}" y="{y - 2:.1f}" text-anchor="middle" '
+        f'font-size="7" fill="{PALETTE["subtle"]}">no intraday</text></svg>'
     )
 
 def _prev_session_label(m, fmt: str = "%d/%m") -> str:
