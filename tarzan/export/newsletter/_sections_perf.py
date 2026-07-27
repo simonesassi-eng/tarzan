@@ -649,9 +649,14 @@ def _returns_table_html(period_cols, portfolio: dict, groups: list) -> str:
         for p in period_cols:
             r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
             neg, pos = scales[p]
+            raw = r.get("raw")
             cells.append(uni_cell(
-                r["value"], color=r["color"], weight=weight,
-                bg=_heat.heat_bg(r.get("raw"), neg=neg, pos=pos)))
+                r["value"],
+                # On a saturated tint a green figure on green loses contrast, so
+                # the ink takes over; below that the sign colour is kept.
+                color=(_heat.heat_ink(raw, neg=neg, pos=pos) or r["color"]),
+                weight=weight,
+                bg=_heat.heat_bg(raw, neg=neg, pos=pos)))
         return cells
 
     # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
