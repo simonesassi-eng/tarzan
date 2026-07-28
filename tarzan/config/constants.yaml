@@ -157,6 +157,18 @@ default_equity_geo_targets_pctg:
   Dev ex-USA ex-EMU ex-JP: 13.0
   Emerging Markets: 12.0
 
+# Fallback benchmark universe, used only when instrument_taxonomy.csv marks no
+# row is_benchmark=true — a first run by a new user who has not curated one yet.
+# Without it alpha/beta are None and the α/β footnote names an index the report
+# never computed. One broad global equity ETF is the least opinionated reference
+# available; a curated taxonomy row always wins over this.
+#
+# The ticker is deliberately the fully-qualified listing, not the bare "ISAC":
+# bare-ticker promotion needs a taxonomy name to match candidate venues
+# against, which is exactly what an uncurated taxonomy cannot supply.
+default_benchmarks:
+  iShares MSCI ACWI: ISAC.MI
+
 
 # =============================================================================
 # 4. GEOGRAPHY: country → MSCI bucket mapping
