@@ -239,18 +239,27 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         if acwi_all is not None else None
     )
 
-    pnl_pct = None
-    if m.pnl_series is not None:
-        pnl = _norm_series(m.pnl_series).reindex(idx, method="ffill").bfill()
-        base = pnl - pnl.iloc[0]
-        v0 = float(val.iloc[0]) or 1.0
-        pnl_pct = [float(p) / v0 * 100.0 for p in base.values]
+    # Both P&L lines are rebased on the window's own opening value, so each
+    # reads as "what this measure added over the window" on the same axis as
+    # TWROR — not as its since-inception level, which would sit far off the
+    # window's scale and flatten the lines that belong to it.
+    v0 = float(val.iloc[0]) or 1.0
+
+    def _window_pct(source):
+        if source is None:
+            return None
+        s = _norm_series(source).reindex(idx, method="ffill").bfill()
+        return [float(p) / v0 * 100.0 for p in (s - s.iloc[0]).values]
+
+    pnl_pct = _window_pct(m.pnl_series)
+    unreal_pct = _window_pct(m.unrealized_series)
 
     dates = list(idx)
     endpoints = {
         "twror": float(twror[-1]) if twror else None,
         "acwi": float(acwi[-1]) if acwi else None,
         "pnl_pct": float(pnl_pct[-1]) if pnl_pct else None,
+        "unreal_pct": float(unreal_pct[-1]) if unreal_pct else None,
     }
     return {
         "dates": dates,
@@ -258,6 +267,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         "twror": twror,
         "acwi": acwi,
         "pnl_pct": pnl_pct,
+        "unreal_pct": unreal_pct,
         "flows": _flow_list(m.external_flows, dates[0], dates[-1]),
         "window_start": dates[0],
         "window_end": dates[-1],
@@ -319,7 +329,7 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     ``_perf_level_series`` for the cumulative math. None when unavailable.
 
     Keys mirror ``_perf_window`` so the chart builder is symmetric:
-    ``{dates, twror, pnl_pct, acwi}`` (any line may be None)."""
+    ``{dates, twror, pnl_pct, unreal_pct, acwi}`` (any line may be None)."""
     if m.portfolio_history is None or m.actual_value_series is None:
         return None
     nav_full = _norm_series(m.portfolio_history)
@@ -336,11 +346,12 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     lvl = _perf_level_series(m, list(idx), geo_name)
     if lvl is None:
         return None
-    twror_si, total_pct, _unreal_pct, acwi_si = lvl
+    twror_si, total_pct, unreal_pct, acwi_si = lvl
     return {
         "dates": list(idx),
         "twror": twror_si,
         "pnl_pct": total_pct,
+        "unreal_pct": unreal_pct,
         "acwi": acwi_si,
     }
 

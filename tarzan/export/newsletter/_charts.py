@@ -149,12 +149,18 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
         f'</svg>'
     )
 
-def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> str:
+def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
+                      total_pct=None) -> str:
     """Dual-axis hero chart with the same baseline semantics as Markets.
 
-    Portfolio value is green above the window-start baseline and red below it;
-    Unrealized P&L remains the neutral dashed secondary series. Cash-flow
-    triangles stay attached to the value line.
+    Portfolio value is green above the window-start baseline and red below it.
+    Both P&L measures ride the right axis as dashed secondary series —
+    Unrealized in violet and Total in cyan, the same two colours they carry on
+    the return charts, so one key holds across the issue. Cash-flow triangles
+    stay attached to the value line.
+
+    ``total_pct`` is optional: when the caller cannot build it the chart draws
+    exactly as before rather than dropping the panel.
     """
     global _dual_uid
     _dual_uid += 1
@@ -163,6 +169,8 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> 
     n = len(values)
     if n < 2 or not pct or len(pct) != n:
         return ""
+    if total_pct is not None and len(total_pct) != n:
+        total_pct = None
     ML, MR, MT, MB = 52, 48, 12, 26
     PW, PH = w - ML - MR, h - MT - MB
     base = values[0]
@@ -170,7 +178,10 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> 
     vlo, vhi, vticks = _ch.nice_ticks(
         min(min(values), base), max(max(values), base), 4
     )
-    plo, phi, pticks = _ch.nice_ticks(min(pct), max(pct), 4)
+    # The right axis must span BOTH P&L series, or the second line is drawn
+    # against a scale that was fitted to the first and rides off the plot.
+    pct_all = list(pct) + list(total_pct or ())
+    plo, phi, pticks = _ch.nice_ticks(min(pct_all), max(pct_all), 4)
 
     def X(i):
         return ML + (i / (n - 1) * PW if n > 1 else 0)
@@ -216,6 +227,8 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> 
         f"{X(0):.1f},{baseline_y:.1f}"
     )
     pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
+    tline = (" ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(total_pct))
+             if total_pct is not None else "")
     baseline_clip_y = max(MT, min(baseline_y, MT + PH))
 
     marks = ""
@@ -251,16 +264,15 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> 
         f'fill="{P["green"] if values[-1] >= base else P["red"]}" '
         f'stroke="{P["card_alt"]}" stroke-width="1.8"/>'
     )
-    # Two labels inside the plot instead of a legend underneath. The legend
-    # spent a line naming the axes; naming the baseline where it is drawn and
-    # the right axis where it is read says the same thing in the place the
-    # reader is already looking.
+    # The baseline is named where it is drawn, so the reader learns the €
+    # reference in the place they are already looking. The right axis is NOT
+    # named here any more: it now carries two series, and one word ("unreal.")
+    # beside the axis could only name one of them. Naming both is the colour
+    # key's job, drawn below the plot by the caller.
     labels = (
         f'<text x="{ML + 5}" y="{max(9.0, baseline_y - 5):.1f}" '
         f'text-anchor="start" font-size="8.5" font-weight="700" '
         f'fill="{P["muted"]}">window open {_eur_smart(base)}</text>'
-        f'<text x="{ML + PW + 6}" y="{h - 6}" text-anchor="start" '
-        f'font-size="8.5" font-weight="700" fill="{P["muted"]}">unreal.</text>'
     )
 
     return (
@@ -283,10 +295,37 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196) -> 
         f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
         + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" '
         f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
-        + f'<polyline points="{pline}" fill="none" stroke="{P["muted"]}" '
+        + f'<polyline points="{pline}" fill="none" stroke="{P["unreal"]}" '
         f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
+        + (f'<polyline points="{tline}" fill="none" stroke="{P["pnl"]}" '
+           f'stroke-width="1.8" stroke-dasharray="1,2.5" '
+           f'stroke-linejoin="round"/>' if tline else "")
         + marks + endpoint + labels + xlab + "</svg>"
     )
+
+
+def _hero_chart_legend(*, has_total: bool) -> str:
+    """Colour key for the hero chart: the € line, then each P&L series drawn.
+
+    The hero used inline axis labels instead of a key, which worked while the
+    right axis held one series. With two it does not, and the two P&L colours
+    are the same ones the return charts use, so naming them here also teaches
+    the mapping the reader needs three sections later.
+    """
+    P = PALETTE
+    items = [(P["green"], "Value (€, left)"),
+             (P["unreal"], "Unreal. P&amp;L (%, right)")]
+    if has_total:
+        items.append((P["pnl"], "Total P&amp;L (%, right)"))
+    parts = [
+        (f'<span style="display:inline-block;width:7px;height:7px;'
+         f'border-radius:2px;background:{color};vertical-align:baseline;'
+         f'margin-right:4px;"></span>'
+         f'<span style="color:{P["muted"]};">{label}</span>')
+        for color, label in items
+    ]
+    return ('<div style="font-size:9px;line-height:1.5;margin:7px 0 0;">'
+            + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
 
 def _hero_flow_chips(flows) -> str:
