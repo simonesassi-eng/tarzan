@@ -98,6 +98,39 @@ class TestCumExNetting:
         ]
         assert _open_from_orders(orders) == {"IE00BL25JL35", "IE00BL25JM42"}
 
+    def test_cum_ex_rollover_releases_cost_from_the_daily_series(self):
+        """A position opened under a cum ISIN and sold under its ex ISIN must
+        release its cost from the daily cost-basis series, not just from the
+        snapshot.
+
+        Regression: the daily builder walked raw ISINs, so the disposal found
+        an empty book under the ex ISIN and never released the opening cost.
+        The stranded cost surfaced as a phantom unrealized step (~the opening
+        notional) that flattened every since-inception line above it.
+        """
+        from tarzan.engine.returns_builder import (
+            _build_cost_basis_series,
+        )
+
+        orders = [
+            _o(OrderType.TRANSFER_IN, "IT0005565392", qty=20000.0,
+               gross=20000.0, equivalence_group="btp-2028", d=(2026, 1, 8)),
+            _o(OrderType.SELL, "IT0005565400", qty=-20000.0, net=21000.0,
+               equivalence_group="BTP-2028", d=(2026, 1, 23)),
+        ]
+        identity = _instrument_identity_by_isin(orders)
+        index = pd.date_range("2026-01-08", "2026-01-31", freq="D")
+
+        # Identity-aware: cost is released on the ex-ISIN disposal.
+        aware = _build_cost_basis_series(orders, index, identity)
+        assert aware.iloc[-1] == pytest.approx(0.0), aware.iloc[-1]
+        assert aware.max() == pytest.approx(20000.0)
+
+        # Raw-ISIN walk (no identity): the €20k never leaves the books — the
+        # exact defect this guards against.
+        raw = _build_cost_basis_series(orders, index, None)
+        assert raw.iloc[-1] == pytest.approx(20000.0)
+
     def test_conflicting_explicit_groups_fail_closed(self):
         orders = [
             _o(

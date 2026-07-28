@@ -415,7 +415,10 @@ def build_holdings_from_orders(
     return holdings
 
 
-def _apply_cost_order(qty: dict[str, float], cost: dict[str, float], o: Order) -> None:
+def _apply_cost_order(
+    qty: dict[str, float], cost: dict[str, float], o: Order,
+    key: Optional[str] = None,
+) -> None:
     """Advance the running average-cost ``(qty, cost)`` books by one order.
 
       * a buy / transfer-in adds the EUR it committed — the net cash paid
@@ -426,19 +429,27 @@ def _apply_cost_order(qty: dict[str, float], cost: dict[str, float], o: Order) -
         that remain;
       * coupons and dividends never touch cost basis (they are income, not
         a return of capital).
+
+    ``key`` is the book the order posts to. It defaults to the order's ISIN,
+    but a caller that has resolved economic identities passes the identity
+    key so a position opened under one identifier (e.g. a bond's cum-coupon
+    ISIN) and disposed under its equivalent (the ex-coupon ISIN) share one
+    book — otherwise the disposal finds an empty book and never releases the
+    opening cost.
     """
-    q = qty.get(o.isin, 0.0)
-    c = cost.get(o.isin, 0.0)
+    book = key if key is not None else o.isin
+    q = qty.get(book, 0.0)
+    c = cost.get(book, 0.0)
     if o.quantity > 0:  # buy / transfer_in
         committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
-        qty[o.isin] = q + o.quantity
-        cost[o.isin] = c + committed
+        qty[book] = q + o.quantity
+        cost[book] = c + committed
     elif o.quantity < 0:  # sell / transfer_out
         sold = abs(o.quantity)
         if q > _QTY_EPS:
             avg = c / q
-            cost[o.isin] = max(c - avg * min(sold, q), 0.0)
-        qty[o.isin] = max(q - sold, 0.0)
+            cost[book] = max(c - avg * min(sold, q), 0.0)
+        qty[book] = max(q - sold, 0.0)
 
 
 def cost_basis_by_isin(orders: list[Order]) -> dict[str, float]:
@@ -1173,7 +1184,8 @@ def build_order_derived_series(
     # basis on each day. Same average-cost logic as ``cost_basis_by_isin``
     # (so today's value reconciles with the hero's snapshot), expressed as a
     # full daily series for charting.
-    cost_basis_series = _build_cost_basis_series(orders, actual_value_series.index)
+    cost_basis_series = _build_cost_basis_series(
+        orders, actual_value_series.index, identity_by_isin)
     if actual_value_series is not None and not actual_value_series.empty:
         unrealized_series = actual_value_series - cost_basis_series
     else:
@@ -1225,7 +1237,10 @@ def _trim_carried_tail(s: pd.Series, max_trim: int = 10) -> pd.Series:
     return s.iloc[: i + 1]
 
 
-def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
+def _build_cost_basis_series(
+    orders: list[Order], index: pd.Index,
+    identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
+) -> pd.Series:
     """Daily total cost basis of the OPEN positions, reindexed onto ``index``.
 
     Same average-cost walk as ``cost_basis_by_isin`` (see
@@ -1233,6 +1248,12 @@ def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
     trade date so the result is a step function forward-filled across
     calendar days. Subtracting it from the daily market value yields the
     unrealized P&L series.
+
+    Orders post to their economic-identity book, so a cum/ex bond rollover —
+    opened under one ISIN and disposed under its equivalent — nets to zero
+    cost rather than leaving the opening leg's cost stranded on the books
+    forever (which surfaced as a phantom step in the unrealized series, and
+    a false +69% at inception on the since-inception chart).
     """
     if index is None or len(index) == 0:
         return pd.Series(dtype=float)
@@ -1244,7 +1265,8 @@ def _build_cost_basis_series(orders: list[Order], index: pd.Index) -> pd.Series:
     cost: dict[str, float] = {}
     by_date: dict[pd.Timestamp, float] = {}
     for o in pos:
-        _apply_cost_order(qty, cost, o)
+        book = "\x1f".join(_identity_key(o.isin, identity_by_isin))
+        _apply_cost_order(qty, cost, o, key=book)
         by_date[pd.Timestamp(o.trade_date)] = sum(cost.values())
     if not by_date:
         return pd.Series(0.0, index=index)
