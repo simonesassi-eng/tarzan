@@ -42,10 +42,21 @@
     table { border-collapse: collapse; }
     img { display: block; border: 0; }
     a { color: {{ palette.accent }}; text-decoration: none; }
+    {# Reflow the frame as soon as the window is narrower than the card. #}
     @media only screen and (max-width: 620px) {
       .container { width: 100% !important; }
-      .kpi-cell  { display: block !important; width: 100% !important; box-sizing: border-box; }
       .px-32     { padding-left: 18px !important; padding-right: 18px !important; }
+    }
+    {# Stacking the KPI tiles is a SEPARATE, later breakpoint. Tying it to the
+       620px container width collapsed the three-column grid in any reading
+       pane merely narrower than the card -- Apple Mail's default desktop pane
+       among them -- which stacked nine tiles into one column with room to
+       spare. At 520px the content column is ~460px wide, so each of three
+       tiles gets ~153px against a widest value ("€234,579" at 22px monospace)
+       of ~120px. Narrower than that the value itself would clip, and one tile
+       per line becomes the correct layout. #}
+    @media only screen and (max-width: 520px) {
+      .kpi-cell  { display: block !important; width: 100% !important; box-sizing: border-box; }
     }
   </style>
 </head>
