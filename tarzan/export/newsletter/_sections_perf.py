@@ -1207,6 +1207,24 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # Each row is tagged with its curated (asset_class, role) from the
     # instrument taxonomy so the section can be grouped and ordered.
     taxonomy = cfg.instrument_taxonomy()
+
+    # A taxonomy row can be BOTH held and flagged is_benchmark=true (a fund we
+    # own that is also the reference for its role). Such an instrument already
+    # has a row in the returns snapshot above, so listing it again here
+    # duplicated it — and invited comparing the portfolio against something it
+    # owns. The held row wins; the watchlist copy is dropped.
+    #
+    # Matched on the curated taxonomy name, which is the same identity the α/β
+    # and GEO tags below match on: a benchmark row's ``name`` comes straight
+    # from the taxonomy, and ``name_for`` resolves a holding to that row by
+    # ISIN then bare ticker, so both sides meet on one key.
+    held_bench_names = set()
+    if m.holdings_df is not None and not m.holdings_df.empty:
+        for _, h in m.holdings_df.iterrows():
+            curated = cfg.name_for(h.get("isin"), h.get("ticker"))
+            if curated:
+                held_bench_names.add(curated.strip().lower())
+
     benchmark_rows = []
     if not hp.empty and "type" in hp.columns:
         ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
@@ -1215,6 +1233,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         for _, r in bench_df.iterrows():
             name = str(r.get("name") or r.get("ticker", ""))
             name_norm = name.strip().lower()
+            if name_norm in held_bench_names:
+                continue
             # Tag the configured benchmarks. The same index can be both
             # the α/β and the geo reference (e.g. MSCI ACWI), so we may
             # show both tags on one row.
