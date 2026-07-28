@@ -117,16 +117,22 @@ def _lookup_asset_geo(
 ) -> Optional[tuple[dict[Geography, float], str]]:
     """Look up geo exposure in instrument_taxonomy.csv.
 
-    Matches by ISIN, ticker, or index name (in that order).
+    Matches by ISIN, ticker, or index name (in that order). Both sides go
+    through the canonical identity normalizers, so a taxonomy row written as
+    the bare ``CL2`` still matches a holding resolved to the full listing
+    ``CL2.MI``. An exact string compare silently dropped such a holding's whole
+    equity notional into a "Not Available" geography bucket.
     """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
     df = _load_asset_geo()
     if df is None or df.empty:
         return None
 
     # Match by ISIN
     if isin and "isin" in df.columns:
-        col = df["isin"].astype(str).str.strip().str.upper()
-        match = df[col == isin.strip().upper()]
+        col = df["isin"].map(normalize_isin)
+        match = df[col == normalize_isin(isin)]
         if not match.empty:
             geo = _parse_geo_row(match.iloc[0])
             if geo:
@@ -134,8 +140,8 @@ def _lookup_asset_geo(
 
     # Match by ticker
     if ticker and "ticker" in df.columns:
-        col = df["ticker"].astype(str).str.strip().str.upper()
-        match = df[col == ticker.strip().upper()]
+        col = df["ticker"].map(normalize_ticker)
+        match = df[col == normalize_ticker(ticker)]
         if not match.empty:
             geo = _parse_geo_row(match.iloc[0])
             if geo:
