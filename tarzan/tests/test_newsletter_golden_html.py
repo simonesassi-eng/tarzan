@@ -79,6 +79,18 @@ class TestNewsletterGoldenHtml:
         html, metrics, config = rendered
         assert _render(metrics, config) == html
 
+    def test_the_masthead_is_stamped_from_the_run_clock(self, rendered):
+        """The issue date must be the effective date, not the wall clock.
+
+        Two defects in one: under ``--as_of`` a masthead stamped "today" dates
+        the issue to a day none of the figures below it describe, and the golden
+        above then failed on every day except the one it was regenerated on — a
+        gate that expires overnight instead of catching a regression.
+        """
+        html, _metrics, _config = rendered
+        assert _AS_OF.strftime("%a, %d %b %Y") in html, (
+            "masthead is not stamped from the run-owned clock")
+
     def test_markup_matches_golden(self, rendered):
         html, _metrics, _config = rendered
         if os.environ.get("UPDATE_NEWSLETTER_GOLDEN") == "1":

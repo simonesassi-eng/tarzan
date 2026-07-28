@@ -452,7 +452,11 @@ def _prev_session_label(m, fmt: str = "%d/%m") -> str:
     ph = getattr(m, "portfolio_history", None)
     try:
         if ph is not None and len(ph) >= 1:
-            today = pd.Timestamp.now().normalize()
+            # Run-owned clock: under --as_of "previous session" means the last
+            # close before the effective date, not before the wall clock.
+            from tarzan import runtime as _runtime
+
+            today = pd.Timestamp(_runtime.today()).normalize()
             past = [d for d in ph.index if pd.Timestamp(d).normalize() < today]
             d = pd.Timestamp(past[-1]) if past else pd.Timestamp(ph.index[-1])
             return d.strftime(fmt)

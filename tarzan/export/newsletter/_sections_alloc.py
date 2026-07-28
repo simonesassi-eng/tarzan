@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Optional
 
 import pandas as pd
@@ -129,7 +129,14 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     ``ctx.issue_number`` value overrides this only when greater than 1,
     so callers wishing to pin a specific number still can.
     """
-    now = datetime.now()
+    # The run-owned clock, not datetime.now(): under --as_of every other figure
+    # in the newsletter is measured at the effective date, so a masthead stamped
+    # with the wall clock dates the issue to a day the numbers do not describe.
+    # It also made the markup golden fail on any day but the one it was
+    # regenerated on, which is a test that expires rather than a gate.
+    from tarzan import runtime as _runtime
+
+    now = datetime.combine(_runtime.today(), time.min)
     inception_date = ctx.metrics.inception_date or ""
     issue_number = ctx.issue_number
     if issue_number <= 1 and inception_date:
