@@ -1276,11 +1276,26 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     invested_base = float(getattr(m, "invested_value", 0.0) or 0.0)
     if invested_base <= 0:
         invested_base = float(getattr(m, "total_value", 0.0) or 0.0)
-    hdf = getattr(m, "holdings_df", None)
-    equity_base = fi_base = 0.0
-    if hdf is not None and not hdf.empty and "asset_class" in hdf.columns:
-        equity_base = float(hdf.loc[hdf["asset_class"] == "Equities", "current_value"].sum())
-        fi_base = float(hdf.loc[hdf["asset_class"] == "Fixed Income", "current_value"].sum())
+    # Geography and per-sleeve rows are shares of the NOTIONAL sleeve
+    # (``_compute_geo_allocation`` distributes each holding's notional equity
+    # exposure), so their euro base must be that same notional sleeve — the
+    # class weight × invested capital, exactly as the asset-class table's own
+    # leverage math uses. Multiplying a notional share by the physical market
+    # value instead (Σ current_value) mixes two different denominators: it made
+    # Emerging Markets read €15.9k while its sole holding, XMME, was worth
+    # €17.5k on its own.
+    byclass = getattr(m, "allocation_by_class", None)
+
+    def _notional_sleeve_eur(klass: str) -> float:
+        if byclass is None or byclass.empty:
+            return 0.0
+        row = byclass[byclass["category"] == klass]
+        if row.empty:
+            return 0.0
+        return float(row["weight_pct"].iloc[0]) / 100.0 * invested_base
+
+    equity_base = _notional_sleeve_eur("Equities")
+    fi_base = _notional_sleeve_eur("Fixed Income")
 
     tl = ctx.metrics.allocation_timeline or {}
     dates = tl.get("dates") or []
