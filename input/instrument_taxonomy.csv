@@ -4,6 +4,7 @@ iShares Core Global Aggregate Bond EUR Hedged,AGGH,IE00BDBRDM35,etf,Fixed Income
 L&G Multi-Strategy Enhanced Commodities,ENCO,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (multi-strategy) to reduce contango drag.,7/8/26
 Invesco Bloomberg Commodity,CMOD,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only tracking the Bloomberg Commodity Index.,7/8/26
 WisdomTree Enhanced Commodity,WCOA,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (WisdomTree) to reduce contango drag.,7/8/26
+iShares Bloomberg Roll Select Commodity Swap,IS39,IE00BZ1NCS44,etf,Commodities,Broad Basket,True,,,,,,,,,,,,,,0.0028,Broad commodities long-only tracking Bloomberg Roll Select Commodity (swap-based); roll-select picks the least-contango futures contract. USD unhedged.,7/28/26
 WisdomTree Enhanced Commodity Carry,CRRY,,etc,Commodities,Carry,True,,,,,,,,,,,,,,0.0045,Commodity carry factor via long/short positions in commodity futures.,6/24/26
 UBS CMCI Commodity Carry,UEQC,IE00BKFB6L02,etc,Commodities,Carry,True,,,,,,,,,,,,,,0.0034,Commodity carry via 2.5x leveraged long/short spread between CMCI and BCOM ex-precious metals.,6/24/26
 Fineco AM ESTR Plus,MONEY,IE0005PGDJ30,etf,Cash & Cash Equivalents,Cash / Money Market,,,,,,,,,,,,,,,,EUR overnight rate (ESTR) money market.,7/9/26
@@ -56,6 +57,7 @@ Amundi Euro Government Bond 25+ (LMTH),LMTH,LU1686832194,etf,Fixed Income,Long D
 Xtrackers II Eurozone Government Bond 25+,X25E,,etf,Fixed Income,Long Duration,True,,,,,,,,,,,,,,,Eurozone government bonds 25+ (long duration).,7/8/26
 iMGP DBi Managed Futures (EUR Hedged),MFEH,,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0075,Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,6/25/26
 iMGP DBi Managed Futures R EUR,DBMFE,LU2951555403,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0075,Active managed futures (CTA) strategy - R EUR share class.,7/11/26
+BNP Paribas Easy Managed Futures,EEAU,LU3307218399,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.006,Managed futures (CTA) via swap on the BNP Paribas Easy Managed Futures index - EUR share class. Launched 29 May 2026: history is short.,7/28/26
 L&G Market Neutral Commodities,COMN,,etc,Commodities,Market Neutral,True,,,,,,,,,,,,,,,Market-neutral commodities (long/short) - uncorrelated diversifier and not directional commodity beta.,7/8/26
 Vanguard LifeStrategy 80% Equity,V80A,,etf,Equities,Multi-Asset,True,,,59.2,9.3,10.4,5.7,15.4,80.0,20.0,,,,,,Globally diversified multi-asset fund holding 80% equities and 20% bonds.,6/24/26
 Vanguard LifeStrategy 60% Equity,V60A,,etf,Equities,Multi-Asset,True,,,58.6,7.0,15.9,4.8,13.7,60.0,40.0,,,,,,Globally diversified multi-asset fund holding 60% equities and 40% bonds.,6/24/26
