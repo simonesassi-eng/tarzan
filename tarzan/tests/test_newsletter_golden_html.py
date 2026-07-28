@@ -153,6 +153,33 @@ class TestNewsletterGoldenHtml:
         assert not re.search(r'src\s*=\s*["\']https?://', html, re.I)
         assert not re.search(r'@import|<link[^>]+stylesheet', html, re.I)
 
+    def test_kpi_tiles_stack_later_than_the_frame_reflows(self, rendered):
+        """The KPI grid must survive a reading pane narrower than the card.
+
+        Stacking the tiles at the container's own width (620px) collapsed the
+        three-column STATE grid into one column in any desktop pane merely
+        narrower than the card — Apple Mail's default among them — while three
+        columns still fit. The stack belongs at a width where a tile's value
+        would actually clip, strictly below the frame reflow.
+        """
+        html, _m, _c = rendered
+        breakpoints = {
+            int(width): body
+            for width, body in re.findall(
+                r'@media only screen and \(max-width: (\d+)px\)\s*\{(.*?)\n    \}',
+                html, re.S,
+            )
+        }
+        stack = [w for w, body in breakpoints.items() if "kpi-cell" in body]
+        reflow = [w for w, body in breakpoints.items() if ".container" in body]
+        assert len(stack) == 1 and len(reflow) == 1, breakpoints.keys()
+        assert stack[0] < reflow[0], (
+            f"KPI tiles stack at {stack[0]}px but the frame reflows at "
+            f"{reflow[0]}px — every pane between them loses the grid"
+        )
+        # A typical desktop reading pane keeps all three columns.
+        assert stack[0] < 603
+
 
 class TestSectionNumbering:
     """Section ordinals must run 1..N over the sections actually rendered.
