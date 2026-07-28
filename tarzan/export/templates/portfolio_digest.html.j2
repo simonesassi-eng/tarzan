@@ -137,6 +137,7 @@
                 <tr>
                   <td style="padding:14px 16px;">
                     {{ hero.value_chart|safe }}
+                    {% if hero.value_chart_legend %}{{ hero.value_chart_legend|safe }}{% endif %}
                     {% if hero.flow_chips_html %}{{ hero.flow_chips_html|safe }}{% endif %}
                   </td>
                 </tr>

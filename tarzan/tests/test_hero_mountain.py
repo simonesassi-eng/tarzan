@@ -95,6 +95,58 @@ class TestHeroSinceInception:
         assert hero["twror_pct"] is None
 
 
+class TestBothPnlMeasuresAreDrawn:
+    """Total and Unrealized P&L must BOTH appear, on a shared right axis.
+
+    The two differ whenever anything has been realized (here: lifetime P&L 350
+    vs unrealized 300), so a chart carrying one of them answers half the
+    question. The axis is the subtle part — fitted to one series it clips the
+    other off the plot rather than failing visibly.
+    """
+
+    def test_hero_draws_both_and_scales_the_axis_to_the_wider(self):
+        import re
+
+        from tarzan.export.newsletter._charts import _hero_value_chart
+        from tarzan.export.newsletter import PALETTE
+
+        unreal = [0.0, 2.0, 1.0, 4.0]
+        total = [0.0, 9.0, 8.0, 12.0]     # realized included -> much wider
+        svg = _hero_value_chart(
+            [100.0, 104.0, 102.0, 108.0], unreal,
+            ["2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04"], [],
+            total_pct=total,
+        )
+        drawn = dict(
+            (color, points) for points, color in
+            re.findall(r'<polyline points="([^"]+)" fill="none" stroke="(#[0-9A-Fa-f]{6})"', svg)
+        )
+        assert PALETTE["unreal"] in drawn and PALETTE["pnl"] in drawn, sorted(drawn)
+        ticks = [float(t) for t in re.findall(r'>(−?[\d.]+)%<', svg)]
+        assert max(ticks) >= max(total), (
+            f"right axis tops out at {max(ticks)}% and clips Total P&L at "
+            f"{max(total)}%"
+        )
+
+    def test_hero_survives_a_missing_total_series(self):
+        from tarzan.export.newsletter._charts import _hero_value_chart
+
+        svg = _hero_value_chart(
+            [100.0, 104.0], [0.0, 2.0], ["2026-07-01", "2026-07-02"], [],
+            total_pct=None,
+        )
+        assert svg and "<svg" in svg
+
+    def test_both_return_charts_name_both_measures(self):
+        html = render_newsletter(_metrics(with_order_returns=True), _config())
+        # One key entry per measure per chart: hero (with axis side), then the
+        # two return panels (bare names).
+        assert html.count("Total P&amp;L (%, right)") == 1
+        assert html.count("Unreal. P&amp;L (%, right)") == 1
+        assert html.count(">Total P&amp;L<") == 2
+        assert html.count(">Unreal. P&amp;L<") == 2
+
+
 class TestRender:
     def test_renders_without_crash(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
@@ -119,12 +171,23 @@ class TestRender:
         assert "Total P&L" in html           # state tile
         assert "Unrealized P&L" in html      # state tile
         # The Portfolio value series follows the Markets contract: green above
-        # the start baseline, red below it. Unrealized P&L is neutral/dashed.
+        # the start baseline, red below it. Both P&L measures are dashed
+        # secondary series on the right axis, each in the colour it also
+        # carries on the return charts -- violet Unrealized, cyan Total -- so
+        # the mapping holds across the issue.
         from tarzan.export.newsletter import PALETTE
         assert 'clip-path="url(#dg' in html
         assert f'stroke="{PALETTE["green"]}" stroke-width="2.6"' in html
         assert f'stroke="{PALETTE["red"]}" stroke-width="2.6"' in html
         assert (
-            f'stroke="{PALETTE["muted"]}" stroke-width="1.8" '
+            f'stroke="{PALETTE["unreal"]}" stroke-width="1.8" '
             'stroke-dasharray="4,3"' in html
         )
+        assert (
+            f'stroke="{PALETTE["pnl"]}" stroke-width="1.8" '
+            'stroke-dasharray="1,2.5"' in html
+        )
+        # ...and the key names both, since the right axis can no longer be
+        # labelled with one word.
+        assert "Unreal. P&amp;L (%, right)" in html
+        assert "Total P&amp;L (%, right)" in html

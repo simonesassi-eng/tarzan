@@ -47,6 +47,7 @@ from tarzan.export.newsletter._format import (
     is_missing,
 )
 from tarzan.export.newsletter._charts import (
+    _hero_chart_legend,
     _hero_flow_chips,
     _hero_value_chart,
     _prev_session_label,
@@ -333,11 +334,12 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
                                  "weighted average, annual"))
 
 
-    # Dual-axis hero chart: 30-day portfolio value (€, left) + Unrealized
-    # PnL % (right, flow-adjusted via the daily cost-basis series), with
-    # cash-flow triangles. Empty string when the order-derived series are
+    # Dual-axis hero chart: 30-day portfolio value (€, left) + both P&L
+    # measures as % (right, flow-adjusted via the daily cost-basis series),
+    # with cash-flow triangles. Empty string when the order-derived series are
     # unavailable (holdings-only path).
     value_chart_html = ""
+    hero_chart_legend = ""
     hero_flow_chips = ""
     win = _perf_window(m, 30)
     if (win and win.get("value") and len(win["value"]) >= 2
@@ -345,10 +347,29 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         dts = win["dates"]
         idx = pd.DatetimeIndex(dts)
         av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
-        ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
-        unreal_series = list(((ur / (av - ur).replace(0, float("nan"))) * 100.0)
-                             .bfill().values.astype(float))
-        value_chart_html = _hero_value_chart(win["value"], unreal_series, dts, win["flows"])
+
+        def _cost_basis_pct(source):
+            """A P&L series as % of its own cost basis (value − that P&L).
+
+            Both lines use this one definition, so Total and Unrealized are
+            directly comparable on the shared right axis — and it is the same
+            definition the STATE tile captions state.
+            """
+            if source is None:
+                return None
+            s = _norm_series(source).reindex(idx, method="ffill").bfill()
+            return list(((s / (av - s).replace(0, float("nan"))) * 100.0)
+                        .bfill().values.astype(float))
+
+        unreal_series = _cost_basis_pct(m.unrealized_series)
+        total_series = _cost_basis_pct(m.pnl_series)
+        value_chart_html = _hero_value_chart(
+            win["value"], unreal_series, dts, win["flows"],
+            total_pct=total_series,
+        )
+        if value_chart_html:
+            hero_chart_legend = _hero_chart_legend(
+                has_total=total_series is not None)
         hero_flow_chips = _hero_flow_chips(win["flows"])
 
     # This-week figures, mirroring the since-inception group:
@@ -460,6 +481,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # Dual-axis hero chart (value € + Unrealized PnL %) and cash-flow
         # chips, pre-rendered as safe HTML (empty on the holdings-only path).
         "value_chart": value_chart_html or None,
+        "value_chart_legend": hero_chart_legend or None,
         "flow_chips_html": hero_flow_chips or None,
         "invested_value": _eur_smart(m.invested_value),
         "invested_pct": _pct(invested_pct, decimals=1),

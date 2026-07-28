@@ -59,4 +59,9 @@ PALETTE = {
     # Chart-only roles, kept distinguishable from axis furniture.
     "bench": "#8FA3BC",
     "pnl": "#38BDF8",
+    # Unrealized P&L sits beside Total P&L on every return chart, so it needs a
+    # hue that reads as its sibling without being confusable with it: violet
+    # against the cyan of ``pnl``, and far from green/red (which mean sign, not
+    # series) and from the grey of ``bench``.
+    "unreal": "#A78BFA",
 }

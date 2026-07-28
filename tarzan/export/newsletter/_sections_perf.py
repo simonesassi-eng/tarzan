@@ -344,6 +344,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
     GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
+    UNREAL = _charts.UNREAL
 
     def _colcap(t: str) -> str:
         """Panel caption, in the concept's form: 9px uppercase subtle with wide
@@ -412,7 +413,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL,
                     "end_label": _window_label("pnl_pct", "Total P&L %")})
-        ret_leg.append((PNL, "P&amp;L"))
+        ret_leg.append((PNL, "Total P&amp;L"))
+    if win.get("unreal_pct") is not None and endpoints.get("unreal_pct") is not None:
+        s30.append({"values": win["unreal_pct"], "color": UNREAL,
+                    "end_label": _window_label("unreal_pct", "Unrealized P&L %")})
+        ret_leg.append((UNREAL, "Unreal. P&amp;L"))
     if win["acwi"] is not None and endpoints.get("acwi") is not None:
         s30.append({"values": win["acwi"], "color": BENCH,
                     "end_label": _window_label("acwi", "MSCI ACWI")})
@@ -450,7 +455,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if full["pnl_pct"] is not None:
             ssi.append({"values": full["pnl_pct"], "color": PNL,
                         "end_label": _pct(m.pnl_pct, signed=True)})
-            si_leg.append((PNL, "P&amp;L"))
+            si_leg.append((PNL, "Total P&amp;L"))
+        if full.get("unreal_pct") is not None:
+            # Labelled from the line's own end point, not from a lifetime
+            # metrics field: there is no ``m.unrealized_pct`` counterpart to
+            # ``m.pnl_pct``, and inventing one from the final ratio would risk
+            # printing a number the drawn line does not reach.
+            ssi.append({"values": full["unreal_pct"], "color": UNREAL,
+                        "end_label": _pct(full["unreal_pct"][-1], signed=True)})
+            si_leg.append((UNREAL, "Unreal. P&amp;L"))
         if full["acwi"] is not None:
             ssi.append({"values": full["acwi"], "color": BENCH,
                         "end_label": _pct(full["acwi"][-1], signed=True)})
