@@ -77,7 +77,17 @@ import pandas as pd
 
 # Ensure the tarzan package is importable when run from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tarzan.data.bond_fetcher import looks_like_bond_from_orders  # noqa: E402
+
+
+def _looks_like_bond(price: float, quantity: float) -> bool:
+    """Heuristic bond detection from order-list data alone.
+
+    Transfer rows carry no ``quote_type``, so mechanics cannot be
+    resolved from the registry here. A clean bond price sits in
+    ``[50, 150]`` with a nominal quantity of at least 1,000; ETF and
+    equity unit prices in that band come with far smaller share counts.
+    """
+    return 50.0 <= price <= 150.0 and quantity >= 1000.0
 
 
 logging.basicConfig(
@@ -289,7 +299,7 @@ def _build_rows(fineco: pd.DataFrame) -> list[dict]:
             # the bank side and the accrual is preserved as a
             # regular distribution.
             quantity = abs(qty_raw)
-            bond = looks_like_bond_from_orders(price, quantity)
+            bond = _looks_like_bond(price, quantity)
             denom = 100.0 if bond else 1.0
             transfer_eur = quantity * price / denom / (fx if fx > 0 else 1.0)
             gross_eur = transfer_eur
