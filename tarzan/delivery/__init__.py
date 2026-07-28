@@ -553,9 +553,13 @@ def run_and_send() -> int:
             "purpose": intent.purpose.value,
             "smtp_invoked": False,
         })
+        # The message is the only diagnosable channel on an ephemeral runner:
+        # local artifacts are not retained. Every raise site in claims.py
+        # carries a fixed string plus an HTTP/error code — never a credential.
         logger.critical(
-            "Delivery claim storage unavailable (%s); SMTP is blocked.",
+            "Delivery claim storage unavailable (%s: %s); SMTP is blocked.",
             type(error).__name__,
+            error,
         )
         _write_delivery_artifacts(writer, result, html, "CLAIM_STORE_UNAVAILABLE")
         return 1
