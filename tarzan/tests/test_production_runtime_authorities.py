@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -394,6 +395,13 @@ def test_apps_script_claim_adapter_and_workflow_share_the_durable_contract(
     workflow = (root / ".github/workflows/newsletter.yml").read_text(encoding="utf-8")
     assert "function doPost(e)" in script
     assert "LockService.getScriptLock()" in script
+    # The client must outwait the service's lock wait, or contention with the
+    # scheduler tick reads as an unavailable claim store and blocks the send.
+    service_lock_wait = max(
+        int(match) / 1000.0
+        for match in re.findall(r"tryLock\((\d+)\)", script)
+    )
+    assert store.timeout_seconds > service_lock_wait
     assert "DELIVERY_CLAIM_PREFIX = 'delivery_claim:'" in script
     assert "SENT_MARKER_PREFIX = 'sent:'" in script
     assert "SMTP_INVOCATION_STARTED: ['ACKNOWLEDGED_SUCCESS', 'UNCERTAIN']" in script
@@ -810,6 +818,92 @@ def test_remote_claim_store_enforces_graph_before_io_and_exact_target(monkeypatc
             DeliveryState.SMTP_INVOCATION_STARTED,
         )
     assert len(requests) == 1
+
+
+def test_remote_claim_store_retries_only_uncommitted_failures(monkeypatch):
+    """Lock contention and 5xx are retried; a decided rejection is not.
+
+    The claim service shares its script lock with the Gmail scheduler tick, so
+    one unlucky attempt must not block publication — but a retry is only sound
+    for failures the service could not have committed.
+    """
+    import tarzan.delivery.claims as claims_module
+
+    monkeypatch.setattr(claims_module.time, "sleep", lambda seconds: None)
+    store = AppsScriptPropertiesDeliveryClaimStore(
+        "https://claims.example.invalid/exec",
+        "claim-secret",
+        minimum_retention_days=30,
+    )
+    intent = DeliveryIntent(
+        stable_event_id="workflow:1",
+        purpose=DeliveryPurpose.NORMAL_NEWSLETTER,
+        recipient_set_digest=recipient_set_digest(["reader@example.invalid"]),
+        template_schema_version="1",
+    )
+
+    class Response:
+        def __init__(self, document: dict):
+            self._payload = json.dumps(document).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return self._payload[:limit]
+
+    granted = {
+        "ok": True,
+        "retention_days": 45,
+        "created": True,
+        "duplicate": False,
+        "conflict": False,
+        "state": DeliveryState.CLAIMED.value,
+    }
+    attempts: list[int] = []
+
+    def contended_then_granted(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 3:
+            return Response({
+                "ok": False,
+                "error_code": "LOCK_UNAVAILABLE",
+                "retention_days": 45,
+            })
+        return Response(granted)
+
+    monkeypatch.setattr(claims_module, "urlopen", contended_then_granted)
+    assert store.claim(intent).state is DeliveryState.CLAIMED
+    assert len(attempts) == 3
+
+    attempts.clear()
+
+    def authentication_failed(request, timeout):
+        attempts.append(1)
+        return Response({
+            "ok": False,
+            "error_code": "AUTHENTICATION_FAILED",
+            "retention_days": 45,
+        })
+
+    monkeypatch.setattr(claims_module, "urlopen", authentication_failed)
+    with pytest.raises(RuntimeError, match="AUTHENTICATION_FAILED"):
+        store.claim(intent)
+    assert len(attempts) == 1
+
+    attempts.clear()
+
+    def server_error(request, timeout):
+        attempts.append(1)
+        raise claims_module.HTTPError("https://claims.example.invalid/exec", 500, "boom", None, None)
+
+    monkeypatch.setattr(claims_module, "urlopen", server_error)
+    with pytest.raises(RuntimeError, match="HTTP 500 after 3 attempts"):
+        store.claim(intent)
+    assert len(attempts) == 3
 
 
 # **Validates: Requirements 2.4, 2.12, 2.15, 3.4, 3.12, 3.15**

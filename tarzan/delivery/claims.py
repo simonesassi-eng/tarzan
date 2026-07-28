@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -210,6 +211,14 @@ def recipient_set_digest(recipients: list[str]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_CLAIM_ATTEMPTS = 3
+_CLAIM_BACKOFF_SECONDS = 2.0
+
+
+class _TransientClaimError(RuntimeError):
+    """A claim failure the service provably did not commit — safe to retry."""
+
+
 class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
     """Authenticated HTTP adapter for lock-serialized Apps Script Properties."""
 
@@ -218,7 +227,12 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         endpoint: str,
         auth_token: str,
         *,
-        timeout_seconds: float = 15.0,
+        # Must exceed the service's own lock wait (tryLock(20000) in
+        # scripts/apps_script/Code.gs) plus Apps Script cold start. A shorter
+        # client timeout abandons a request the service is still serializing
+        # behind the scheduler tick, turning routine contention into a blocked
+        # publication.
+        timeout_seconds: float = 35.0,
         minimum_retention_days: int = 30,
     ) -> None:
         if not endpoint.startswith("https://"):
@@ -233,6 +247,27 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         self.minimum_retention_days = int(minimum_retention_days)
 
     def _call(self, request: dict) -> dict:
+        """Post one claim action, retrying only knowably-transient failures.
+
+        The service shares its script lock with the Gmail scheduler tick, and
+        Google returns occasional 5xx on web apps, so a single unlucky attempt
+        must not block an otherwise healthy publication. Retried failures are
+        confined to ones the service could not have committed (lock contention)
+        or that never reached it (network/5xx); a definitive rejection, invalid
+        payload, or short retention still fails closed on the first response.
+        """
+        last: Exception | None = None
+        for attempt in range(1, _CLAIM_ATTEMPTS + 1):
+            try:
+                return self._call_once(request)
+            except _TransientClaimError as error:
+                last = error
+                if attempt == _CLAIM_ATTEMPTS:
+                    break
+                time.sleep(_CLAIM_BACKOFF_SECONDS * attempt)
+        raise RuntimeError(f"{last} after {_CLAIM_ATTEMPTS} attempts") from None
+
+    def _call_once(self, request: dict) -> dict:
         # Apps Script web-app events do not reliably expose custom headers, so
         # the credential is carried only in the TLS-protected request body. It
         # is never persisted by the service or included in errors/evidence.
@@ -249,11 +284,12 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
             with urlopen(http_request, timeout=self.timeout_seconds) as response:
                 body = response.read(64 * 1024)
         except HTTPError as error:
-            raise RuntimeError(
-                f"delivery claim service rejected request with HTTP {error.code}"
-            ) from None
+            message = f"delivery claim service rejected request with HTTP {error.code}"
+            if error.code >= 500:
+                raise _TransientClaimError(message) from None
+            raise RuntimeError(message) from None
         except (URLError, TimeoutError, OSError) as error:
-            raise RuntimeError(
+            raise _TransientClaimError(
                 f"delivery claim service request failed ({type(error).__name__})"
             ) from None
         try:
@@ -262,7 +298,12 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
             raise RuntimeError("delivery claim service returned invalid JSON") from None
         if not isinstance(document, dict) or document.get("ok") is not True:
             code = document.get("error_code", "CLAIM_SERVICE_ERROR") if isinstance(document, dict) else "CLAIM_SERVICE_ERROR"
-            raise RuntimeError(f"delivery claim service failed with {code}")
+            message = f"delivery claim service failed with {code}"
+            # Lock contention is rejected before the service touches state, so
+            # a later attempt cannot duplicate an already-committed claim.
+            if code == "LOCK_UNAVAILABLE":
+                raise _TransientClaimError(message)
+            raise RuntimeError(message)
         retention = document.get("retention_days")
         if not isinstance(retention, int) or retention < self.minimum_retention_days:
             raise RuntimeError("delivery claim retention is below the reconciliation window")
