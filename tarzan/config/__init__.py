@@ -476,24 +476,42 @@ def risk_free_rate() -> float:
 def trading_days() -> int:
     return 252
 
+def default_benchmarks() -> dict[str, str]:
+    """Fallback benchmark universe for an uncurated taxonomy.
+
+    A new user's ``instrument_taxonomy.csv`` flags no ``is_benchmark`` row, so
+    every benchmark accessor below used to return nothing and alpha/beta came
+    out ``None`` while the α/β footnote still named a hardcoded index the run
+    never computed. Falling back to one shipped default keeps the three
+    accessors, the engine catalog and the semantic gate naming the same
+    instrument. A curated row always wins.
+    """
+    return get("default_benchmarks", {"iShares MSCI ACWI": "ISAC.MI"})
+
+
+def _default_benchmark_name() -> str:
+    """Display name of the first shipped default benchmark."""
+    return next(iter(default_benchmarks()), "iShares MSCI ACWI")
+
+
 def benchmark_beta_name() -> str:
     """Get the index name for Alpha/Beta calculation (used for column headers)."""
     match = _flagged_rows("is_benchmark_alpha_beta")
     if not match.empty:
         return str(match.iloc[0]["name"]).strip()
-    return "S&P 500"
+    return _default_benchmark_name()
 
 def chart_benchmarks() -> list[str]:
     """Get index names marked as is_benchmark=true for chart overlay."""
     match = _flagged_rows("is_benchmark")
-    return match["name"].tolist() if not match.empty else []
+    return match["name"].tolist() if not match.empty else list(default_benchmarks())
 
 def benchmark_geo_allocation() -> str:
     """Get the index name for geo benchmark reference (is_benchmark_geo=true)."""
     match = _flagged_rows("is_benchmark_geo")
     if not match.empty:
         return str(match.iloc[0]["name"]).strip()
-    return "MSCI ACWI"
+    return _default_benchmark_name()
 
 def mix_60_40() -> dict:
     return get("mix_60_40", {
@@ -522,7 +540,12 @@ def geography_map() -> dict[str, Geography]:
 # --- Benchmarks (from instrument_taxonomy.csv) ---
 
 def benchmarks() -> dict[str, str]:
-    """Get benchmark dict {index_name: ticker} from instrument_taxonomy.csv where is_benchmark=true."""
+    """Get benchmark dict {index_name: ticker} from instrument_taxonomy.csv where is_benchmark=true.
+
+    Falls back to :func:`default_benchmarks` when the taxonomy flags none, so a
+    first run still computes alpha/beta instead of reporting ``None`` under a
+    footnote naming an index it never used.
+    """
     match = _flagged_rows("is_benchmark")
     result = {}
     for _, row in match.iterrows():
@@ -530,7 +553,7 @@ def benchmarks() -> dict[str, str]:
         ticker = str(row.get("ticker", "")).strip()
         if name and ticker:
             result[name] = ticker
-    return result
+    return result or dict(default_benchmarks())
 
 
 # --- Allocation defaults ---

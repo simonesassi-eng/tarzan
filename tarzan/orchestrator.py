@@ -474,6 +474,8 @@ def _run_once(
         logger.error("No orders are effective on or before the analysis boundary.")
         return PortfolioMetrics(), config
 
+    _check_offline_identity_bootstrap(orders)
+
     # Resolve mechanics and identifier continuity only from the effective
     # ledger. Profile reads are as-of aware; only a LIVE run may refresh them
     # through OpenFIGI. Work on copies so accepted input provenance remains
@@ -595,6 +597,59 @@ def _run_once(
         logger.info("Total portfolio value: €%.2f", metrics.trustworthy_total_value_eur)
 
     return metrics, config
+
+
+def _check_offline_identity_bootstrap(orders) -> None:
+    """Explain the one failure a first-ever pinned run cannot avoid.
+
+    A pinned run (``--deterministic``) may not touch the network, so an ISIN is
+    identifiable only from the curated taxonomy or from identity learned by an
+    earlier live run. With neither, every holding resolves to an UNKNOWN kind,
+    the valuation policy rejects it and the whole report is blocked — correctly,
+    but the operator only saw an opaque failure reference and had no way to know
+    the fix is a single online run. Emitted before enrichment so the guidance
+    arrives immediately rather than after minutes of doomed resolution.
+    """
+    try:
+        from tarzan import runtime as _runtime
+        if _runtime.allows_live_transport():
+            return
+
+        from tarzan import config as _cfg
+        from tarzan.data import price_cache
+        from tarzan.models.instrument_key import normalize_isin
+
+        isins = {
+            normalize_isin(getattr(o, "isin", None))
+            for o in orders
+            if normalize_isin(getattr(o, "isin", None))
+        }
+        if not isins:
+            return
+        known = {
+            isin for isin in isins
+            if _cfg.resolve_taxonomy_identity(isin, "")[1]
+            or price_cache.load_ticker_isin_reverse(isin)
+            or price_cache.load_resolution(isin)
+        }
+        if known:
+            return  # some identity exists; normal partial-coverage paths apply
+
+        # Console, not the data-quality report: the run is already going to be
+        # blocked by the valuation policy, and a second failure reference adds
+        # noise instead of guidance. What was missing is an actionable line the
+        # operator actually reads.
+        logger.error(
+            "None of the %d ISIN(s) in the order list can be identified "
+            "offline: --deterministic forbids network access, and neither "
+            "instrument_taxonomy.csv nor the local cache maps them to a market "
+            "symbol yet. Run once WITHOUT --deterministic to learn the "
+            "ISIN→symbol mapping (cached permanently), then pinned runs work "
+            "offline.",
+            len(isins),
+        )
+    except Exception as e:  # noqa: BLE001 — guidance must never break the run
+        logger.debug("Offline identity bootstrap check failed: %s", e)
 
 
 def _check_taxonomy_coverage(holdings) -> None:
