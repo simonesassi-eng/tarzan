@@ -38,7 +38,14 @@ TPH_ARG=(); [ -f "$TPH" ] && TPH_ARG=(--input_targets_per_holding "$TPH")
 LOG="$(mktemp)"
 "$PY" -m tarzan.main --input_orders "$ORDERS" "${CFG_ARG[@]}" "${TPH_ARG[@]}" 2>&1 | tee "$LOG"
 
-OUT="$(grep -oE 'Newsletter saved to: .*\.html' "$LOG" | tail -1 | sed 's/^Newsletter saved to: //')"
+# The CLI writes the newsletter into the run's artifact directory and reports
+# that directory's manifest, so derive the path from the manifest line rather
+# than from a "Newsletter saved to:" line — which the CLI no longer prints, and
+# whose absence made the grep fail the whole script under `set -e` even though
+# the newsletter had rendered fine.
+MANIFEST="$(grep -oE 'Local artifact manifest: [^ ]+manifest\.json' "$LOG" | tail -1 | sed 's/^Local artifact manifest: //')" || true
+OUT=""
+[ -n "$MANIFEST" ] && OUT="$(dirname "$MANIFEST")/newsletter.html"
 rm -f "$LOG"
 if [ -n "$OUT" ] && [ -f "$OUT" ]; then
   echo ""
