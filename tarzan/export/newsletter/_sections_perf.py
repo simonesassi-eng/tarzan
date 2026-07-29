@@ -456,11 +456,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi.append({"values": full["pnl_pct"], "color": PNL,
                         "end_label": _pct(m.pnl_pct, signed=True)})
             si_leg.append((PNL, "Total P&amp;L"))
-        if full.get("unreal_pct") is not None:
+        if full.get("unreal_pct") is not None and not is_missing(full["unreal_pct"][-1]):
             # Labelled from the line's own end point, not from a lifetime
             # metrics field: there is no ``m.unrealized_pct`` counterpart to
             # ``m.pnl_pct``, and inventing one from the final ratio would risk
-            # printing a number the drawn line does not reach.
+            # printing a number the drawn line does not reach. A missing end
+            # point drops the line rather than labelling it "—", which would
+            # name a series the reader cannot read a value for.
             ssi.append({"values": full["unreal_pct"], "color": UNREAL,
                         "end_label": _pct(full["unreal_pct"][-1], signed=True)})
             si_leg.append((UNREAL, "Unreal. P&amp;L"))
