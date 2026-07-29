@@ -262,12 +262,22 @@ def validate_newsletter_semantics(
         getattr(metrics, "intraday_quotes", {}) or {}
     )
 
+    # The intraday request is built from ``holding_performance``, which carries
+    # only holdings with a usable price history (>= 2 closes) and drops those
+    # whose order mechanics are unavailable. ``holdings_df`` keeps every
+    # valuation-accepted holding, history or not — so unioning the two demands
+    # intraday for tickers the request set structurally cannot contain, and a
+    # freshly-bought or thinly-listed instrument blocks delivery on its first
+    # run. The analytical ticker set for THIS check is the performance frame.
     expected_intraday: set[str] = set()
-    for frame in (hp, getattr(metrics, "holdings_df", None)):
-        if frame is None or getattr(frame, "empty", True) or "ticker" not in frame.columns:
-            continue
+    hp_frame = hp
+    if hp_frame is None or getattr(hp_frame, "empty", True) or "ticker" not in getattr(hp_frame, "columns", ()):
+        # No performance frame at all: fall back to the holdings snapshot so a
+        # renderer that skipped preprocessing entirely is still caught.
+        hp_frame = getattr(metrics, "holdings_df", None)
+    if hp_frame is not None and not getattr(hp_frame, "empty", True) and "ticker" in getattr(hp_frame, "columns", ()):
         expected_intraday.update(
-            _text(ticker) for ticker in frame["ticker"].dropna() if _text(ticker)
+            _text(ticker) for ticker in hp_frame["ticker"].dropna() if _text(ticker)
         )
 
     if origin != "metrics_preprocessing":
