@@ -836,7 +836,32 @@ def _resolve_isin(
         )
     )
     if allows_live_transport:
+        # A live run trusts the cache for VENUE choice, but never to the point
+        # of keeping a symbol that costs the instrument its curated identity.
+        # Asset class and role are looked up by bare ticker, so a cached
+        # 18MF.MU normalises to "18MF" — absent from the taxonomy — and the
+        # holding lands in OTHER with no class. One unclassified valued holding
+        # sets ``classification_available`` False, which blanks the ENTIRE
+        # allocation section (every class 0% / €0, "no series", drift −125pp).
+        #
+        # So: if the taxonomy does not know the cached symbol but DOES know a
+        # provider alias of this ISIN, the cached entry is stale relative to
+        # curated data and must be re-resolved. A poisoned entry otherwise
+        # survives its 30-day TTL, and CI restores the cache every run — which
+        # is why the rendered mail stayed broken after the resolution fix.
         cached_is_compatible = True
+        if cached_symbol and not cfg.instrument_taxonomy_has(cached_symbol):
+            if any(
+                cfg.instrument_taxonomy_has(alias)
+                for alias in _openfigi_lookup(clean_isin)
+            ):
+                logger.info(
+                    "Cached symbol %s for ISIN %s is unknown to the taxonomy "
+                    "while a curated alias exists; re-resolving so the holding "
+                    "keeps its asset class.",
+                    cached_symbol, isin,
+                )
+                cached_is_compatible = False
     elif not cached_symbol:
         cached_is_compatible = False
     elif taxonomy_ticker:
