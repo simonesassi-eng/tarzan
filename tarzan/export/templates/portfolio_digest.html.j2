@@ -38,6 +38,14 @@
   <meta name="supported-color-schemes" content="dark">
   <title>Tarzan Portfolio Digest</title>
   <style>
+    {# Apple Mail (and iOS WebKit) auto-inflate text in a table cell that has no
+       intrinsic width, which is exactly what a 22px monospace value in a 33%
+       cell is. Inflated glyphs make each STATE tile demand more than its third,
+       the row overflows, and the client stacks the cells one per line —
+       regardless of any media query, which is why moving the KPI breakpoint to
+       520px in 53834dc did not fix the mail. Pin the adjustment off so the
+       declared sizes are the rendered sizes. #}
+    body, table, td, div, span { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; text-size-adjust: 100%; }
     body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; }
     table { border-collapse: collapse; }
     img { display: block; border: 0; }

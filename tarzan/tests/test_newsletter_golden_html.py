@@ -180,6 +180,36 @@ class TestNewsletterGoldenHtml:
         # A typical desktop reading pane keeps all three columns.
         assert stack[0] < 603
 
+    def test_state_grid_does_not_depend_on_the_breakpoint_alone(self, rendered):
+        """The tiles must hold three columns even where media queries do not run.
+
+        Moving the KPI breakpoint was necessary but not sufficient: Apple Mail
+        still stacked the tiles, because the cells carried only a percentage
+        width. A client is then free to auto-size columns to their content, and
+        WebKit's text inflation makes a 22px monospace value in a widthless cell
+        demand more than its third — the row overflows and the cells stack, with
+        no media query involved.
+
+        Two declarations prevent that, and both must survive: fixed table layout
+        (declared widths are authoritative) and text-size-adjust:100% (declared
+        font sizes are the rendered ones).
+        """
+        html, _m, _c = rendered
+        assert "-webkit-text-size-adjust: 100%" in html, (
+            "without this Apple Mail inflates the tile values and overflows the row"
+        )
+        # Every STATE tile row is a fixed-layout table with explicit cell widths.
+        rows = re.findall(
+            r'<table[^>]*style="table-layout:fixed;[^"]*"[^>]*>\s*<tr>(.*?)</tr>',
+            html, re.S,
+        )
+        tile_rows = [r for r in rows if "kpi-cell" in r]
+        assert tile_rows, "the STATE grid must use a fixed table layout"
+        for row in tile_rows:
+            cells = re.findall(r'<td[^>]*style="width:([0-9.]+)%', row)
+            assert len(cells) >= 1, "each tile cell needs an explicit CSS width"
+            assert all(abs(float(c) - 33.33) < 0.01 for c in cells), cells
+
 
 class TestSectionNumbering:
     """Section ordinals must run 1..N over the sections actually rendered.
