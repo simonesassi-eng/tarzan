@@ -58,3 +58,98 @@ def test_sign_is_not_dropped_from_a_nonzero_label():
     """A negative that does NOT round to zero keeps its minus."""
     assert _displayed_percent(_pct(-1.5, signed=True)) == -1.5
     assert _displayed_percent("−0.97%") == -0.97
+
+
+# ── The intraday "analytical ticker set" is the PERFORMANCE frame ─────────────
+# The intraday request is built from ``holding_performance``, which carries only
+# holdings with >= 2 closes (and drops those whose order mechanics are
+# unavailable). ``holdings_df`` keeps every valuation-accepted holding. Unioning
+# the two demanded intraday for a ticker the request set structurally cannot
+# contain, so a freshly-bought or thinly-listed instrument blocked the send on
+# its first run:
+#
+#   intraday preprocessing candidates differ from the analytical ticker set
+#   (requested=[... no 18MF.MU ...], expected=[... 18MF.MU ...])
+#
+# FR0010755611 was bought 2026-07-27 and resolved to 18MF.MU, which had too
+# little history to enter holding_performance. One violation, delivery blocked.
+
+import pandas as pd
+
+from tarzan.export.newsletter._semantic import validate_newsletter_semantics
+
+
+class _M:
+    """The narrowest metrics stand-in that reaches the intraday check."""
+    benchmark_resolution_errors = ()
+    benchmark_tickers = {}
+    degraded_computers = ()
+    benchmark_comparison = None
+    historical_risk = {}
+    ticker_resolutions = ()
+
+    def __init__(self, hp, holdings_df, requested, quotes):
+        self.holding_performance = hp
+        self.holdings_df = holdings_df
+        self.intraday_requested_tickers = requested
+        self.intraday_quotes = quotes
+        # A non-empty history set gives the gate a benchmark "contract" so it
+        # does not early-return before the intraday check.
+        s = pd.Series([1.0, 2.0], index=pd.DatetimeIndex(["2026-07-01", "2026-07-02"]))
+        s.name = "ACWI.X"
+        s.attrs["resolved_ticker"] = "ACWI.X"
+        s.attrs["requested_ticker"] = "ACWI.X"
+        self.benchmark_histories = {"probe": s}
+
+
+def _mismatch_errors(errors):
+    return [e for e in errors if "intraday preprocessing candidates differ" in e]
+
+
+def test_historyless_holding_does_not_block_intraday_check():
+    """A holding absent from holding_performance must not be demanded."""
+    hp = pd.DataFrame([
+        {"ticker": "AVEM.DE", "type": "In portfolio"},
+        {"ticker": "CNDX.L", "type": "Benchmark index"},
+    ])
+    # 18MF.MU is valuation-accepted but has too little history for hp.
+    holdings_df = pd.DataFrame([{"ticker": "AVEM.DE"}, {"ticker": "18MF.MU"}])
+    requested = ("AVEM.DE", "CNDX.L")
+    quotes = {"AVEM.DE": {"intraday_source_ticker": "AVEM.DE",
+                          "intraday_series": [1.0, 2.0],
+                          "intraday_baseline": 1.0},
+              "CNDX.L": {"intraday_source_ticker": "CNDX.L",
+                         "intraday_series": [1.0, 2.0],
+                         "intraday_baseline": 1.0}}
+    audit = {"performance_intraday": {
+        "origin": "metrics_preprocessing",
+        "requested_tickers": requested,
+        "returned_tickers": tuple(quotes),
+        "source_tickers": {k: k for k in quotes},
+    }}
+    errors = validate_newsletter_semantics(
+        _M(hp, holdings_df, requested, quotes), audit, "")
+    assert _mismatch_errors(errors) == [], (
+        f"a historyless holding must not block delivery; got {_mismatch_errors(errors)}"
+    )
+
+
+def test_renderer_dropping_a_performance_ticker_is_still_caught():
+    """The check must keep its teeth: a request set missing an hp ticker fails."""
+    hp = pd.DataFrame([
+        {"ticker": "AVEM.DE", "type": "In portfolio"},
+        {"ticker": "CL2.MI", "type": "In portfolio"},
+    ])
+    requested = ("AVEM.DE",)  # CL2.MI silently dropped
+    quotes = {"AVEM.DE": {"intraday_source_ticker": "AVEM.DE",
+                          "intraday_series": [1.0, 2.0],
+                          "intraday_baseline": 1.0}}
+    audit = {"performance_intraday": {
+        "origin": "metrics_preprocessing",
+        "requested_tickers": requested,
+        "returned_tickers": tuple(quotes),
+        "source_tickers": {k: k for k in quotes},
+    }}
+    errors = validate_newsletter_semantics(
+        _M(hp, pd.DataFrame([{"ticker": "AVEM.DE"}]), requested, quotes), audit, "")
+    assert _mismatch_errors(errors), "the gate went blind to a dropped ticker"
