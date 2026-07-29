@@ -730,6 +730,33 @@ def _history_visible_at_boundary(history: Optional[pd.DataFrame]) -> bool:
     return _history_has_market_evidence(history)
 
 
+def _history_supports_a_return(history: Optional[pd.DataFrame]) -> bool:
+    """Whether history has enough closes to compute a single return (>= 2).
+
+    Candidate SELECTION needs a stricter test than
+    :func:`_history_visible_at_boundary`, which is satisfied by one close. One
+    close is a quote wearing a series' clothes: it cannot produce a return, so
+    every downstream consumer (``holding_performance``, ``_holding_histories``,
+    the historical-risk reconstruction) drops it on its own ``len < 2`` guard,
+    and the instrument silently falls through to the carry-flat/synthetic path.
+
+    That is precisely the failure the candidate walk says it exists to prevent —
+    "pick the FIRST candidate that actually serves a usable price history, not
+    merely a live quote" — so selection applies the same threshold the consumers
+    do. 18MF.MU (one close) was beating CL2.MI (1276) for FR0010755611 on rank
+    alone; a listing with real history now wins over one with a lone print.
+    """
+    if not _history_visible_at_boundary(history):
+        return False
+    closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
+    closes = closes[closes.map(math.isfinite) & (closes > 0)]
+    try:
+        closes = _clip_to_as_of(closes)
+    except Exception:  # noqa: BLE001 — evidence checks must degrade closed
+        return False
+    return len(closes) >= 2
+
+
 def _resolve_isin(
     isin: str, hint_ticker: str = "", expected_currency: str = ""
 ) -> Optional[tuple[dict, str]]:
@@ -927,6 +954,25 @@ def _resolve_isin(
         if taxonomy_ticker and hint_is_isin_only
         else hint_ticker
     )
+    # The taxonomy row for this instrument may be keyed only by ticker (its isin
+    # cell empty), in which case the ISIN lookup above found nothing. But the
+    # provider already tells us the ISIN's ticker aliases, and one of them is
+    # usually the very ticker the taxonomy knows — so cross the two instead of
+    # requiring the isin cell to be filled by hand. This is what makes an
+    # ISIN-only broker row (Fineco) resolve to the same curated identity a
+    # target file reaches by ticker: one resolver, reached from either key.
+    if hint_is_isin_only and not taxonomy_ticker:
+        for alias in _openfigi_lookup(clean_isin):
+            # ``resolve_taxonomy_identity`` echoes its input back when nothing
+            # matches, so it cannot answer "is this in the taxonomy?" — ask the
+            # curated lookup directly, which only holds real rows.
+            if cfg.instrument_taxonomy_has(alias):
+                resolution_hint = alias
+                logger.info(
+                    "ISIN %s matched curated taxonomy via provider alias %s",
+                    isin, alias,
+                )
+                break
     candidates = _collect_candidate_metas(clean_isin, resolution_hint)
     if not candidates:
         return None
@@ -949,7 +995,7 @@ def _resolve_isin(
     best = ranked[0]
     for cand in ranked:
         history = _fetch_history(cand.symbol)
-        if _history_visible_at_boundary(history):
+        if _history_supports_a_return(history):
             cand.data = _annotate_ticker_data(
                 {"info": cand.info, "history": history},
                 cand.symbol,
@@ -1020,15 +1066,34 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
                 _add(f"{hint_ticker}{suffix}")
 
     figi_syms = _openfigi_lookup(clean_isin)
-    for sym in figi_syms:
-        _add(sym)
+    bare_figi = [sym for sym in figi_syms if "." not in sym]
 
-    # Bare OpenFIGI tickers (no exchange suffix) get the full suffix sweep,
-    # so an ISIN-only caller reaches the local listing the same way.
+    # Already-qualified OpenFIGI symbols (they carry a venue) go first.
     for sym in figi_syms:
-        if "." not in sym:
-            for suffix in ISIN_EXCHANGE_SUFFIXES:
-                _add(f"{sym}{suffix}")
+        if "." in sym:
+            _add(sym)
+
+    # Then the bare tickers crossed with the configured venues, SUFFIX-MAJOR:
+    # every root on .MI, then every root on .SG, and so on. Ticker-major order
+    # (all eight venues of the first root, then the second) buried the primary
+    # listing behind the aliases of roots that do not trade.
+    #
+    # A BARE Yahoo symbol only quotes for suffixless US listings, so for a
+    # non-US ISIN every bare candidate is a Bloomberg/venue code that 404s. They
+    # are therefore probed LAST, after the qualified listings: OpenFIGI returned
+    # ten bare tickers for FR0010755611 (Amundi MSCI USA 2x) — exactly
+    # ``_MAX_RESOLVE_FETCHES`` — so the budget was spent entirely on 404s.
+    # CL2.MI (1276 closes) sat at candidate 51 and was never probed, and the
+    # ISIN resolved to a venue carrying a single close, which left the fund with
+    # no usable history at all.
+    for suffix in ISIN_EXCHANGE_SUFFIXES:
+        for sym in bare_figi:
+            _add(f"{sym}{suffix}")
+
+    # US listings are genuinely suffixless, so the bare roots still have to be
+    # tried — just not before every qualified venue candidate.
+    for sym in bare_figi:
+        _add(sym)
 
     for suffix in ISIN_EXCHANGE_SUFFIXES:
         _add(f"{clean_isin}{suffix}")

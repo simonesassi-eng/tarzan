@@ -158,6 +158,28 @@ def instrument_taxonomy() -> dict:
     return _taxonomy_lookup()
 
 
+def instrument_taxonomy_has(identity: Optional[str]) -> bool:
+    """Whether the curated taxonomy actually holds this ISIN or bare ticker.
+
+    ``resolve_taxonomy_identity`` echoes unknown input straight back — by
+    design, so partial identities survive — which makes it useless for asking
+    "does the taxonomy know this?". This answers that question against the
+    curated lookup, which contains only real rows, keyed by both ISIN and bare
+    ticker. Used to recognise a curated instrument through a provider ticker
+    alias when the row's own isin cell is empty.
+    """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    if not identity:
+        return False
+    lut = _taxonomy_lookup()
+    raw = str(identity).strip()
+    return any(
+        key and key in lut
+        for key in (raw, normalize_isin(raw), normalize_ticker(raw))
+    )
+
+
 def resolve_taxonomy_identity(
     isin: Optional[str],
     ticker: Optional[str],
