@@ -465,10 +465,15 @@ def run_and_send() -> int:
                 ),
                 publication_impact="BLOCK_NORMAL_AND_DO_NOT_SEND",
             )
+            # The violations themselves, not just their count. A bare count
+            # cannot be diagnosed from a CI log — the run is the only place
+            # the live book is ever rendered, so an unprinted violation costs
+            # a whole guess-and-redeploy cycle.
             logger.critical(
                 "Newsletter semantic gate failed with %d violation(s); claim and "
-                "SMTP are blocked.",
+                "SMTP are blocked:\n%s",
                 len(semantic_errors),
+                "\n".join(f"  [{i}] {e}" for i, e in enumerate(semantic_errors, 1)),
             )
         subject = build_subject(metrics, subject_prefix, trigger_label)
 

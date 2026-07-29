@@ -13,7 +13,13 @@ import re
 from collections.abc import Mapping
 
 
-_DISPLAYED_PERCENT_RE = re.compile(r"([+\-\u2212])(\d+(?:\.\d+)?)%$")
+# The sign is OPTIONAL. ``_pct(..., signed=True)`` deliberately omits it when
+# the value rounds to zero (``_sign_for`` returns "" so a residual \u22120.004%
+# prints as "0.00%" rather than as a signed zero reading like a real move
+# down). Requiring a sign here made that correct rendering unparseable, and an
+# unparseable label is reported as disagreeing with its endpoint \u2014 blocking
+# delivery over a line that was drawn and labelled correctly.
+_DISPLAYED_PERCENT_RE = re.compile(r"([+\-\u2212]?)(\d+(?:\.\d+)?)%$")
 
 
 def _text(value: object) -> str:
