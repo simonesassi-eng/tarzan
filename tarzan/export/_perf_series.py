@@ -246,9 +246,17 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
     v0 = float(val.iloc[0]) or 1.0
 
     def _window_pct(source):
-        if source is None:
+        # An empty series is not None (``unrealized_series`` defaults to an
+        # empty Series, and the metrics shift can poison a whole series when
+        # its last point is NaN), and reindexing one onto the window yields
+        # all-NaN. A NaN line is not a line: it renders as "—" while the
+        # semantic gate compares it numerically, so NaN != NaN blocks delivery
+        # instead of simply omitting the series. Absent data must read as None.
+        if source is None or len(source) == 0:
             return None
         s = _norm_series(source).reindex(idx, method="ffill").bfill()
+        if not s.notna().any():
+            return None
         return [float(p) / v0 * 100.0 for p in (s - s.iloc[0]).values]
 
     pnl_pct = _window_pct(m.pnl_series)
@@ -303,12 +311,16 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
         twror_full = (nav_full / float(nav_full.iloc[0]) - 1.0) * 100.0
         twror_si = list(twror_full.reindex(idx, method="ffill").bfill().values.astype(float))
     total_pct = unreal_pct = None
-    if m.pnl_series is not None:
+    # Same absent-data rule as ``_perf_window._window_pct``: an empty or
+    # all-NaN series must read as None (no line) rather than as a NaN line.
+    if m.pnl_series is not None and len(m.pnl_series):
         pnl = _norm_series(m.pnl_series).reindex(idx, method="ffill").bfill()
-        total_pct = list((pnl / (av - pnl).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
-    if m.unrealized_series is not None:
+        if pnl.notna().any():
+            total_pct = list((pnl / (av - pnl).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
+    if m.unrealized_series is not None and len(m.unrealized_series):
         ur = _norm_series(m.unrealized_series).reindex(idx, method="ffill").bfill()
-        unreal_pct = list((ur / (av - ur).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
+        if ur.notna().any():
+            unreal_pct = list((ur / (av - ur).replace(0, float("nan")) * 100.0).bfill().values.astype(float))
     # MSCI ACWI since inception: anchor on the benchmark's first observation
     # at/after inception (its own real price, not one stale-filled from before
     # the portfolio's start), then sample the window — same anchoring rule as

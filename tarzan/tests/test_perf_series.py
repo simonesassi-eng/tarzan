@@ -259,3 +259,63 @@ def test_chart_grid_density():
                               min_day_ticks=12)
     days = re.findall(r'>([A-Z][a-z]{2} \d{2})<', svg_r)
     assert len(days) >= 12
+
+
+# ── An absent P&L series must read as NO LINE, never as a NaN line ───────────
+# The semantic gate compares each drawn line's endpoint numerically, and
+# NaN != NaN. So a NaN line does not merely look wrong, it fails the gate with
+# "endpoint differs from the shared-close endpoint" and blocks delivery
+# (BLOCK_NORMAL_AND_DO_NOT_SEND) — the newsletter never sends. Three real ways
+# a NaN series arrives: unrealized_series defaults to an EMPTY Series (not
+# None), a window can slice a region with no observations, and the metrics
+# level-shift anchors on iloc[-1] so one NaN tail poisons every day.
+
+def _nan_case_metrics(unreal):
+    idx = pd.date_range("2026-06-01", "2026-07-13", freq="D")
+    m = PortfolioMetrics(total_value=10500.0, invested_value=10500.0, cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 10000.0}]))
+    m.actual_value_series = pd.Series(np.linspace(10000, 10500, len(idx)), index=idx)
+    m.portfolio_history = pd.Series(np.linspace(100, 105, len(idx)), index=idx)
+    m.pnl_series = pd.Series(np.linspace(0, 500, len(idx)), index=idx)
+    m.unrealized_series = unreal
+    return m, idx
+
+
+def test_empty_unrealized_series_yields_no_line_not_nan():
+    """``unrealized_series`` defaults to an empty Series, so a ``is None``
+    guard alone lets it through and reindexing produces all-NaN."""
+    m, _ = _nan_case_metrics(pd.Series(dtype=float, index=pd.DatetimeIndex([])))
+    win = _perf_window(m, 30)
+    assert win is not None
+    assert win["unreal_pct"] is None
+    assert win["endpoints"]["unreal_pct"] is None
+    full = _perf_full_series(m)
+    assert full is not None and full["unreal_pct"] is None
+
+
+def test_all_nan_unrealized_window_yields_no_line_not_nan():
+    """A series that exists but has no observation inside the window."""
+    _, idx = _nan_case_metrics(None)
+    m, idx = _nan_case_metrics(pd.Series([float("nan")] * len(idx), index=idx))
+    win = _perf_window(m, 30)
+    assert win is not None
+    assert win["unreal_pct"] is None, "an all-NaN window must be no line at all"
+    assert win["endpoints"]["unreal_pct"] is None, (
+        "a NaN endpoint reaches the semantic gate, where NaN != NaN blocks the send"
+    )
+
+
+def test_nan_tail_does_not_poison_the_shifted_series():
+    """metrics.py anchors the level shift on the last OBSERVED point.
+
+    Anchoring on ``iloc[-1]`` made ``hero_unreal - nan`` = nan, and adding that
+    scalar turned all 30 days into NaN — one missing price for today silently
+    took out the whole line.
+    """
+    idx = pd.date_range("2026-06-01", "2026-07-13", freq="D")
+    ur = pd.Series(np.linspace(100.0, 400.0, len(idx)), index=idx)
+    ur.iloc[-1] = float("nan")  # today's price unavailable
+    observed = ur.dropna()
+    shifted = ur + (5000.0 - float(observed.iloc[-1]))
+    assert shifted.notna().any(), "the shift must not poison every day"
+    assert abs(float(shifted.dropna().iloc[-1]) - 5000.0) < 1e-9

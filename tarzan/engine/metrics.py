@@ -613,7 +613,14 @@ class MetricsEngine:
             cost_now = (float(hdf["cost_basis_eur"].sum())
                         if hdf is not None and not hdf.empty else 0.0)
             hero_unreal = float(ctx.get("total_value", 0.0)) - cost_now
-            ctx["unrealized_series"] = ur + (hero_unreal - float(ur.iloc[-1]))
+            # Anchor on the last OBSERVED point, not on ``iloc[-1]``: a NaN
+            # tail (an instrument with no price for today) would make the
+            # shift NaN and poison every day in the series, not just the tail.
+            observed = ur.dropna()
+            if observed.empty:
+                ctx["unrealized_series"] = None
+            else:
+                ctx["unrealized_series"] = ur + (hero_unreal - float(observed.iloc[-1]))
         else:
             ctx["unrealized_series"] = ur
 
