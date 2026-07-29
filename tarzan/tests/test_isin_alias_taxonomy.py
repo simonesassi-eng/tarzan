@@ -111,3 +111,63 @@ def test_single_close_still_counts_as_boundary_evidence():
     assert _history_visible_at_boundary(_hist(1)), (
         "a lone close is still a valid current price — only SELECTION is stricter"
     )
+
+
+# ── A cached symbol must never cost the instrument its curated identity ───────
+# The resolution cache holds ISIN→symbol for 30 days and CI restores it every
+# run, so a poisoned entry outlives any fix downstream of it: the live-run fast
+# path accepted the cached symbol unconditionally, so 18MF.MU kept being reused
+# and the alias bridge was never reached.
+#
+# The damage is not confined to that one row. asset_class/role are looked up by
+# BARE ticker, so 18MF.MU normalises to "18MF", which the taxonomy does not
+# know. The holding lands in OTHER with no class, and one unclassified valued
+# holding sets classification_available=False, which blanks the WHOLE allocation
+# section — every class 0% / €0, "no series", total notional drift −125.0pp.
+
+def test_poisoned_cache_entry_is_rejected_when_a_curated_alias_exists(monkeypatch):
+    """The cached symbol is unknown to the taxonomy but an alias is curated."""
+    from tarzan.data import enricher as E
+
+    monkeypatch.setattr(E, "_openfigi_lookup", lambda _isin: list(_FIGI_ALIASES))
+    # 18MF.MU normalises to a bare ticker the taxonomy has never heard of...
+    assert not cfg.instrument_taxonomy_has("18MF.MU")
+    # ...while CL2 — an alias of the SAME ISIN — is curated. That combination is
+    # what marks the cached entry stale rather than merely unfamiliar.
+    assert any(cfg.instrument_taxonomy_has(a) for a in E._openfigi_lookup("X"))
+
+
+def test_a_curated_cached_symbol_is_still_trusted(monkeypatch):
+    """Self-healing must not turn into re-resolving on every single run."""
+    from tarzan.data import enricher as E
+
+    monkeypatch.setattr(E, "_openfigi_lookup", lambda _isin: list(_FIGI_ALIASES))
+    # CL2.MI normalises to CL2, which IS curated, so the cache stays valid and
+    # no re-resolution (or provider traffic) is triggered.
+    assert cfg.instrument_taxonomy_has("CL2.MI")
+
+
+def test_unclassified_holding_is_what_blanks_the_allocation_section():
+    """Tie the ticker choice to the symptom seen in the mail.
+
+    This is the mechanism, in two lines: no asset_class -> empty breakdown ->
+    the holding counts as unresolved -> classification_available False.
+    """
+    from tarzan.engine import allocations as alloc
+
+    class _H:
+        isin = "FR0010755611"
+        current_value = 18199.54
+        market_value_eur = 18199.54
+        class_breakdown = None
+        asset_class = None
+        ticker = "18MF"
+
+    class _Curated(_H):
+        ticker = "CL2"
+        asset_class = "Equities"
+
+    assert alloc.holding_class_breakdown(_H()) == {}, (
+        "an unknown bare ticker yields no class — the OTHER row in the mail"
+    )
+    assert alloc.holding_class_breakdown(_Curated()) == {"Equities": 100.0}
