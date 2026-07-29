@@ -16,18 +16,25 @@
                     {# Optional tiles are absent from hero.tiles rather than
                        blank, and the grid closes the row it is on, so a short
                        list never leaves an empty box. #}
+                    {# ``table-layout:fixed`` makes the three declared 33.33%
+                       columns authoritative. Without it the client is free to
+                       auto-size columns to their content, and a long monospace
+                       value (€234,579 / −3.05pp) pushes a tile past its third,
+                       overflows the row, and gets stacked one per line — the
+                       Apple Mail symptom. Fixed layout clips or wraps inside the
+                       cell instead of reflowing the grid. #}
                     {% for row in hero.tiles|batch(3) %}
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"{% if not loop.first %} style="margin-top:14px;"{% endif %}>
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;{% if not loop.first %}margin-top:14px;{% endif %}">
                       <tr>
                         {% for t in row %}
-                        <td class="kpi-cell" width="33%" style="vertical-align:top;padding-right:10px;">
+                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:{{ palette.muted }};text-transform:uppercase;">{{ t.label }}</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
                           <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.4;">{{ t.caption }}</div>
                         </td>
                         {% endfor %}
                         {% for _ in range(3 - row|length) %}
-                        <td width="33%">&nbsp;</td>
+                        <td width="33.33%" style="width:33.33%;">&nbsp;</td>
                         {% endfor %}
                       </tr>
                     </table>
