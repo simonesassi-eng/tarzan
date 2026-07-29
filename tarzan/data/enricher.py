@@ -1089,6 +1089,21 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
         if _is_expandable_bare_ticker(hint_ticker):
             for suffix in ISIN_EXCHANGE_SUFFIXES:
                 _add(f"{hint_ticker}{suffix}")
+        else:
+            # hint_ticker already carries a venue suffix (e.g. "CL2.PA" from
+            # an OpenFIGI alias match against the curated taxonomy). Expand
+            # its bare root across every configured venue too, the same way
+            # a genuinely bare hint is expanded below -- otherwise the one
+            # exact suffixed form the alias bridge happened to return is the
+            # only qualified candidate tried, and the instrument's actual
+            # primary listing (e.g. CL2.MI) stays buried behind the
+            # unrelated alias roots in the generic sweep, unreached within
+            # the fetch budget -- which is exactly how 18MF.MU won originally.
+            bare_root = hint_ticker.split(".", 1)[0]
+            if _is_expandable_bare_ticker(bare_root):
+                _add(bare_root)
+                for suffix in ISIN_EXCHANGE_SUFFIXES:
+                    _add(f"{bare_root}{suffix}")
 
     figi_syms = _openfigi_lookup(clean_isin)
     bare_figi = [sym for sym in figi_syms if "." not in sym]

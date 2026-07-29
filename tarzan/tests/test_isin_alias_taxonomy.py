@@ -86,6 +86,40 @@ def test_curated_hint_puts_the_primary_listing_inside_the_probe_cap(monkeypatch)
     )
 
 
+def test_suffixed_hint_still_reaches_the_primary_listing(monkeypatch):
+    """A curated hint is not always bare — the fix must not assume it is.
+
+    In production (the 2026-07-29 10:41 run) the alias bridge for
+    FR0010755611 matched CL2.PA, not bare CL2: OpenFIGI's data item for the
+    Paris listing maps to a qualified yfinance ticker, and the alias-bridge
+    loop reaches that qualified form before the bare one in the same
+    provider result. Without expanding the bare root of a suffixed hint
+    across every configured venue, only that one exact suffixed form is a
+    qualified candidate, and the instrument's actual primary listing
+    (CL2.MI — confirmed live via the newsletter's own instrument-data-
+    sources footer) stays buried behind the unrelated alias roots in the
+    generic sweep, unreached within the fetch budget. That is exactly how
+    18MF.MU won originally, and it won again even after the alias bridge
+    correctly found CL2.PA — the alias bridge gets the right identity INTO
+    consideration, it doesn't make that identity win on its own.
+    """
+    from tarzan.data import enricher as E
+
+    monkeypatch.setattr(E, "_openfigi_lookup", lambda _isin: ["CL2.PA", "CL2", "18MF.MU"])
+    monkeypatch.setattr(E, "_fetch_candidate_meta",
+                        lambda sym: E._Candidate(sym, {}, 30.0, "EUR", "Amundi"))
+
+    candidates = [c.symbol for c in E._collect_candidate_metas("FR0010755611", "CL2.PA")]
+    assert "CL2.MI" in candidates, (
+        "a suffixed hint must still reach the primary listing, not just the "
+        "one exact suffixed form the alias bridge happened to return"
+    )
+    assert candidates[0] == "CL2.PA" and candidates[1] == "CL2", (
+        "the hint and its bare root must lead the candidate list"
+    )
+    assert len(candidates) <= E._MAX_RESOLVE_FETCHES
+
+
 def _hist(n_closes: int) -> pd.DataFrame:
     idx = pd.date_range("2020-01-01", periods=max(n_closes, 1), freq="B")
     return pd.DataFrame({"Close": [30.0] * len(idx)}, index=idx).iloc[:n_closes]
