@@ -699,7 +699,19 @@ def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> 
     ranking the same candidate set always yields the same winner. Only
     lightweight ``info`` fields are used — price history is fetched later,
     for the winner only — so ranking does not depend on a full download.
+
+    ``curated`` is checked first, ahead of name matching: whether the
+    candidate's own symbol is independently verifiable against the curated
+    taxonomy (not just the hint that got it into the pool). Production
+    evidence for FR0010755611 (2026-07-29/30 runs) showed a curated
+    candidate (CL2.MI) losing to a non-curated one (18MF.MU) purely on
+    name-token overlap -- 18MF.MU's yfinance name happened to mirror the
+    OpenFIGI canonical name more closely than the correct venue's own
+    metadata did. Name matching is a heuristic for when nothing more
+    reliable exists; it should never outrank a candidate we can already
+    confirm against ground truth.
     """
+    curated = 1 if cfg.instrument_taxonomy_has(cand.symbol) else 0
     name_score = _name_match_score(cand.name, canonical_name)
     # Bucket the name score so tiny float differences don't reorder
     # otherwise-equivalent listings of the same instrument.
@@ -707,7 +719,7 @@ def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> 
     currency_match = 1 if _currency_matches(cand.currency, expected_currency) else 0
     # Negate suffix priority so a lower index sorts higher.
     suffix_rank = -_suffix_priority(cand.symbol)
-    return (name_bucket, currency_match, suffix_rank)
+    return (curated, name_bucket, currency_match, suffix_rank)
 
 
 def _currency_matches(candidate_ccy: str, expected_ccy: str) -> bool:
@@ -1157,14 +1169,30 @@ _MAX_RESOLVE_FETCHES = 10
 def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
     """Fetch a single candidate's lightweight ``info`` for ranking.
 
-    Does NOT download price history — that happens once for the winning
-    symbol in :func:`_resolve_isin`. Returns None if the symbol has no
-    usable price (so it cannot be a real listing).
+    Does NOT download price history for an ordinary candidate — that
+    happens once for the winning symbol in :func:`_resolve_isin`. The one
+    exception is a symbol the curated taxonomy already recognises: Yahoo's
+    live ``info`` endpoint is unreliable for thin European listings even
+    when the same symbol's daily history is solid, so a curated candidate
+    that fails the live-quote check gets one history check before being
+    discarded. This is scoped to curated symbols only -- it cannot
+    resurrect an arbitrary low-quality candidate, only one we can already
+    verify against ground truth -- so it does not reopen the cost the
+    quote-only design avoids for the common case.
     """
     info = _fetch_ticker_info(symbol)
     price = info.get("regularMarketPrice") or info.get("previousClose")
     if not price or price <= 0:
-        return None
+        if not cfg.instrument_taxonomy_has(symbol):
+            return None
+        history = _fetch_history(symbol)
+        if not _history_supports_a_return(history):
+            return None
+        closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
+        closes = closes[closes.map(math.isfinite) & (closes > 0)]
+        if closes.empty:
+            return None
+        price = float(closes.iloc[-1])
     name = info.get("longName") or info.get("shortName") or info.get("name") or ""
     return _Candidate(
         symbol=symbol,
