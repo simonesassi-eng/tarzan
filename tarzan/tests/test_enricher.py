@@ -191,6 +191,20 @@ class TestRankKey:
         # Expected EUR → the EUR listing ranks higher.
         assert _rank_key(b, "Same Fund", "EUR") > _rank_key(a, "Same Fund", "EUR")
 
+    def test_curated_beats_name_match(self):
+        # A candidate independently verifiable against the curated taxonomy
+        # must win even when a different, non-curated candidate's yfinance
+        # name overlaps the OpenFIGI canonical name far better. Regression
+        # for FR0010755611 (2026-07-29/30 runs): 18MF.MU (bare "18MF" is not
+        # in the taxonomy) was outranking CL2.MI (bare "CL2" is curated)
+        # purely on name-token overlap.
+        curated = _cand("CL2.MI", currency="EUR",
+                        name="Amundi MSCI USA (2x) Leveraged")
+        better_name = _cand("18MF.MU", currency="EUR",
+                            name="Amundi MSCI USA Dly(2x) Lev.UEA")
+        canon = "AMUNDI MSCI USA DAILY 2X LEVERAGED UCITS ETF"
+        assert _rank_key(curated, canon, "EUR") > _rank_key(better_name, canon, "EUR")
+
 
 class TestResolveIsinDeterminism:
     """_resolve_isin must be a pure function of the candidate set:
@@ -285,6 +299,55 @@ class TestResolveIsinDeterminism:
         assert result is not None
         _, symbol = result
         assert symbol == "UEQC.DE"
+
+    def test_fr0010755611_resolves_to_curated_venue_not_18mf(self, monkeypatch):
+        """Full regression for the real 2026-07-29/30 production failure.
+
+        FR0010755611 (Amundi MSCI USA 2x Leveraged, taxonomy ticker CL2) is
+        an ISIN-only Fineco order (hint_ticker=""). The alias bridge finds
+        CL2.PA as the curated match. 18MF.MU has a live quote AND a name
+        that mirrors the OpenFIGI canonical name closely -- it used to win
+        outright on name-token overlap. CL2.MI has no live quote in
+        yfinance's `info` (the real-world gap for this venue) but carries
+        a full 1276-close daily history. The resolver must still land on
+        CL2.MI: curated ranking beats the name match, and the
+        curated-symbol history fallback in _fetch_candidate_meta keeps
+        CL2.MI from being discarded for lacking a live quote.
+        """
+        isin = "FR0010755611"
+        canonical = "AMUNDI MSCI USA DAILY 2X LEVERAGED UCITS ETF"
+        info_by_symbol = {
+            "18MF.MU": {
+                "regularMarketPrice": 30.48, "currency": "EUR",
+                "longName": "Amundi MSCI USA Dly(2x) Lev.UEA",
+            },
+            "CL2.MI": {"currency": "EUR",
+                       "longName": "Amundi MSCI USA (2x) Leveraged"},
+        }
+        hist_by_symbol = {
+            "CL2.MI": pd.DataFrame(
+                {"Close": [10.0] * 1276},
+                index=pd.date_range("2021-01-04", periods=1276, freq="B"),
+            ),
+            "18MF.MU": pd.DataFrame(
+                {"Close": [30.0, 30.48]},
+                index=pd.to_datetime(["2026-07-28", "2026-07-29"]),
+            ),
+        }
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda i: canonical)
+        monkeypatch.setattr(enricher, "_openfigi_lookup",
+                            lambda i: ["CL2.PA", "CL2", "18MF.MU"])
+        monkeypatch.setattr(enricher, "_fetch_ticker_info",
+                            lambda s: info_by_symbol.get(s, {}))
+        monkeypatch.setattr(enricher, "_fetch_history",
+                            lambda s: hist_by_symbol.get(s, pd.DataFrame()))
+        monkeypatch.setattr(enricher.price_cache, "store_resolution",
+                            lambda *a, **k: None)
+
+        result = enricher._resolve_isin(isin, hint_ticker="", expected_currency="EUR")
+        assert result is not None
+        _, symbol = result
+        assert symbol == "CL2.MI"
 
 
 class TestTaxonomyBidirectionalMatch:
