@@ -153,3 +153,36 @@ class TestHeaderContract:
         header = _rows(html)[0]
         labels = header
         assert labels.index("Trend") < labels.index("Drift")
+
+
+class TestValueSubs:
+    """value_subs toggles the euro-under-percent line independently of subs
+    (which still gates the trend-pp line under the sparkline and the
+    leverage line under drift). Added for the per-holding-target table,
+    which wants the euro amount under Now/Target like the asset-class and
+    equity-geography tables above it, but not the trend-pp sub-line."""
+
+    def test_value_subs_true_shows_euro_even_with_subs_false(self):
+        html = _div_table([_value_row()], tol=2.0, base=300_000.0,
+                          subs=False, value_subs=True)
+        assert "\u20ac" in html
+
+    def test_subs_false_still_suppresses_the_trend_sub_line(self):
+        # now=77.6, spark_vals start at 70.0 -> a +7.6pp trend sub-line when
+        # subs is on. drift (now - target = 2.6pp) is a different figure and
+        # must still appear either way.
+        with_trend = _div_table([_value_row()], tol=2.0, base=300_000.0,
+                                subs=True)
+        without_trend = _div_table([_value_row()], tol=2.0, base=300_000.0,
+                                   subs=False, value_subs=True)
+        assert "+7.6pp" in with_trend
+        assert "+7.6pp" not in without_trend
+        assert "+2.6pp" in with_trend and "+2.6pp" in without_trend
+
+    def test_value_subs_none_falls_back_to_subs(self):
+        # Every existing caller omits value_subs, so it must reproduce the
+        # prior behaviour exactly: tied to subs, on or off together.
+        on = _div_table([_value_row()], tol=2.0, base=300_000.0, subs=True)
+        off = _div_table([_value_row()], tol=2.0, base=300_000.0, subs=False)
+        assert "\u20ac" in on
+        assert "\u20ac" not in off
