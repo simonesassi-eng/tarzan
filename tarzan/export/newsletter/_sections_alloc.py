@@ -854,7 +854,7 @@ def _div_label(name: str, color: Optional[str] = None,
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                show_leverage: bool = False, first_label: str = "Name",
-               subs: bool = True) -> str:
+               subs: bool = True, value_subs: Optional[bool] = None) -> str:
     """Unified diversification table (asset class / geography / by holding).
 
     One row per slice — current weight, target, the weight against its target
@@ -865,6 +865,12 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     amount inline (e.g. "26.5% · €10.3k") — same row height, no extra
     columns, since the % is what drives width/alignment.
 
+    ``subs`` gates the trend-pp line under the sparkline and the leverage
+    line under drift. ``value_subs`` gates the euro line under Now/Target
+    independently — it defaults to ``subs`` when not given, so existing
+    callers are unaffected, but a table can show the euro amount without
+    also turning on the trend-pp sub-line, or vice versa.
+
     ``show_leverage`` adds a "Lev" column = notional exposure / physical
     capital in that class (row dict ``leverage``); used only for the asset-
     class table, where >1.0 marks a partly-synthetic class (e.g. a bond
@@ -873,6 +879,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     if not rows:
         return ""
     P = PALETTE
+    value_subs = subs if value_subs is None else value_subs
 
     _bb = f'border-bottom:1px solid {P["border"]};'
 
@@ -970,9 +977,9 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
 
     def _num_cell(pct_val: float, color: str, weight: int = 700) -> str:
         """A Now/Target cell: the weight, with its euro amount underneath when a
-        EUR base for 100% is known and this table shows sub-lines."""
+        EUR base for 100% is known and this table shows the value sub-line."""
         eur = (_eur_smart(pct_val / 100.0 * base)
-               if (subs and base and base > 0) else "")
+               if (value_subs and base and base > 0) else "")
         return _stack(_pct_smart(pct_val), eur, color=color, weight=weight)
 
     def _eur_cell(eur_val: float, color: str, weight: int = 700,
@@ -1413,11 +1420,14 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             f'total 100%.</div>'
         )
     if holding_rows:
-        # Percentages only: this table is a list of targets, and the euro
-        # amount under every weight doubled its height to restate what the
-        # asset-class table above already puts in context.
-        html.append(_div_table(holding_rows, tol, base=None,
-                               first_label="Per-holding target", subs=False))
+        # Now/Target show the euro amount under the percentage, same style
+        # as the asset-class and equity-geography tables above — same
+        # invested-value base, since these rows' percentages are on that
+        # same basis (see _ph_target_rows). The trend sub-line stays off:
+        # this table is a list of targets, not a trend view.
+        html.append(_div_table(holding_rows, tol, base=invested_base,
+                               first_label="Per-holding target", subs=False,
+                               value_subs=True))
         if exits_note:
             html.append(exits_note)
     if eq_rows:
