@@ -154,14 +154,14 @@ class TestNewsletterGoldenHtml:
         assert not re.search(r'@import|<link[^>]+stylesheet', html, re.I)
 
     def test_kpi_tiles_never_collapse_to_one_column(self, rendered):
-        """The STATE grid must hold two columns at every width it is actually
+        """The STATE grid must hold three columns at every width it is actually
         read at, with no narrow-viewport rule collapsing it further.
 
         A narrow-pane fallback used to stack the tiles one per line below
         520px — meant for a pane narrower than the card, but every phone
         viewport is narrower than that, so it fired unconditionally on the
         one device this mail is read on: nine tiles, one per line, every
-        time. Two 50% columns clear the widest tile value at any width down
+        time. Three 33.33% columns hold their structure at any width down
         to an iPhone SE, so no such rule should exist any more.
         """
         html, _m, _c = rendered
@@ -178,7 +178,7 @@ class TestNewsletterGoldenHtml:
         assert len(reflow) == 1, breakpoints.keys()
 
     def test_state_grid_does_not_depend_on_the_breakpoint_alone(self, rendered):
-        """The tiles must hold two columns even where media queries do not run.
+        """The tiles must hold three columns even where media queries do not run.
 
         Fixed table layout (declared widths are authoritative) and
         text-size-adjust:100% (declared font sizes are the rendered ones)
@@ -195,12 +195,12 @@ class TestNewsletterGoldenHtml:
             r'<table[^>]*style="table-layout:fixed;[^"]*"[^>]*>\s*<tr>(.*?)</tr>',
             html, re.S,
         )
-        tile_rows = [r for r in rows if 'width="50%"' in r]
+        tile_rows = [r for r in rows if 'width="33.33%"' in r]
         assert tile_rows, "the STATE grid must use a fixed table layout"
         for row in tile_rows:
             cells = re.findall(r'<td[^>]*style="width:([0-9.]+)%', row)
             assert len(cells) >= 1, "each tile cell needs an explicit CSS width"
-            assert all(abs(float(c) - 50.0) < 0.01 for c in cells), cells
+            assert all(abs(float(c) - 33.33) < 0.01 for c in cells), cells
 
 
 class TestSectionNumbering:
