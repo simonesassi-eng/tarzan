@@ -72,9 +72,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def is_continuous_market(_ticker):  # safe default if the import fails
         return False
 
+    def session_caption(_ticker):  # safe default if the import fails
+        return ""
+
     try:
         from tarzan.data.market_quotes import (fetch_market_quotes, CATEGORY_ORDER,
-                                               market_open_now, is_continuous_market)
+                                               market_open_now, is_continuous_market,
+                                               session_caption)
         snap = fetch_market_quotes()
     except Exception:  # noqa: BLE001
         snap, CATEGORY_ORDER = [], []
@@ -105,13 +109,35 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
                           w=44, h=20, stretch=False)
 
+    def _hours_line(d: dict) -> str:
+        """Local trading hours + an open/closed dot for a bounded cash
+        session, or the \u224824h caption alone for a continuously traded
+        instrument (futures/FX/crypto have no open/closed to state)."""
+        sym = d.get("symbol", "")
+        cap = session_caption(sym)
+        if not cap:
+            return ""
+        if is_continuous_market(sym):
+            return (f'<div style="font-size:8px;color:{P["subtle"]};'
+                    f'margin-top:1px;">{cap}</div>')
+        is_open = market_open_now(sym)
+        dot_col = P["green"] if is_open else P["subtle"]
+        status = "Open" if is_open else "Closed"
+        return (f'<div style="font-size:8px;color:{P["subtle"]};'
+                f'margin-top:1px;">{cap} &middot; '
+                f'<span style="color:{dot_col};">&#9679;</span> {status}</div>')
+
     def _row(d: dict) -> str:
         up = d["pct"] >= 0
         col = P["green"] if up else P["red"]
         name = d["name"]
         # Tag futures so a full-width sparkline reads as a continuously traded
         # contract (change vs previous settlement), not a finished session.
-        if str(d.get("symbol", "")).upper().endswith("=F"):
+        # Idempotent: a name that already carries the tag (set directly in
+        # MARKETS, so it is unique from its cash-index counterpart) is left
+        # alone rather than doubled.
+        if (str(d.get("symbol", "")).upper().endswith("=F")
+                and not name.endswith("(FUT)")):
             name = f"{name} (FUT)"
         level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
                  else f'{d["value"]:,.2f}')
@@ -120,7 +146,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return (
             f'<tr>'
             f'<td style="{td}font-size:10px;font-weight:600;color:{P["ink"]};'
-            f'white-space:nowrap;">{name}</td>'
+            f'white-space:nowrap;">{name}{_hours_line(d)}</td>'
             f'<td align="right" style="{td}">{_spark_for(d)}</td>'
             f'<td align="right" style="{td}font-size:10px;color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'
@@ -147,7 +173,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'border-bottom:1px solid {P["border"]};font-size:9px;'
             f'font-weight:700;letter-spacing:0.05em;text-transform:uppercase;'
             f'color:{P["muted"]};">{lbl}</td>'
-            for lbl, al in (("Index", "left"), ("Session", "right"),
+            for lbl, al in (("Index", "left"), ("Chart", "right"),
                             ("Level", "right"), ("Chg %", "right"))) + '</tr>')
         body, last = [], None
         for cat, d in entries:
