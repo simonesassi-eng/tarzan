@@ -269,3 +269,49 @@ def test_memo_serves_within_ttl_and_refetches_after(monkeypatch):
     finally:
         mq._memo = None
         mq._memo_at = 0.0
+
+
+# ---------------------------------------------------------------------------
+# session_caption — trading hours / continuous-market caption
+# ---------------------------------------------------------------------------
+def test_session_caption_continuous_market_shows_approx_24h():
+    for ticker in ("ES=F", "NQ=F", "YM=F", "RTY=F", "EURUSD=X", "BTC-USD"):
+        assert mq.session_caption(ticker) == "\u224824h", ticker
+
+
+def test_session_caption_bounded_session_shows_hours_and_zone():
+    assert mq.session_caption("^GSPC") == "09:30\u201316:00 ET"
+    assert mq.session_caption("^FTSE") == "08:00\u201316:30 GMT"
+    assert mq.session_caption("^N225") == "09:00\u201315:00 JST"
+
+
+def test_session_caption_unknown_exchange_is_empty():
+    assert mq.session_caption("SOME.XX") == ""
+    assert mq.session_caption("") == ""
+
+
+# ---------------------------------------------------------------------------
+# New US index futures — must not collide in name with their cash index
+# ---------------------------------------------------------------------------
+def test_new_index_futures_present_with_correct_ticker_and_category():
+    wanted = {"ES=F": "S&P 500 (FUT)", "YM=F": "Dow 30 (FUT)",
+              "NQ=F": "Nasdaq 100 (FUT)", "RTY=F": "Russell 2000 (FUT)"}
+    by_ticker = {t: n for n, t, c in mq.MARKETS}
+    for ticker, name in wanted.items():
+        assert by_ticker.get(ticker) == name, ticker
+
+    cats = {t: c for _n, t, c in mq.MARKETS}
+    for ticker in wanted:
+        assert cats[ticker] == "US"
+        assert mq.is_continuous_market(ticker)
+
+
+def test_markets_names_are_unique():
+    # A duplicate name (e.g. a futures entry sharing its cash index's name)
+    # collides in any lookup keyed by name, fetch_market_quotes results
+    # included -- this is what test_intraday_path_sets_baseline_to_prior_close
+    # would have caught if ES=F had been added as bare "S&P 500".
+    names = [n for n, _t, _c in mq.MARKETS]
+    assert len(names) == len(set(names)), (
+        [n for n in names if names.count(n) > 1]
+    )

@@ -137,6 +137,37 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     return dtime(oh, om) <= n.time() <= dtime(ch, cm)
 
 
+# Short zone label per exchange group, for a compact human-readable hours
+# caption ("09:30\u201316:00 ET") rather than a raw IANA zone name.
+_SESSION_LABEL: dict[str, str] = {
+    "EU": "CET", "L": "GMT", "US": "ET", "JP": "JST",
+    "HK": "HKT", "CN": "CST", "AU": "AEST", "KR": "KST",
+}
+
+
+def session_caption(ticker: str) -> str:
+    """A short, human caption for an instrument's trading session.
+
+    A bounded cash session gets its local hours and zone abbreviation, e.g.
+    "09:30\u201316:00 ET" \u2014 always in the exchange's own local time, since that
+    is how every financial site quotes session hours and the reader already
+    holds several exchanges' worth of them side by side. A continuously
+    traded instrument (futures/FX/crypto, per :func:`is_continuous_market`)
+    has no single bounded session to state, so it gets "\u224824h" instead of a
+    fabricated or misleading open/close pair. Empty string when the exchange
+    is not one of the modelled groups. Never raises.
+    """
+    if is_continuous_market(ticker):
+        return "\u224824h"
+    ex = _exchange_for(ticker)
+    if ex is None or ex not in _SESSIONS:
+        return ""
+    tzname, (oh, om), (ch, cm) = _SESSIONS[ex]
+    label = _SESSION_LABEL.get(ex, "")
+    hours = f"{oh:02d}:{om:02d}\u2013{ch:02d}:{cm:02d}"
+    return f"{hours} {label}".strip()
+
+
 def market_session_age_seconds(
     ticker: str,
     observed_at: datetime,
@@ -248,6 +279,21 @@ MARKETS: list[tuple[str, str, str]] = [
     ("US 5-Yr", "^FVX", "US"),
     ("US 10-Yr", "^TNX", "US"),
     ("US 30-Yr", "^TYX", "US"),
+    # US index futures (CME/CBOT E-mini contracts), right after their cash
+    # index. Their own name already carries "(FUT)" -- not left to the
+    # render-time auto-suffix in _row() -- because otherwise this name would
+    # collide with the cash index's ("S&P 500" listed twice), which breaks
+    # any lookup keyed by name (fetch_market_quotes results included). Trade
+    # nearly around the clock (Sun 18:00 \u2013 Fri 17:00 ET, with a short
+    # daily maintenance break) rather than the cash session above them,
+    # hence is_continuous_market()/session_caption() treat every "=F" ticker
+    # as \u224824h rather than stating a fixed open/close pair.
+    # NQ=F tracks the Nasdaq-100 specifically (not the Composite ^IXIC
+    # above), so it is named "Nasdaq 100", not "Nasdaq".
+    ("S&P 500 (FUT)", "ES=F", "US"),        # E-mini S&P
+    ("Dow 30 (FUT)", "YM=F", "US"),         # E-mini Dow
+    ("Nasdaq 100 (FUT)", "NQ=F", "US"),     # E-mini Nasdaq
+    ("Russell 2000 (FUT)", "RTY=F", "US"),  # E-mini Russell
     # Europe — equity indices + a German 10Y reference. Yahoo exposes no
     # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
     # government-bond ETF proxy: iShares eb.rexx Government Germany 5.5-10.5yr
