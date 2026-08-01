@@ -57,11 +57,12 @@
     {# The STATE tiles used to collapse to one column below 520px — meant as
        a narrow-pane fallback, but every phone viewport is narrower than
        that, so the "grid" never actually rendered as a grid for its one
-       reader: nine tiles, one per line, on every read. Two fixed 50%
-       columns (status.html.j2) comfortably clear the widest tile value
-       ("€234,579" at 22px monospace, ~120px) on any phone from an iPhone SE
-       up, so there is no width at which this mail is actually read where a
-       further collapse is needed — hence no breakpoint here at all. #}
+       reader: nine tiles, one per line, on every read. Three fixed 33.33%
+       columns (status.html.j2) hold their structure at any width down to
+       an iPhone SE — the widest tile value ("€234,579" at 22px monospace,
+       ~120px) wraps to a second line inside its own cell on the narrowest
+       phones rather than breaking the grid — so there is no width at which
+       a further collapse is needed, hence no breakpoint here at all. #}
   </style>
 </head>
 {% set secn = namespace(n=0) %}
