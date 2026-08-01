@@ -16,9 +16,6 @@
       .container { width: 100% !important; }
       .px-32     { padding-left: 18px !important; padding-right: 18px !important; }
     }
-    @media only screen and (max-width: 520px) {
-      .kpi-cell  { display: block !important; width: 100% !important; box-sizing: border-box; }
-    }
   </style>
 </head>
 <body style="margin:0;padding:0;background:#05090D;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;color:#E6EDF6;">
@@ -66,36 +63,40 @@
                   <td style="padding:16px 18px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;">
                       <tr>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">Portfolio</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#E6EDF6;">€19,650</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">invested €19.6k</div>
                         </td>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">Total P&L</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+€2.5k</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">+14.24% on contributed capital</div>
-                        </td>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
-                          <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">Unrealized P&L</div>
-                          <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+€2.5k</div>
-                          <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">+14.24% on open positions</div>
                         </td>
                       </tr>
                     </table>
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;margin-top:14px;">
                       <tr>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
+                          <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">Unrealized P&L</div>
+                          <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+€2.5k</div>
+                          <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">+14.24% on open positions</div>
+                        </td>
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">TWROR</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+15.38%</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">time-weighted · +33.89% annualized</div>
                         </td>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                      </tr>
+                    </table>
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;margin-top:14px;">
+                      <tr>
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">MWR</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+32.77%</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">money-weighted (XIRR) · +32.77% net of tax</div>
                         </td>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">CAGR</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+34.33%</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">compound annual growth</div>
@@ -104,17 +105,16 @@
                     </table>
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;margin-top:14px;">
                       <tr>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">Session</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#2FBF71;">+0.23%</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">+€15 · market closed</div>
                         </td>
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="50%" style="width:50%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:#8FA3BC;text-transform:uppercase;">TER</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:#E6EDF6;">0.000%</div>
                           <div style="margin-top:2px;font-size:10px;color:#8FA3BC;line-height:1.4;">weighted average, annual</div>
                         </td>
-                        <td width="33.33%" style="width:33.33%;">&nbsp;</td>
                       </tr>
                     </table>
                   </td>

@@ -153,14 +153,16 @@ class TestNewsletterGoldenHtml:
         assert not re.search(r'src\s*=\s*["\']https?://', html, re.I)
         assert not re.search(r'@import|<link[^>]+stylesheet', html, re.I)
 
-    def test_kpi_tiles_stack_later_than_the_frame_reflows(self, rendered):
-        """The KPI grid must survive a reading pane narrower than the card.
+    def test_kpi_tiles_never_collapse_to_one_column(self, rendered):
+        """The STATE grid must hold two columns at every width it is actually
+        read at, with no narrow-viewport rule collapsing it further.
 
-        Stacking the tiles at the container's own width (620px) collapsed the
-        three-column STATE grid into one column in any desktop pane merely
-        narrower than the card — Apple Mail's default among them — while three
-        columns still fit. The stack belongs at a width where a tile's value
-        would actually clip, strictly below the frame reflow.
+        A narrow-pane fallback used to stack the tiles one per line below
+        520px — meant for a pane narrower than the card, but every phone
+        viewport is narrower than that, so it fired unconditionally on the
+        one device this mail is read on: nine tiles, one per line, every
+        time. Two 50% columns clear the widest tile value at any width down
+        to an iPhone SE, so no such rule should exist any more.
         """
         html, _m, _c = rendered
         breakpoints = {
@@ -172,27 +174,17 @@ class TestNewsletterGoldenHtml:
         }
         stack = [w for w, body in breakpoints.items() if "kpi-cell" in body]
         reflow = [w for w, body in breakpoints.items() if ".container" in body]
-        assert len(stack) == 1 and len(reflow) == 1, breakpoints.keys()
-        assert stack[0] < reflow[0], (
-            f"KPI tiles stack at {stack[0]}px but the frame reflows at "
-            f"{reflow[0]}px — every pane between them loses the grid"
-        )
-        # A typical desktop reading pane keeps all three columns.
-        assert stack[0] < 603
+        assert not stack, f"the STATE grid must not collapse at any width: {stack}"
+        assert len(reflow) == 1, breakpoints.keys()
 
     def test_state_grid_does_not_depend_on_the_breakpoint_alone(self, rendered):
-        """The tiles must hold three columns even where media queries do not run.
+        """The tiles must hold two columns even where media queries do not run.
 
-        Moving the KPI breakpoint was necessary but not sufficient: Apple Mail
-        still stacked the tiles, because the cells carried only a percentage
-        width. A client is then free to auto-size columns to their content, and
-        WebKit's text inflation makes a 22px monospace value in a widthless cell
-        demand more than its third — the row overflows and the cells stack, with
-        no media query involved.
-
-        Two declarations prevent that, and both must survive: fixed table layout
-        (declared widths are authoritative) and text-size-adjust:100% (declared
-        font sizes are the rendered ones).
+        Fixed table layout (declared widths are authoritative) and
+        text-size-adjust:100% (declared font sizes are the rendered ones)
+        both keep a client from auto-sizing a column to an inflated
+        monospace value and overflowing the row — independent of whether
+        any media query in the document runs at all.
         """
         html, _m, _c = rendered
         assert "-webkit-text-size-adjust: 100%" in html, (
@@ -203,12 +195,12 @@ class TestNewsletterGoldenHtml:
             r'<table[^>]*style="table-layout:fixed;[^"]*"[^>]*>\s*<tr>(.*?)</tr>',
             html, re.S,
         )
-        tile_rows = [r for r in rows if "kpi-cell" in r]
+        tile_rows = [r for r in rows if 'width="50%"' in r]
         assert tile_rows, "the STATE grid must use a fixed table layout"
         for row in tile_rows:
             cells = re.findall(r'<td[^>]*style="width:([0-9.]+)%', row)
             assert len(cells) >= 1, "each tile cell needs an explicit CSS width"
-            assert all(abs(float(c) - 33.33) < 0.01 for c in cells), cells
+            assert all(abs(float(c) - 50.0) < 0.01 for c in cells), cells
 
 
 class TestSectionNumbering:
