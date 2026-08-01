@@ -16,6 +16,18 @@
                     {# Optional tiles are absent from hero.tiles rather than
                        blank, and the grid closes the row it is on, so a short
                        list never leaves an empty box. #}
+                    {# Three columns, no narrow-viewport collapse: the
+                       narrow-pane fallback that used to kick in here
+                       (.kpi-cell: display:block; width:100%) fired on every
+                       phone, since every phone viewport is narrower than its
+                       520px trigger — the grid never actually rendered as a
+                       grid for its one reader. Fixed table layout (below)
+                       keeps the three 33.33% columns structurally intact at
+                       any width; the widest tile value ("€234,579" at 22px
+                       monospace, ~120px) wraps to a second line inside its
+                       own cell on the narrowest phones rather than breaking
+                       the grid — that is the accepted tradeoff for holding
+                       three columns everywhere. #}
                     {# ``table-layout:fixed`` makes the three declared 33.33%
                        columns authoritative. Without it the client is free to
                        auto-size columns to their content, and a long monospace
@@ -27,7 +39,7 @@
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;{% if not loop.first %}margin-top:14px;{% endif %}">
                       <tr>
                         {% for t in row %}
-                        <td class="kpi-cell" width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
                           <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:{{ palette.muted }};text-transform:uppercase;">{{ t.label }}</div>
                           <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
                           <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.4;">{{ t.caption }}</div>

@@ -39,12 +39,11 @@
   <title>Tarzan Portfolio Digest</title>
   <style>
     {# Apple Mail (and iOS WebKit) auto-inflate text in a table cell that has no
-       intrinsic width, which is exactly what a 22px monospace value in a 33%
-       cell is. Inflated glyphs make each STATE tile demand more than its third,
-       the row overflows, and the client stacks the cells one per line —
-       regardless of any media query, which is why moving the KPI breakpoint to
-       520px in 53834dc did not fix the mail. Pin the adjustment off so the
-       declared sizes are the rendered sizes. #}
+       intrinsic width. Fixed table layout plus an explicit CSS width on every
+       STATE tile cell (below, in status.html.j2) keeps the declared columns
+       authoritative regardless, so inflated glyphs wrap or clip inside their
+       own tile instead of overflowing the row. Pin the adjustment off too, so
+       the declared sizes are the rendered ones and nothing needs to wrap. #}
     body, table, td, div, span { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; text-size-adjust: 100%; }
     body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; }
     table { border-collapse: collapse; }
@@ -55,17 +54,15 @@
       .container { width: 100% !important; }
       .px-32     { padding-left: 18px !important; padding-right: 18px !important; }
     }
-    {# Stacking the KPI tiles is a SEPARATE, later breakpoint. Tying it to the
-       620px container width collapsed the three-column grid in any reading
-       pane merely narrower than the card -- Apple Mail's default desktop pane
-       among them -- which stacked nine tiles into one column with room to
-       spare. At 520px the content column is ~460px wide, so each of three
-       tiles gets ~153px against a widest value ("€234,579" at 22px monospace)
-       of ~120px. Narrower than that the value itself would clip, and one tile
-       per line becomes the correct layout. #}
-    @media only screen and (max-width: 520px) {
-      .kpi-cell  { display: block !important; width: 100% !important; box-sizing: border-box; }
-    }
+    {# The STATE tiles used to collapse to one column below 520px — meant as
+       a narrow-pane fallback, but every phone viewport is narrower than
+       that, so the "grid" never actually rendered as a grid for its one
+       reader: nine tiles, one per line, on every read. Three fixed 33.33%
+       columns (status.html.j2) hold their structure at any width down to
+       an iPhone SE — the widest tile value ("€234,579" at 22px monospace,
+       ~120px) wraps to a second line inside its own cell on the narrowest
+       phones rather than breaking the grid — so there is no width at which
+       a further collapse is needed, hence no breakpoint here at all. #}
   </style>
 </head>
 {% set secn = namespace(n=0) %}
