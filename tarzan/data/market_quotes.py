@@ -359,7 +359,8 @@ MARKETS: list[tuple[str, str, str]] = [
     # together since they are all US-market references.
     ("S&P 500", "^GSPC", "US"),
     ("Dow 30", "^DJI", "US"),
-    ("Nasdaq", "^IXIC", "US"),
+    ("Nasdaq Composite", "^IXIC", "US"),
+    ("Nasdaq 100", "^NDX", "US"),
     ("Russell 2000", "^RUT", "US"),
     ("VIX", "^VIX", "US"),
     ("US 13-Wk", "^IRX", "US"),
@@ -374,12 +375,12 @@ MARKETS: list[tuple[str, str, str]] = [
     # nearly around the clock but not literally 24/7 (see
     # futures_open_now()/market_status() for the real Globex weekly + daily
     # schedule) rather than the cash session above them.
-    # NQ=F technically tracks the Nasdaq-100, not the Composite (^IXIC
-    # above) -- named "Nasdaq" to match its cash counterpart anyway, since
-    # that is the pairing that reads clearly in the table.
+    # NQ=F tracks the Nasdaq-100 specifically, which now sits above as its
+    # own cash entry (distinct from the Composite, ^IXIC) -- named
+    # "Nasdaq 100 (FUT)" to pair with it directly.
     ("S&P 500 (FUT)", "ES=F", "US"),     # E-mini S&P
     ("Dow 30 (FUT)", "YM=F", "US"),      # E-mini Dow
-    ("Nasdaq (FUT)", "NQ=F", "US"),      # E-mini Nasdaq (tracks the Nasdaq-100)
+    ("Nasdaq 100 (FUT)", "NQ=F", "US"),  # E-mini Nasdaq
     ("Russell 2000 (FUT)", "RTY=F", "US"),  # E-mini Russell
     # Europe — equity indices + a German 10Y reference. Yahoo exposes no
     # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
