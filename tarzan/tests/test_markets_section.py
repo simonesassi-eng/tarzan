@@ -2,10 +2,11 @@
 whether its exchange is open right now, not just level/change/sparkline.
 
 Before this, a reader saw a mix of markets on different session clocks
-(US/Europe/Asia/futures/FX) with no stated hours and no way to tell
-whether a level was live or from a closed session. Network-free: quotes
-are injected directly, and market_open_now is monkeypatched so the open/
-closed outcome does not depend on when the suite happens to run.
+(US/Europe/Asia/futures/FX) with no stated hours, no way to tell whether a
+level was live or from a closed session, and (for "Open"/"Closed" itself)
+no stated day to pin the status to. Network-free: quotes are injected
+directly, and market_status is monkeypatched so the open/closed/day
+outcome does not depend on when the suite happens to run.
 """
 
 from __future__ import annotations
@@ -37,33 +38,64 @@ _SAMPLE = [
 ]
 
 
-def test_cash_index_shows_hours_and_open_badge():
+def test_cash_index_shows_hours_open_badge_and_day():
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
-         mock.patch.object(mq, "market_open_now", return_value=True):
+         mock.patch.object(mq, "market_status",
+                           return_value=(True, "Tue")):
         html = _build_markets(_ctx())["html"]
     assert "09:30\u201316:00 ET" in html
-    assert "&#9679;</span> Open" in html
+    assert "&#9679;</span> Open Tue" in html
 
 
-def test_cash_index_shows_closed_badge_when_market_open_now_is_false():
+def test_cash_index_shows_closed_badge_and_day():
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
-         mock.patch.object(mq, "market_open_now", return_value=False):
+         mock.patch.object(mq, "market_status",
+                           return_value=(False, "Fri")):
         html = _build_markets(_ctx())["html"]
-    assert "&#9679;</span> Closed" in html
+    assert "&#9679;</span> Closed Fri" in html
 
 
-def test_futures_show_approx_24h_with_no_open_closed_badge():
+def test_chg_column_shows_only_percent_not_the_absolute_value():
+    # Saves the width the day label now needs: +0.20% shows, the +10.0
+    # points/€ that used to sit underneath it does not.
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
-         mock.patch.object(mq, "market_open_now", return_value=True):
+         mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
         html = _build_markets(_ctx())["html"]
-    # "S&P 500 (FUT)" is rendered with its own \u224824h line, not the cash
-    # index's hours/status, and the FUT tag is not doubled by the
-    # render-time auto-suffix (name already carries it in MARKETS).
+    assert "+0.20%" in html
+    assert "+10.0" not in html
+    assert "+12.0" not in html
+
+
+def test_futures_show_open_status_and_day_not_the_cash_hours():
+    mq._memo = None
+    with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
+         mock.patch.object(mq, "market_status",
+                           side_effect=lambda sym, now=None: (
+                               (True, "Tue") if sym == "^GSPC"
+                               else (True, "Mon"))):
+        html = _build_markets(_ctx())["html"]
+    # "S&P 500 (FUT)" gets its own \u224824h line and its own day/status,
+    # not the cash index's hours or its day, and the FUT tag is not
+    # doubled by the render-time auto-suffix (name already carries it).
     fut_pos = html.index("S&P 500 (FUT)")
-    fut_chunk = html[fut_pos:fut_pos + 200]
+    fut_chunk = html[fut_pos:fut_pos + 250]
     assert "\u224824h" in fut_chunk
-    assert "Open" not in fut_chunk and "Closed" not in fut_chunk
+    assert "Open Mon" in fut_chunk
+    assert "09:30" not in fut_chunk  # not the cash index's hours
     assert "(FUT) (FUT)" not in html
+
+
+def test_futures_show_closed_with_day_over_the_weekend():
+    mq._memo = None
+    with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
+         mock.patch.object(mq, "market_status",
+                           side_effect=lambda sym, now=None: (
+                               (False, "Fri") if sym == "ES=F"
+                               else (False, "Fri"))):
+        html = _build_markets(_ctx())["html"]
+    fut_pos = html.index("S&P 500 (FUT)")
+    fut_chunk = html[fut_pos:fut_pos + 250]
+    assert "Closed Fri" in fut_chunk
