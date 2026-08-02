@@ -295,7 +295,7 @@ def test_session_caption_unknown_exchange_is_empty():
 # ---------------------------------------------------------------------------
 def test_new_index_futures_present_with_correct_ticker_and_category():
     wanted = {"ES=F": "S&P 500 (FUT)", "YM=F": "Dow 30 (FUT)",
-              "NQ=F": "Nasdaq (FUT)", "RTY=F": "Russell 2000 (FUT)"}
+              "NQ=F": "Nasdaq 100 (FUT)", "RTY=F": "Russell 2000 (FUT)"}
     by_ticker = {t: n for n, t, c in mq.MARKETS}
     for ticker, name in wanted.items():
         assert by_ticker.get(ticker) == name, ticker
@@ -304,6 +304,19 @@ def test_new_index_futures_present_with_correct_ticker_and_category():
     for ticker in wanted:
         assert cats[ticker] == "US"
         assert mq.is_continuous_market(ticker)
+
+
+def test_nasdaq_composite_and_100_are_both_present_and_distinct():
+    # Composite (^IXIC), 100 (^NDX) and the 100's futures (NQ=F) all show
+    # up as their own entries -- three genuinely different things, not one
+    # collapsed into another.
+    by_ticker = {t: n for n, t, c in mq.MARKETS}
+    assert by_ticker["^IXIC"] == "Nasdaq Composite"
+    assert by_ticker["^NDX"] == "Nasdaq 100"
+    assert by_ticker["NQ=F"] == "Nasdaq 100 (FUT)"
+    cats = {t: c for _n, t, c in mq.MARKETS}
+    assert cats["^NDX"] == "US"
+    assert not mq.is_continuous_market("^NDX")
 
 
 def test_markets_names_are_unique():
