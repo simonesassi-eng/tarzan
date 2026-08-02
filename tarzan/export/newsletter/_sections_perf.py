@@ -75,10 +75,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def session_caption(_ticker):  # safe default if the import fails
         return ""
 
+    def market_status(_ticker, _now=None):  # safe default if the import fails
+        return None, ""
+
     try:
         from tarzan.data.market_quotes import (fetch_market_quotes, CATEGORY_ORDER,
                                                market_open_now, is_continuous_market,
-                                               session_caption)
+                                               session_caption, market_status)
         snap = fetch_market_quotes()
     except Exception:  # noqa: BLE001
         snap, CATEGORY_ORDER = [], []
@@ -110,22 +113,25 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                           w=44, h=20, stretch=False)
 
     def _hours_line(d: dict) -> str:
-        """Local trading hours + an open/closed dot for a bounded cash
-        session, or the \u224824h caption alone for a continuously traded
-        instrument (futures/FX/crypto have no open/closed to state)."""
+        """Local trading hours (or \u224824h for a continuously traded
+        instrument) plus an open/closed dot and the calendar day that
+        status refers to \u2014 so "Closed" is never ambiguous about which
+        session it means, and "Open" about which day is live."""
         sym = d.get("symbol", "")
         cap = session_caption(sym)
         if not cap:
             return ""
-        if is_continuous_market(sym):
+        is_open, day = market_status(sym)
+        if is_open is None:
             return (f'<div style="font-size:8px;color:{P["subtle"]};'
                     f'margin-top:1px;">{cap}</div>')
-        is_open = market_open_now(sym)
         dot_col = P["green"] if is_open else P["subtle"]
         status = "Open" if is_open else "Closed"
+        day_suffix = f" {day}" if day else ""
         return (f'<div style="font-size:8px;color:{P["subtle"]};'
                 f'margin-top:1px;">{cap} &middot; '
-                f'<span style="color:{dot_col};">&#9679;</span> {status}</div>')
+                f'<span style="color:{dot_col};">&#9679;</span> '
+                f'{status}{day_suffix}</div>')
 
     def _row(d: dict) -> str:
         up = d["pct"] >= 0
@@ -155,9 +161,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             # drawing negatives with a different, shorter glyph than the
             # thirty-odd other tables around it.
             f'<td align="right" style="{td}font-size:10px;font-weight:700;'
-            f'color:{col};white-space:nowrap;">{_signed(d["pct"], 2)}%'
-            f'<div style="font-size:8.5px;font-weight:600;color:{P["subtle"]};">'
-            f'{_signed(d["change"], 2, thousands=True)}</div></td>'
+            f'color:{col};white-space:nowrap;">{_signed(d["pct"], 2)}%</td>'
             f'</tr>')
 
     def _region_head(cat: str) -> str:

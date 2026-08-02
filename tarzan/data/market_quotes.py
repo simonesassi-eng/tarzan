@@ -168,6 +168,93 @@ def session_caption(ticker: str) -> str:
     return f"{hours} {label}".strip()
 
 
+def futures_open_now(now: Optional[datetime] = None) -> bool:
+    """Whether CME/CBOT equity index futures (E-mini S&P/Nasdaq/Dow/Russell
+    \u2014 ticker suffix "=F") are inside their Globex trading window right now.
+
+    "\u224824h" (per :func:`session_caption`) means nearly continuous, not
+    literally 24/7: closed over the weekend (Friday 17:00 ET to Sunday
+    18:00 ET) and for a one-hour daily maintenance halt (17:00\u201318:00 ET,
+    Monday\u2013Thursday). All times ET. Does not model CME holiday closures.
+    Defaults to closed (the conservative reading) if local time cannot be
+    computed. Never raises.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(_SESSIONS["US"][0])
+        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+    except Exception:  # noqa: BLE001
+        return False
+    wd, t = n.weekday(), n.time()
+    if wd == 5:  # Saturday: closed all day
+        return False
+    if wd == 6:  # Sunday: the week reopens at 18:00 ET
+        return t >= dtime(18, 0)
+    if wd == 4:  # Friday: closes at 17:00 ET, no reopen the same day
+        return t < dtime(17, 0)
+    # Monday-Thursday: closed only for the 17:00-18:00 ET maintenance break.
+    return not (dtime(17, 0) <= t < dtime(18, 0))
+
+
+_WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _cash_session_day(n: datetime, oh: int, om: int) -> str:
+    """The plain calendar weekday (exchange-local) whose cash session is
+    live right now, or was the most recently completed one: today once
+    today's own session has started, otherwise the previous trading day
+    (walking back over a weekend one weekday further)."""
+    from datetime import timedelta
+    d = n
+    if not (d.weekday() < 5 and d.time() >= dtime(oh, om)):
+        d = d - timedelta(days=1)
+        while d.weekday() >= 5:
+            d = d - timedelta(days=1)
+    return _WD[d.weekday()]
+
+
+def market_status(ticker: str, now: Optional[datetime] = None) -> tuple:
+    """(is_open, weekday_label) for the MARKETS caption: whether trading is
+    live right now, and the plain calendar day that status refers to.
+
+    Unlike :func:`market_open_now`, this always resolves a real yes/no for
+    a CME/CBOT future ("=F") rather than deferring to recency, since that
+    exchange's schedule is itself well known (:func:`futures_open_now`).
+    FX ("=X") and crypto ("-USD") are continuously open with no weekly
+    closure worth stating, so they get ``(True, "")`` \u2014 no day needed
+    when there is never a different one to point to. ``(None, "")`` when no
+    schedule is modelled for the ticker. Never raises.
+    """
+    t = (ticker or "").upper()
+    if t.endswith("-USD") or t.endswith("=X"):
+        return True, ""
+    if t.endswith("=F"):
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(_SESSIONS["US"][0])
+            n = now.astimezone(tz) if now is not None else datetime.now(tz)
+        except Exception:  # noqa: BLE001
+            return None, ""
+        is_open = futures_open_now(n)
+        # Today's calendar day once open, or closed only for today's brief
+        # maintenance break; Friday specifically during the weekend closure
+        # (Saturday, or Sunday before the 18:00 ET reopen), since that is
+        # the day whose session most recently ended.
+        day = _WD[n.weekday()] if (is_open or n.weekday() < 5) else "Fri"
+        return is_open, day
+    ex = _exchange_for(t)
+    if ex is None or ex not in _SESSIONS:
+        return None, ""
+    tzname, (oh, om), (ch, cm) = _SESSIONS[ex]
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tzname)
+        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+    except Exception:  # noqa: BLE001
+        return None, ""
+    return market_open_now(ticker, now), _cash_session_day(n, oh, om)
+
+
 def market_session_age_seconds(
     ticker: str,
     observed_at: datetime,
@@ -284,15 +371,15 @@ MARKETS: list[tuple[str, str, str]] = [
     # render-time auto-suffix in _row() -- because otherwise this name would
     # collide with the cash index's ("S&P 500" listed twice), which breaks
     # any lookup keyed by name (fetch_market_quotes results included). Trade
-    # nearly around the clock (Sun 18:00 \u2013 Fri 17:00 ET, with a short
-    # daily maintenance break) rather than the cash session above them,
-    # hence is_continuous_market()/session_caption() treat every "=F" ticker
-    # as \u224824h rather than stating a fixed open/close pair.
-    # NQ=F tracks the Nasdaq-100 specifically (not the Composite ^IXIC
-    # above), so it is named "Nasdaq 100", not "Nasdaq".
-    ("S&P 500 (FUT)", "ES=F", "US"),        # E-mini S&P
-    ("Dow 30 (FUT)", "YM=F", "US"),         # E-mini Dow
-    ("Nasdaq 100 (FUT)", "NQ=F", "US"),     # E-mini Nasdaq
+    # nearly around the clock but not literally 24/7 (see
+    # futures_open_now()/market_status() for the real Globex weekly + daily
+    # schedule) rather than the cash session above them.
+    # NQ=F technically tracks the Nasdaq-100, not the Composite (^IXIC
+    # above) -- named "Nasdaq" to match its cash counterpart anyway, since
+    # that is the pairing that reads clearly in the table.
+    ("S&P 500 (FUT)", "ES=F", "US"),     # E-mini S&P
+    ("Dow 30 (FUT)", "YM=F", "US"),      # E-mini Dow
+    ("Nasdaq (FUT)", "NQ=F", "US"),      # E-mini Nasdaq (tracks the Nasdaq-100)
     ("Russell 2000 (FUT)", "RTY=F", "US"),  # E-mini Russell
     # Europe — equity indices + a German 10Y reference. Yahoo exposes no
     # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
