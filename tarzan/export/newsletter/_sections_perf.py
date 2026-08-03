@@ -109,8 +109,22 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                            else market_open_now(sym))
             return _intraday_spark(ss, d.get("baseline", d["value"]),
                                    w=44, h=20, in_progress=in_progress)
-        return _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                          w=44, h=20, stretch=False)
+        chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
+                           w=44, h=20, stretch=False)
+        if not chart:
+            return chart
+        # No timestamped intraday series for this ticker -- a real, if
+        # uneven, gap in Yahoo's coverage for some exchanges (mainland
+        # China/Hong Kong among them) -- so this falls back to the last
+        # ~40 daily closes instead. Drawn with the same shape as a live
+        # session path, it looks exactly like one that has been running all
+        # day, with nothing marking it as weeks of history instead: that is
+        # what read as "the market just opened but the chart is already
+        # full" on an index whose "Open Mon" line said it had only just
+        # started. Label matches _flat_dashed_spark's own wording for the
+        # same gap elsewhere in the issue.
+        return (chart + f'<div style="font-size:7px;color:{P["subtle"]};'
+                        f'margin-top:1px;">no intraday</div>')
 
     def _hours_line(d: dict) -> str:
         """Local trading hours (or \u224824h for a continuously traded
