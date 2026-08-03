@@ -269,3 +269,143 @@ def test_memo_serves_within_ttl_and_refetches_after(monkeypatch):
     finally:
         mq._memo = None
         mq._memo_at = 0.0
+
+
+# ---------------------------------------------------------------------------
+# session_caption — trading hours / continuous-market caption
+# ---------------------------------------------------------------------------
+def test_session_caption_continuous_market_shows_approx_24h():
+    for ticker in ("ES=F", "NQ=F", "YM=F", "RTY=F", "EURUSD=X", "BTC-USD"):
+        assert mq.session_caption(ticker) == "\u224824h", ticker
+
+
+def test_session_caption_bounded_session_shows_hours_and_zone():
+    assert mq.session_caption("^GSPC") == "09:30\u201316:00 ET"
+    assert mq.session_caption("^FTSE") == "08:00\u201316:30 GMT"
+    assert mq.session_caption("^N225") == "09:00\u201315:00 JST"
+
+
+def test_session_caption_unknown_exchange_is_empty():
+    assert mq.session_caption("SOME.XX") == ""
+    assert mq.session_caption("") == ""
+
+
+# ---------------------------------------------------------------------------
+# New US index futures — must not collide in name with their cash index
+# ---------------------------------------------------------------------------
+def test_new_index_futures_present_with_correct_ticker_and_category():
+    wanted = {"ES=F": "S&P 500 (FUT)", "YM=F": "Dow 30 (FUT)",
+              "NQ=F": "Nasdaq 100 (FUT)", "RTY=F": "Russell 2000 (FUT)"}
+    by_ticker = {t: n for n, t, c in mq.MARKETS}
+    for ticker, name in wanted.items():
+        assert by_ticker.get(ticker) == name, ticker
+
+    cats = {t: c for _n, t, c in mq.MARKETS}
+    for ticker in wanted:
+        assert cats[ticker] == "US"
+        assert mq.is_continuous_market(ticker)
+
+
+def test_nasdaq_composite_and_100_are_both_present_and_distinct():
+    # Composite (^IXIC), 100 (^NDX) and the 100's futures (NQ=F) all show
+    # up as their own entries -- three genuinely different things, not one
+    # collapsed into another.
+    by_ticker = {t: n for n, t, c in mq.MARKETS}
+    assert by_ticker["^IXIC"] == "Nasdaq Composite"
+    assert by_ticker["^NDX"] == "Nasdaq 100"
+    assert by_ticker["NQ=F"] == "Nasdaq 100 (FUT)"
+    cats = {t: c for _n, t, c in mq.MARKETS}
+    assert cats["^NDX"] == "US"
+    assert not mq.is_continuous_market("^NDX")
+
+
+def test_markets_names_are_unique():
+    # A duplicate name (e.g. a futures entry sharing its cash index's name)
+    # collides in any lookup keyed by name, fetch_market_quotes results
+    # included -- this is what test_intraday_path_sets_baseline_to_prior_close
+    # would have caught if ES=F had been added as bare "S&P 500".
+    names = [n for n, _t, _c in mq.MARKETS]
+    assert len(names) == len(set(names)), (
+        [n for n in names if names.count(n) > 1]
+    )
+
+
+# ---------------------------------------------------------------------------
+# futures_open_now / market_status — real CME Globex schedule, not literal
+# 24/7. Reference dates: 2024-01-01 is a known Monday, so 01-05/06/07 are
+# Fri/Sat/Sun and 01-08 is the following Monday.
+# ---------------------------------------------------------------------------
+def _et(y, m, d, hh, mm):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime(y, m, d, hh, mm, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_futures_open_now_weekday_daytime_is_open():
+    assert mq.futures_open_now(_et(2024, 1, 8, 10, 0)) is True   # Monday
+
+
+def test_futures_open_now_saturday_is_closed():
+    assert mq.futures_open_now(_et(2024, 1, 6, 12, 0)) is False  # Saturday
+
+
+def test_futures_open_now_sunday_before_reopen_is_closed():
+    assert mq.futures_open_now(_et(2024, 1, 7, 17, 59)) is False
+
+
+def test_futures_open_now_sunday_at_reopen_is_open():
+    assert mq.futures_open_now(_et(2024, 1, 7, 18, 0)) is True
+
+
+def test_futures_open_now_friday_before_close_is_open():
+    assert mq.futures_open_now(_et(2024, 1, 5, 16, 59)) is True
+
+
+def test_futures_open_now_friday_at_close_is_closed():
+    assert mq.futures_open_now(_et(2024, 1, 5, 17, 0)) is False
+
+
+def test_futures_open_now_daily_maintenance_break_is_closed():
+    assert mq.futures_open_now(_et(2024, 1, 8, 17, 30)) is False  # Monday
+    assert mq.futures_open_now(_et(2024, 1, 8, 18, 0)) is True    # break ends
+
+
+def test_market_status_continuous_instruments_have_no_day():
+    assert mq.market_status("BTC-USD") == (True, "")
+    assert mq.market_status("EURUSD=X") == (True, "")
+
+
+def test_market_status_futures_open_shows_todays_day():
+    assert mq.market_status("ES=F", _et(2024, 1, 8, 10, 0)) == (True, "Mon")
+    # Reopened Sunday evening: today (Sunday), not Friday.
+    assert mq.market_status("ES=F", _et(2024, 1, 7, 19, 0)) == (True, "Sun")
+
+
+def test_market_status_futures_weekend_closure_shows_friday():
+    assert mq.market_status("ES=F", _et(2024, 1, 6, 12, 0)) == (False, "Fri")
+    assert mq.market_status("ES=F", _et(2024, 1, 7, 10, 0)) == (False, "Fri")
+
+
+def test_market_status_futures_daily_break_shows_today_not_friday():
+    # Monday 17:30 ET: closed for the hour-long break, but still Monday's
+    # session, not the prior week's Friday.
+    assert mq.market_status("ES=F", _et(2024, 1, 8, 17, 30)) == (False, "Mon")
+
+
+def test_market_status_cash_market_open_shows_today():
+    is_open, day = mq.market_status("^GSPC", _et(2024, 1, 8, 10, 0))  # Mon
+    assert is_open is True and day == "Mon"
+
+
+def test_market_status_cash_market_before_open_shows_previous_weekday():
+    is_open, day = mq.market_status("^GSPC", _et(2024, 1, 8, 7, 0))  # Mon 7am
+    assert is_open is False and day == "Fri"  # last session was Friday
+
+
+def test_market_status_cash_market_weekend_shows_friday():
+    is_open, day = mq.market_status("^GSPC", _et(2024, 1, 6, 12, 0))  # Sat
+    assert is_open is False and day == "Fri"
+
+
+def test_market_status_unknown_ticker_is_none():
+    assert mq.market_status("SOME.XX") == (None, "")
