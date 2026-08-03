@@ -99,3 +99,38 @@ def test_futures_show_closed_with_day_over_the_weekend():
     fut_pos = html.index("S&P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
     assert "Closed Fri" in fut_chunk
+
+
+def test_daily_close_fallback_chart_is_labelled_no_intraday():
+    # No timestamped spark_series (as happens for some exchanges, mainland
+    # China/Hong Kong among them, per a real Yahoo data gap) means _spark_for
+    # falls back to the daily-close history. Drawn the same way as a real
+    # session path, that used to be indistinguishable from one -- exactly
+    # what read as "the market just opened but the chart is already full".
+    sample = [{"name": "SSE Composite", "symbol": "000001.SS",
+               "category": "Asia", "value": 3200.0, "change": 5.0,
+               "pct": 0.16, "spark": [3150.0 + i for i in range(40)],
+               "baseline": 3195.0}]  # no "spark_series" key at all
+    mq._memo = None
+    with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
+         mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
+        html = _build_markets(_ctx())["html"]
+    assert "no intraday" in html
+
+
+def test_real_intraday_chart_is_not_labelled_no_intraday():
+    import pandas as pd
+    intra = pd.Series(
+        [3190.0, 3193.0, 3196.0],
+        index=pd.to_datetime(["2026-08-03 09:30", "2026-08-03 09:45",
+                              "2026-08-03 10:00"]),
+    )
+    sample = [{"name": "Nikkei 225", "symbol": "^N225", "category": "Asia",
+               "value": 3196.0, "change": 6.0, "pct": 0.19,
+               "spark": [3190.0, 3193.0, 3196.0], "baseline": 3190.0,
+               "spark_series": intra}]
+    mq._memo = None
+    with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
+         mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
+        html = _build_markets(_ctx())["html"]
+    assert "no intraday" not in html
