@@ -365,7 +365,8 @@ def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
 
 def _intraday_spark(intra: "pd.Series", baseline: float,
                     w: int = 62, h: int = 22,
-                    in_progress: Optional[bool] = None) -> str:
+                    in_progress: Optional[bool] = None,
+                    session_hours: Optional[float] = None) -> str:
     """Intraday sparkline on a full-session time axis.
 
     Unlike the stretched ``_day_spark`` (which spreads N points across the
@@ -380,7 +381,16 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     ``in_progress`` says whether the market is trading *now*: when the caller
     knows this (from exchange hours) it should pass it explicitly so a closed
     same-day session renders full width even if its last bar is recent. When
-    None, it is inferred from bar recency (FX/futures fallback)."""
+    None, it is inferred from bar recency (a fallback for when the caller has
+    no exchange-hours signal at all, not the normal path for futures/FX,
+    which do have one via market_status()).
+
+    ``session_hours`` overrides the 6.5h/8.5h cash-session heuristic below
+    for a continuously traded instrument (futures ~23h, FX ~24h) -- without
+    it, a bar an hour into a 23-hour session would be placed as if the
+    session were 6.5-8.5 hours long, clamped to the right edge and making a
+    just-opened market look like a nearly complete one.
+    """
     global _day_spark_uid
     ts = list(intra.index)
     vals = [float(x) for x in intra.values]
@@ -402,13 +412,17 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
         except Exception:  # noqa: BLE001
             in_progress = False
     if in_progress:
-        # Session length from the open's UTC hour (yfinance returns intraday
-        # timestamps in UTC): US cash opens ~13:30 UTC, Europe ~07:00 UTC.
-        try:
-            oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
-        except Exception:  # noqa: BLE001
-            oh = 8
-        sess = (6.5 if oh >= 12 else 8.5) * 3600.0
+        if session_hours is not None:
+            sess = session_hours * 3600.0
+        else:
+            # Session length from the open's UTC hour (yfinance returns
+            # intraday timestamps in UTC): US cash opens ~13:30 UTC, Europe
+            # ~07:00 UTC.
+            try:
+                oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
+            except Exception:  # noqa: BLE001
+                oh = 8
+            sess = (6.5 if oh >= 12 else 8.5) * 3600.0
 
         def _xpos(t) -> float:
             try:
