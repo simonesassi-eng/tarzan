@@ -102,13 +102,26 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         sym = d.get("symbol", "")
         ss = d.get("spark_series")
         if ss is not None and len(ss) >= 2:
-            # Continuous instruments (futures/FX/crypto) have no bounded cash
-            # session, so they draw full width; exchange-listed ones grow
-            # through their session while it is open.
-            in_progress = (False if is_continuous_market(sym)
-                           else market_open_now(sym))
+            up = str(sym).upper()
+            if up.endswith("=F") or up.endswith("=X"):
+                # Futures/FX are nearly continuous but not literally 24/7
+                # (market_status models the real weekly cycle) -- forcing
+                # in_progress=False stretched a chart an hour into its
+                # ~23-24h window to fill the full cell, making it look like
+                # a completed session when only a fraction had elapsed.
+                is_open, _day = market_status(sym)
+                in_progress = bool(is_open)
+                sess_hours = 23.0 if up.endswith("=F") else 24.0
+            else:
+                # Crypto (-USD) never closes and has no session boundary to
+                # grow from, so it keeps the full-width view. Exchange-listed
+                # instruments grow through their bounded session while open.
+                in_progress = (False if is_continuous_market(sym)
+                              else market_open_now(sym))
+                sess_hours = None
             return _intraday_spark(ss, d.get("baseline", d["value"]),
-                                   w=44, h=20, in_progress=in_progress)
+                                   w=44, h=20, in_progress=in_progress,
+                                   session_hours=sess_hours)
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
                            w=44, h=20, stretch=False)
         if not chart:
