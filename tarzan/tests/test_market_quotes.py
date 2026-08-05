@@ -370,9 +370,26 @@ def test_futures_open_now_daily_maintenance_break_is_closed():
     assert mq.futures_open_now(_et(2024, 1, 8, 18, 0)) is True    # break ends
 
 
+def test_fx_open_now_weekday_is_open_no_daily_break():
+    assert mq.fx_open_now(_et(2024, 1, 8, 10, 0)) is True   # Monday
+    assert mq.fx_open_now(_et(2024, 1, 8, 17, 30)) is True  # no CME-style break
+
+
+def test_fx_open_now_weekend_closure():
+    assert mq.fx_open_now(_et(2024, 1, 6, 12, 0)) is False        # Saturday
+    assert mq.fx_open_now(_et(2024, 1, 7, 16, 59)) is False       # Sun pre-reopen
+    assert mq.fx_open_now(_et(2024, 1, 7, 17, 0)) is True         # Sun reopen
+    assert mq.fx_open_now(_et(2024, 1, 5, 16, 59)) is True        # Fri pre-close
+    assert mq.fx_open_now(_et(2024, 1, 5, 17, 0)) is False        # Fri close
+
+
 def test_market_status_continuous_instruments_have_no_day():
     assert mq.market_status("BTC-USD") == (True, "")
-    assert mq.market_status("EURUSD=X") == (True, "")
+
+
+def test_market_status_fx_has_real_weekly_status():
+    assert mq.market_status("EURUSD=X", _et(2024, 1, 8, 10, 0)) == (True, "Mon")
+    assert mq.market_status("EURUSD=X", _et(2024, 1, 6, 12, 0)) == (False, "Fri")
 
 
 def test_market_status_futures_open_shows_todays_day():
