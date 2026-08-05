@@ -213,29 +213,55 @@ def _cash_session_day(n: datetime, oh: int, om: int) -> str:
     return _WD[d.weekday()]
 
 
+def fx_open_now(now: Optional[datetime] = None) -> bool:
+    """Whether FX spot (Yahoo ticker suffix "=X") is trading right now.
+
+    24/5, not 24/7: closed from Friday 17:00 ET (New York close) to Sunday
+    17:00 ET (the conventional "Sydney open" reference, stated in New York
+    time so it moves with New York's own DST the same way the close does
+    -- this matches 22:00 UTC in winter / 21:00 UTC in summer for both
+    edges). Unlike CME futures, FX has no daily maintenance halt. All times
+    ET. Defaults to closed if local time cannot be computed. Never raises.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(_SESSIONS["US"][0])
+        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+    except Exception:  # noqa: BLE001
+        return False
+    wd, t = n.weekday(), n.time()
+    if wd == 5:
+        return False
+    if wd == 6:
+        return t >= dtime(17, 0)
+    if wd == 4:
+        return t < dtime(17, 0)
+    return True
+
+
 def market_status(ticker: str, now: Optional[datetime] = None) -> tuple:
     """(is_open, weekday_label) for the MARKETS caption: whether trading is
     live right now, and the plain calendar day that status refers to.
 
     Unlike :func:`market_open_now`, this always resolves a real yes/no for
-    a CME/CBOT future ("=F") rather than deferring to recency, since that
-    exchange's schedule is itself well known (:func:`futures_open_now`).
-    FX ("=X") and crypto ("-USD") are continuously open with no weekly
-    closure worth stating, so they get ``(True, "")`` \u2014 no day needed
-    when there is never a different one to point to. ``(None, "")`` when no
-    schedule is modelled for the ticker. Never raises.
+    a CME/CBOT future ("=F") or FX pair ("=X") rather than deferring to
+    recency, since both schedules are well known (:func:`futures_open_now`,
+    :func:`fx_open_now`). Crypto ("-USD") is continuously open with no
+    weekly closure worth stating, so it gets ``(True, "")`` \u2014 no day
+    needed when there is never a different one to point to. ``(None, "")``
+    when no schedule is modelled for the ticker. Never raises.
     """
     t = (ticker or "").upper()
-    if t.endswith("-USD") or t.endswith("=X"):
+    if t.endswith("-USD"):
         return True, ""
-    if t.endswith("=F"):
+    if t.endswith("=F") or t.endswith("=X"):
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(_SESSIONS["US"][0])
             n = now.astimezone(tz) if now is not None else datetime.now(tz)
         except Exception:  # noqa: BLE001
             return None, ""
-        is_open = futures_open_now(n)
+        is_open = futures_open_now(n) if t.endswith("=F") else fx_open_now(n)
         # Today's calendar day once open, or closed only for today's brief
         # maintenance break; Friday specifically during the weekend closure
         # (Saturday, or Sunday before the 18:00 ET reopen), since that is
