@@ -431,3 +431,30 @@ def test_plan_cost_buy_only_has_no_cgt():
     cost = plan_cost([{"idx": 0, "direction": "buy", "amount_eur": 500.0}], holdings, cfg)
     assert cost["cgt_eur"] == 0.0          # no sells → no CGT
     assert cost["fees_eur"] == pytest.approx(19.0)
+
+
+def test_seed_skips_held_fund_via_openfigi_profile(monkeypatch):
+    # Holding has ISIN FR0010755611 but has a name that doesn't match taxonomy ("AMUNDI 2X")
+    # Ticker is initially FR0010755611 (defaults to ISIN).
+    # OpenFIGI profile is mocked to return tickers: ["CL2"]
+    from tarzan.data import price_cache
+    monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda isin: None)
+    monkeypatch.setattr(price_cache, "load_instrument_profile",
+                        lambda isin, **kwargs: {"tickers": ["CL2"]} if isin == "FR0010755611" else None)
+
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "FR0010755611", qty=10.0, net=-1000.0),
+    ])
+    holdings[0].ticker = "FR0010755611"
+    holdings[0].name = "AMUNDI 2X" # Doesn't match taxonomy name
+
+    row = {"isin": "", "ticker": "CL2", "name": "Amundi MSCI USA (2x) Leveraged",
+           "target_portfolio": 8.0, "no_buy_no_sell": False}
+    targets = {"CL2": row, "TICKER:CL2": row}
+
+    orchestrator._apply_per_holding_targets(holdings, targets)
+    assert holdings[0].target_portfolio == pytest.approx(8.0)
+    assert holdings[0].ticker == "CL2"
+
+    seeded = orchestrator._seed_missing_targets(holdings, targets)
+    assert seeded == [], "held CL2 must not be seeded when matched via OpenFIGI profile aliases"
