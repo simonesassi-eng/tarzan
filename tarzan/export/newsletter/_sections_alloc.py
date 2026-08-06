@@ -264,7 +264,13 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # The session move in euros, for the tile caption: the same window-1
     # money P&L the performance matrix prints, so the two agree.
     session_eur = None
-    if m.pnl_series is not None and m.actual_value_series is not None:
+    if not is_missing(session_pct):
+        pct_val = float(session_pct)
+        denom = 1.0 + pct_val / 100.0
+        if denom != 0:
+            prev_val = m.total_value / denom
+            session_eur = m.total_value - prev_val
+    if session_eur is None and m.pnl_series is not None and m.actual_value_series is not None:
         pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
         if pair and pair[0] is not None:
             session_eur = float(pair[0])
