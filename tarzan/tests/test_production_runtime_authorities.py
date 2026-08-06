@@ -821,7 +821,8 @@ def test_remote_claim_store_enforces_graph_before_io_and_exact_target(monkeypatc
 
 
 def test_remote_claim_store_retries_only_uncommitted_failures(monkeypatch):
-    """Lock contention and 5xx are retried; a decided rejection is not.
+    """Lock contention, 5xx, and a garbled 2xx body are retried; a decided
+    rejection is not.
 
     The claim service shares its script lock with the Gmail scheduler tick, so
     one unlucky attempt must not block publication — but a retry is only sound
@@ -904,6 +905,29 @@ def test_remote_claim_store_retries_only_uncommitted_failures(monkeypatch):
     with pytest.raises(RuntimeError, match="HTTP 500 after 3 attempts"):
         store.claim(intent)
     assert len(attempts) == 3
+
+    attempts.clear()
+
+    class GarbledResponse:
+        """A 2xx whose body is not valid JSON -- e.g. truncated in transit."""
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return b"{not valid json"
+
+    def garbled_then_granted(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 2:
+            return GarbledResponse()
+        return Response(granted)
+
+    monkeypatch.setattr(claims_module, "urlopen", garbled_then_granted)
+    assert store.claim(intent).state is DeliveryState.CLAIMED
+    assert len(attempts) == 2
 
 
 # **Validates: Requirements 2.4, 2.12, 2.15, 3.4, 3.12, 3.15**

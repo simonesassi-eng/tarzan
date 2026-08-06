@@ -252,9 +252,12 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         The service shares its script lock with the Gmail scheduler tick, and
         Google returns occasional 5xx on web apps, so a single unlucky attempt
         must not block an otherwise healthy publication. Retried failures are
-        confined to ones the service could not have committed (lock contention)
-        or that never reached it (network/5xx); a definitive rejection, invalid
-        payload, or short retention still fails closed on the first response.
+        confined to ones the service could not have committed (lock contention),
+        that never reached it (network/5xx), or where a 2xx response body was
+        too garbled to read (the request likely reached the service, but a
+        corrupted body says nothing about whether it committed -- see
+        _call_once); a definitive rejection or short retention still fails
+        closed on the first response.
         """
         last: Exception | None = None
         for attempt in range(1, _CLAIM_ATTEMPTS + 1):
@@ -295,7 +298,19 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         try:
             document = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise RuntimeError("delivery claim service returned invalid JSON") from None
+            # The service returned a 2xx (an HTTPError would have been raised
+            # above), so the request most likely reached it -- a garbled body
+            # says nothing about whether it committed the claim before the
+            # response was corrupted in transit. A retry is safe regardless:
+            # intent.stable_event_id is the idempotency key the service's own
+            # claim lookup is keyed on, so a retry either claims cleanly (the
+            # first attempt did not commit) or comes back "duplicate" (it did)
+            # -- never a double send. Observed as a real, transient failure
+            # (2026-08-05, workflow:30989210047): the very next scheduled run
+            # succeeded with no code change, consistent with a one-off glitch
+            # rather than a persistent one this retry would not help.
+            raise _TransientClaimError(
+                "delivery claim service returned invalid JSON") from None
         if not isinstance(document, dict) or document.get("ok") is not True:
             code = document.get("error_code", "CLAIM_SERVICE_ERROR") if isinstance(document, dict) else "CLAIM_SERVICE_ERROR"
             message = f"delivery claim service failed with {code}"
