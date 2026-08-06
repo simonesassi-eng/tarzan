@@ -1320,7 +1320,7 @@ class MetricsEngine:
             bool(live_flag.get(str(ticker), False)) for ticker in hp["ticker"]
         ]
         hp["1d"] = [
-            live.get(str(ticker), old)
+            live.get(str(ticker), old) if bool(live_flag.get(str(ticker), False)) else old
             for ticker, old in zip(hp["ticker"], hp["1d"])
         ]
         ctx["holding_performance"] = hp
@@ -1348,8 +1348,9 @@ class MetricsEngine:
                 for key in ("performance", "performance_full"):
                     projection = ctx.get(key)
                     if isinstance(projection, dict):
-                        projection["1d"] = port_1d
                         projection["1d_live"] = any_live
+                        if any_live:
+                            projection["1d"] = port_1d
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, time
 from typing import Any, Optional
 
+import math
 import pandas as pd
 
 from tarzan.models.portfolio import PortfolioMetrics
@@ -263,11 +264,17 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     session_pct = perf.get("1d")
     # The session move in euros, for the tile caption: the same window-1
     # money P&L the performance matrix prints, so the two agree.
+    # To ensure 100% synchronization, we compute the € session move directly from
+    # session_pct and total_value, matching the performance table's eur_1d calculation.
     session_eur = None
-    if m.pnl_series is not None and m.actual_value_series is not None:
-        pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
-        if pair and pair[0] is not None:
-            session_eur = float(pair[0])
+    if session_pct is not None and not (isinstance(session_pct, float) and math.isnan(session_pct)):
+        prev_val = m.total_value / (1.0 + float(session_pct) / 100.0) if (1.0 + float(session_pct) / 100.0) else None
+        session_eur = (m.total_value - prev_val) if prev_val is not None else None
+    else:
+        if m.pnl_series is not None and m.actual_value_series is not None:
+            pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
+            if pair and pair[0] is not None:
+                session_eur = float(pair[0])
     def _tile(label, value, caption, tone="flat"):
         return {"label": label, "value": value, "caption": caption,
                 "tone": tone}
