@@ -216,13 +216,14 @@ def resolve_taxonomy_identity(
         return str(value).strip()
 
     rows = list(frame.to_dict("records"))
-    candidates = rows
+    candidates = []
     if normalized_isin:
         candidates = [
             row for row in rows
             if normalize_isin(_cell(row, "isin")) == normalized_isin
         ]
-    elif bare_ticker:
+
+    if not candidates and bare_ticker:
         exact = [
             row for row in rows
             if _cell(row, "ticker").casefold() == raw_ticker.casefold()
@@ -239,12 +240,14 @@ def resolve_taxonomy_identity(
                 row for row in rows
                 if normalize_ticker(_cell(row, "ticker")) == bare_ticker
             ]
-    elif raw_name:
+
+    if not candidates and raw_name:
         candidates = [
             row for row in rows
             if _cell(row, "name").casefold() == raw_name.casefold()
         ]
-    else:
+
+    if not candidates:
         return normalized_isin, raw_ticker
 
     if len(candidates) > 1 and raw_name:

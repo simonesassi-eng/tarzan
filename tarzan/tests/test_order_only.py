@@ -224,6 +224,36 @@ def test_seed_matches_held_by_bare_ticker():
     assert orchestrator._seed_missing_targets(holdings, targets) == []
 
 
+def test_seed_skips_held_fund_with_empty_isin_in_taxonomy():
+    # Test our new fallback behavior in resolve_taxonomy_identity:
+    # A holding is built with ISIN "FR0010755611" (no ticker, so ticker defaults to ISIN)
+    # and name "Amundi MSCI USA (2x) Leveraged".
+    # The taxonomy has a row for ticker "CL2" with the same name, but its ISIN cell is empty.
+    # The target row has ticker "CL2" and target_portfolio = 8.0.
+    # Applying targets should match the holding to the CL2 target (8.0),
+    # and seeding should NOT create a duplicate phantom buy-new seed for "CL2".
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "FR0010755611", qty=10.0, net=-1000.0),
+    ])
+    # Ticker defaults to ISIN pre-enrichment.
+    holdings[0].ticker = "FR0010755611"
+    holdings[0].name = "Amundi MSCI USA (2x) Leveraged"
+
+    # Target row keyed exactly like the loader keys a ticker-only row.
+    row = {"isin": "", "ticker": "CL2", "name": "Amundi MSCI USA (2x) Leveraged",
+           "target_portfolio": 8.0, "no_buy_no_sell": False}
+    targets = {"CL2": row, "TICKER:CL2": row}
+
+    # 1. Apply target
+    orchestrator._apply_per_holding_targets(holdings, targets)
+    assert holdings[0].target_portfolio == pytest.approx(8.0)
+    assert holdings[0].ticker == "CL2"
+
+    # 2. Seed missing targets - should NOT create a duplicate "CL2" seed!
+    seeded = orchestrator._seed_missing_targets(holdings, targets)
+    assert seeded == [], "held CL2 must not be seeded as a duplicate phantom buy-new"
+
+
 def test_apply_target_bridges_isin_to_ticker_via_xref(monkeypatch):
     # Regression (the "UEQC" optimizer bug): a Fineco order carries only an
     # ISIN (holding.ticker defaults to the ISIN, pre-enrichment), the target
