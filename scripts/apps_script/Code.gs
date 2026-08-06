@@ -596,6 +596,9 @@ function _transitionDeliveryClaim_(props, request) {
   const expected = Array.isArray(request.expected) ? request.expected : [];
   const target = String(request.target || '');
   if (expected.indexOf(record.state) === -1) {
+    if (record.state === target) {
+      return { ok: true, state: record.state };
+    }
     return { ok: false, error_code: 'CONDITIONAL_TRANSITION_FAILED' };
   }
   const allowed = {
