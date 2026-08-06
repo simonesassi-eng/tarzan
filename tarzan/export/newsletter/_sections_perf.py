@@ -123,7 +123,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                                    w=66, h=20, in_progress=in_progress,
                                    session_hours=sess_hours)
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                           w=66, h=20, stretch=False)
+                           w=66, h=20, stretch=True)
         if not chart:
             return chart
         # No timestamped intraday series for this ticker -- a real, if
