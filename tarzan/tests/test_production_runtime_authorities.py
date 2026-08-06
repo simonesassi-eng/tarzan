@@ -719,7 +719,7 @@ def test_local_delivery_claim_store_rejects_every_prohibited_edge(tmp_path):
         assert current is source
 
         for target in DeliveryState:
-            if target in allowed[source]:
+            if target in allowed[source] or target == source:
                 continue
             with pytest.raises(
                 ValueError,
@@ -1027,3 +1027,62 @@ def test_order_derived_zero_anchor_has_indeterminate_materiality():
     assert assessment.availability is Availability.UNAVAILABLE
     assert assessment.trustworthy_total_eur is None
     assert assessment.planning_eligible is False
+
+
+def test_local_delivery_claim_store_idempotent_transition(tmp_path):
+    store = LocalJsonDeliveryClaimStore(tmp_path / "delivery-idempotent.json")
+    intent = DeliveryIntent(
+        stable_event_id="test:idempotent",
+        purpose=DeliveryPurpose.NORMAL_NEWSLETTER,
+        recipient_set_digest=recipient_set_digest(["reader@example.invalid"]),
+        template_schema_version="1",
+    )
+    store.claim(intent)
+    # First transition: CLAIMED -> SMTP_INVOCATION_STARTED (succeeds)
+    store.transition(intent.logical_id, (DeliveryState.CLAIMED,), DeliveryState.SMTP_INVOCATION_STARTED)
+    # Second transition (retry): CLAIMED -> SMTP_INVOCATION_STARTED (succeeds because state is already SMTP_INVOCATION_STARTED)
+    assert store.transition(intent.logical_id, (DeliveryState.CLAIMED,), DeliveryState.SMTP_INVOCATION_STARTED) == DeliveryState.SMTP_INVOCATION_STARTED
+
+
+def test_remote_claim_store_idempotent_transition_retry(monkeypatch):
+    store = AppsScriptPropertiesDeliveryClaimStore(
+        "https://claims.example.invalid/exec",
+        "claim-secret",
+        minimum_retention_days=30,
+    )
+    attempts = []
+
+    class Response:
+        def __init__(self, document: dict):
+            self._payload = json.dumps(document).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, limit: int) -> bytes:
+            return self._payload[:limit]
+
+    import tarzan.delivery.claims as claims_module
+    monkeypatch.setattr(claims_module.time, "sleep", lambda seconds: None)
+
+    def timeout_then_idempotent(request, timeout):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise TimeoutError("timeout")
+        return Response({
+            "ok": True,
+            "retention_days": 45,
+            "state": "SMTP_INVOCATION_STARTED"
+        })
+
+    monkeypatch.setattr(claims_module, "urlopen", timeout_then_idempotent)
+
+    assert store.transition(
+        "logical-id",
+        (DeliveryState.CLAIMED,),
+        DeliveryState.SMTP_INVOCATION_STARTED,
+    ) == DeliveryState.SMTP_INVOCATION_STARTED
+    assert len(attempts) == 2
