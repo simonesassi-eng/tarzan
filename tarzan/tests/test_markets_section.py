@@ -45,7 +45,7 @@ def test_cash_index_shows_hours_open_badge_and_day():
                            return_value=(True, "Tue")):
         html = _build_markets(_ctx())["html"]
     assert "09:30\u201316:00 ET" in html
-    assert "&#9679;</span> Open Tue" in html
+    assert "&#9679;</span> Op. Tue" in html
 
 
 def test_cash_index_shows_closed_badge_and_day():
@@ -54,7 +54,7 @@ def test_cash_index_shows_closed_badge_and_day():
          mock.patch.object(mq, "market_status",
                            return_value=(False, "Fri")):
         html = _build_markets(_ctx())["html"]
-    assert "&#9679;</span> Closed Fri" in html
+    assert "&#9679;</span> Cl. Fri" in html
 
 
 def test_chg_column_shows_only_percent_not_the_absolute_value():
@@ -83,7 +83,7 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
     fut_pos = html.index("S&P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
     assert "\u224824h" in fut_chunk
-    assert "Open Mon" in fut_chunk
+    assert "Op. Mon" in fut_chunk
     assert "09:30" not in fut_chunk  # not the cash index's hours
     assert "(FUT) (FUT)" not in html
 
@@ -98,7 +98,7 @@ def test_futures_show_closed_with_day_over_the_weekend():
         html = _build_markets(_ctx())["html"]
     fut_pos = html.index("S&P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
-    assert "Closed Fri" in fut_chunk
+    assert "Cl. Fri" in fut_chunk
 
 
 def test_daily_close_fallback_chart_is_labelled_no_intraday():
