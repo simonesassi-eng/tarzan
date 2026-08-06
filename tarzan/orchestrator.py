@@ -111,6 +111,20 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
                 )
                 holding_aliases.update(xref_aliases)
                 _add_target_keys(xref_aliases)
+            # Also leverage the instrument profile's ticker aliases from OpenFIGI
+            # so we match a bare-ticker target like "CL2" to its ISIN holding even
+            # on a cold/offline run before any yfinance enrichment has run.
+            profile = price_cache.load_instrument_profile(h.isin, allow_stale=True)
+            if profile and isinstance(profile, dict):
+                profile_tickers = profile.get("tickers") or []
+                for pt in profile_tickers:
+                    if pt:
+                        profile_aliases = (
+                            _identity_aliases("", pt)
+                            | _identity_aliases(h.isin, pt)
+                        )
+                        holding_aliases.update(profile_aliases)
+                        _add_target_keys(profile_aliases)
         if h.ticker:
             xref_isin = price_cache.load_ticker_isin(h.ticker)
             if xref_isin:
@@ -268,6 +282,15 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
             xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin)
             if xref_ticker:
                 exact_tickers.add(_norm(xref_ticker))
+            # Also leverage the instrument profile's ticker aliases from OpenFIGI
+            # so we match a bare-ticker target like "CL2" to its ISIN holding even
+            # on a cold/offline run before any yfinance enrichment has run.
+            profile = price_cache.load_instrument_profile(holding.isin, allow_stale=True)
+            if profile and isinstance(profile, dict):
+                profile_tickers = profile.get("tickers") or []
+                for pt in profile_tickers:
+                    if pt:
+                        exact_tickers.add(_norm(pt))
             # This runs before enrichment (see the call order below), so an
             # ISIN-only holding's real venue ticker (from the enricher's
             # resolver) does not exist yet -- exact_tickers/bare_tickers can

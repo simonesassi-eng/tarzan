@@ -401,3 +401,49 @@ def test_plan_cost_buy_only_has_no_cgt():
     cost = plan_cost([{"idx": 0, "direction": "buy", "amount_eur": 500.0}], holdings, cfg)
     assert cost["cgt_eur"] == 0.0          # no sells → no CGT
     assert cost["fees_eur"] == pytest.approx(19.0)
+
+
+def test_apply_target_and_seed_bridges_via_profile(monkeypatch):
+    # Tests that when the ticker xref is cold but the instrument profile is cached
+    # (retrieved from OpenFIGI during earlier stages), both matching of targets
+    # and preventing phantom seeds works correctly.
+    from tarzan.data import price_cache
+
+    # Mock no xrefs in price cache
+    monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda isin: None)
+    monkeypatch.setattr(price_cache, "load_ticker_isin", lambda t: None)
+
+    # Mock cached instrument profile containing 'CL2' in tickers list for ISIN FR0010755611
+    profile = {
+        "status": "VERIFIED",
+        "isin": "FR0010755611",
+        "tickers": ["CL2", "CL2.PA", "18MF.MU"],
+    }
+    monkeypatch.setattr(
+        price_cache,
+        "load_instrument_profile",
+        lambda isin, **kwargs: profile if isin == "FR0010755611" else None,
+    )
+
+    holdings = build_holdings_from_orders([
+        _o(OrderType.BUY, "FR0010755611", qty=40.0, net=-5000.0),
+    ])
+    # Ticker defaults to ISIN
+    holdings[0].ticker = "FR0010755611"
+
+    row = {
+        "isin": "",
+        "ticker": "CL2",
+        "name": "Amundi MSCI USA (2x) Leveraged",
+        "target_portfolio": 8.0,
+        "no_buy_no_sell": False,
+    }
+    targets = {"TICKER:CL2": row, "CL2": row}
+
+    # Verify target successfully matches the holding
+    orchestrator._apply_per_holding_targets(holdings, targets)
+    assert holdings[0].target_portfolio == pytest.approx(8.0)
+
+    # Verify it does NOT create a duplicate phantom seed
+    seeded = orchestrator._seed_missing_targets(holdings, targets)
+    assert seeded == []
