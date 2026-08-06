@@ -268,19 +268,6 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
             xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin)
             if xref_ticker:
                 exact_tickers.add(_norm(xref_ticker))
-            # This runs before enrichment (see the call order below), so an
-            # ISIN-only holding's real venue ticker (from the enricher's
-            # resolver) does not exist yet -- exact_tickers/bare_tickers can
-            # be empty even for an already-held position. The taxonomy's own
-            # curated ticker needs only the ISIN, not a resolved venue, so
-            # resolve it here too: this is what lets a bare-ticker target row
-            # (e.g. "CL2", whose taxonomy row itself carries no ISIN) match
-            # an already-held ISIN-only order and skip creating a duplicate
-            # seed for it.
-            _, curated_ticker = cfg.resolve_taxonomy_identity(
-                holding.isin, holding.ticker, holding.name)
-            if curated_ticker:
-                exact_tickers.add(_norm(curated_ticker))
         elif holding.ticker:
             xref_isin = price_cache.load_ticker_isin(holding.ticker)
             if xref_isin:
