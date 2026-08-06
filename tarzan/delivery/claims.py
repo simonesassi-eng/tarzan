@@ -200,6 +200,8 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
                 raise KeyError(f"delivery claim not found: {logical_id}")
             current = DeliveryState(record["state"])
             if current not in expected:
+                if current == target:
+                    return target
                 raise ValueError(f"invalid delivery transition {current.value} -> {target.value}")
             record["state"] = target.value
             self._write(document)
