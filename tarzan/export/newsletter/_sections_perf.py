@@ -120,10 +120,10 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                               else market_open_now(sym))
                 sess_hours = None
             return _intraday_spark(ss, d.get("baseline", d["value"]),
-                                   w=44, h=20, in_progress=in_progress,
+                                   w=66, h=20, in_progress=in_progress,
                                    session_hours=sess_hours)
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                           w=44, h=20, stretch=False)
+                           w=66, h=20, stretch=False)
         if not chart:
             return chart
         # No timestamped intraday series for this ticker -- a real, if
@@ -142,8 +142,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def _hours_line(d: dict) -> str:
         """Local trading hours (or \u224824h for a continuously traded
         instrument) plus an open/closed dot and the calendar day that
-        status refers to \u2014 so "Closed" is never ambiguous about which
-        session it means, and "Open" about which day is live."""
+        status refers to \u2014 so "Cl." is never ambiguous about which
+        session it means, and "Op." about which day is live. Abbreviated
+        (not "Closed"/"Open") to leave room for the wider chart column."""
         sym = d.get("symbol", "")
         cap = session_caption(sym)
         if not cap:
@@ -153,7 +154,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             return (f'<div style="font-size:8px;color:{P["subtle"]};'
                     f'margin-top:1px;">{cap}</div>')
         dot_col = P["green"] if is_open else P["subtle"]
-        status = "Open" if is_open else "Closed"
+        status = "Op." if is_open else "Cl."
         day_suffix = f" {day}" if day else ""
         return (f'<div style="font-size:8px;color:{P["subtle"]};'
                 f'margin-top:1px;">{cap} &middot; '
