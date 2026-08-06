@@ -111,6 +111,15 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
                 )
                 holding_aliases.update(xref_aliases)
                 _add_target_keys(xref_aliases)
+            profile = price_cache.load_instrument_profile(h.isin, allow_stale=True)
+            if profile and profile.get("tickers"):
+                for tick in profile["tickers"]:
+                    xref_aliases = (
+                        _identity_aliases("", tick)
+                        | _identity_aliases(h.isin, tick)
+                    )
+                    holding_aliases.update(xref_aliases)
+                    _add_target_keys(xref_aliases)
         if h.ticker:
             xref_isin = price_cache.load_ticker_isin(h.ticker)
             if xref_isin:
@@ -268,6 +277,10 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
             xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin)
             if xref_ticker:
                 exact_tickers.add(_norm(xref_ticker))
+            profile = price_cache.load_instrument_profile(holding.isin, allow_stale=True)
+            if profile and profile.get("tickers"):
+                for tick in profile["tickers"]:
+                    exact_tickers.add(_norm(tick))
             # This runs before enrichment (see the call order below), so an
             # ISIN-only holding's real venue ticker (from the enricher's
             # resolver) does not exist yet -- exact_tickers/bare_tickers can
