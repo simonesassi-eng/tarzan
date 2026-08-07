@@ -166,6 +166,81 @@ def test_resolve_intraday_routes_around_stale_primary_feed(monkeypatch):
     assert len(series) == 5
 
 
+def test_resolve_intraday_logs_reason_when_all_candidates_exhausted(monkeypatch, caplog):
+    # Mirrors what CL2 likely hit tonight: a stale Milan primary, and every
+    # EUR-venue sibling either has no data or prices too far from the
+    # canonical close to trust (ticker-root collision on another exchange).
+    # Previously these reasons were only logged at DEBUG, invisible in the
+    # INFO-level CI log — silent, correct rejection looked identical to a
+    # broken fallback. All three reasons should now surface at INFO.
+    stale_primary = _intra([94.0, 94.05], day="2026-07-08", start="09:00")
+    mismatched_sibling = _intra([250.0, 251.0], day="2026-07-10", start="14:55")
+
+    def fake_fetch(symbols):
+        out = {}
+        if "NTSG.MI" in symbols:
+            out["NTSG.MI"] = stale_primary
+        if "NTSG.PA" in symbols:
+            out["NTSG.PA"] = mismatched_sibling
+        return out
+
+    def fake_hist(ticker):
+        return pd.DataFrame({"Close": [95.0]}, index=pd.to_datetime(["2026-07-10"]))
+
+    monkeypatch.setattr(mq, "_fetch_intraday", fake_fetch)
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
+    _pin_now(monkeypatch, "2026-07-10 15:05")
+    with caplog.at_level("INFO", logger="tarzan.data.market_quotes"):
+        resolved = mq._resolve_intraday(["NTSG.MI"])
+    assert resolved == {}
+    text = caplog.text
+    assert "stale" in text and "NTSG.MI" in text
+    assert "NTSG.MI→NTSG.PA rejected" in text
+    assert "exhausted for NTSG.MI" in text
+
+
+def test_broker_1d_closed_stale_primary_anchors_wrong_day(monkeypatch):
+    # Reproduces a second symptom of the same bug: broker_1d derives `iday`
+    # (which calendar day's official close to look up) from the primary
+    # intraday series' *last timestamp*. If that primary is stale from a
+    # PRIOR calendar day — not just old-within-today — the old length-only
+    # _has_intraday() still accepted it, so the closed-session % got
+    # computed for the wrong day entirely: not frozen, but a wrong sign and
+    # magnitude, e.g. Tarzan showing +0.53% on a holding that actually
+    # closed down.
+    stale_primary = _intra([94.0, 94.05], day="2026-07-08", start="09:00")
+    # Last print (95.2) close to the canonical last-known close (95.0) used
+    # below, so the sibling collision guard (price coherence) accepts it.
+    fresh_sibling = _intra(
+        [94.0, 94.2, 94.5, 94.8, 95.2], day="2026-07-10", start="09:00", freq="120min"
+    )
+
+    def fake_fetch(symbols):
+        out = {}
+        if "NTSG.MI" in symbols:
+            out["NTSG.MI"] = stale_primary
+        if "NTSG.DE" in symbols:
+            out["NTSG.DE"] = fresh_sibling
+        return out
+
+    def fake_hist(ticker):
+        return pd.DataFrame(
+            {"Close": [90.0, 100.0, 100.0, 95.0]},
+            index=pd.to_datetime(["2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10"]),
+        )
+
+    monkeypatch.setattr(mq, "_fetch_intraday", fake_fetch)
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
+    monkeypatch.setattr(mq, "market_open_now", lambda s: False)  # closed
+    _pin_now(monkeypatch, "2026-07-10 17:10")
+    res = mq.broker_1d(["NTSG.MI"])
+    assert "NTSG.MI" in res
+    # Correct: anchored to 2026-07-10 (95 vs prior close 100) = -5.00%.
+    # The pre-fix bug anchored to the stale primary's day, 2026-07-08
+    # (100 vs prior close 90) = +11.11% — wrong sign, wrong magnitude.
+    assert round(res["NTSG.MI"]["pct"], 2) == -5.00
+
+
 def test_resolve_intraday_rejects_price_collision(monkeypatch):
     # Sibling exists but its price is wildly off the primary close → treated
     # as a different instrument (ticker collision) and rejected.

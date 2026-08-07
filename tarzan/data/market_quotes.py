@@ -561,6 +561,20 @@ def _resolve_intraday(
     prim = _fetch_intraday(symbols)
     out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s))}
     missing = [s for s in symbols if s not in out]
+    if missing:
+        stale = [s for s in missing if prim.get(s) is not None]
+        empty = [s for s in missing if prim.get(s) is None]
+        if stale:
+            logger.info(
+                "intraday primary rejected as stale (>%ds old), trying siblings: %s",
+                _INTRADAY_STALE_AFTER_SECONDS,
+                ", ".join(stale),
+            )
+        if empty:
+            logger.info(
+                "intraday primary returned no data, trying siblings: %s",
+                ", ".join(empty),
+            )
     if not missing or not allow_sibling_fallback:
         return out
 
@@ -590,24 +604,26 @@ def _resolve_intraday(
             except Exception:  # noqa: BLE001
                 pass
         if not prim_close:
-            logger.debug(
+            logger.info(
                 "intraday fallback %s rejected (no canonical close for "
                 "price-coherence guard)",
                 s,
             )
             continue
+        rejected_candidates: list[str] = []
         for c in cand_map[s]:
             ser = sib.get(c)
             if not _has_intraday(ser):
                 continue
             dev = abs(float(ser.iloc[-1]) / prim_close - 1.0)
             if dev > _SIBLING_PRICE_TOLERANCE:
-                logger.debug(
+                logger.info(
                     "intraday fallback %s→%s rejected (%.1f%% off primary close)",
                     s,
                     c,
                     dev * 100,
                 )
+                rejected_candidates.append(c)
                 continue
             out[s] = (ser, c)
             logger.info(
@@ -616,6 +632,17 @@ def _resolve_intraday(
                 c,
             )
             break
+        else:
+            tried = cand_map[s]
+            no_data = [c for c in tried if c not in rejected_candidates]
+            logger.info(
+                "intraday fallback exhausted for %s — no usable venue "
+                "(tried %s; no data: %s; price-mismatched: %s)",
+                s,
+                ", ".join(tried) or "none",
+                ", ".join(no_data) or "none",
+                ", ".join(rejected_candidates) or "none",
+            )
     return out
 
 
