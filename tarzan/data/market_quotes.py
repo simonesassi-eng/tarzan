@@ -479,8 +479,40 @@ _SIBLING_SUFFIXES: dict[str, tuple[str, ...]] = {
 _SIBLING_PRICE_TOLERANCE = 0.10
 
 
+
+# A 15m-interval feed that has truly gone stale (Yahoo's Borsa Italiana
+# ``.MI`` intraday feed is the known offender — see the sibling-fallback
+# note above) still satisfies ``len(ser) >= 2`` on its last couple of
+# pre-market/open ticks and never advances again. That let a stale-but-
+# nonempty primary series silently short-circuit the sibling fallback that
+# exists specifically to route around it, freezing the sparkline and the
+# broker-1D % at whatever those first two ticks were for the rest of the
+# session. Two intervals of slack (30 min) covers a missed bar without
+# flagging a feed that is merely early in the session as stale.
+_INTRADAY_STALE_AFTER_SECONDS = 1800  # 2x the 15m fetch interval
+
+
+def _intraday_reference_now(tzinfo=None):
+    """Real current time, tz-aware. A thin, monkeypatchable seam (mirrors
+    the ``now=`` pattern used by ``market_open_now`` elsewhere in this
+    module) so tests can pin "now" without threading a parameter through
+    the whole intraday call chain."""
+    from datetime import timezone as _tz
+    return datetime.now(tzinfo or _tz.utc)
+
+
 def _has_intraday(ser) -> bool:
-    return ser is not None and len(ser) >= 2
+    if ser is None or len(ser) < 2:
+        return False
+    try:
+        last_ts = ser.index[-1]
+        now = _intraday_reference_now(getattr(last_ts, "tzinfo", None))
+        age_seconds = (now - last_ts.to_pydatetime()).total_seconds()
+    except Exception:  # noqa: BLE001
+        # Unexpected index type: don't newly reject on a shape we can't
+        # evaluate — fall back to the pre-existing length-only behavior.
+        return True
+    return age_seconds <= _INTRADAY_STALE_AFTER_SECONDS
 
 
 def _official_and_prev(fetch_history, ticker: str, iday):
