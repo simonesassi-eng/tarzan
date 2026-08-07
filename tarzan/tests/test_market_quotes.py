@@ -95,6 +95,14 @@ def _intra(values, day="2026-07-10", start="09:00", freq="5min"):
     return pd.Series([float(v) for v in values], index=idx)
 
 
+def _pin_now(monkeypatch, ts):
+    """Pin _has_intraday's staleness clock to ``ts`` (Europe/Rome), so
+    fixture series built on a fixed historical date aren't flagged stale
+    just because the real wall clock has since moved on."""
+    pinned = pd.Timestamp(ts, tz="Europe/Rome")
+    monkeypatch.setattr(mq, "_intraday_reference_now", lambda tzinfo=None: pinned)
+
+
 def test_sibling_symbols_only_eur_venues():
     assert mq._sibling_symbols("NTSG.MI")[0] == "NTSG.DE"
     assert set(mq._sibling_symbols("NTSG.MI")) == {"NTSG.DE", "NTSG.PA", "NTSG.AS", "NTSG.F"}
@@ -118,11 +126,44 @@ def test_resolve_intraday_falls_back_to_sibling(monkeypatch):
     # Primary daily close near the sibling → passes the collision guard.
     monkeypatch.setattr("tarzan.data.enricher._fetch_history",
                         lambda s: _close([29.0, 29.19]))
+    _pin_now(monkeypatch, "2026-07-10 09:10")
     resolved = mq._resolve_intraday(["NTSG.MI"])
     assert "NTSG.MI" in resolved
     series, src = resolved["NTSG.MI"]
     assert src == "NTSG.DE"
     assert len(series) == 3
+
+
+def test_resolve_intraday_routes_around_stale_primary_feed(monkeypatch):
+    # Reproduces the reported bug: Milan's intraday feed prints two ticks at
+    # the open (09:00/09:05) and then goes silent for the rest of the
+    # session — a documented Yahoo .MI behavior. len(ser) >= 2 alone used to
+    # treat that as "has intraday" and never try the healthier Xetra sibling,
+    # freezing the sparkline/1D% at the stale open-of-day print all day.
+    stale_primary = _intra([29.10, 29.12], day="2026-07-10", start="09:00")
+    healthy_sibling = _intra(
+        [29.10, 29.20, 29.30, 29.45, 29.66], day="2026-07-10", start="09:00", freq="90min"
+    )
+
+    def fake_fetch(symbols):
+        out = {}
+        if "NTSG.MI" in symbols:
+            out["NTSG.MI"] = stale_primary
+        if "NTSG.DE" in symbols:
+            out["NTSG.DE"] = healthy_sibling
+        return out
+
+    monkeypatch.setattr(mq, "_fetch_intraday", fake_fetch)
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
+                        lambda s: _close([29.0, 29.19]))
+    # It's now mid-afternoon; the primary's last print (09:05) is hours
+    # stale, while the sibling's last print (15:00) is still fresh.
+    _pin_now(monkeypatch, "2026-07-10 15:05")
+    resolved = mq._resolve_intraday(["NTSG.MI"])
+    assert "NTSG.MI" in resolved
+    series, src = resolved["NTSG.MI"]
+    assert src == "NTSG.DE", "stale primary must not block the sibling fallback"
+    assert len(series) == 5
 
 
 def test_resolve_intraday_rejects_price_collision(monkeypatch):
@@ -150,6 +191,7 @@ def test_broker_1d_uses_sibling_prev_close(monkeypatch):
 
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
     monkeypatch.setattr(mq, "market_open_now", lambda s: True)
+    _pin_now(monkeypatch, "2026-07-10 09:05")
     res = mq.broker_1d(["NTSG.MI"])
     assert "NTSG.MI" in res
     selected = res["NTSG.MI"]
@@ -180,6 +222,7 @@ def test_broker_1d_closed_uses_official_close(monkeypatch):
     monkeypatch.setattr("tarzan.data.enricher._fetch_history",
                         lambda s: _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)]))
     monkeypatch.setattr(mq, "market_open_now", lambda s: False)  # session closed
+    _pin_now(monkeypatch, "2026-07-10 17:19")
     res = mq.broker_1d(["NTSG.MI"])
     assert res["NTSG.MI"]["live"] is False
     assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
@@ -195,6 +238,7 @@ def test_broker_1d_live_uses_last_tick(monkeypatch):
     monkeypatch.setattr("tarzan.data.enricher._fetch_history",
                         lambda s: _daily([("2026-07-09", 29.18)]))
     monkeypatch.setattr(mq, "market_open_now", lambda s: True)  # session live
+    _pin_now(monkeypatch, "2026-07-10 11:05")
     res = mq.broker_1d(["NTSG.MI"])
     assert res["NTSG.MI"]["live"] is True
     assert round(res["NTSG.MI"]["pct"], 2) == round((29.66 / 29.18 - 1) * 100, 2)  # +1.64%
@@ -214,6 +258,7 @@ def test_broker_1d_closed_prefers_primary_listing_over_sibling(monkeypatch):
 
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
     monkeypatch.setattr(mq, "market_open_now", lambda s: False)  # closed
+    _pin_now(monkeypatch, "2026-07-10 09:05")
     res = mq.broker_1d(["NTSG.MI"])
     assert res["NTSG.MI"]["live"] is False
     assert round(res["NTSG.MI"]["pct"], 2) == round((29.385 / 29.19 - 1) * 100, 2)  # +0.67%
@@ -233,6 +278,7 @@ def test_broker_1d_closed_falls_back_to_sibling_close(monkeypatch):
 
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
     monkeypatch.setattr(mq, "market_open_now", lambda s: False)
+    _pin_now(monkeypatch, "2026-07-10 09:05")
     res = mq.broker_1d(["NTSG.MI"])
     assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
 
