@@ -36,9 +36,16 @@ jobs:
           if old != new:
               p.write_text(s[:start] + new + s[end:], encoding='utf-8')
               print('patched')
+              print('patched=true')
           else:
               print('already patched')
+              print('patched=false')
           PY
+          if grep -q 'Load the curated instrument taxonomy deterministically' tarzan/config/__init__.py; then
+            echo 'patched=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'patched=false' >> "$GITHUB_OUTPUT"
+          fi
       - name: Commit repair
         if: steps.repair.outputs.patched == 'true'
         run: |
