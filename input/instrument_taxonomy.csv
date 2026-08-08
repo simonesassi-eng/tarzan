@@ -1,6 +1,6 @@
 name,ticker,isin,kind,asset_class,role,is_benchmark,is_benchmark_alpha_beta,is_benchmark_geo,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,exp_equities,exp_fixed_income,exp_gold,exp_commodities,exp_alternative,exp_crypto,ter,description,updated
 iShares Core EUR Aggregate Bond,IEAG,,etf,Fixed Income,Aggregate/Credit,,,,,0.0,100.0,0.0,0.0,,,,,,,,Tracks EUR-denominated investment grade bonds.,2/22/26
-iShares Core Global Aggregate Bond EUR Hedged,AGGH,IE00BDBRDM35,etf,Fixed Income,Aggregate/Credit,,,,,,,,,,,,,,,0.001,Global aggregate investment grade bonds - EUR hedged.,7/9/26
+iShares Core Global Aggregate Bond EUR Hedged,AGGH,IE00BDBRDM35,etf,Fixed Income,Aggregate/Credit,True,,,,,,,,,,,,,,,0.001,Global aggregate investment grade bonds - EUR hedged.,7/9/26
 L&G Multi-Strategy Enhanced Commodities,ENCO,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (multi-strategy) to reduce contango drag.,7/8/26
 Invesco Bloomberg Commodity,CMOD,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only tracking the Bloomberg Commodity Index.,7/8/26
 WisdomTree Enhanced Commodity,WCOA,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (WisdomTree) to reduce contango drag.,7/8/26
@@ -14,8 +14,8 @@ WisdomTree Eurozone Efficient Core,NTSZ,IE000OV4XWA3,etf,Equities,Efficient Core
 Vanguard FTSE All-World,VWRL,,etf,Equities,Equity Broad,True,,,62.15,10.12,7.85,6.1,13.78,,,,,,,,Large and mid-cap stocks across developed and emerging markets.,2/21/26
 iShares MSCI ACWI,ISAC,,etf,Equities,Equity Broad,True,True,True,63.85,10.27,7.39,5.05,13.44,,,,,,,,Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 iShares Core MSCI World,SWDA,,etf,Equities,Equity Broad,,,,72.5,0.0,8.5,5.7,13.3,,,,,,,0.0012,Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
-iShares Nasdaq 100 UCITS ETF,CNDX,,etf,Equities,Equity Broad,,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,Nasdaq 100 (top 100 non-financial Nasdaq companies) via iShares UCITS ETF (Acc).,7/12/26
-iShares Core S&P 500 UCITS ETF,CSPX,,etf,Equities,Equity Broad,,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,S&P 500 (500 leading large-cap US companies) via iShares Core UCITS ETF (Acc).,7/12/26
+iShares Nasdaq 100 UCITS ETF,CNDX,,etf,Equities,Equity Broad,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,Nasdaq 100 (top 100 non-financial Nasdaq companies) via iShares UCITS ETF (Acc).,7/12/26
+iShares Core S&P 500 UCITS ETF,CSPX,,etf,Equities,Equity Broad,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,S&P 500 (500 leading large-cap US companies) via iShares Core UCITS ETF (Acc).,7/12/26
 Amundi CAC 40 UCITS ETF,CACC,,etf,Equities,Equity Broad,,,,0.0,0.0,100.0,0.0,0.0,,,,,,,,French large-cap (CAC 40) via Amundi UCITS ETF (Acc).,7/12/26
 iShares Core DAX UCITS ETF,EXS1,,etf,Equities,Equity Broad,,,,0.0,0.0,100.0,0.0,0.0,,,,,,,,German blue-chip (DAX 40) via iShares Core UCITS ETF (Acc).,7/12/26
 iShares FTSE MIB UCITS ETF,CSMIB,,etf,Equities,Equity Broad,,,,0.0,0.0,100.0,0.0,0.0,,,,,,,,Italian large-cap (FTSE MIB) via iShares UCITS ETF (Acc).,7/12/26
@@ -41,7 +41,7 @@ Avantis Pacific Equity,AVPE,IE000T62NEO6,etf,Equities,Equity Factor,True,,,0.0,0
 Invesco MSCI World Equal Weight,MWEQ,,etf,Equities,Equity Factor,,,,42.07,0.8,16.45,12.88,27.8,,,,,,,,Equal-weighted developed-market global equity.,6/15/26
 iShares Edge MSCI World Minimum Volatility,MVOL,,etf,Equities,Equity Factor,,,,66.64,0.0,8.35,10.24,14.77,,,,,,,,Developed-market stocks with lower volatility characteristics.,6/15/26
 iShares MSCI World Small Cap,WSML,,etf,Equities,Equity Factor,,,,62.46,0.0,6.0,11.98,19.56,,,,,,,,Small-cap stocks across developed market countries.,6/15/26
-SPDR Russell 2000 US Small Cap UCITS ETF,R2US,,etf,Equities,Equity Factor,,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,US small-cap (Russell 2000) via SPDR UCITS ETF.,7/12/26
+SPDR Russell 2000 US Small Cap UCITS ETF,R2US,,etf,Equities,Equity Factor,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,US small-cap (Russell 2000) via SPDR UCITS ETF.,7/12/26
 Xtrackers S&P 500 Equal Weight UCITS ETF,XDEW,,etf,Equities,Equity Factor,,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,S&P 500 constituents equally weighted via Xtrackers UCITS ETF.,7/12/26
 iShares Edge MSCI USA Minimum Volatility,MVUS,IE00B8FHGS14,etf,Equities,Equity Factor,,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,US large/mid-cap stocks with lower volatility (MSCI USA Min Vol).,7/9/26
 Xtrackers MSCI World Value,XDEV,IE00BL25JM42,etf,Equities,Equity Factor,,,,51.29,0.0,16.05,18.57,14.09,,,,,,,0.0025,MSCI World Value factor.,7/8/26
