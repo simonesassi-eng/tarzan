@@ -44,28 +44,57 @@ def _load_static() -> dict:
 
 @lru_cache(maxsize=1)
 def _load_indexes_csv() -> pd.DataFrame:
-    """Load instrument_taxonomy.csv into a DataFrame.
+    """Load the curated instrument taxonomy deterministically.
 
-    Tries the CWD-relative path first, then the repo-root-anchored fallback.
-    A missing or unparseable taxonomy is NOT silent: it degrades benchmarks,
-    the beta reference and notional asset-class splits, so we record a
-    data-quality WARNING pointing at the resolved/attempted path.
+    The taxonomy is runtime data, not optional configuration. Resolve it from
+    an explicit environment override first, then search upward from the
+    current working directory and from this module's repository ancestors.
+    This makes CLI, pytest and installed-package execution agree on the same
+    repository data instead of silently depending on the caller's cwd.
     """
-    path = (
-        _INDEXES_CSV_PATH if os.path.exists(_INDEXES_CSV_PATH)
-        else (_INDEXES_CSV_FALLBACK if os.path.exists(_INDEXES_CSV_FALLBACK) else None)
-    )
+    from pathlib import Path
+
+    candidates: list[Path] = []
+    override = os.environ.get("TARZAN_TAXONOMY_PATH")
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    def add_ancestors(start: Path) -> None:
+        start = start.resolve()
+        for parent in (start, *start.parents):
+            candidates.append(parent / "input" / "instrument_taxonomy.csv")
+
+    add_ancestors(Path.cwd())
+    add_ancestors(Path(__file__).resolve())
+
+    seen: set[str] = set()
+    path = None
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_file():
+            path = candidate
+            break
+
     if path is None:
         _warn_taxonomy(
-            f"instrument_taxonomy.csv not found (looked in "
-            f"'{_INDEXES_CSV_PATH}' and '{_INDEXES_CSV_FALLBACK}'); "
-            "benchmarks, beta reference and notional asset-class splits will "
-            "use built-in defaults"
+            "instrument_taxonomy.csv not found; looked from cwd/module ancestors; "
+            "benchmarks, beta reference and notional asset-class splits will use "
+            "built-in defaults"
         )
         return pd.DataFrame()
+
     try:
         df = pd.read_csv(path)
         df.columns = [c.strip().lower() for c in df.columns]
+        required = {"name", "ticker", "isin", "kind", "asset_class"}
+        missing = required.difference(df.columns)
+        if df.empty or missing:
+            raise ValueError(
+                f"missing required columns {sorted(missing)} or empty file"
+            )
         return df
     except Exception as e:  # noqa: BLE001
         _warn_taxonomy(
