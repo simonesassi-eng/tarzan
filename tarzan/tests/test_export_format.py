@@ -70,26 +70,42 @@ class TestColorizePct:
 
 
 class TestColorizePctLines:
-    """_colorize_pct_lines turns newline-separated items (the news digest)
-    into <li> markup — plain newlines collapse to whitespace in HTML, so the
-    caller needs real list markup to keep items visually separate."""
+    """_colorize_pct_lines turns the news digest's newline-separated items
+    (each optionally starting with a '[tag]' time marker) into <tr><td>
+    rows - a <table>, not a native <ul>, renders consistently across email
+    clients (Outlook in particular)."""
 
     def _lines(self, text):
         from tarzan.export.newsletter import _colorize_pct_lines
         return _colorize_pct_lines(text)
 
-    def test_one_li_per_line(self):
-        html = self._lines("First headline.\nSecond headline +0.5%.")
-        assert html.count("<li>") == 2 and html.count("</li>") == 2
-        assert html.startswith("<li>First headline.</li>")
+    def test_one_row_per_line(self):
+        html = self._lines("[14:30] First headline.\n[Yesterday] Second +0.5%.")
+        assert html.count("<tr>") == 2 and html.count("</tr>") == 2
+
+    def test_tag_extracted_and_styled_separately_from_headline(self):
+        html = self._lines("[14:30] Markets rallied.")
+        assert "14:30" in html
+        assert html.index("14:30") < html.index("Markets rallied")
+
+    def test_line_without_tag_still_renders(self):
+        html = self._lines("No tag on this one.")
+        assert "No tag on this one." in html
+        assert html.count("<tr>") == 1
+
+    def test_last_row_has_no_border(self):
+        html = self._lines("First.\nSecond.\nThird.")
+        rows = html.split("<tr>")[1:]
+        assert "border-bottom" in rows[0] and "border-bottom" in rows[1]
+        assert "border-bottom" not in rows[2]
 
     def test_empty_lines_dropped(self):
         html = self._lines("First.\n\nSecond.\n")
-        assert html.count("<li>") == 2
+        assert html.count("<tr>") == 2
 
-    def test_percentage_still_coloured_inside_li(self):
+    def test_percentage_still_coloured(self):
         from tarzan.export.newsletter import PALETTE
-        html = self._lines("Oil slipped -1.2% on supply data.")
+        html = self._lines("[09:00] Oil slipped -1.2% on supply data.")
         assert PALETTE["red"] in html
 
     def test_empty_input_returns_empty_string(self):
