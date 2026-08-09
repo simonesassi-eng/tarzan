@@ -115,9 +115,9 @@
                03 vs the market whether that beat the alternative
                04 markets      what the market did, and why
                05 allocation   where the money sits vs where it should
-               06 the book     the positions themselves
-               07 returns      how each position performed
-               08 watchlist    how the instruments not held performed
+               06 returns      how each position performed
+               07 watchlist    how the instruments not held performed
+               08 the book     the positions themselves
                09 attribution  which positions moved the number
                10 risk         what the shape of the ride was
                11 optimizer    what to do about it
@@ -202,12 +202,7 @@
           </tr>
           {% endif %}
 
-          {# ─── [06] THE BOOK ───────────────────────────────
-             The positions, before the grids that dissect them: a reader meets
-             the holdings, then their returns. #}
-          {% include "partials/holdings.html.j2" %}
-
-          {# ─── [07] RETURNS ────────────────────────────────
+          {# ─── [06] RETURNS ────────────────────────────────
              Per-holding, session then every window to five years. #}
           {% if returns_snapshot.available %}
           <tr>
@@ -222,7 +217,7 @@
           </tr>
           {% endif %}
 
-          {# ─── [08] WATCHLIST ──────────────────────────────
+          {# ─── [07] WATCHLIST ──────────────────────────────
              The same columns over the instruments tracked but not held, scaled
              on this table's own columns so it never borrows the book's range. #}
           <tr>
@@ -231,6 +226,11 @@
               {{ performance.table_html|safe }}
             </td>
           </tr>
+
+          {# ─── [08] THE BOOK ───────────────────────────────
+             The positions themselves, closing out the per-holding tables after
+             Returns and Watchlist. #}
+          {% include "partials/holdings.html.j2" %}
 
           {# ─── [09] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
           {% if return_contrib.winners or return_contrib.laggards %}
