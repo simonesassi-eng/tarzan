@@ -166,10 +166,13 @@
           {% endif %}
 
           {# ─── [04] MARKETS ────────────────────────────────
-             Every index with its session path, level and change, in two columns
-             split on a region boundary, then the AI market context. One section:
-             the note reads as a gloss on the table above it, and as a section of
-             its own it claimed an ordinal for three sentences. #}
+             Every index with its session path, level and change, in two
+             columns split on a region boundary, then a short financial-news
+             digest (last 6 hours + previous-session recap), grounded in
+             Google Search — general market news, not portfolio commentary.
+             One section: the digest reads as a coda to the table above it,
+             and as a section of its own it claimed an ordinal for a handful
+             of headlines. #}
           {% if markets.available or ai_summary %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
@@ -179,8 +182,8 @@
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
-                    <div style="font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary_html|safe }}</div>
-                    <div style="margin-top:8px;font-size:10px;color:{{ palette.subtle }};">✨ AI-generated market context · news may be imperfect · not financial advice</div>
+                    <ul style="margin:0;padding:0 0 0 16px;font-size:13.5px;color:{{ palette.ink }};line-height:1.55;">{{ ai_summary_html|safe }}</ul>
+                    <div style="margin-top:8px;font-size:10px;color:{{ palette.subtle }};">✨ AI-generated news digest · via Google Search · not financial advice</div>
                   </td>
                 </tr>
               </table>
