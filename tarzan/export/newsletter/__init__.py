@@ -28,7 +28,7 @@ from tarzan.export.newsletter._constants import (  # noqa: F401 (re-exported)
     _NewsletterContext,
     _PERF_CLASS_ORDER,
 )
-from tarzan.export.newsletter._format import _colorize_pct
+from tarzan.export.newsletter._format import _colorize_pct, _colorize_pct_lines
 from tarzan.export.newsletter import _charts as _charts_mod
 from tarzan.export.newsletter._sections_alloc import (
     _build_headline,
@@ -138,7 +138,7 @@ def build_context(
         "hero": hero,
         "performance30": _build_performance30(nctx),
         "ai_summary": ai_summary,
-        "ai_summary_html": _colorize_pct(ai_summary) if ai_summary else None,
+        "ai_summary_html": _colorize_pct_lines(ai_summary) if ai_summary else None,
         "movers": _build_movers(nctx),
         "diversification": _build_diversification(nctx),
         "holdings": _build_holdings(nctx),

@@ -69,6 +69,34 @@ class TestColorizePct:
         assert self._spans("beta of 0.69") == []
 
 
+class TestColorizePctLines:
+    """_colorize_pct_lines turns newline-separated items (the news digest)
+    into <li> markup — plain newlines collapse to whitespace in HTML, so the
+    caller needs real list markup to keep items visually separate."""
+
+    def _lines(self, text):
+        from tarzan.export.newsletter import _colorize_pct_lines
+        return _colorize_pct_lines(text)
+
+    def test_one_li_per_line(self):
+        html = self._lines("First headline.\nSecond headline +0.5%.")
+        assert html.count("<li>") == 2 and html.count("</li>") == 2
+        assert html.startswith("<li>First headline.</li>")
+
+    def test_empty_lines_dropped(self):
+        html = self._lines("First.\n\nSecond.\n")
+        assert html.count("<li>") == 2
+
+    def test_percentage_still_coloured_inside_li(self):
+        from tarzan.export.newsletter import PALETTE
+        html = self._lines("Oil slipped -1.2% on supply data.")
+        assert PALETTE["red"] in html
+
+    def test_empty_input_returns_empty_string(self):
+        assert self._lines("") == ""
+        assert self._lines(None) == ""
+
+
 class TestAssetClassOrder:
     def test_base_order_returned_without_arg(self):
         order = _format.asset_class_order()
