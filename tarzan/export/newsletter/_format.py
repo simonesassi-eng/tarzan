@@ -183,3 +183,14 @@ def _colorize_pct(text: str) -> str:
     return _re.sub(
         r"[+\-\u2212]\d+(?:[.,]\d+)?\s?(?:%|pp|percentage points?)", _wrap, esc)
 
+
+def _colorize_pct_lines(text: str) -> str:
+    """Like :func:`_colorize_pct`, but for newline-separated items (the news
+    digest): colorizes each line independently and returns them as <li>
+    markup, so the caller's newlines become a real list instead of
+    collapsing to whitespace in HTML."""
+    if not text:
+        return ""
+    items = [_colorize_pct(line) for line in text.split("\n") if line.strip()]
+    return "".join(f"<li>{item}</li>" for item in items)
+

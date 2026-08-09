@@ -99,11 +99,31 @@ def test_generate_summary_sanitizes_model_output(monkeypatch):
     monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
     monkeypatch.setattr(
         ai_summary, "_call_gemini",
-        lambda *a, **k: "**Your portfolio** is up.\n\n- bullet noise",
+        lambda *a, **k: (
+            "**Markets** rallied on rate hopes.\n"
+            "- Oil slipped -1.2% on supply data.\n"
+        ),
     )
     out = ai_summary.generate_summary(_metrics(), _config())
     assert out is not None
-    assert "**" not in out and "\n" not in out
+    # Markdown and any leading bullet are stripped per line, but (unlike the
+    # single-paragraph _sanitize) newlines are the whole point: one line per
+    # news item.
+    assert out.splitlines() == [
+        "Markets rallied on rate hopes.",
+        "Oil slipped -1.2% on supply data.",
+    ]
+
+
+def test_generate_summary_caps_at_seven_lines(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
+    nine = "\n".join(
+        f"Headline {i} moved markets today for a stated reason." for i in range(9)
+    )
+    monkeypatch.setattr(ai_summary, "_call_gemini", lambda *a, **k: nine)
+    out = ai_summary.generate_summary(_metrics(), _config())
+    assert len(out.splitlines()) == 7
 
 
 # ── Output hygiene ───────────────────────────────────────────────────────────
@@ -126,7 +146,7 @@ def test_render_shows_ai_summary_when_present():
         _metrics(), _config(),
         ai_summary="Your portfolio is up 20% since inception, steady this month.",
     )
-    assert "AI-generated market context" in html
+    assert "AI-generated news digest" in html
     assert "up 20% since inception" in html
     assert "not financial advice" in html
 
@@ -138,7 +158,7 @@ def test_render_without_ai_has_no_market_context():
     assert ctx["ai_summary"] is None
     assert "smart_insights" not in ctx
     html = render_newsletter(_metrics(), _config(), ai_summary=None)
-    assert "AI-generated market context" not in html
+    assert "AI-generated news digest" not in html
     assert "worth your attention" not in html
 
 
@@ -151,7 +171,7 @@ def test_render_auto_resolves_ai_summary_when_none(monkeypatch):
         lambda m, c: "Auto-resolved market note for the render path.",
     )
     html = render_newsletter(_metrics(), _config())  # ai_summary defaults to None
-    assert "AI-generated market context" in html
+    assert "AI-generated news digest" in html
     assert "Auto-resolved market note" in html
 
 
@@ -163,7 +183,7 @@ def test_render_empty_string_forces_block_off(monkeypatch):
         lambda m, c: (_ for _ in ()).throw(AssertionError("must not auto-resolve on empty string")),
     )
     html = render_newsletter(_metrics(), _config(), ai_summary="")
-    assert "AI-generated market context" not in html
+    assert "AI-generated news digest" not in html
 
 
 # ── Benchmark-divergence note (charts section) ───────────────────────────────
