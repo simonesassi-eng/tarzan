@@ -138,7 +138,7 @@ class TestNewsletterGoldenHtml:
         labels = re.findall(
             r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
         expected = ["State", "Portfolio", "Vs the market", "Markets",
-                    "Allocation", "The book", "Returns", "Watchlist",
+                    "Allocation", "Returns", "Watchlist", "The book",
                     "Attribution", "Risk", "Optimizer", "Appendix"]
         # Sections the deterministic fixture cannot fill are absent, not
         # reordered, so compare as a subsequence of the intended order.
