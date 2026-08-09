@@ -185,12 +185,35 @@ def _colorize_pct(text: str) -> str:
 
 
 def _colorize_pct_lines(text: str) -> str:
-    """Like :func:`_colorize_pct`, but for newline-separated items (the news
-    digest): colorizes each line independently and returns them as <li>
-    markup, so the caller's newlines become a real list instead of
-    collapsing to whitespace in HTML."""
+    """Like :func:`_colorize_pct`, but for the news digest's newline-
+    separated items. Each line may start with a '[tag]' time marker (e.g.
+    '[14:30]' or '[Today]', see _system_prompt); the tag, if present, is
+    pulled out and styled distinctly (muted, monospace) from the headline.
+    Returns <tr><td> rows, not <li>: the caller wraps this in a <table>,
+    which renders far more consistently across email clients than native
+    list bullets/spacing (Outlook in particular)."""
+    import html as _html
+    import re as _re
     if not text:
         return ""
-    items = [_colorize_pct(line) for line in text.split("\n") if line.strip()]
-    return "".join(f"<li>{item}</li>" for item in items)
+    raw_lines = [ln for ln in text.split("\n") if ln.strip()]
+    tag_re = _re.compile(r"^\[([^\]]{1,20})\]\s*")
+    rows = []
+    for i, line in enumerate(raw_lines):
+        m = tag_re.match(line)
+        tag, rest = (m.group(1), line[m.end():]) if m else (None, line)
+        tag_html = (
+            f'<span style="display:inline-block;min-width:52px;'
+            f"font-family:'SF Mono',Consolas,monospace;"
+            f'color:{PALETTE["subtle"]};font-size:11px;">'
+            f'{_html.escape(tag)}</span> '
+        ) if tag else ""
+        border = (f'border-bottom:1px solid {PALETTE["border"]};'
+                  if i < len(raw_lines) - 1 else "")
+        rows.append(
+            f'<tr><td style="padding:5px 2px;{border}">'
+            f'{tag_html}<span style="color:{PALETTE["ink"]};">'
+            f"{_colorize_pct(rest)}</span></td></tr>"
+        )
+    return "".join(rows)
 
