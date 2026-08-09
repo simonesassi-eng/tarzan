@@ -51,6 +51,8 @@ _TIMEOUT_SECONDS = 20
 _MAX_OUTPUT_TOKENS = 1400
 _MAX_CHARS = 1600  # generous safety cap for a ~150-word, 6-7 sentence note;
 # the trim always ends on a full sentence, never mid-thought or mid-number.
+_MAX_NEWS_LINES = 7  # the digest's own line budget (see _sanitize_lines)
+_MAX_LINE_CHARS = 220  # per-line safety net if the model ignores the word budget
 
 
 @dataclass(frozen=True)
@@ -169,10 +171,13 @@ def generate_summary(metrics, config) -> Optional[str]:
     model = _PINNED_MODEL
     attempts: list[GeminiAttemptEvidence] = []
     try:
-        digest = build_digest(metrics, config)
+        # No portfolio digest needed: this is a general financial-news
+        # digest, not commentary tied to this investor's holdings (see
+        # _system_prompt). metrics/config are still accepted so the caller
+        # in newsletter/__init__.py needs no changes.
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
         today_str = datetime.now().strftime("%A, %B %d, %Y")
-        system, user = _system_prompt(language, today_str), _user_prompt(digest)
+        system, user = _system_prompt(language, today_str), _user_prompt()
         grounded_started = time.perf_counter()
         try:
             text = _call_gemini(system, user, use_search=True)
@@ -227,7 +232,7 @@ def generate_summary(metrics, config) -> Optional[str]:
         _store_provider_result(GeminiProviderResult(
             tuple(attempts), selected_mode, availability
         ))
-        return _sanitize(text) if text else None
+        return _sanitize_lines(text) if text else None
     except Exception as error:  # noqa: BLE001
         attempts.append(GeminiAttemptEvidence(
             provider="gemini", model=model, mode="BUILD_OR_RENDER", ordinal=len(attempts) + 1,
@@ -841,60 +846,43 @@ def _rebalancing(m) -> dict:
 
 def _system_prompt(language: str, today_str: str) -> str:
     return (
-        f"You are a markets commentator writing a 'market context' note "
-        f"for a retail investor on {today_str}, explaining the macro backdrop "
-        "behind their portfolio's recent moves. Use Google Search to ground "
-        "the note in real, recent market news.\n"
-        "WEAVE TOGETHER THREE TIME HORIZONS into one flowing note (about two "
-        "sentences each). Do NOT label them, number them, or use the words "
-        "'breaking', 'previous session' or 'weekly trend' as headings — just "
-        "let the note move naturally from the newest to the broader picture:\n"
-        "1. The last few hours / today: what is moving world financial markets "
-        "right now — the latest headlines, pre-market or intraday moves, and "
-        "any news breaking in the last few hours.\n"
-        "2. The previous trading session (yesterday): what happened in the last "
-        "completed session and the events that drove it.\n"
-        "3. The past week's trend: the week's direction — cite the portfolio's "
-        "own weekly figures from the JSON (twror_by_period_pct '1w', movers_1w) "
-        "alongside the week's macro theme.\n"
+        f"You are writing a short financial-news digest for a retail-"
+        f"investor newsletter on {today_str}. Use Google Search to ground "
+        "every line in real, recent news. This is general financial/markets "
+        "news — not commentary tied to any specific portfolio.\n"
+        "Cover TWO time horizons, in this order:\n"
+        "1. The last 6 hours: the most significant financial and markets-"
+        "world headlines from roughly the last 6 hours (world indices, "
+        "central banks, major companies, macro data, geopolitics affecting "
+        "markets).\n"
+        "2. The previous trading day: a short recap of what happened in "
+        "yesterday's (the last completed) session and what drove it.\n"
         "RULES:\n"
-        "- Start directly with the market content. No preamble, no salutation, "
-        "no 'Here is your...' opener, no date restatement at the start.\n"
-        "- Keep every point relevant to THIS portfolio's exposures (asset "
-        "classes, equity geographies, top holdings and recent returns in the "
-        "JSON).\n"
-        "- Reference the ACTUAL day(s) by name and date (e.g. 'on Thursday the "
-        "25th') and cite CONCRETE figures — real index levels and percentage "
-        "moves (use the 'markets_today' levels in the JSON plus what you find "
-        "in search).\n"
-        "- Every market move you mention MUST carry a specific number (level "
-        "and/or % change), and write every percentage CHANGE with an explicit "
-        "leading + or - sign (e.g. +0.81%, -0.6%). NEVER use vague qualifiers "
-        "such as 'slight', 'mixed', 'somewhat', 'a bit', 'modest', 'broadly' "
-        "or 'edged' without an attached figure.\n"
-        "- Connect the macro drivers (US / Europe / emerging-market equities, "
-        "gold, government-bond yields and rates, EUR/USD) to why the portfolio "
-        "moved the way the JSON shows.\n"
-        "- Refer to real, recent events (rate decisions, inflation prints, "
-        "earnings, geopolitics) but NEVER invent figures, quotes or dates; if "
-        "unsure, omit that point rather than guessing.\n"
-        "- Write 6 to 8 sentences (roughly two per horizon), about 150 words "
-        "(never more than 180), as a single flowing paragraph. ALWAYS finish "
-        "your final sentence — never stop mid-thought. No markdown, no bullet "
-        "points, no headings, no labels. No predictions, no recommendations, "
-        "no personalized investment advice.\n"
+        "- Output ONLY the news lines: one item per line, separated by a "
+        "single newline. MAXIMUM 7 lines total across both horizons — fewer "
+        "is fine if there isn't enough real news; never pad to reach 7.\n"
+        "- No headings, no horizon labels, no numbering, no markdown, no "
+        "bullet characters. Each line is plain text: a single self-"
+        "contained, headline-style sentence, roughly 12-22 words.\n"
+        "- Reference the actual day/date where it matters and cite CONCRETE "
+        "figures — real index levels and percentage moves. Write every "
+        "percentage CHANGE with an explicit leading + or - sign (e.g. "
+        "+0.81%, -0.6%). Never use vague qualifiers ('slight', 'mixed', "
+        "'broadly') without an attached figure.\n"
+        "- Refer to real, recent events only; NEVER invent figures, quotes "
+        "or dates — if unsure, omit that line rather than guessing.\n"
+        "- No predictions, no recommendations, no personalized investment "
+        "advice.\n"
         f"- Write in {language}."
     )
 
 
-def _user_prompt(digest: dict) -> str:
+def _user_prompt() -> str:
     return (
-        "Here is the investor's portfolio context as JSON (exposures, recent "
-        "returns and today's index levels in 'markets_today'):\n\n"
-        + json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
-        + "\n\nSearch for the latest market news — covering the last few "
-        "hours, the previous trading session, and the past week's trend — and "
-        "write the market-context note now."
+        "Search for the latest world financial and markets news from "
+        "roughly the last 6 hours, plus a short recap of the previous "
+        "trading day, then write the digest now — one line per item, "
+        "7 lines maximum, following the rules exactly."
     )
 
 
@@ -999,6 +987,37 @@ def _sanitize(text: str) -> Optional[str]:
         else:
             cleaned = cut.rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return cleaned
+
+
+def _sanitize_lines(text: str, max_lines: int = _MAX_NEWS_LINES) -> Optional[str]:
+    """Like :func:`_sanitize`, but for the news digest: keeps one line per
+    item instead of collapsing to a single paragraph. Strips markdown and
+    any leading bullet/numbering per line (the model is told not to add
+    these, but this is the same never-trust-the-model discipline as
+    :func:`_sanitize`), drops empty lines, and caps at ``max_lines`` — extra
+    lines are dropped, not merged, so a line is never silently truncated to
+    make room."""
+    if not text:
+        return None
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        for token in ("**", "*", "`", "#"):
+            line = line.replace(token, "")
+        line = re.sub(r"^(?:[-•\u2022]|\d+[.)])\s+", "", line)
+        line = " ".join(line.split())
+        if not line:
+            continue
+        if len(line) > _MAX_LINE_CHARS:
+            cut = line[:_MAX_LINE_CHARS]
+            matches = list(re.finditer(r'[.!?]["\')\]]?(?=\s|$)', cut))
+            end = matches[-1].end() if matches else -1
+            line = (cut[:end].rstrip() if end >= _MAX_LINE_CHARS * 0.5
+                     else cut.rsplit(" ", 1)[0].rstrip(",;:") + "…")
+        lines.append(line)
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines) if lines else None
 
 
 # ---------------------------------------------------------------------------
