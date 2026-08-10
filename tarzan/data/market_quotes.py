@@ -663,7 +663,14 @@ def _fetch_intraday(symbols: list[str]) -> dict:
         def _download():
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                return yf.download(symbols, period="1d", interval="15m",
+                # 5d, not 1d: a market closed for a long weekend or a
+                # holiday needs more than one day of lookback to still find
+                # its last completed session. The per-symbol filter below
+                # then keeps exactly one day out of whatever comes back -
+                # today's if the market is open, otherwise the most recent
+                # one present - so a wider window never means a multi-day
+                # chart, only a better chance of finding a single real one.
+                return yf.download(symbols, period="5d", interval="15m",
                                    group_by="ticker", progress=False, threads=True)
         # Shared spacing+retry so the intraday batch survives a 429 burst.
         raw = _yf_net.fetch_yf(_download, what="intraday batch", log=logger)
@@ -675,7 +682,10 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                 if s in level0 and "Close" in raw[s].columns:
                     cl = raw[s]["Close"].dropna()
                     if len(cl) >= 2:
-                        out[s] = cl
+                        last_day = cl.index[-1].date()
+                        same_day = cl[[ts.date() == last_day for ts in cl.index]]
+                        if len(same_day) >= 2:
+                            out[s] = same_day
             except Exception:  # noqa: BLE001
                 continue
         missing = [s for s in symbols if s not in out]

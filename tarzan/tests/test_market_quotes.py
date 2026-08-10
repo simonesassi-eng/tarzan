@@ -18,6 +18,27 @@ def _close(values):
     return pd.DataFrame({"Close": values}, index=idx)
 
 
+def test_fetch_intraday_keeps_only_the_most_recent_available_day(monkeypatch):
+    """The 5d lookback window can span more than one calendar day for a
+    symbol that's been closed a while (weekend/holiday) - the chart must
+    still reflect ONE session: today's if the market is open, otherwise the
+    most recent one traded, never several days concatenated together."""
+    monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+
+    friday = pd.date_range("2026-08-07 09:30", periods=3, freq="15min")
+    monday = pd.date_range("2026-08-10 09:30", periods=4, freq="15min")
+    idx = friday.append(monday)
+    cols = pd.MultiIndex.from_product([["^GSPC"], ["Close", "Volume"]])
+    values = [[100.0, 1000]] * 3 + [[105.0, 1000]] * 4
+    raw = pd.DataFrame(values, index=idx, columns=cols)
+    monkeypatch.setattr("tarzan.data._yf_net.fetch_yf", lambda fn, **kw: raw)
+
+    out = mq._fetch_intraday(["^GSPC"])
+
+    assert len(out["^GSPC"]) == 4  # only Monday's 4 bars; Friday's dropped
+    assert all(ts.date() == monday[0].date() for ts in out["^GSPC"].index)
+
+
 def test_fetch_intraday_logs_symbols_missing_from_batch_response(monkeypatch, caplog):
     """Reproduces the shape of the real 'futures show no intraday' report:
     a batch response that has some symbols but not others should say so
