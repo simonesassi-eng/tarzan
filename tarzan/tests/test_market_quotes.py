@@ -18,6 +18,34 @@ def _close(values):
     return pd.DataFrame({"Close": values}, index=idx)
 
 
+def test_fetch_intraday_logs_symbols_missing_from_batch_response(monkeypatch, caplog):
+    """Reproduces the shape of the real 'futures show no intraday' report:
+    a batch response that has some symbols but not others should say so
+    in the logs, not fail silently - the newsletter's own fallback (daily-
+    close chart + a 'no intraday' label) looks intentional either way, so
+    this is the only signal that distinguishes a real data gap from a
+    one-off Yahoo miss."""
+    import logging
+    monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+
+    idx = pd.date_range("2026-08-10 09:30", periods=3, freq="15min")
+    cols = pd.MultiIndex.from_product([["^GSPC", "ES=F"], ["Close", "Volume"]])
+    raw = pd.DataFrame(
+        [[100.0, 1000, 101.0, 500],
+         [100.5, 1000, 101.5, 500],
+         [101.0, 1000, 102.0, 500]],
+        index=idx, columns=cols,
+    )
+    monkeypatch.setattr("tarzan.data._yf_net.fetch_yf", lambda fn, **kw: raw)
+
+    with caplog.at_level(logging.INFO):
+        out = mq._fetch_intraday(["^GSPC", "ES=F", "GC=F"])
+
+    assert set(out) == {"^GSPC", "ES=F"}  # present in the batch response
+    assert "GC=F" not in out              # absent from it, silently before
+    assert any("GC=F" in m for m in caplog.messages)
+
+
 def test_builds_quotes_from_history(monkeypatch):
     mq._memo = None
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
