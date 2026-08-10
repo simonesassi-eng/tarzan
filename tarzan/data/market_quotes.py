@@ -678,6 +678,16 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                         out[s] = cl
             except Exception:  # noqa: BLE001
                 continue
+        missing = [s for s in symbols if s not in out]
+        if missing:
+            # Visible at INFO (not DEBUG) on purpose: a symbol silently
+            # missing intraday data falls back to the daily-close chart
+            # with a "no intraday" label in the newsletter, which reads as
+            # a routine one-off Yahoo gap unless the pattern is visible in
+            # the logs. If the same symbols show up here run after run,
+            # that is a real gap in the batch response, not flakiness.
+            logger.info("intraday batch: %d/%d symbols missing from response: %s",
+                        len(missing), len(symbols), ", ".join(missing))
     except Exception as e:  # noqa: BLE001
         logger.debug("intraday batch failed: %s", e)
     return out
