@@ -489,6 +489,16 @@ _SIBLING_PRICE_TOLERANCE = 0.10
 # broker-1D % at whatever those first two ticks were for the rest of the
 # session. Two intervals of slack (30 min) covers a missed bar without
 # flagging a feed that is merely early in the session as stale.
+#
+# This staleness-by-recency check only means something while a session
+# should be actively advancing. Once the relevant market is closed, its
+# last print being wall-clock "old" is simply correct (see
+# _fetch_intraday's own-day filter, which already narrowed the series to
+# one real session) — rejecting it here as "stale" sent every closed-market
+# symbol through an unnecessary, and usually unsuccessful, sibling search.
+# _has_intraday takes the ticker so it can tell the two cases apart via
+# market_open_now(); for FX/futures (market_open_now returns None — no
+# clean open/close concept) the recency check still applies, unchanged.
 _INTRADAY_STALE_AFTER_SECONDS = 1800  # 2x the 15m fetch interval
 
 
@@ -501,12 +511,46 @@ def _intraday_reference_now(tzinfo=None):
     return datetime.now(tzinfo or _tz.utc)
 
 
-def _has_intraday(ser) -> bool:
+def _no_trading_day_skipped(ticker: str, last_ts, now) -> bool:
+    """Whether every calendar day strictly between ``last_ts`` and ``now``
+    was a non-trading day for ``ticker`` (weekend, per market_open_now's
+    weekday gate) - i.e. the market had no opportunity to print anything
+    fresher in between. Probed once at midday per intervening day; coarse
+    but sufficient to separate "just closed" from "stuck behind a session
+    that did happen". Conservative on any error: reports a skip (False),
+    so a real staleness check still runs rather than silently trusting
+    data that couldn't be verified."""
+    from datetime import timedelta
+    try:
+        d = last_ts.date() + timedelta(days=1)
+        end_date = now.date()
+        while d < end_date:
+            probe = datetime.combine(d, dtime(12, 0), tzinfo=last_ts.tzinfo)
+            if market_open_now(ticker, now=probe):
+                return False
+            d += timedelta(days=1)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def _has_intraday(ser, ticker: Optional[str] = None) -> bool:
     if ser is None or len(ser) < 2:
         return False
     try:
         last_ts = ser.index[-1]
         now = _intraday_reference_now(getattr(last_ts, "tzinfo", None))
+        if (ticker is not None
+                and market_open_now(ticker, now=now) is False
+                and _no_trading_day_skipped(ticker, last_ts, now)):
+            # Closed market, and nothing fresher could plausibly exist yet:
+            # an "old" last print is expected and correct, not a sign of a
+            # stuck feed. See the comment on _INTRADAY_STALE_AFTER_SECONDS
+            # above. If a valid trading day WAS skipped in between, fall
+            # through to the normal age check instead - the sibling search
+            # exists precisely to route around a primary stuck behind a
+            # session that did happen.
+            return True
         age_seconds = (now - last_ts.to_pydatetime()).total_seconds()
     except Exception:  # noqa: BLE001
         # Unexpected index type: don't newly reject on a shape we can't
@@ -559,7 +603,7 @@ def _resolve_intraday(
     selected series and provenance without resolving another venue.
     """
     prim = _fetch_intraday(symbols)
-    out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s))}
+    out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s), s)}
     missing = [s for s in symbols if s not in out]
     if missing:
         stale = [s for s in missing if prim.get(s) is not None]
@@ -613,7 +657,7 @@ def _resolve_intraday(
         rejected_candidates: list[str] = []
         for c in cand_map[s]:
             ser = sib.get(c)
-            if not _has_intraday(ser):
+            if not _has_intraday(ser, c):
                 continue
             dev = abs(float(ser.iloc[-1]) / prim_close - 1.0)
             if dev > _SIBLING_PRICE_TOLERANCE:
