@@ -302,8 +302,18 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     live_1d = (m.performance_full or {}).get("1d")
     if live_1d is not None and not (isinstance(live_1d, float) and math.isnan(live_1d)):
         tw[1] = float(live_1d)
-        prev_val = m.total_value / (1.0 + float(live_1d) / 100.0) if (1.0 + float(live_1d) / 100.0) else None
-        eur_1d = (m.total_value - prev_val) if prev_val is not None else None
+        # Bill the session € against the PRICED sleeve (invested_value), NOT
+        # total_value. performance_full["1d"] is a value-weighted move over the
+        # priced holdings (metrics._portfolio_1d: Σ weight·pct / Σ weight over
+        # holdings with a live quote) — cash carries no move into it, so a base
+        # that includes cash inflates the euro by the cash weight. This is the
+        # same fix already applied to the hero's Session tile; billed against a
+        # different base, the two 1-day euros were diverging by exactly that
+        # cash weight. base is an END-of-session value and the % is measured
+        # from the session START, so de-compound: end - end/(1+p).
+        base = m.invested_value if (m.invested_value or 0) > 0 else m.total_value
+        p = float(live_1d) / 100.0
+        eur_1d = (base - base / (1.0 + p)) if (1.0 + p) else None
         tot[1] = (eur_1d, float(live_1d))
         unr[1] = (eur_1d, float(live_1d))
 
