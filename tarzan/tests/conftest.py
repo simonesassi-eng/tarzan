@@ -22,6 +22,26 @@ def _disable_market_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_run_context():
+    """Give every test a fresh live run context.
+
+    ``runtime.configure()`` writes into a module-level ContextVar, so a test
+    that configures a pinned ``as_of`` (the golden-master runs do) leaves that
+    effective date installed for every test that runs after it in the same
+    process. Anything reading the ambient context then silently inherits it —
+    ``ValuationCompletenessEvaluator`` derives its ``captured_at`` that way, so
+    a "2 hours old" holding was measured against a 2025 effective date and
+    graded FALLBACK instead of STALE. That made a real freshness assertion
+    pass or fail purely on test ORDER, which is exactly the kind of check
+    that must not be order-dependent.
+    """
+    from tarzan import runtime
+    runtime.reset(attempt_id="test", invocation_source="test")
+    yield
+    runtime.reset(attempt_id="test", invocation_source="test")
+
+
+@pytest.fixture(autouse=True)
 def _disable_ai_summary(monkeypatch):
     """Force the AI portfolio summary off for the whole suite so tests
     never hit the network or consume API tokens. Tests that exercise the
