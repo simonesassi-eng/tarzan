@@ -14,7 +14,8 @@ The folder must contain at least:
     - order_list.csv
     - targets.csv
 
-Optionally: targets_per_holding.csv. Anything else in the folder is ignored.
+Optionally: targets_per_holding.csv, strategy.txt (the written thesis rendered
+as the newsletter's Strategy section). Anything else in the folder is ignored.
 
 Used by :mod:`tarzan.delivery` (the newsletter service); the CI workflow
 reaches it through the ``scripts/send_newsletter.py`` shim.
@@ -37,6 +38,10 @@ logger = logging.getLogger(__name__)
 # per-holding targets file).
 KNOWN_INPUT_FILES = (
     "order_list.csv", "targets.csv", "targets_per_holding.csv",
+    # The written investment thesis rendered as the newsletter's Strategy
+    # section. Personal free text, so it lives in Drive like the other inputs
+    # rather than in the (public) repo.
+    "strategy.txt",
 )
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
