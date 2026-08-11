@@ -853,12 +853,20 @@ def broker_1d(
         # so a Milan holding served by its Xetra twin is judged by the venue
         # that actually produced the bars. FX/futures/crypto have no fixed
         # session → market_open_now returns None and we fall back to recency.
-        mkt_open = market_open_now(src)
+        # "now" goes through _intraday_reference_now — the same pinnable seam
+        # _has_intraday uses — instead of a bare market_open_now(src) (no
+        # now=) or Timestamp.now(): those read the REAL wall clock, so
+        # is_live silently depended on what moment this happened to run,
+        # not on the series' own reference time. A test built around a
+        # fixed historical "now" only gets a deterministic result once this
+        # reads through the same pinnable seam.
+        now_ref = _intraday_reference_now()
+        mkt_open = market_open_now(src, now=now_ref)
         if mkt_open is None:
             try:
                 lt = (last_ts.tz_convert("UTC") if getattr(last_ts, "tzinfo", None)
                       else last_ts.tz_localize("UTC"))
-                age_min = (pd.Timestamp.now(tz="UTC") - lt).total_seconds() / 60.0
+                age_min = (now_ref - lt).total_seconds() / 60.0
                 is_live = age_min <= _MARKET_OPEN_MAX_LAG_MIN
             except Exception:  # noqa: BLE001
                 is_live = False
