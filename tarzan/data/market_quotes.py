@@ -499,7 +499,19 @@ _SIBLING_PRICE_TOLERANCE = 0.10
 # _has_intraday takes the ticker so it can tell the two cases apart via
 # market_open_now(); for FX/futures (market_open_now returns None — no
 # clean open/close concept) the recency check still applies, unchanged.
-_INTRADAY_STALE_AFTER_SECONDS = 1800  # 2x the 15m fetch interval
+#
+# The threshold is 3h, not the 30 min (2x the 15m interval) it started at.
+# Yahoo's free 15m feed for small European ETF listings lags far more than
+# its nominal interval: measured on a live run, NTSG.PA was 36 min behind
+# and NTSG.DE 246 min, while both carried a full session of real bars priced
+# within 0.25% of the primary's own close. The 30 min rule rejected both, so
+# the sibling fallback found perfectly usable data and threw it away — the
+# holding then showed the previous day's close while its market was open,
+# which is exactly what the fallback exists to prevent. 3h still catches a
+# feed frozen at the open (the .MI failure this guard was built for, which
+# stops advancing for the whole session) while accepting one that is merely
+# behind. A lagging-but-advancing feed is worth far more than yesterday.
+_INTRADAY_STALE_AFTER_SECONDS = 10800  # 3h — Yahoo's EU ETF 15m feed lags
 
 
 def _intraday_reference_now(tzinfo=None):
@@ -519,13 +531,30 @@ def _no_trading_day_skipped(ticker: str, last_ts, now) -> bool:
     but sufficient to separate "just closed" from "stuck behind a session
     that did happen". Conservative on any error: reports a skip (False),
     so a real staleness check still runs rather than silently trusting
-    data that couldn't be verified."""
+    data that couldn't be verified.
+
+    The probe -- and the day range it walks -- is built in the EXCHANGE's own
+    timezone, not the series'. yfinance indexes intraday bars in UTC, and
+    midday UTC falls outside most exchanges' local sessions (08:00 in New
+    York, before the 09:30 open; the small hours in Tokyo/Hong Kong/Sydney).
+    Probing at 12:00 UTC therefore reported "closed" for every intervening
+    weekday on every non-European exchange, so a feed genuinely stuck behind
+    a completed session read as "nothing fresher could exist" and was
+    accepted as that market's last session -- which is exactly the stale-day
+    anchoring bug the caller's guard exists to prevent. 12:00 local is inside
+    the regular session of every exchange in _SESSIONS.
+    """
     from datetime import timedelta
     try:
-        d = last_ts.date() + timedelta(days=1)
-        end_date = now.date()
+        ex = _exchange_for((ticker or "").upper())
+        if ex is None or ex not in _SESSIONS:
+            return False
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(_SESSIONS[ex][0])
+        d = last_ts.astimezone(tz).date() + timedelta(days=1)
+        end_date = now.astimezone(tz).date()
         while d < end_date:
-            probe = datetime.combine(d, dtime(12, 0), tzinfo=last_ts.tzinfo)
+            probe = datetime.combine(d, dtime(12, 0), tzinfo=tz)
             if market_open_now(ticker, now=probe):
                 return False
             d += timedelta(days=1)
@@ -655,9 +684,18 @@ def _resolve_intraday(
             )
             continue
         rejected_candidates: list[str] = []
+        stale_candidates: list[str] = []
         for c in cand_map[s]:
             ser = sib.get(c)
             if not _has_intraday(ser, c):
+                # Absent and stale are different diagnoses, and conflating
+                # them is actively misleading: a sibling holding a full
+                # session of bars that merely lag the staleness threshold
+                # used to be reported as "no data", which reads as "this
+                # venue does not exist" and hides the fact that the
+                # threshold — not the provider — is what dropped it.
+                if ser is not None:
+                    stale_candidates.append(c)
                 continue
             dev = abs(float(ser.iloc[-1]) / prim_close - 1.0)
             if dev > _SIBLING_PRICE_TOLERANCE:
@@ -678,13 +716,16 @@ def _resolve_intraday(
             break
         else:
             tried = cand_map[s]
-            no_data = [c for c in tried if c not in rejected_candidates]
+            accounted = set(rejected_candidates) | set(stale_candidates)
+            no_data = [c for c in tried if c not in accounted]
             logger.info(
                 "intraday fallback exhausted for %s — no usable venue "
-                "(tried %s; no data: %s; price-mismatched: %s)",
+                "(tried %s; no data: %s; stale >%ds: %s; price-mismatched: %s)",
                 s,
                 ", ".join(tried) or "none",
                 ", ".join(no_data) or "none",
+                _INTRADAY_STALE_AFTER_SECONDS,
+                ", ".join(stale_candidates) or "none",
                 ", ".join(rejected_candidates) or "none",
             )
     return out

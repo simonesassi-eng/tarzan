@@ -317,6 +317,48 @@ def test_broker_1d_closed_stale_primary_anchors_wrong_day(monkeypatch):
     assert round(res["NTSG.MI"]["pct"], 2) == -5.00
 
 
+def test_stale_day_detection_probes_in_exchange_time_not_series_time(monkeypatch):
+    """The same stale-day bug as the test above, on a US ticker.
+
+    yfinance indexes intraday bars in UTC, and _no_trading_day_skipped used
+    to build its midday probe in the SERIES' timezone. 12:00 UTC is 08:00 in
+    New York — before the 09:30 open — so every intervening weekday probed as
+    "closed", the guard concluded no session had been skipped, and a feed
+    stuck two days back was accepted as that market's last session. Only
+    Europe/Rome (where the test above lives, and where 12:00 UTC does land
+    mid-session) was unaffected, so the bug hid behind a passing suite.
+    """
+    utc_bars = pd.date_range("2026-08-05 13:45", periods=2, freq="15min", tz="UTC")
+    stale_primary = pd.Series([94.0, 94.05], index=utc_bars)
+
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"^GSPC": stale_primary}
+                        if "^GSPC" in symbols else {})
+    monkeypatch.setattr(
+        "tarzan.data.enricher._fetch_history",
+        lambda t: pd.DataFrame(
+            {"Close": [90.0, 100.0, 100.0, 95.0]},
+            index=pd.to_datetime(
+                ["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"])),
+    )
+    # Friday 2026-08-07 21:00 UTC = 17:00 ET: US cash closed. Thursday
+    # 2026-08-06 in between WAS a full trading day, so this primary is stuck
+    # behind a real session — not merely "old because the market is shut".
+    monkeypatch.setattr(
+        mq, "_intraday_reference_now",
+        lambda tzinfo=None: pd.Timestamp("2026-08-07 21:00", tz=tzinfo or "UTC"))
+
+    assert mq._no_trading_day_skipped(
+        "^GSPC", stale_primary.index[-1],
+        pd.Timestamp("2026-08-07 21:00", tz="UTC")) is False, \
+        "Thursday was a real US trading day — the skip must be detected"
+    assert mq._has_intraday(stale_primary, "^GSPC") is False, \
+        "a primary two days stale must not pass as the last session"
+    # With the stale primary rejected and no sibling for an index, broker_1d
+    # reports nothing rather than the stale-day anchored +11.11% (100 vs 90).
+    assert "^GSPC" not in mq.broker_1d(["^GSPC"])
+
+
 def test_resolve_intraday_rejects_price_collision(monkeypatch):
     # Sibling exists but its price is wildly off the primary close → treated
     # as a different instrument (ticker collision) and rejected.
