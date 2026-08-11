@@ -105,6 +105,11 @@ _HISTORY_ORIGINS_ATTR = "tarzan_price_origins"
 _HISTORY_SYMBOL_ATTR = "tarzan_price_symbol"
 _HISTORY_ORIGIN_PRIMARY = "primary"
 _HISTORY_ORIGIN_CACHE = "cache"
+# A close this venue never printed: today's bar reconstructed by applying a
+# price-coherent sibling venue's OWN same-day return to this venue's last
+# real close. See _fill_today_from_sibling.
+_HISTORY_ORIGIN_SIBLING_RETURN = "sibling_return"
+_HISTORY_SYNTHETIC_ATTR = "tarzan_price_synthetic"
 _FX_EVIDENCE_ATTR = "tarzan_fx_evidence"
 
 
@@ -1257,6 +1262,207 @@ def _history_origins(
     return origins
 
 
+def _sibling_close_series(symbol: str):
+    """Daily closes for ``symbol``, fetched WITHOUT sibling filling.
+
+    Deliberately bypasses :func:`_fetch_history` (and so cannot recurse into
+    the fill): a synthesized close must never be derived from another
+    synthesized close, or one venue's outage would propagate a chain of
+    reconstructed prices across every listing of the fund. Returns ``None``
+    on any failure — the fill is best-effort by design.
+    """
+    try:
+        cached = price_cache.load_history(symbol)
+        start = price_cache.refresh_start(cached)
+
+        def _call():
+            _space_yf_call()
+            ticker = yf.Ticker(symbol)
+            if start is not None:
+                return ticker.history(start=start, interval="1d", auto_adjust=True)
+            return ticker.history(period=_backtest_period(), interval="1d",
+                                  auto_adjust=True)
+
+        fresh = _retry(_call, what=f"sibling history {symbol}")
+        if fresh is None:
+            fresh = pd.DataFrame()
+        merged = price_cache.merge_history(cached, fresh)
+        frame = merged if merged is not None and not merged.empty else fresh
+        if frame is None or frame.empty or "Close" not in frame:
+            return None
+        frame = _clip_to_as_of(frame)
+        frame = price_cache.repair_split_jumps(frame)
+        if frame is None or frame.empty:
+            return None
+        closes = frame["Close"].dropna()
+        closes = closes[closes > 0]
+        return closes if len(closes) else None
+    except Exception:  # noqa: BLE001 — a best-effort fill must never break enrichment
+        return None
+
+
+def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
+    """Give ``symbol`` today's close by borrowing a sibling venue's own return.
+
+    Yahoo's feed for some European listings (Borsa Italiana ``.MI`` most
+    often) publishes today's daily bar late or not at all, while the same
+    fund's Xetra/Paris listing already has it. Without this, that holding
+    sits a day behind every other one in the book: its 1w/1m/YTD, TWROR,
+    XIRR and risk are all measured to yesterday while the rest are measured
+    to today.
+
+    The borrowed quantity is a RETURN, never a price. Both endpoints of that
+    return come from the sibling, so the venue basis cancels in the division;
+    the result is then applied to THIS venue's last real close::
+
+        synthetic = own_last_close * (1 + sibling_today / sibling_prev)
+
+    Splicing the sibling's raw price instead would inject the venue basis as
+    a fake return. Measured on NTSG (125 overlapping days) that basis has a
+    0.31% standard deviation and swings 0.44% day to day against a 0.70%
+    typical daily move — i.e. mostly noise, permanently embedded in the
+    return chain and directly inflating volatility. Taking the return keeps
+    every step venue-consistent. This mirrors what ``broker_1d`` already
+    does for the intraday path, where both the current tick and the previous
+    close come from the selected sibling.
+
+    Deliberately narrow:
+
+    * Only the CURRENT day is ever added, and only when it is genuinely
+      missing. Older holes are left alone; a gap mid-series is a different
+      problem and backfilling it would rewrite settled history run to run.
+    * Only when the sibling's own previous close sits on this venue's last
+      real close date, so the borrowed return spans exactly the missing step.
+    * Only when the two venues' price levels agree within
+      ``_SIBLING_PRICE_TOLERANCE`` — the same collision guard the intraday
+      path uses to prove the sibling is the same instrument, not an unrelated
+      fund sharing a ticker root.
+    * Never in a pinned/reproducible run: the caller gates on that, so a
+      point-in-time run reflects only what its own venue actually printed.
+    """
+    from tarzan.data.market_quotes import _sibling_symbols, _SIBLING_PRICE_TOLERANCE
+
+    try:
+        closes = result["Close"].dropna()
+        closes = closes[closes > 0]
+        if len(closes) < 2:
+            return result
+        own_last_index = closes.index[-1]
+        own_last_date = pd.Timestamp(own_last_index).date()
+        today = _today_local()
+        if own_last_date >= today:
+            return result  # already current — nothing to fill
+        # Only the immediately-missing session is in scope. If this venue is
+        # several sessions behind, that is a deeper outage than a late bar and
+        # chaining borrowed returns across it is not something to do silently.
+        if not _is_previous_trading_day(symbol, own_last_date, today):
+            return result
+
+        own_last_close = float(closes.iloc[-1])
+        for candidate in _sibling_symbols(symbol):
+            sib = _sibling_close_series(candidate)
+            if sib is None or len(sib) < 2:
+                continue
+            sib_dates = [pd.Timestamp(i).date() for i in sib.index]
+            if sib_dates[-1] != today:
+                continue  # sibling has no today either
+            # The sibling's previous close must sit exactly on this venue's
+            # last real close date, so the borrowed return covers precisely
+            # the one missing step and not a longer span.
+            try:
+                prev_pos = sib_dates.index(own_last_date)
+            except ValueError:
+                continue
+            if prev_pos != len(sib_dates) - 2:
+                continue
+            sib_prev = float(sib.iloc[prev_pos])
+            sib_today = float(sib.iloc[-1])
+            if sib_prev <= 0 or sib_today <= 0:
+                continue
+            # Same-instrument guard: levels must be comparable, else an equal
+            # ticker root on another exchange is a different fund.
+            if abs(sib_prev / own_last_close - 1.0) > _SIBLING_PRICE_TOLERANCE:
+                logger.info(
+                    "daily tail fill %s→%s rejected (%.1f%% off own last close)",
+                    symbol, candidate,
+                    abs(sib_prev / own_last_close - 1.0) * 100,
+                )
+                continue
+
+            sibling_return = sib_today / sib_prev - 1.0
+            synthetic = own_last_close * (1.0 + sibling_return)
+            new_index = pd.Timestamp(today)
+            existing_index = pd.Timestamp(own_last_index)
+            if existing_index.tz is not None:
+                new_index = new_index.tz_localize(existing_index.tz)
+
+            filled = result.copy()
+            row = {col: float("nan") for col in filled.columns}
+            row["Close"] = synthetic
+            filled.loc[new_index] = row
+            filled = filled.sort_index()
+
+            origins = dict(result.attrs.get(_HISTORY_ORIGINS_ATTR, {}))
+            origins[_history_timestamp_key(new_index)] = (
+                _HISTORY_ORIGIN_SIBLING_RETURN
+            )
+            filled.attrs.update(result.attrs)
+            filled.attrs[_HISTORY_ORIGINS_ATTR] = origins
+            synthetic_map = dict(result.attrs.get(_HISTORY_SYNTHETIC_ATTR, {}))
+            synthetic_map[_history_timestamp_key(new_index)] = {
+                "source": candidate,
+                "sibling_return_pct": sibling_return * 100.0,
+                "own_last_close": own_last_close,
+                "own_last_date": str(own_last_date),
+                "synthetic_close": synthetic,
+            }
+            filled.attrs[_HISTORY_SYNTHETIC_ATTR] = synthetic_map
+
+            logger.info(
+                "daily tail fill: %s has no %s close; applied %s's own "
+                "%+.4f%% move to %s's last close %.4f → %.4f",
+                symbol, today, candidate, sibling_return * 100.0,
+                symbol, own_last_close, synthetic,
+            )
+            dq.info(
+                "market_data",
+                f"no {today} close from this venue; today's close derived by "
+                f"applying {candidate}'s own {sibling_return * 100:+.4f}% move "
+                f"to the last real close {own_last_close:.4f} → "
+                f"{synthetic:.4f} (venue-consistent return, not a spliced price)",
+                context=symbol,
+            )
+            return filled
+    except Exception:  # noqa: BLE001 — a best-effort fill must never break enrichment
+        logger.debug("daily tail fill failed for %s", symbol, exc_info=True)
+    return result
+
+
+def _today_local():
+    """Today's date in the run's own clock (as_of when pinned)."""
+    from tarzan import runtime
+    as_of = runtime.as_of()
+    if as_of is not None:
+        return as_of
+    return pd.Timestamp.now().date()
+
+
+def _is_previous_trading_day(symbol: str, own_last_date, today) -> bool:
+    """Whether ``own_last_date`` is the trading day immediately before
+    ``today`` for ``symbol``'s exchange — i.e. exactly one session is
+    missing, not several.
+
+    Weekends are skipped (holidays are not modelled anywhere in Tarzan, so a
+    holiday simply makes this False and the fill declines — the conservative
+    direction).
+    """
+    from datetime import timedelta
+    probe = today - timedelta(days=1)
+    while probe.weekday() >= 5:
+        probe -= timedelta(days=1)
+    return own_last_date == probe
+
+
 def _fetch_history(symbol: str) -> pd.DataFrame:
     """Fetch and merge daily history while preserving row-level provenance.
 
@@ -1335,7 +1541,16 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
         result.attrs[_HISTORY_ORIGINS_ATTR] = origins
         result.attrs[_HISTORY_SYMBOL_ATTR] = symbol
         if not pinned:
+            # Store BEFORE the sibling fill: only closes this venue actually
+            # printed belong in its own on-disk cache. A synthesized bar is a
+            # per-run reconstruction, and persisting it would let it be read
+            # back next run as though the venue had printed it — and then
+            # become the base another synthetic close is derived from.
             price_cache.store_history(symbol, result)
+            # Live runs only. A pinned/reproducible run must reflect exactly
+            # what its own venue printed, or the same as_of would yield
+            # different history depending on which venues answered.
+            result = _fill_today_from_sibling(symbol, result)
 
     with _net_lock:
         _history_memo[symbol] = result
