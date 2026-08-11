@@ -51,13 +51,22 @@ def test_resolve_inputs_local(monkeypatch, tmp_path):
     monkeypatch.setenv("ORDERS_PATH", str(orders))
     monkeypatch.setenv("TARGETS_PATH", str(targets))
     monkeypatch.setenv("TARGETS_PER_HOLDING_PATH", str(tmp_path / "absent.csv"))
+    # Strategy note absent → None as well (the section simply disappears).
+    monkeypatch.setenv("STRATEGY_PATH", str(tmp_path / "absent.txt"))
 
     resolved = delivery.resolve_inputs()
     assert resolved == {
         "config": str(targets),
         "orders": str(orders),
         "targets_per_holding": None,
+        "strategy": None,
     }
+
+    # Present → resolved, so the newsletter can render the Strategy section.
+    note = tmp_path / "strategy.txt"
+    note.write_text("## Thesis\nbody\n", encoding="utf-8")
+    monkeypatch.setenv("STRATEGY_PATH", str(note))
+    assert delivery.resolve_inputs()["strategy"] == str(note)
 
 
 def test_resolve_inputs_local_missing_orders_raises(monkeypatch, tmp_path):

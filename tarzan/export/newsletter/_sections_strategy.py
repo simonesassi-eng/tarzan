@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
 STRATEGY_FILE = ROOT / "input" / "strategy.txt"
+# Env override so the automated run can point at the copy pulled from Drive
+# (inputs land in a tempdir there, not in the repo's input/).
+_ENV_VAR = "STRATEGY_PATH"
+
+
+def strategy_path() -> Path:
+    """The strategy note to render: ``$STRATEGY_PATH`` if set, else input/."""
+    return Path(os.environ.get(_ENV_VAR) or STRATEGY_FILE)
 
 
 def parse_strategy(text: str) -> list[tuple[str, list[str]]]:
@@ -82,9 +90,11 @@ def _build_strategy(ctx: _NewsletterContext) -> dict:
     try:
         if "PYTEST_CURRENT_TEST" in os.environ:
             return {"available": False, "html": ""}
-        if not STRATEGY_FILE.exists():
+        path = strategy_path()
+        if not path.exists():
+            logger.info("Strategy note skipped (%s not found).", path)
             return {"available": False, "html": ""}
-        text = STRATEGY_FILE.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except OSError as e:                  # unreadable file must never break the render
         logger.warning("Strategy note skipped (%s): %s", type(e).__name__, e)
         return {"available": False, "html": ""}
