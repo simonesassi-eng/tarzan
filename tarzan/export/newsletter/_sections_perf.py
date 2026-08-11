@@ -49,7 +49,6 @@ from tarzan.export.newsletter._charts import (
     _day_spark,
     _flat_dashed_spark,
     _intraday_spark,
-    _prev_session_label,
     day_column_label,
 )
 
@@ -248,12 +247,21 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 '</tr></table>')
     else:
         grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
-    # Section subtitle: which close the levels are, and how many indices. Both
-    # change what the table means and neither was stated.
-    close_label = _prev_session_label(m, "%d %b")
-    n = sum(1 for d in snap if isinstance(d, dict))
-    sub = (f'Session close \u00b7 {close_label} \u00b7 {n} indices'
-           if close_label else f'{n} indices')
+    # Section subtitle: when this live snapshot was captured, in the reader's
+    # timezone (Europe/Rome) with a DST-aware label (CEST/CET) -- the anchor
+    # that explains why a level here can differ from a live quote viewed later
+    # (this is a frozen email, not a live page). From the run-owned
+    # captured_at, NOT datetime.now(): the scheduled build runs on a UTC CI
+    # clock, so an explicit Europe/Rome conversion is required rather than the
+    # system-local .astimezone() that runtime.now_stamp() would apply.
+    sub = ""
+    try:
+        from zoneinfo import ZoneInfo
+        from tarzan import runtime as _runtime
+        _cap = _runtime.context().captured_at.astimezone(ZoneInfo("Europe/Rome"))
+        sub = f"As of {_cap:%H:%M %Z}"
+    except Exception:  # noqa: BLE001
+        sub = ""
     return {"available": True, "html": grid, "sub": sub}
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
