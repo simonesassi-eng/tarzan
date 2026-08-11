@@ -71,3 +71,6 @@ tarzan_cache/
 # Personal/educational use only, NOT for redistribution. Regenerate locally
 # with tbtf-analisi/fetch_arcticshift.py. Derived stats (small JSON) are kept.
 tbtf-analisi/tbtf_arcticshift.json
+
+# Written investment thesis (personal free text, rendered in the newsletter).
+input/strategy.txt
