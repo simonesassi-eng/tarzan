@@ -261,15 +261,26 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     perf = getattr(m, "performance", None) or {}
     cagr_pct = perf.get("cagr")
     session_pct = perf.get("1d")
-    # The session move in euros, for the tile caption: the same window-1
-    # money P&L the performance matrix prints, so the two agree.
+    # The session move in euros, for the tile caption: derived from the very
+    # percentage shown beside it, so the two can never describe different
+    # windows. (_window_money_pnl below walks a CALENDAR-day window, while
+    # session_pct is the last-TRADING-day change — across a weekend those are
+    # different spans, which is how a -0.18% session came to print -€1.2k.)
+    #
+    # The base is invested_value, not total_value: session_pct is a price-only
+    # return over the priced holdings (see metrics._portfolio_history, which
+    # sums price_history x quantity), and cash contributes no price move to
+    # it. Applying it to a total that includes cash inflates the euro figure
+    # by the cash weight.
+    # base is an END-of-session value, while session_pct is measured against
+    # the session's START, so the percentage is de-compounded rather than
+    # applied directly: end - end/(1+p) == end * p/(1+p).
     session_eur = None
     if not is_missing(session_pct):
-        pct_val = float(session_pct)
-        denom = 1.0 + pct_val / 100.0
-        if denom != 0:
-            prev_val = m.total_value / denom
-            session_eur = m.total_value - prev_val
+        base = m.invested_value if m.invested_value > 0 else m.total_value
+        pct_val = float(session_pct) / 100.0
+        if pct_val != -1.0:
+            session_eur = base * pct_val / (1.0 + pct_val)
     if session_eur is None and m.pnl_series is not None and m.actual_value_series is not None:
         pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
         if pair and pair[0] is not None:
