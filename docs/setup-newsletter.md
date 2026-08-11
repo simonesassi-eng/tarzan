@@ -6,8 +6,10 @@ with on-demand "Update" replies wired in.
 
 > **Time required:** ~30 minutes the first time.
 > **What you'll have at the end:**
-> - 3× scheduled sends per day (09:05, 13:00, 17:35 Europe/Rome),
->   driven by the Gmail Apps Script — never duplicated, never bursty
+> - Scheduled sends at Italian market hours (08:00 pre-open, a 90-minute
+>   cadence from 09:05 to the 17:35 post-close wrap-up, 23:00 recap;
+>   weekends 08:00 / 13:05 / 23:00), driven by the Gmail Apps Script —
+>   never duplicated, never bursty
 > - Reply "Update" to any newsletter → fresh send within ~5 minutes
 > - One manual "Run workflow" button in the GitHub Actions UI
 > - Your portfolio data stays in your private Google Drive — the
@@ -223,9 +225,12 @@ sidebar) → scroll to **Script Properties** → **Edit** → **Add property**:
 The other properties (`LABEL_NAME`, `SUBJECT_MATCH`, `WORD_MATCH`)
 have sensible defaults — leave them blank.
 
-> **Slot times** (09:05 / 13:00 / 17:35 Europe/Rome, weekend = morning
-> only) live in the `SLOTS` constant at the top of `Code.gs`. Edit
-> there if you want different hours; no other change needed.
+> **Slot times** live in `_buildSlots_()` at the top of `Code.gs` (see
+> the table further down for the full schedule). Edit there if you want
+> different hours; no other change needed. After editing, run
+> `validateSlots()` from the editor — it fails if two slots land closer
+> than `MAX_LAG_MINUTES`, which would make them share a tick and send
+> twice.
 
 ### 6d. Approve OAuth and install the trigger
 
@@ -248,7 +253,8 @@ have sensible defaults — leave them blank.
 
 That's it. Going forward:
 
-- **Three sends per day, automatic** (09:05, 13:00, 17:35 Europe/Rome),
+- **Scheduled sends, automatic** (08:00 pre-open, the 09:05–17:35 market
+  cadence on weekdays / 13:05 on weekends, 23:00 recap — Europe/Rome),
   each fired at most once per day — no duplicates, no bursts.
 - **Reply "Update"** → fresh send within ~8 minutes total.
 - **Click "Run workflow"** in the Actions UI for an instant manual send.
@@ -263,8 +269,8 @@ Actions. The script's `tick()` trigger runs every 5 minutes and, for
 each market slot, dispatches a send only when:
 
 - the current `Europe/Rome` time is at or after the slot time, but
-  within `MAX_LAG_MINUTES` (default 90) of it;
-- weekend rules allow it (Sat/Sun = morning only); and
+  within `MAX_LAG_MINUTES` (default 25) of it;
+- weekend rules allow it (Sat/Sun: 08:00, 13:05 and 23:00 only); and
 - no send has already happened for that `(date, slot)` — an idempotency
   marker in Script Properties guarantees **at most one send per slot per
   day**, no matter how the polling jitters or retries.
@@ -273,11 +279,13 @@ Because the script formats time in `Europe/Rome`, **DST is handled
 natively** — a slot fires at the same wall-clock time year-round. There
 is no UTC double-cron and no DST guard to maintain.
 
-| Slot    | Italian time | Days       |
-|---------|--------------|------------|
-| morning | 09:05        | every day  |
-| midday  | 13:00        | weekdays   |
-| close   | 17:35        | weekdays   |
+| Slot      | Italian time                        | Days       |
+|-----------|-------------------------------------|------------|
+| preopen   | 08:00                               | every day  |
+| wd-HHMM   | 09:05 → 16:35, every 90 min         | weekdays   |
+| close     | 17:35                               | weekdays   |
+| weekend   | 13:05                               | weekends   |
+| night     | 23:00                               | every day  |
 
 > **Why not GitHub's built-in cron?** It's UTC-only and best-effort: it
 > queues runs under load and then releases them in a burst, which is

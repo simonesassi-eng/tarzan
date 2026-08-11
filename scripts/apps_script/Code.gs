@@ -7,11 +7,12 @@
  * minutes, and tick() does two independent jobs:
  *
  *   1. checkSchedule() — fires the market-hours slots at their
- *      Europe/Rome local time, AT MOST ONCE PER DAY PER SLOT. On
- *      weekdays it sends one digest every 90 minutes across Borsa
- *      Italiana continuous trading (09:05 up to the 17:30 close) plus a
- *      post-close wrap-up at 17:35; on weekends a single midday digest
- *      (13:05) goes out. This replaces GitHub Actions' built-in cron,
+ *      Europe/Rome local time, AT MOST ONCE PER DAY PER SLOT. Every day
+ *      opens with an 08:00 pre-open briefing and closes with a 23:00
+ *      recap. In between, weekdays get one digest every 90 minutes
+ *      across Borsa Italiana continuous trading (09:05 up to the 17:30
+ *      close) plus a post-close wrap-up at 17:35; on weekends a single
+ *      midday digest (13:05) goes out. This replaces GitHub Actions' cron,
  *      which was best-effort: it queued runs under load and released
  *      them in a burst, causing several newsletters to arrive
  *      back-to-back.
@@ -74,7 +75,8 @@
 // year-round.
 const SCHEDULE_TZ = 'Europe/Rome';
 
-// Daily market slots. Times are Europe/Rome local. On weekdays we send
+// Daily market slots. Times are Europe/Rome local. Every day gets an
+// 08:00 pre-open briefing and a 23:00 recap. On weekdays we also send
 // one digest every 90 minutes across Borsa Italiana continuous trading
 // (from just after the 09:00 open to the 17:30 close) plus a wrap-up
 // just after the close; on weekends markets are closed, so a single
@@ -108,9 +110,37 @@ function _buildSlots_() {
   slots.push({ name: 'close', label: 'close', hour: 17, minute: 35, days: 'weekday' });
   // Weekend: a single midday digest.
   slots.push({ name: 'weekend', label: 'weekend', hour: 13, minute: 5, days: 'weekend' });
+  // Pre-open briefing and end-of-day recap, every day of the week.
+  slots.push({ name: 'preopen', label: '08:00', hour: 8, minute: 0, days: 'all' });
+  slots.push({ name: 'night', label: '23:00', hour: 23, minute: 0, days: 'all' });
   return slots;
 }
 const SLOTS = _buildSlots_();
+
+/**
+ * Run this from the editor after editing _buildSlots_(). It asserts the
+ * one invariant a new slot can silently break: two slots on the same day
+ * closer together than MAX_LAG_MINUTES would both come due inside a
+ * single tick and send two emails back-to-back — the exact burst this
+ * scheduler exists to prevent.
+ */
+function validateSlots() {
+  const names = {};
+  for (const a of SLOTS) {
+    if (names[a.name]) throw new Error('duplicate slot name: ' + a.name);
+    names[a.name] = true;
+    for (const b of SLOTS) {
+      if (a === b) continue;
+      const sameDay = a.days === b.days || a.days === 'all' || b.days === 'all';
+      const gap = Math.abs((a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
+      if (sameDay && gap < MAX_LAG_MINUTES) {
+        throw new Error('slots "' + a.name + '" and "' + b.name + '" are ' + gap +
+                        'm apart, under MAX_LAG_MINUTES (' + MAX_LAG_MINUTES + ')');
+      }
+    }
+  }
+  Logger.log('%s slots OK.', SLOTS.length);
+}
 
 // A slot may fire only within this many minutes after its target time.
 // Past the window it is skipped (avoids stale, bursty sends if the
