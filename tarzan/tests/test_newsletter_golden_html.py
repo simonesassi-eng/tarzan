@@ -139,7 +139,7 @@ class TestNewsletterGoldenHtml:
             r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
         expected = ["State", "Portfolio", "Vs the market", "Markets",
                     "Allocation", "Returns", "Watchlist", "The book",
-                    "Attribution", "Risk", "Optimizer", "Appendix"]
+                    "Attribution", "Risk", "Optimizer", "Strategy", "Appendix"]
         # Sections the deterministic fixture cannot fill are absent, not
         # reordered, so compare as a subsequence of the intended order.
         assert labels == [x for x in expected if x in labels], labels

@@ -388,7 +388,20 @@
              where a reader who wants to compare candidates is already looking.
              ── #}
 
-          {# ─── [12] APPENDIX — tax, method, feeds ─────────────
+          {# ─── [12] STRATEGY — the investor's own thesis ──────
+             Read verbatim from input/strategy.txt (not generated): what the
+             portfolio is, why it is built this way, and what to expect. Placed
+             after the numbers and before the appendix, so the reader meets the
+             evidence first and the rationale second. #}
+          {% if strategy.available %}
+          <tr>
+            <td class="px-32" style="padding:20px 20px 0 20px;">
+              {{ sec(secn, "Strategy", strategy.sub) }}
+              {{ strategy.html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
              Three reference blocks under one heading. They were three unnumbered
              blocks trailing off the end of the document, which read as an
              afterthought rather than as the place to look things up. #}
