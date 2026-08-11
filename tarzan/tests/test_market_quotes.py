@@ -70,6 +70,7 @@ def test_fetch_intraday_logs_symbols_missing_from_batch_response(monkeypatch, ca
 def test_builds_quotes_from_history(monkeypatch):
     mq._memo = None
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
     monkeypatch.setattr("tarzan.data.enricher._fetch_history",
                         lambda symbol: _close([100.0, 102.0]))
     quotes = fetch_market_quotes(force=True)
@@ -87,6 +88,7 @@ def test_builds_quotes_from_history(monkeypatch):
 def test_skips_symbols_that_fail_or_are_short(monkeypatch):
     mq._memo = None
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
 
     def _fetch(symbol):
         if symbol == "^GSPC":
@@ -107,6 +109,7 @@ def test_skips_symbols_that_fail_or_are_short(monkeypatch):
 def test_empty_when_fetch_layer_unavailable(monkeypatch):
     mq._memo = None
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
     monkeypatch.setattr("tarzan.data.enricher._fetch_history",
                         lambda symbol: None)
     try:
@@ -125,6 +128,7 @@ def test_intraday_path_sets_baseline_to_prior_close(monkeypatch):
                       index=pd.to_datetime(["2026-06-25 09:00", "2026-06-25 12:00",
                                             "2026-06-25 16:00"]))
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {"^GSPC": intra})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", lambda symbol: daily)
     q = {d["name"]: d for d in fetch_market_quotes(force=True)}
     try:
@@ -132,6 +136,33 @@ def test_intraday_path_sets_baseline_to_prior_close(monkeypatch):
         assert sp["value"] == 210.0          # latest intraday
         assert sp["baseline"] == 200.0       # prior daily close (the 0% line)
         assert round(sp["pct"], 2) == 5.0    # 210 vs 200
+    finally:
+        mq._memo = None
+
+
+def test_official_prev_close_overrides_bad_daily_close(monkeypatch):
+    """Yahoo's regularMarketPreviousClose is the baseline in preference to the
+    daily-history close — the GC=F-style fix, where yfinance's daily Close
+    (200) is well off the true prior settlement (250) and would otherwise
+    inflate the daily %."""
+    mq._memo = None
+    import pandas as pd
+    daily = pd.DataFrame({"Close": [180.0, 200.0]},
+                         index=pd.to_datetime(["2026-06-23", "2026-06-24"]))
+    intra = pd.Series([252.0, 255.0, 258.0],
+                      index=pd.to_datetime(["2026-06-25 09:00", "2026-06-25 12:00",
+                                            "2026-06-25 16:00"]))
+    monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {"^GSPC": intra})
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history", lambda symbol: daily)
+    # Official prior settlement is 250, not the daily-history 200.
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes",
+                        lambda symbols: {"^GSPC": 250.0})
+    q = {d["name"]: d for d in fetch_market_quotes(force=True)}
+    try:
+        sp = q["S&P 500"]
+        assert sp["value"] == 258.0          # latest intraday, unchanged
+        assert sp["baseline"] == 250.0       # official settlement, NOT 200
+        assert round(sp["pct"], 2) == 3.2    # 258 vs 250, not 258 vs 200 (+29%)
     finally:
         mq._memo = None
 
@@ -489,6 +520,7 @@ def test_memo_serves_within_ttl_and_refetches_after(monkeypatch):
         return _close([100.0, 101.0])
 
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", _fetch)
 
     # Drive a controllable clock.

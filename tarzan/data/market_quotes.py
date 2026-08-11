@@ -788,15 +788,84 @@ def _fetch_intraday(symbols: list[str]) -> dict:
     return out
 
 
-def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
+def _fetch_official_prev_closes(symbols: list[str]) -> dict:
+    """One batched Yahoo v7 quote call → ``{symbol:
+    regularMarketPreviousClose}`` (positive floats only).
+
+    This is the OFFICIAL prior settlement/close Yahoo shows behind its headline
+    change — the authoritative daily-% baseline. Needed because yfinance's
+    *daily-history* ``Close`` is unreliable for some futures (see ``_quote``):
+    the v7 quote endpoint carries the correct settlement where the chart API
+    does not. ONE authenticated batched request for the whole strip (not one
+    ``.info`` per symbol — that is the slowest, most 429-prone yfinance path,
+    and its lighter ``fast_info`` cousin returns the wrong value for exactly the
+    futures this fixes). Empty on any failure so the caller falls back to the
+    daily-history close. Never raises."""
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport() or not symbols:
+        return {}
+    out: dict = {}
+    try:
+        from yfinance.data import YfData
+        from tarzan.data import _yf_net
+
+        data = YfData()
+
+        def _get():
+            resp = data.get(
+                "https://query2.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": ",".join(symbols)},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        payload = _yf_net.fetch_yf(_get, what="markets prev-close batch", log=logger)
+        if not payload:
+            return {}
+        for q in payload.get("quoteResponse", {}).get("result", []):
+            sym = q.get("symbol")
+            pc = q.get("regularMarketPreviousClose")
+            try:
+                if sym and pc is not None and float(pc) > 0:
+                    out[sym] = float(pc)
+            except (TypeError, ValueError):
+                continue
+        missing = [s for s in symbols if s not in out]
+        if missing:
+            # INFO, not DEBUG: a symbol absent here silently falls back to the
+            # (possibly unreliable) daily-history close for its baseline. A
+            # persistent gap for the same symbol is a real regression in the
+            # quote response, not one-off flakiness — see _fetch_intraday's
+            # matching rationale.
+            logger.info("prev-close batch: %d/%d symbols missing: %s",
+                        len(missing), len(symbols), ", ".join(missing))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("prev-close batch failed: %s", e)
+    return out
+
+
+def _quote(dclose, intra, spark_points: int = 40,
+           official_prev: Optional[float] = None) -> Optional[dict]:
     """Assemble one quote from the daily close series and (optional)
-    intraday close series. Returns None when there is not enough data."""
+    intraday close series. Returns None when there is not enough data.
+
+    ``official_prev`` is Yahoo's ``regularMarketPreviousClose`` — the official
+    prior settlement/close behind its headline change. When present it is the
+    baseline, in preference to the daily-history previous close, because
+    yfinance's daily ``Close`` is unreliable for some futures: measured, GC=F's
+    daily close sat ~1.3% below the true prior settlement (4361.8 vs 4419.7),
+    which inflated the strip's daily % by that much versus every site quoting
+    Yahoo's headline. Falls back to the daily-history close, then the first
+    intraday tick, when the official close is absent (offline runs, or a symbol
+    the batch quote did not return)."""
     spark_series = None
+    official = official_prev if (official_prev and official_prev > 0) else None
     if intra is not None and len(intra) >= 2:
         cur = float(intra.iloc[-1])
         iday = intra.index[-1].date()
-        prev = None
-        if dclose is not None and len(dclose):
+        prev = official
+        if prev is None and dclose is not None and len(dclose):
             prior = dclose[[ts.date() < iday for ts in dclose.index]]
             if len(prior):
                 prev = float(prior.iloc[-1])
@@ -808,7 +877,8 @@ def _quote(dclose, intra, spark_points: int = 40) -> Optional[dict]:
         # on a full-session time axis (line grows through the day).
         spark_series = intra
     elif dclose is not None and len(dclose) >= 2:
-        cur, prev = float(dclose.iloc[-1]), float(dclose.iloc[-2])
+        cur = float(dclose.iloc[-1])
+        prev = official if official is not None else float(dclose.iloc[-2])
         spark = [float(x) for x in dclose.iloc[-spark_points:].values]
         baseline = spark[0]
     else:
@@ -1012,7 +1082,9 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
         logger.debug("market quotes unavailable (%s)", e)
         return []
 
-    intraday = _fetch_intraday([s for _, s, _ in MARKETS])
+    symbols = [s for _, s, _ in MARKETS]
+    intraday = _fetch_intraday(symbols)
+    prev_closes = _fetch_official_prev_closes(symbols)
     out: list[dict] = []
     for name, symbol, category in MARKETS:
         try:
@@ -1020,7 +1092,8 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             dclose = (hist["Close"].dropna()
                       if hist is not None and len(hist) and "Close" in getattr(hist, "columns", [])
                       else None)
-            q = _quote(dclose, intraday.get(symbol))
+            q = _quote(dclose, intraday.get(symbol),
+                       official_prev=prev_closes.get(symbol))
             if q is None:
                 continue
             out.append({"name": name, "symbol": symbol, "category": category, **q})
