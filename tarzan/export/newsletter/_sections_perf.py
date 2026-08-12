@@ -893,8 +893,12 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
     # One width for every window column, so the tinted blocks form an even grid
     # rather than columns sized by whatever their widest figure happened to be.
-    # Only the session column is wider, because it carries a chart.
-    W_PERIOD, W_DAY = 41, 68
+    # Only the session column is wider, because it carries a chart. These are
+    # HARD widths under fixed_layout (see the render call): name 148 + day 68 +
+    # 7×52 = 580px, the exact content width of the 620px card less its 20px
+    # gutters, so nothing is scaled and a five-figure return (+199.9%) still
+    # fits its 52px column without spilling into the next.
+    W_PERIOD, W_DAY = 52, 68
 
     def _cells(returns_dict, spark_inner, *, weight, day_raw=None):
         # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
@@ -942,10 +946,16 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     # matrix an uncoloured cell has to be ONE surface, or the eye reads the
     # stripe as a signal too. ``dense``: 9.5px on 5px/4px padding, so the tint
     # fills its column instead of floating in it.
+    # ``fixed_layout``: the Returns and Watchlist tables share a container
+    # width, so pinning every column to the width declared here makes the two
+    # grids align — same sparkline start, same 1W/1M/… x positions — instead of
+    # each sizing its columns from its own content (short tickers/small % vs
+    # long names/large %), which drifted them apart.
     return render_unified_table("Instrument", columns, uni_groups,
                                 portfolio_row=portfolio_row, compact=True,
-                                first_col_width=76, separators=False,
-                                zebra=False, dense=True, radius=4)
+                                first_col_width=148, separators=False,
+                                zebra=False, dense=True, radius=4,
+                                fixed_layout=True)
 
 def _perf_name_html(name: str, ticker: str, tags: list, *,
                     name_chars: Optional[int] = None) -> str:
@@ -1118,9 +1128,12 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         row_items.append({
             "_ac": str(h.get("asset_class", "") or "") or "Other",
             "_isin": isin, "_ticker": ticker,
+            # Ticker + a short name, exactly like the Watchlist rows, so the
+            # two grids read as one view. (The Book below still carries the
+            # full untruncated name for every holding.)
             "name_html": _perf_name_html(
                 display_instrument_name(isin, ticker, raw_name),
-                display_tk, [], name_chars=0),
+                display_tk, [], name_chars=16),
             "spark_inner": inner,
             "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
