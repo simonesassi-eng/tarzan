@@ -596,7 +596,18 @@ def run_and_send() -> int:
         })
         _write_delivery_artifacts(writer, result, html, "CONFLICT")
         return 1
-    if claim.duplicate:
+    # A duplicate claim only means "already sent" once its state has moved past
+    # CLAIMED: the CLAIMED -> SMTP_INVOCATION_STARTED transition runs in
+    # send_email's before_invoke, strictly BEFORE smtp.send_message, so a claim
+    # still in CLAIMED provably never reached SMTP. Suppressing it would drop a
+    # send that never happened — exactly the failure seen when the claim
+    # store's first response is lost (5xx/timeout) after it committed and the
+    # silent client retry reads the claim back as a "duplicate". So we suppress
+    # only past-CLAIMED states and otherwise adopt the CLAIMED claim and send.
+    # Double-send stays impossible: the transition is a compare-and-swap (under
+    # the Apps Script lock), so a genuinely concurrent claimer loses the CAS and
+    # never sends.
+    if claim.duplicate and claim.state is not DeliveryState.CLAIMED:
         result.ledger.append(LedgerEntryType.DELIVERY, {
             "state": "SUPPRESSED_DUPLICATE",
             "logical_id": intent.logical_id,
@@ -610,6 +621,14 @@ def run_and_send() -> int:
             claim.state.value,
         )
         return 0
+    if claim.duplicate:
+        # duplicate + CLAIMED: our own lost-response retry re-read the claim we
+        # committed. Nobody has sent yet; proceed and send under this claim.
+        logger.warning(
+            "Delivery %s re-read as a duplicate in state CLAIMED (lost claim "
+            "response); adopting the claim and sending.",
+            intent.logical_id,
+        )
 
     result.ledger.append(LedgerEntryType.DELIVERY, {
         "state": DeliveryState.CLAIMED.value,
