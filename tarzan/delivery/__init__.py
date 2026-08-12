@@ -275,17 +275,23 @@ def _seed_manual_proxies() -> None:
 
 
 def _delivery_claim_store() -> DeliveryClaimStore:
-    """Select cross-run durable control state; GitHub requires Apps Script."""
+    """Select the delivery-claim store.
+
+    A durable Apps Script endpoint (when configured) gives cross-run
+    exactly-once. Without it we fall back to the host-local store rather than
+    hard-failing: it still dedups within a run and across local re-runs, but on
+    an ephemeral GitHub runner it starts empty every run (no cross-run dedup),
+    so a re-run workflow can send twice. That best-effort trade-off is
+    deliberate — previously this raised on GitHub, so a down or absent claim
+    endpoint blocked *every* send (the HTTP 404 / CONDITIONAL_TRANSITION_FAILED
+    outages). A rare duplicate for a personal newsletter beats no newsletter.
+    """
     endpoint = _env("DELIVERY_CLAIM_ENDPOINT")
     token = _env("DELIVERY_CLAIM_TOKEN")
     if bool(endpoint) != bool(token):
         raise RuntimeError("delivery claim endpoint and credential must be configured together")
     if endpoint and token:
         return AppsScriptPropertiesDeliveryClaimStore(endpoint, token)
-    if _env("GITHUB_ACTIONS", "").lower() == "true":
-        raise RuntimeError("GitHub publication requires the durable Apps Script claim service")
-    # Local/manual operation retains a transactional host-local implementation.
-    # It is never selected by the ephemeral GitHub runner.
     path = Path(_env(
         "DELIVERY_CLAIM_STORE_PATH",
         str(ROOT / "output" / "delivery_claims.json"),
