@@ -965,13 +965,17 @@ def _perf_name_html(name: str, ticker: str, tags: list, *,
     header rather than stacking a caption under every name."""
     from tarzan.export.newsletter._constants import uni_name
     if name_chars == 0:
-        # Ticker only. THE BOOK, one section up, lists every holding's ticker
-        # against its name, so repeating the name on each row of a nine-column
-        # matrix bought nothing and cost the row two extra lines of height.
-        return uni_name("", ticker or "", tags=tuple(tags or ()))
+        # Ticker only (unused by the returns tables now, kept for callers that
+        # want the bare symbol).
+        return uni_name("", ticker or "", tags=tuple(tags or ()),
+                        line_height=1.05)
     if name_chars:
         name = name[:name_chars]
-    return uni_name(name, ticker or "", tags=tuple(tags or ()))
+    # Tight line-height: the curated name (already abbreviated in _format so
+    # it fits ~2 lines in the 148px column) wraps with an almost-zero gap
+    # between line one and two, so a two-line name barely adds row height.
+    return uni_name(name, ticker or "", tags=tuple(tags or ()),
+                    line_height=1.05)
 
 def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     """Build the per-holding returns snapshot table.
@@ -1128,12 +1132,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         row_items.append({
             "_ac": str(h.get("asset_class", "") or "") or "Other",
             "_isin": isin, "_ticker": ticker,
-            # Ticker + a short name, exactly like the Watchlist rows, so the
-            # two grids read as one view. (The Book below still carries the
-            # full untruncated name for every holding.)
+            # Ticker + the curated (abbreviated) name, exactly like the
+            # Watchlist rows, so the two grids read as one view. No hard cut:
+            # the abbreviation in _format keeps it to ~2 tight lines. (The Book
+            # below still carries the full untruncated name for every holding.)
             "name_html": _perf_name_html(
                 display_instrument_name(isin, ticker, raw_name),
-                display_tk, [], name_chars=16),
+                display_tk, []),
             "spark_inner": inner,
             "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
@@ -1457,9 +1462,10 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 insts.append({
                     # A short name here, not just the ticker: these instruments
                     # are tracked and NOT held, so no other section in the issue
-                    # says what they are.
+                    # says what they are. No hard cut — the curated name is
+                    # already abbreviated to ~2 tight lines in _format.
                     "name_html": _perf_name_html(r["name"], r.get("ticker"),
-                                                 r.get("tags"), name_chars=16),
+                                                 r.get("tags")),
                     "spark_inner": inner,
                     "day_raw": r.get("d1"),
                     "returns": r["returns"],

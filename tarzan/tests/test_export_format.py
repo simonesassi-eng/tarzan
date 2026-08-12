@@ -222,7 +222,23 @@ class TestShortInstrumentName:
     def test_strips_trailing_share_class(self):
         out = self._s("iShares Core MSCI World UCITS ETF 1C")
         assert "1C" not in out
-        assert "MSCI World" in out
+        # "World" is abbreviated to "Wrld" (see _WORD_ABBREVIATIONS); the point
+        # of this test is that the trailing share class is gone and the index
+        # survives, now in its abbreviated form.
+        assert out == "iSh. Core MSCI Wrld"
+
+    def test_abbreviates_common_words(self):
+        assert self._s("Xtrackers MSCI World Momentum") == "Xtr. MSCI Wrld Mom."
+        assert self._s("L&G Market Neutral Commodities") == "L&G Mkt Neutral Comm."
+
+    def test_keeps_hedged_abbreviated_not_stripped(self):
+        # "Hedged" is a real distinction, kept as "Hdgd" rather than dropped.
+        assert self._s("Xtrackers S&P 500 Swap EUR Hedged") == \
+            "Xtr. S&P 500 Swap EUR Hdgd"
+
+    def test_drops_trailing_ticker_echo(self):
+        assert self._s("Amundi Euro Government Bond 25+ (LMTH)") == \
+            "Amu. Euro Govt Bond 25+"
 
     def test_drops_fund_series_roman_keeps_issuer(self):
         out = self._s("Xtrackers II Global Govt Bond UCITS ETF 1C")

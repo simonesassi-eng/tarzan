@@ -90,8 +90,8 @@ _NAME_NOISE_PATTERNS = [
     r"\bUCITS\b",
     r"\bETF\b",
     r"\bETC\b",
-    r"\b(?:EUR|USD|GBP|CHF)\s+Hedged\b",
-    r"\bHedged\b",
+    # "Hedged" is NOT stripped: it is a real distinction (EUR-hedged vs
+    # unhedged) worth keeping, abbreviated to "Hdgd" via _WORD_ABBREVIATIONS.
     r"\(?\bAccumulating\b\)?",
     r"\(?\bDistributing\b\)?",
     r"\(?\bAcc\b\)?",
@@ -103,6 +103,11 @@ _NAME_NOISE_PATTERNS = [
 # at the start. Single source of truth so every newsletter table abbreviates
 # issuers identically.
 _ISSUER_ABBREVIATIONS = {
+    # Multi-word brands first — they must match before any single-word key
+    # that could be their prefix (none today, but order keeps it robust).
+    "Return Stacked": "Ret. Stack.",
+    "BNP Paribas": "BNP Par.",
+    "Alpha Architect": "Alpha Arch.",
     "Xtrackers": "Xtr.",
     "Invesco": "Inv.",
     "iShares": "iSh.",
@@ -112,9 +117,64 @@ _ISSUER_ABBREVIATIONS = {
     "Franklin": "Frk.",
     "WisdomTree": "WT",
     "VanEck": "VanEck",
+    "Avantis": "Avant.",
+    "Dimensional": "Dim.",
+    "KraneShares": "KS",
+    "Direxion": "Dir.",
     "FINECO AM": "Fineco",
     "Fineco AM": "Fineco",
 }
+
+# Multi-word phrases collapsed to a short form (applied AFTER separator
+# normalisation, so a hyphen introduced here survives). Order matters only
+# where one phrase is a substring of another; kept longest-first to be safe.
+_PHRASE_ABBREVIATIONS = [
+    ("Emerging Markets", "EM"),
+    ("Minimum Volatility", "Min Vol"),
+    ("Small Cap", "Sm Cap"),
+    ("Equal Weight", "Eq.Wt"),
+    ("Efficient Core", "Eff. Core"),
+    ("Managed Futures", "Mgd Fut."),
+    ("Market Neutral", "Mkt Neutral"),
+    ("Roll Select", "Roll Sel."),
+    ("Government Bond", "Govt Bond"),
+    ("Mount Lucas", "Mt Lucas"),
+    ("Multi Strategy", "Multi-Strat"),
+    ("Inflation Linked", "Infl-Linked"),
+]
+
+# Single-word abbreviations. Case-insensitive, whole-word.
+_WORD_ABBREVIATIONS = {
+    "World": "Wrld", "Commodities": "Comm.", "Commodity": "Comm.",
+    "Government": "Govt", "Aggregate": "Agg.", "Developed": "Dev.",
+    "Enhanced": "Enh.", "Leveraged": "Lev.", "Strategy": "Strat.",
+    "International": "Intl", "Momentum": "Mom.", "Quality": "Qual.",
+    "Physical": "Phys.", "Bloomberg": "BBG", "Equity": "Eq.",
+    "Equities": "Eq.", "Global": "Gl.", "Efficient": "Eff.",
+    "Select": "Sel.", "Europe": "Eur.", "European": "Eur.",
+    "America": "US", "Stocks": "Stk", "Futures": "Fut.",
+    "Bitcoin": "BTC", "Hedged": "Hdgd",
+}
+
+
+def _apply_abbreviations(s: str) -> str:
+    """Collapse the phrase then single-word abbreviations in ``s``.
+
+    Kept separate from :func:`short_instrument_name` only for readability; it
+    is called once, after issuer/noise/separator cleanup, so the introduced
+    tokens (e.g. the hyphen in ``Infl-Linked``) are not re-split."""
+    for phrase, short in _PHRASE_ABBREVIATIONS:
+        s = re.sub(r"\b" + re.escape(phrase) + r"\b", short, s,
+                   flags=re.IGNORECASE)
+
+    def _word(m: "re.Match") -> str:
+        w = m.group(0)
+        for key, val in _WORD_ABBREVIATIONS.items():
+            if key.lower() == w.lower():
+                return val
+        return w
+
+    return re.sub(r"[A-Za-z][A-Za-z\-]+", _word, s)
 
 
 def short_instrument_name(
@@ -163,6 +223,15 @@ def short_instrument_name(
     # collapsing it printed "Bond 7 10", which reads as two separate numbers.
     s = re.sub(r"(?<!\d)\s*[-\u2013\u00b7]\s*(?!\d)", " ", s)
     s = re.sub(r"(?<=\d)\s*[\u2013\u00b7]\s*(?=\d)", "-", s)
+    s = re.sub(r"\s+", " ", s).strip(" -–·")
+    # Curated word/phrase abbreviations (World → Wrld, Government → Govt,
+    # Hedged → Hdgd, …). Runs AFTER separator normalisation so a hyphen it
+    # introduces (Infl-Linked) is not immediately re-split into two words.
+    s = _apply_abbreviations(s)
+    # Drop a trailing all-caps ticker echo like "(LMTH)" — the symbol already
+    # leads the row — and any parenthesis left empty by the boilerplate strip.
+    s = re.sub(r"\s*\([A-Z]{2,6}\)\s*$", "", s)
+    s = re.sub(r"\(\s*\)", "", s)
     s = re.sub(r"\s+", " ", s).strip(" -–·")
     # Fallback: if stripping emptied the name (it was entirely
     # boilerplate/share-class tokens), keep the original rather than
