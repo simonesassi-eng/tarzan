@@ -729,6 +729,33 @@ def test_local_delivery_claim_store_rejects_every_prohibited_edge(tmp_path):
             assert store.claim(intent).state is source
 
 
+def test_github_without_claim_endpoint_falls_back_best_effort(monkeypatch, tmp_path):
+    """No durable endpoint on GitHub must NOT hard-fail the send: it falls back
+    to the host-local store (best-effort). Previously this raised, so a down or
+    absent Apps Script claim endpoint blocked every send (the observed HTTP 404
+    / CONDITIONAL_TRANSITION_FAILED outages)."""
+    from tarzan.delivery import _delivery_claim_store
+
+    monkeypatch.delenv("DELIVERY_CLAIM_ENDPOINT", raising=False)
+    monkeypatch.delenv("DELIVERY_CLAIM_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("DELIVERY_CLAIM_STORE_PATH", str(tmp_path / "claims.json"))
+
+    store = _delivery_claim_store()
+    assert isinstance(store, LocalJsonDeliveryClaimStore)
+    # And it actually works end to end: a fresh claim, then the full send path.
+    intent = DeliveryIntent(
+        stable_event_id="scheduled:2026-08-12:wd-1035",
+        purpose=DeliveryPurpose.NORMAL_NEWSLETTER,
+        recipient_set_digest=recipient_set_digest(["reader@example.invalid"]),
+        template_schema_version="1",
+    )
+    assert store.claim(intent).created is True
+    assert store.transition(
+        intent.logical_id, (DeliveryState.CLAIMED,), DeliveryState.SMTP_INVOCATION_STARTED
+    ) is DeliveryState.SMTP_INVOCATION_STARTED
+
+
 # **Validates: Requirements 2.7, 2.13, 3.7, 3.13**
 def test_indeterminate_valuation_basis_is_critical_even_with_known_denominator():
     from types import SimpleNamespace
