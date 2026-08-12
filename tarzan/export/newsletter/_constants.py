@@ -140,7 +140,7 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
 # alternating row stripe. Only the columns + per-cell colours (which encode
 # data) differ. Before, four separate renderers had drifted.
 
-def uni_name(name, ticker="", *, tags=(), pill="", span=""):
+def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=1.35):
     """Canonical instrument label: an optional action pill (BUY/SELL), the
     ticker, then the name, then reference tags and a faint history-span chip.
 
@@ -167,8 +167,8 @@ def uni_name(name, ticker="", *, tags=(), pill="", span=""):
     name_html = (f'<span style="color:{P["muted"]};">{name}</span>'
                  if name else "")
     inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'
-    return (f'<div style="font-size:10.5px;font-weight:600;line-height:1.35;'
-            f'color:{P["ink"]};">{inner}</div>')
+    return (f'<div style="font-size:10.5px;font-weight:600;'
+            f'line-height:{line_height};color:{P["ink"]};">{inner}</div>')
 
 
 def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
