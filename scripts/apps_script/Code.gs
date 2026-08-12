@@ -51,7 +51,7 @@
  *                     HTTP 403.
  *      LABEL_NAME     Optional Gmail label applied to processed
  *                     "Update" threads. Default "tarzan-update-handled".
- *      SUBJECT_MATCH  Optional. Default "Tarzan Portfolio Digest" — only
+ *      SUBJECT_MATCH  Optional. Default "Portfolio Digest" — only
  *                     threads whose subject contains this string are
  *                     eligible for the "Update" reply path.
  *      WORD_MATCH     Optional. Default "update" — body must contain
@@ -170,7 +170,11 @@ const MARKER_RETENTION_DAYS = 3;
 // ---------------------------------------------------------------------------
 
 const DEFAULT_LABEL = 'tarzan-update-handled';
-const DEFAULT_SUBJECT_MATCH = 'Tarzan Portfolio Digest';
+// Must match the emailed subject's prefix (SUBJECT_PREFIX in the workflow =
+// "Portfolio Digest", so subjects read "Portfolio Digest - HH:MM - uP&L …").
+// Gmail's subject: search only scans the Subject header, so a stale value here
+// matches nothing and silently breaks "Update" replies.
+const DEFAULT_SUBJECT_MATCH = 'Portfolio Digest';
 const DEFAULT_WORD_MATCH = 'update';
 // How far back we scan for new "Update" replies on each run. 1 day
 // is plenty given the 5-minute polling cadence and is a safety net
