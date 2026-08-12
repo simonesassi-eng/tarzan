@@ -1092,8 +1092,19 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             dclose = (hist["Close"].dropna()
                       if hist is not None and len(hist) and "Close" in getattr(hist, "columns", [])
                       else None)
-            q = _quote(dclose, intraday.get(symbol),
-                       official_prev=prev_closes.get(symbol))
+            intra = intraday.get(symbol)
+            # A strip sparkline must show ONE real session, never a prior one
+            # dressed up as today's. At (or just after) the open the 15m feed
+            # has no today bars yet, so _fetch_intraday collapses to yesterday's
+            # full session — which would render full-width next to a live "Op."
+            # badge. The same freshness gate the holdings path uses (broker_1d /
+            # _resolve_intraday) rejects a session that's stale while the market
+            # is open, so _quote falls back to the daily-close chart ("no
+            # intraday"). Fresh intraday (mid-session) and a genuinely completed
+            # last session (market closed) both still pass.
+            if intra is not None and not _has_intraday(intra, symbol):
+                intra = None
+            q = _quote(dclose, intra, official_prev=prev_closes.get(symbol))
             if q is None:
                 continue
             out.append({"name": name, "symbol": symbol, "category": category, **q})

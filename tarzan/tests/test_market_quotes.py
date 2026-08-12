@@ -167,6 +167,31 @@ def test_official_prev_close_overrides_bad_daily_close(monkeypatch):
         mq._memo = None
 
 
+def test_strip_rejects_prior_session_intraday_at_the_open(monkeypatch):
+    """At the EU open the 15m feed has no today bars yet, so _fetch_intraday
+    collapses to YESTERDAY's full session. Rendering that full-width next to a
+    live "Op." badge is the bug reported from the 09:05 send. The strip must
+    reject a session that is stale while the market is open and fall back to the
+    daily chart — the same freshness gate the holdings path already applies."""
+    mq._memo = None
+    # Tuesday's complete session, still the freshest bars at Wednesday's open.
+    stale = _intra([7000.0, 7010.0, 7020.0], day="2026-08-11", start="16:00", freq="15min")
+    daily = _daily([("2026-08-10", 6900.0), ("2026-08-11", 6950.0)])
+    monkeypatch.setattr(mq, "_fetch_intraday",
+                        lambda symbols: {"^FCHI": stale} if "^FCHI" in symbols else {})
+    monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
+    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
+                        lambda s: daily if s == "^FCHI" else None)
+    _pin_now(monkeypatch, "2026-08-12 09:05")  # Wednesday, EU session just opened
+    try:
+        cac = {d["name"]: d for d in fetch_market_quotes(force=True)}["CAC 40"]
+        assert cac["spark_series"] is None, \
+            "a stale prior session must not become the live sparkline"
+        assert cac["value"] == 6950.0  # daily-close fallback, not intra's 7020
+    finally:
+        mq._memo = None
+
+
 # ---------------------------------------------------------------------------
 # Intraday-only EUR sibling fallback (.MI → .DE/.PA/...)
 # ---------------------------------------------------------------------------
