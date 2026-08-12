@@ -67,10 +67,11 @@ input/portfolio_test.csv
 .cache/
 tarzan_cache/
 
-# TBTF analysis — raw corpus pulled from Arctic Shift (third-party archive).
-# Personal/educational use only, NOT for redistribution. Regenerate locally
-# with tbtf-analisi/fetch_arcticshift.py. Derived stats (small JSON) are kept.
-tbtf-analisi/tbtf_arcticshift.json
+# TBTF analysis — kept entirely local, never committed: scripts, the raw
+# corpus pulled from Arctic Shift (third-party archive, NOT for redistribution),
+# generated xlsx/docx/csv, and derived stats. Regenerate locally with the
+# scripts under tbtf-analisi/.
+tbtf-analisi/
 
 # Written investment thesis (personal free text, rendered in the newsletter).
 input/strategy.txt
