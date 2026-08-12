@@ -389,11 +389,15 @@ function processInbox() {
 
   const label = _ensureLabel_(labelName);
 
-  // Gmail search query: replies (in:inbox), subject contains the marker,
-  // newer than the window, and NOT yet labelled as handled.
+  // Gmail search query: subject contains the marker, newer than the window,
+  // and NOT yet labelled as handled. Deliberately NOT scoped to in:inbox — the
+  // digest is self-sent (sender == recipient), so Gmail files the thread under
+  // Sent / All Mail, not the Inbox, and the "Update" reply lives there too.
+  // Gmail search excludes Spam and Trash by default, and _matchingUpdateMessageId_
+  // still requires a genuine user reply carrying the trigger word, so dropping
+  // in:inbox cannot broaden what actually dispatches.
   const query =
-    'in:inbox' +
-    ' subject:"' + subjectMatch + '"' +
+    'subject:"' + subjectMatch + '"' +
     ' newer_than:' + SEARCH_WINDOW_DAYS + 'd' +
     ' -label:' + labelName.replace(/\s+/g, '-');
 
