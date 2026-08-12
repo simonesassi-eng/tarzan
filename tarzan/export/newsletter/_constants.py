@@ -238,7 +238,8 @@ def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
 def render_unified_table(first_col_label, columns, groups, *,
                          portfolio_row=None, compact=False,
                          first_col_width=None, separators=False,
-                         zebra=True, dense=False, radius=10):
+                         zebra=True, dense=False, radius=10,
+                         fixed_layout=False):
     """Render the canonical instrument table shared by all five sections.
 
     Args:
@@ -263,6 +264,14 @@ def render_unified_table(first_col_label, columns, groups, *,
         separators: draw a barely-there vertical rule between value columns so a
             reader can tell which period a % belongs to. The first value column
             (the 1D sparkline) is left un-ruled as it reads with the name block.
+        fixed_layout: emit ``table-layout:fixed`` so every column lands at the
+            width declared here regardless of its own cell contents. Two tables
+            built with the SAME column widths then align to one grid — the
+            Returns and Watchlist tables share a container width, so with fixed
+            layout their sparklines and period columns fall at identical x
+            positions. Under automatic layout each table sizes its columns from
+            its own content (short tickers + small % in Returns, long names +
+            large % in Watchlist), so the two grids drift apart.
 
     Each ``row`` (and ``portfolio_row``) is a dict:
         ``name_html`` — inner HTML for the name cell (use :func:`uni_name`).
@@ -284,10 +293,11 @@ def render_unified_table(first_col_label, columns, groups, *,
     # (the 1D sparkline / first metric), and honouring an explicit no_sep.
     seps = [separators and i > 0 and not (len(c) > 3 and c[3])
             for i, c in enumerate(columns)]
+    layout = "table-layout:fixed;" if fixed_layout else ""
     out = ['<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
            'border="0" style="margin-top:14px;border:1px solid '
            f'{P["border"]};border-radius:{radius}px;overflow:hidden;border-collapse:separate;'
-           f'border-spacing:0;font-size:12px;">',
+           f'border-spacing:0;font-size:12px;{layout}">',
            _uni_header(first_col_label, columns, vpad, first_col_width, separators)]
 
     def _cells_html(cells, bg):
