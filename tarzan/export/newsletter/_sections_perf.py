@@ -1504,7 +1504,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # then hand off to the shared table renderer.
     raw_groups = group_by_class_role(
         benchmark_rows, asset_class=lambda r: r.get("asset_class") or "Other",
-        role=lambda r: r.get("role"))
+        role=lambda r: r.get("role"), ticker=lambda r: r.get("ticker"))
     groups = []
     for ac, col, role_list in raw_groups:
         rendered_roles = []
@@ -1580,8 +1580,6 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
         return {"available": False, "rows": [], "columns": []}
 
     ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
-    ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
-    geo_name = (ctx.benchmark_geo or "").strip().lower()
 
     def _fmt_pct(v) -> str:
         if is_missing(v):
@@ -1598,14 +1596,14 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
     # a specific market index. Ulcer Index sits next to Max DD as a
     # duration-aware companion (RMS of drawdowns).
     # (label, metrics key, is_pct, note, ratings key). The last field says
-    # which ``metric_ratings`` entry in constants.yaml describes the metric;
-    # its ``invert`` flag is what drives the per-column tint direction. That
-    # direction cannot be inferred from the sign -- a positive volatility is
-    # not good news, and a -7% drawdown beats a -21% one -- and it is already
+    # which ``metric_ratings`` entry in constants.yaml describes the metric; its
+    # thresholds and ``invert`` flag are what the tile's gauge is drawn from.
+    # That direction cannot be inferred from the sign -- a positive volatility
+    # is not good news, and a -7% drawdown beats a -21% one -- and it is already
     # declared in configuration, so reading it here keeps one source of truth
     # instead of a second copy that can drift from the legend beside it.
     # Beta carries None: the configured bands rate it as market exposure, which
-    # is a property to know rather than a score to win, so it stays uncoloured.
+    # is a property to know rather than a score to win, so it draws no gauge.
     # Full names, not abbreviations. "Vol", "VaR" and "CVaR" were squeezed for
     # an eleven-column table that no longer exists; a tile has room to say what
     # the metric is, and the confidence level on the two tail measures is part of
@@ -1627,127 +1625,15 @@ def _build_risk_profile(ctx: _NewsletterContext) -> dict:
 
     # ``invert: true`` in constants.yaml means "a smaller magnitude is better",
     # and it is written against the metric's ABSOLUTE value: max_drawdown is
-    # banded at [-15, -30] and VaR at [0.8, 1.5] while both carry the flag. So
-    # an inverted metric is ranked on |value| with lower better, and every other
-    # metric on its signed value with higher better. Ranking VaR on the signed
-    # number instead greens the worst daily loss in the table, which is what a
-    # first pass at reading the flag did.
+    # banded at [-15, -30] and VaR at [0.8, 1.5] while both carry the flag --
+    # which is why the gauge below is fed abs(value) against abs(threshold).
     from tarzan import config as _rating_cfg
     _ratings = _rating_cfg.metric_ratings() or {}
-
-    def _inverted(rating_key) -> Optional[bool]:
-        """True when smaller-is-better, None when the metric is not rated."""
-        if not rating_key or rating_key not in _ratings:
-            return None
-        return bool((_ratings.get(rating_key) or {}).get("invert", False))
-
-    def _raw_from(metrics: dict) -> list:
-        return [None if is_missing((metrics or {}).get(key))
-                else float((metrics or {}).get(key))
-                for _label, key, _p, _n, _rk in metric_cols]
-
-    def _cells_from(metrics: dict) -> list[str]:
-        out = []
-        for _label, key, is_pct, _note, _rk in metric_cols:
-            v = (metrics or {}).get(key)
-            out.append(_fmt_pct(v) if is_pct else _fmt_num(v))
-        return out
-
-    def _tags_for(name: str) -> list:
-        """Reuse the Performance table's α/β + GEO pins so the reference
-        benchmarks are recognisable here too."""
-        name_norm = (name or "").strip().lower()
-        tags = []
-        if ab_name and name_norm == ab_name:
-            tags.append(("\u03b1/\u03b2", PALETTE["accent"], PALETTE["accent_bg"]))
-        if geo_name and name_norm == geo_name:
-            tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
-        return tags
-
-    from tarzan.export.newsletter._constants import (
-        render_unified_table, uni_cell, uni_name)
-
-    # ── Conditional formatting, one scale per column ────────────────────
-    # Collected in a first pass over every series that will be drawn, so a
-    # column's greenest cell is the best of the series actually shown. The
-    # portfolio row takes part: where it sits among the alternatives is the
-    # question the section exists to answer.
-    _scale_rows = [_raw_from((hr.get("portfolio") or {}).get("metrics"))] if hr.get("portfolio") else []
-    _scale_rows += [_raw_from(inst.get("metrics")) for inst in hr.get("instruments", [])]
-    def _scale_value(j: int, v):
-        """The number the column is ranked on: magnitude for an inverted
-        metric, the signed value otherwise."""
-        if v is None:
-            return None
-        return abs(v) if _inv[j] else v
-
-    _inv = [_inverted(rk) for (_l, _k, _p, _n, rk) in metric_cols]
-    _scales, _dirs = [], []
-    for j in range(len(metric_cols)):
-        # Beta is rated but excluded on purpose: the bands describe market
-        # exposure, which is a property to know rather than a score to win.
-        rated = _inv[j] is not None and metric_cols[j][1] != "beta"
-        _dirs.append(None if not rated else (not _inv[j]))
-        _scales.append(_heat.rank_scale([_scale_value(j, r[j]) for r in _scale_rows])
-                       if rated else None)
-
-    def _metric_cells(metrics, *, weight, color):
-        raw = _raw_from(metrics)
-        cells = []
-        for j, txt in enumerate(_cells_from(metrics)):
-            sc, hib = _scales[j], _dirs[j]
-            bg = ink = None
-            if sc is not None:
-                lo, hi = sc
-                v = _scale_value(j, raw[j])
-                bg = _heat.rank_bg(v, lo=lo, hi=hi, higher_is_better=hib)
-                ink = _heat.rank_ink(v, lo=lo, hi=hi, higher_is_better=hib)
-            cells.append(uni_cell(txt, color=ink or color, weight=weight, bg=bg))
-        return cells
 
     port = hr.get("portfolio")
     if not (port or hr.get("instruments")):
         return {"available": False, "rows": [], "columns": []}
 
-    portfolio_row = None
-    if port:
-        span = port.get("span_label", "\u2014")
-        span_html = (f'<span style="display:inline-block;margin-left:6px;font-size:9px;'
-                     f'font-weight:700;color:{PALETTE["accent"]};opacity:0.75;'
-                     f'vertical-align:middle;">{span}</span>' if span else "")
-        portfolio_row = {
-            "name_html": (f'<span style="color:{PALETTE["accent"]};font-weight:700;'
-                          f'font-size:12px;">\u2605 {port.get("label", "Your portfolio")}'
-                          f'</span>{span_html}'),
-            "cells": _metric_cells(port.get("metrics"), weight=700,
-                                   color=PALETTE["ink"]),
-        }
-
-    # Group instruments by asset_class -> role via the shared engine, then hand
-    # off to the ONE unified renderer (same shell as every other table).
-    uni_groups = []
-    for ac, gc, role_list in group_by_class_role(
-            hr.get("instruments", []),
-            asset_class=lambda inst: inst.get("asset_class") or "Other",
-            role=lambda inst: inst.get("role")):
-        rendered = []
-        for role, insts in role_list:
-            block = [{
-                "name_html": uni_name(
-                    display_instrument_name(inst.get("isin"),
-                                            inst.get("ticker"),
-                                            inst.get("label", "")),
-                    _display_ticker(inst.get("ticker")) or "",
-                    tags=_tags_for(inst.get("label", "")),
-                    span=inst.get("span_label", "\u2014")),
-                "cells": _metric_cells(inst.get("metrics"), weight=600,
-                                       color=PALETTE["muted"]),
-            } for inst in insts]
-            rendered.append((role, block))
-        uni_groups.append((ac, gc, rendered))
-
-    columns = [(f"{label}{note}", "right")
-               for (label, _k, _p, note, _rk) in metric_cols]
     # ── The portfolio's own ten metrics, as tiles ────────────────────────
     # This section used to be a 36-row table: the portfolio plus every reference
     # instrument, over eleven columns. The question it exists to answer is "what
