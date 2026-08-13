@@ -111,9 +111,19 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
     already carries its role, else pass ``isin``+``ticker``+``taxonomy`` to
     look it up via :func:`role_for`.
 
+    Within a role the items are sorted alphabetically by ``ticker``, which is the
+    first thing every row prints — so a reader finds an instrument in the same
+    place in each table instead of a per-table order (value, trade size, feed
+    order). Pass ``ticker`` even when ``role`` makes it redundant for lookup;
+    without it the caller's own order is kept.
+
     Returns the ordered groups; the class colour is ASSET_COLORS[class] so the
     4px left bar / marker is consistent everywhere.
     """
+    # No ticker accessor -> every key is "" and the stable sort is a no-op.
+    def _tk(it) -> str:
+        return str((ticker(it) if ticker is not None else "") or "").upper()
+
     grouped: dict = {}
     for it in items:
         ac = str(asset_class(it) or "") or "Other"
@@ -125,7 +135,7 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
     groups = []
     for ac in _ordered(list(grouped.keys()), _PERF_CLASS_ORDER):
         col = ASSET_COLORS.get(ac, PALETTE["accent"])
-        role_list = [(role, grouped[ac][role])
+        role_list = [(role, sorted(grouped[ac][role], key=_tk))
                      for role in _ordered(list(grouped[ac].keys()),
                                           _PERF_ROLE_ORDER.get(ac, []))]
         groups.append((ac, col, role_list))
