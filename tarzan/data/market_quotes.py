@@ -39,6 +39,11 @@ _MARKET_OPEN_MAX_LAG_MIN = 60
 # Regular cash-session hours per exchange group, keyed by a normalized code.
 # (IANA timezone, (open_h, open_m), (close_h, close_m)). Holidays and lunch
 # breaks are not modelled (best-effort); weekends are handled separately.
+# This table is also the calibration knob for session_day(), so it decides
+# which observations are usable, not just which caption is printed: modelling
+# EU as 09:00 means a German venue's genuine 08:00-09:00 pre-market bars count
+# towards the PREVIOUS session on a pre-09:00 run. Conservative and
+# self-consistent — widen the open here if pre-market should count.
 _SESSIONS: dict[str, tuple[str, tuple[int, int], tuple[int, int]]] = {
     "EU": ("Europe/Rome", (9, 0), (17, 30)),      # Milan/Xetra/Paris/Amsterdam
     "L":  ("Europe/London", (8, 0), (16, 30)),    # London
