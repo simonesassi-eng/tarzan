@@ -30,6 +30,8 @@ from tarzan.export.newsletter._constants import (
     ASSET_COLORS,
     MARKET_REGION_COLORS,
     PALETTE,
+    TYPE,
+    TYPE_PX,
     _NewsletterContext,
     _PF_INTRA_KEY,
     group_by_class_role,
@@ -48,6 +50,7 @@ from tarzan.export.newsletter._charts import (
     _flat_dashed_spark,
     _intraday_spark,
     day_column_label,
+    spark_note,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,13 +132,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             # 10Y). While the venue trades, BOTH used to draw ~40 DAILY closes
             # stretched to full width -- shaped exactly like a completed session
             # path, on a row whose own "Op." badge said it had only just started.
-            # The dashed placeholder says there is no session to draw, and the
-            # caption names the session the level and % actually belong to.
+            # The dashed placeholder is itself the statement that there is no
+            # session to draw; it is captioned only when the level and % belong
+            # to a session that needs naming (the stale case).
             day = d.get("observed_day") if d.get("stale_session") else None
-            note = (f'<div style="font-size:7px;color:{P["subtle"]};'
-                    f'margin-top:1px;">{day.strftime("%a")} close</div>'
-                    if day is not None else "")
-            return _flat_dashed_spark(w=66, h=20) + note
+            return _flat_dashed_spark(
+                w=66, h=20,
+                note=(f'{day.strftime("%a")} close' if day is not None else ""))
         # Venue closed and no intraday feed for it -- a real, if uneven, gap in
         # Yahoo's coverage for some exchanges. The last ~40 daily closes are a
         # COMPLETE period, so filling the width claims nothing false. Label
@@ -144,8 +147,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                            w=66, h=20, stretch=True)
         if not chart:
             return chart
-        return (chart + f'<div style="font-size:7px;color:{P["subtle"]};'
-                        f'margin-top:1px;">no intraday</div>')
+        return chart + spark_note("no intraday")
 
     def _hours_line(d: dict) -> str:
         """Local trading hours (or \u224824h for a continuously traded
@@ -159,13 +161,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             return ""
         is_open, day = market_status(sym)
         if is_open is None:
-            return (f'<div style="font-size:8px;color:{P["subtle"]};'
-                    f'margin-top:1px;">{cap}</div>')
+            return (f'<div style="font-size:{TYPE_PX["label"]}px;'
+                    f'color:{P["subtle"]};margin-top:1px;">{cap}</div>')
         dot_col = P["green"] if is_open else P["subtle"]
         status = "Op." if is_open else "Cl."
         day_suffix = f" {day}" if day else ""
-        return (f'<div style="font-size:8px;color:{P["subtle"]};'
-                f'margin-top:1px;">{cap} &middot; '
+        return (f'<div style="font-size:{TYPE_PX["label"]}px;'
+                f'color:{P["subtle"]};margin-top:1px;">{cap} &middot; '
                 f'<span style="color:{dot_col};">&#9679;</span> '
                 f'{status}{day_suffix}</div>')
 
@@ -187,31 +189,29 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
               f'font-variant-numeric:tabular-nums;')
         return (
             f'<tr>'
-            f'<td style="{td}font-size:10px;font-weight:600;color:{P["ink"]};'
+            f'<td style="{td}{TYPE["data"]}color:{P["ink"]};'
             f'white-space:nowrap;">{name}{_hours_line(d)}</td>'
             f'<td align="right" style="{td}">{_spark_for(d)}</td>'
-            f'<td align="right" style="{td}font-size:10px;color:{P["muted"]};'
+            f'<td align="right" style="{td}{TYPE["data"]}color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'
             # The minus SIGN, as everywhere else in the issue: Python's "+"
             # format flag emits an ASCII hyphen, so this strip was the one table
             # drawing negatives with a different, shorter glyph than the
             # thirty-odd other tables around it.
-            f'<td align="right" style="{td}font-size:10px;font-weight:700;'
+            f'<td align="right" style="{td}{TYPE["data"]}'
             f'color:{col};white-space:nowrap;">{_signed(d["pct"], 2)}%</td>'
             f'</tr>')
 
     def _region_head(cat: str) -> str:
         return (f'<tr><td colspan="4" style="padding:6px 5px 4px;'
-                f'border-bottom:1px solid {P["row_rule"]};font-size:9px;'
-                f'font-weight:700;letter-spacing:0.06em;'
-                f'text-transform:uppercase;color:{_rc(cat)};">{cat}</td></tr>')
+                f'border-bottom:1px solid {P["row_rule"]};{TYPE["label"]}'
+                f'color:{_rc(cat)};">{cat}</td></tr>')
 
     def _table(entries: list) -> str:
         """One column of the strip: region heads interleaved with their rows."""
         head = (f'<tr>' + "".join(
             f'<td align="{al}" style="padding:5px 5px;background:{P["card_alt"]};'
-            f'border-bottom:1px solid {P["border"]};font-size:9px;'
-            f'font-weight:700;letter-spacing:0.05em;text-transform:uppercase;'
+            f'border-bottom:1px solid {P["border"]};{TYPE["label"]}'
             f'color:{P["muted"]};">{lbl}</td>'
             for lbl, al in (("Index", "left"), ("Chart", "right"),
                             ("Level", "right"), ("Chg %", "right"))) + '</tr>')
@@ -334,8 +334,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         eur_s = _eur_smart(eur, signed=True) if eur is not None else "—"
         pct_s = _pct(pct, decimals=2, signed=True) if pct is not None else ""
         return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};">'
-                f'<div style="font-size:13px;font-weight:700;color:{c};font-variant-numeric:tabular-nums;">{eur_s}</div>'
-                + (f'<div style="font-size:11px;color:{c};font-variant-numeric:tabular-nums;">{pct_s}</div>' if pct_s else "")
+                f'<div style="{TYPE["figure"]}color:{c};'
+                f'font-variant-numeric:tabular-nums;">{eur_s}</div>'
+                + (f'<div style="{TYPE["data"]}color:{c};'
+                   f'font-variant-numeric:tabular-nums;">{pct_s}</div>'
+                   if pct_s else "")
                 + '</td>')
 
     # ── The matrix, windows as ROWS ──────────────────────────────────────
@@ -345,8 +348,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # returns grids below.
 
     def _label(txt) -> str:
-        return (f'<td style="padding:7px 0;border-top:{bt};font-size:12px;'
-                f'font-weight:700;color:{P["ink"]};white-space:nowrap;">{txt}</td>')
+        return (f'<td style="padding:7px 0;border-top:{bt};{TYPE["figure"]}'
+                f'color:{P["ink"]};white-space:nowrap;">{txt}</td>')
 
     def _money_pair(pair, *, eur_only=False, pct_only=False) -> str:
         """One measure split across its own two columns, € then %."""
@@ -354,17 +357,17 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         c = _sgn(eur if not pct_only else pct)
         if pct_only:
             return (f'<td align="right" style="padding:7px 0 7px 10px;'
-                    f'border-top:{bt};font-size:13px;font-weight:700;color:{c};'
+                    f'border-top:{bt};{TYPE["figure"]}color:{c};'
                     f'font-variant-numeric:tabular-nums;">'
                     f'{_pct(pct, decimals=2, signed=True) if pct is not None else "\u2014"}</td>')
         return (f'<td align="right" style="padding:7px 0 7px 10px;'
-                f'border-top:{bt};font-size:13px;font-weight:700;color:{c};'
+                f'border-top:{bt};{TYPE["figure"]}color:{c};'
                 f'font-variant-numeric:tabular-nums;">'
                 f'{_eur_smart(eur, signed=True) if eur is not None else "\u2014"}</td>')
 
     def _pct_cell(v) -> str:
         return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};'
-                f'font-size:13px;font-weight:700;color:{_sgn(v)};'
+                f'{TYPE["figure"]}color:{_sgn(v)};'
                 f'font-variant-numeric:tabular-nums;">'
                 f'{_pct(v, signed=True) if v is not None else "\u2014"}</td>')
 
@@ -383,8 +386,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unrealized", "TWROR")
     head_html = '<tr>' + "".join(
         f'<td align="{"left" if i == 0 else "right"}" style="padding:0 0 5px'
-        f'{"" if i == 0 else " 10px"};font-size:9px;font-weight:700;'
-        f'color:{P["muted"]};letter-spacing:0.04em;text-transform:uppercase;">'
+        f'{"" if i == 0 else " 10px"};{TYPE["label"]}'
+        f'color:{P["muted"]};">'
         f'{h}</td>' for i, h in enumerate(heads)) + '</tr>'
 
     windows = [
@@ -399,7 +402,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     for label, total, unreal, twror in windows:
         coincide = _same(total, unreal, twror)
         eq = (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};'
-              f'font-size:13px;font-weight:700;color:{P["subtle"]};">=</td>')
+              f'{TYPE["figure"]}color:{P["subtle"]};">=</td>')
         body += ('<tr>' + _label(label)
                  + _money_pair(total)
                  + _money_pair(total, pct_only=True)
@@ -427,11 +430,10 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     UNREAL = _charts.UNREAL
 
     def _colcap(t: str) -> str:
-        """Panel caption, in the concept's form: 9px uppercase subtle with wide
-        tracking, not 11px ink. At ink weight it competed with the section
-        heading above it for the same job."""
-        return (f'<div style="font-size:9px;font-weight:700;letter-spacing:0.08em;'
-                f'text-transform:uppercase;color:{P["subtle"]};'
+        """Panel caption, in the concept's form: the label tier in subtle, not
+        a title in ink. At ink weight it competed with the section heading
+        above it for the same job."""
+        return (f'<div style="{TYPE["label"]}color:{P["subtle"]};'
                 f'margin-bottom:5px;">{t}</div>')
 
     def _mini_legend(items: list) -> str:
@@ -453,7 +455,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
              f'<span style="color:{P["muted"]};">{label}</span>')
             for color, label in items
         ]
-        return ('<div style="font-size:9px;line-height:1.5;margin:7px 0 0;">'
+        return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
                 + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
     # Last-30-day labels come from the exact arrays passed to the chart. The
@@ -758,7 +760,7 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
         pill_txt = _pct_compact(dv, signed=True)
         pill_col = P["green"] if dv >= 0 else P["red"]
         pill_bg = P["green_bg"] if dv >= 0 else P["red_bg"]
-    pill = (f'<span style="font-size:10px;font-weight:700;color:{pill_col};'
+    pill = (f'<span style="{TYPE["data"]}color:{pill_col};'
             f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
 
@@ -792,8 +794,8 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                                 span=_bar_session_span(quote, raw_ticker))
     else:
         # No intraday trades → a dashed placeholder line (prev-close
-        # reference), so the cell keeps the same height and the pill stays
-        # aligned with the intraday rows.
+        # reference), uncaptioned, so the cell keeps the same height as every
+        # intraday row and the pill stays aligned with them.
         spark = _flat_dashed_spark()
 
     bgc = f"background:{bg};" if bg else ""
@@ -954,7 +956,8 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
                + [(p.upper(), "right", W_PERIOD) for p in period_cols])
     portfolio_row = {
         "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
-                      f'font-size:10.5px;">\u2605 {portfolio["name"]}</span>'),
+                      f'font-size:{TYPE_PX["data"]}px;">'
+                      f'\u2605 {portfolio["name"]}</span>'),
         "cells": _cells(portfolio["returns"], portfolio.get("spark_inner", ""),
                         weight=700, day_raw=portfolio.get("day_raw")),
     } if portfolio else None

@@ -7,7 +7,7 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.export._format import base_symbol
-from tarzan.export.newsletter._constants import PALETTE
+from tarzan.export.newsletter._constants import FONT_STACK, PALETTE, TYPE_PX
 
 
 def is_missing(value) -> bool:
@@ -203,9 +203,13 @@ def _colorize_pct_lines(text: str) -> str:
         m = tag_re.match(line)
         tag, rest = (m.group(1), line[m.end():]) if m else (None, line)
         tag_html = (
-            f'<span style="display:inline-block;min-width:52px;'
-            f"font-family:'SF Mono',Consolas,monospace;"
-            f'color:{PALETTE["subtle"]};font-size:11px;">'
+            # 62px is "Yesterday" -- the longest tag -- at the NOTE size. At
+            # 52px that tag overflowed its own gutter and pushed its sentence
+            # 7px right of every "Today" sentence, so the narrative column had
+            # a ragged left edge.
+            f'<span style="display:inline-block;min-width:62px;'
+            f'font-family:{FONT_STACK};'
+            f'color:{PALETTE["subtle"]};font-size:{TYPE_PX["prose"]}px;">'
             f'{_html.escape(tag)}</span> '
         ) if tag else ""
         border = (f'border-bottom:1px solid {PALETTE["border"]};'

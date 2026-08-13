@@ -107,15 +107,20 @@ def test_daily_close_fallback_chart_is_labelled_no_intraday():
     # falls back to the daily-close history. Drawn the same way as a real
     # session path, that used to be indistinguishable from one -- exactly
     # what read as "the market just opened but the chart is already full".
+    # This is the one place the label survives: a POPULATED path is the thing a
+    # dashed placeholder is not, so nothing but the caption says the 40 points
+    # under it are daily closes. Hence the closed venue -- while it trades
+    # there is no chart at all, only the dash.
     sample = [{"name": "SSE Composite", "symbol": "000001.SS",
                "category": "Asia", "value": 3200.0, "change": 5.0,
                "pct": 0.16, "spark": [3150.0 + i for i in range(40)],
                "baseline": 3195.0}]  # no "spark_series" key at all
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
-         mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
+         mock.patch.object(mq, "market_status", return_value=(False, "Mon")):
         html = _build_markets(_ctx())["html"]
-    assert "no intraday" in html
+    assert "<polyline" in html      # the daily-closes chart really is drawn
+    assert "no intraday" in html    # and it says what those closes are
 
 
 def test_real_intraday_chart_is_not_labelled_no_intraday():

@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.export._format import eur_smart as _eur_smart
-from tarzan.export.newsletter._constants import PALETTE
+from tarzan.export.newsletter._constants import FONT_STACK, PALETTE, TYPE, TYPE_PX
 
 _day_spark_uid = 0
 
@@ -201,14 +201,14 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
             f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" '
             f'stroke="{P["border"]}" stroke-width="1"/>'
             f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" '
-            f'font-size="9" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>'
+            f'font-size="{TYPE_PX["label"]}" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>'
         )
     for t in pticks:
         if t < plo - 1e-9 or t > phi + 1e-9:
             continue
         grid += (
             f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" '
-            f'text-anchor="start" font-size="9" fill="{P["muted"]}">'
+            f'text-anchor="start" font-size="{TYPE_PX["label"]}" fill="{P["muted"]}">'
             f'{_ch.fmt_pct_tick(t)}</text>'
         )
     xlab = ""
@@ -216,7 +216,7 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         x = X(k)
         anc = "start" if k == 0 else "end" if k == n - 1 else "middle"
         xlab += (
-            f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="9" '
+            f'<text x="{x:.1f}" y="{h - 8}" text-anchor="{anc}" font-size="{TYPE_PX["label"]}" '
             f'fill="{P["subtle"]}">{pd.Timestamp(dates[k]).strftime("%b %d")}</text>'
         )
 
@@ -271,14 +271,14 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     # key's job, drawn below the plot by the caller.
     labels = (
         f'<text x="{ML + 5}" y="{max(9.0, baseline_y - 5):.1f}" '
-        f'text-anchor="start" font-size="8.5" font-weight="700" '
+        f'text-anchor="start" font-size="{TYPE_PX["label"]}" font-weight="700" '
         f'fill="{P["muted"]}">window open {_eur_smart(base)}</text>'
     )
 
     return (
         f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;'
-        f'font-family:-apple-system,Helvetica,Arial,sans-serif;">'
+        f'font-family:{FONT_STACK};">'
         f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" '
         f'height="{baseline_clip_y:.1f}"/></clipPath>'
         f'<clipPath id="dr{u}"><rect x="0" y="{baseline_clip_y:.1f}" width="{w}" '
@@ -324,7 +324,7 @@ def _hero_chart_legend(*, has_total: bool) -> str:
          f'<span style="color:{P["muted"]};">{label}</span>')
         for color, label in items
     ]
-    return ('<div style="font-size:9px;line-height:1.5;margin:7px 0 0;">'
+    return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
             + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
 
@@ -345,13 +345,12 @@ def _hero_flow_chips(flows) -> str:
         bg = P["accent_bg"] if v >= 0 else P["card_alt"]
         items += (f'<span style="display:inline-block;margin:4px 6px 0 0;'
                   f'padding:2px 8px;border-radius:6px;background:{bg};'
-                  f'font-size:10px;font-weight:700;color:{fg};'
+                  f'{TYPE["data"]}color:{fg};'
                   f'white-space:nowrap;font-variant-numeric:tabular-nums;">'
                   f'{pd.Timestamp(d).strftime("%b %d")} '
                   f'{_eur_smart(v, signed=True)}</span>')
-    return (f'<div style="margin-top:9px;font-size:9px;font-weight:700;'
-            f'letter-spacing:0.08em;color:{P["muted"]};'
-            f'text-transform:uppercase;">Cash flows in the window</div>'
+    return (f'<div style="margin-top:9px;{TYPE["label"]}'
+            f'color:{P["muted"]};">Cash flows in the window</div>'
             f'<div style="margin-top:3px;">{items}</div>')
 
 def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
@@ -502,23 +501,40 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
         f'</svg>'
     )
 
-def _flat_dashed_spark(w: int = 62, h: int = 22) -> str:
+def _flat_dashed_spark(w: int = 62, h: int = 22, note: str = "") -> str:
     """Placeholder sparkline for instruments with no intraday trades: a single
     dashed horizontal line (the previous-close reference). Keeps the 1D cell
-    the same height as the intraday rows so the pill stays aligned, while
-    signalling 'no intraday, this is the previous-day change'."""
+    the same height as the intraday rows so the pill stays aligned.
+
+    No caption by default. An empty cell where every neighbour draws a path
+    already says there is no intraday series, and a "no intraday" label under
+    it was what made those rows a line taller than the rest of the table —
+    seventeen of fifty-nine in the watchlist, so the column read as ragged.
+    ``note`` is for the one caption the dash cannot imply: WHICH session the
+    row's level and % belong to, when the venue has already moved on to a
+    session this data does not cover ("Wed close").
+    """
     y = h / 2.0
-    # The rule alone was ambiguous: a flat dashed line reads as a session that
-    # went nowhere. Saying "no intraday" on it is the difference between "the
-    # price did not move" and "there is no intraday series to draw".
     return (
         f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;">'
         f'<line x1="0" y1="{y:.1f}" x2="{w}" y2="{y:.1f}" stroke="{PALETTE["subtle"]}" '
-        f'stroke-width="1" stroke-dasharray="3,2"/>'
-        f'<text x="{w / 2.0:.1f}" y="{y - 2:.1f}" text-anchor="middle" '
-        f'font-size="7" fill="{PALETTE["subtle"]}">no intraday</text></svg>'
+        f'stroke-width="1" stroke-dasharray="3,2"/></svg>'
+        + spark_note(note)
     )
+
+
+def spark_note(text: str) -> str:
+    """Caption under a 1D cell that carries no intraday series.
+
+    The LABEL size, not the DATA size: the cell it sits in is 68px wide, and
+    "no intraday" set at 10px needs 66px of it, so at the data size the caption
+    wrapped onto a second line and took the row's height with it. ``nowrap``
+    holds it on one line at any mono advance.
+    """
+    return (f'<div style="font-size:{TYPE_PX["label"]}px;font-weight:600;'
+            f'line-height:1.25;white-space:nowrap;color:{PALETTE["subtle"]};'
+            f'margin-top:1px;">{text}</div>' if text else "")
 
 def _prev_session_label(m, fmt: str = "%d/%m") -> str:
     """Report-level 'previous session' date for the PREV. DAY tag and the 1D

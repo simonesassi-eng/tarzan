@@ -20,7 +20,7 @@ import logging
 import os
 from pathlib import Path
 
-from tarzan.export.newsletter._constants import PALETTE, _NewsletterContext
+from tarzan.export.newsletter._constants import PALETTE, TYPE, _NewsletterContext
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +107,12 @@ def _build_strategy(ctx: _NewsletterContext) -> dict:
     parts: list[str] = []
     for heading, paras in blocks:
         body = "".join(
-            f'<div style="margin-top:{6 if i else 0}px;font-size:12.5px;'
-            f'color:{P["muted"]};line-height:1.65;">{p}</div>'
+            f'<div style="margin-top:{6 if i else 0}px;{TYPE["prose"]}'
+            f'color:{P["muted"]};">{p}</div>'
             for i, p in enumerate(paras)
         )
-        head = (f'<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;'
-                f'color:{P["accent"]};text-transform:uppercase;">{heading}</div>'
+        head = (f'<div style="{TYPE["title"]}color:{P["accent"]};">'
+                f'{heading}</div>'
                 if heading else "")
         parts.append(
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '

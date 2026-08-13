@@ -20,12 +20,12 @@
 {% macro sec(ns, label, sub=None) -%}
 {%- set ns.n = ns.n + 1 -%}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-<td align="left" style="white-space:nowrap;"><span style="font-size:10px;font-weight:700;color:{{ palette.accent }};">[{{ "%02d"|format(ns.n) }}]</span>&nbsp;&nbsp;<span style="font-size:12.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:{{ palette.ink }};">{{ label }}</span></td>
+<td align="left" style="white-space:nowrap;"><span style="{{ type.title }}color:{{ palette.accent }};">[{{ "%02d"|format(ns.n) }}]</span>&nbsp;&nbsp;<span style="{{ type.title }}color:{{ palette.ink }};">{{ label }}</span></td>
 {# The rule fills whatever the label leaves, so the heading reads as a ruled
    band across the column instead of a floating word. #}
 <td width="100%" style="padding-left:12px;"><div style="height:1px;background:{{ palette.border }};font-size:0;line-height:0;">&nbsp;</div></td>
 </tr></table>
-{%- if sub %}<div style="margin-top:7px;font-size:11px;line-height:1.6;color:{{ palette.muted }};">{{ sub|safe }}</div>{% endif -%}
+{%- if sub %}<div style="margin-top:7px;{{ type.prose }}color:{{ palette.muted }};">{{ sub|safe }}</div>{% endif -%}
 {%- endmacro %}
 <!DOCTYPE html>
 <html lang="en">
@@ -45,7 +45,7 @@
        own tile instead of overflowing the row. Pin the adjustment off too, so
        the declared sizes are the rendered ones and nothing needs to wrap. #}
     body, table, td, div, span { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; text-size-adjust: 100%; }
-    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; }
+    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: {{ font_stack }}; }
     table { border-collapse: collapse; }
     img { display: block; border: 0; }
     a { color: {{ palette.accent }}; text-decoration: none; }
@@ -66,7 +66,7 @@
   </style>
 </head>
 {% set secn = namespace(n=0) %}
-<body style="margin:0;padding:0;background:{{ palette.page }};font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;color:{{ palette.ink }};">
+<body style="margin:0;padding:0;background:{{ palette.page }};font-family:{{ font_stack }};color:{{ palette.ink }};">
 
   {# -- Preheader (hidden, shown as preview text in inbox) -- #}
   <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{{ preheader }}</div>
@@ -89,8 +89,9 @@
             <td class="px-32" style="padding:11px 20px 9px 20px;background:{{ palette.page }};border-bottom:1px solid {{ palette.border }};">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td align="left" style="white-space:nowrap;"><span style="font-size:11px;font-weight:700;letter-spacing:0.22em;color:{{ palette.accent }};">TARZAN</span></td>
-                  <td align="right" style="font-size:10px;color:{{ palette.subtle }};white-space:nowrap;">{{ header.stamp }}</td>
+                  <td align="left" style="white-space:nowrap;">{# The wordmark is the scale's one letter-spacing exception: 0.22em is what
+                     makes five capitals read as a mark rather than as a word. #}<span style="font-size:{{ type_px.prose }}px;font-weight:700;letter-spacing:0.22em;color:{{ palette.accent }};">TARZAN</span></td>
+                  <td align="right" style="{{ type.data }}color:{{ palette.subtle }};white-space:nowrap;">{{ header.stamp }}</td>
                 </tr>
               </table>
               {% if header.status_bar %}
@@ -100,7 +101,7 @@
                   <td style="padding:0 8px 0 0;white-space:nowrap;">
                     {# No text-transform: CSS uppercase maps the beta label to a
                        capital Beta, which renders as a plain "B". The labels are
-                       already written in caps. #}<span style="font-size:8.5px;font-weight:700;letter-spacing:0.06em;color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>{% if not loop.last %}<span style="color:{{ palette.border }};padding-left:8px;">│</span>{% endif %}
+                       already written in caps. #}<span style="{{ type.label }}color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="{{ type.data }}font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>{% if not loop.last %}<span style="color:{{ palette.border }};padding-left:8px;">│</span>{% endif %}
                   </td>
                   {% endfor %}
                 </tr>
@@ -182,8 +183,8 @@
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr>
                   <td style="padding:14px 16px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13.5px;line-height:1.5;">{{ ai_summary_html|safe }}</table>
-                    <div style="margin-top:8px;font-size:10px;color:{{ palette.subtle }};">✨ AI-generated news digest · via Google Search · not financial advice</div>
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="{{ type.prose }}">{{ ai_summary_html|safe }}</table>
+                    <div style="margin-top:8px;{{ type.prose }}color:{{ palette.subtle }};">✨ AI-generated news digest · via Google Search · not financial advice</div>
                   </td>
                 </tr>
               </table>
@@ -249,17 +250,17 @@
                 <tr>
                   <td width="50%" valign="top" style="padding:0 9px 0 0;">
                     {% if return_contrib.winners %}
-                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.green }};text-transform:uppercase;">▲ Top contributors</div>
+                    <div style="{{ type.label }}color:{{ palette.green }};">▲ Top contributors</div>
                     {% for w in return_contrib.winners %}
-                    <div style="margin-top:6px;font-size:11px;color:{{ palette.ink }};">{{ w.name|truncate(26, true, '…') }}<b style="color:{{ palette.green }};float:right;font-variant-numeric:tabular-nums;">{{ w.value }}</b></div>
+                    <div style="margin-top:6px;{{ type.data }}color:{{ palette.ink }};">{{ w.name|truncate(26, true, '…') }}<b style="color:{{ palette.green }};float:right;font-variant-numeric:tabular-nums;">{{ w.value }}</b></div>
                     {% endfor %}
                     {% endif %}
                   </td>
                   <td width="50%" valign="top" style="padding:0 0 0 9px;border-left:1px solid {{ palette.border }};">
                     {% if return_contrib.laggards %}
-                    <div style="font-size:10px;font-weight:700;letter-spacing:0.06em;color:{{ palette.red }};text-transform:uppercase;">▼ Laggards</div>
+                    <div style="{{ type.label }}color:{{ palette.red }};">▼ Laggards</div>
                     {% for l in return_contrib.laggards %}
-                    <div style="margin-top:6px;font-size:11px;color:{{ palette.ink }};">{{ l.name|truncate(26, true, '…') }}<b style="color:{{ palette.red }};float:right;font-variant-numeric:tabular-nums;">{{ l.value }}</b></div>
+                    <div style="margin-top:6px;{{ type.data }}color:{{ palette.ink }};">{{ l.name|truncate(26, true, '…') }}<b style="color:{{ palette.red }};float:right;font-variant-numeric:tabular-nums;">{{ l.value }}</b></div>
                     {% endfor %}
                     {% endif %}
                   </td>
@@ -277,7 +278,7 @@
               {% if risk_profile.portfolio_note %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:separate;border-spacing:0;">
                 <tr>
-                  <td style="padding:9px 12px;background:{{ palette.accent_bg }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;font-size:11px;color:{{ palette.ink }};line-height:1.5;">&#9432; {{ risk_profile.portfolio_note }}</td>
+                  <td style="padding:9px 12px;background:{{ palette.accent_bg }};border:1px solid {{ palette.border }};border-left:4px solid {{ palette.accent }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">&#9432; {{ risk_profile.portfolio_note }}</td>
                 </tr>
               </table>
               {% endif %}
@@ -292,8 +293,8 @@
                 <tr>
                   {% for t in row %}
                   <td class="stack" width="20%" valign="top" style="padding:9px 10px;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
-                    <div style="font-size:9px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:{{ palette.subtle }};">{{ t.label }}</div>
-                    <div style="margin-top:2px;font-size:15px;font-weight:700;color:{{ palette.ink }};font-variant-numeric:tabular-nums;">{{ t.value }}</div>
+                    <div style="{{ type.label }}color:{{ palette.subtle }};">{{ t.label }}</div>
+                    <div style="margin-top:2px;{{ type.figure }}color:{{ palette.ink }};font-variant-numeric:tabular-nums;">{{ t.value }}</div>
                     {% if t.gauge %}<div style="margin-top:5px;">{{ t.gauge|safe }}</div>{% endif %}
                   </td>
                   {% endfor %}
@@ -302,7 +303,7 @@
                 {% endfor %}
               </table>
               {% if risk_profile.alpha_beta_note %}
-              <div style="margin-top:6px;font-size:10px;color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
+              <div style="margin-top:6px;{{ type.prose }}color:{{ palette.subtle }};">* {{ risk_profile.alpha_beta_note }}</div>
               {% endif %}
 
               {% if risk_profile.legend %}
@@ -314,18 +315,18 @@
                  definition. Ten boxed cards in two columns, each with a
                  three-line gloss, were taller than the ten tiles they
                  explained. #}
-              <div style="margin-top:18px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Legend</div>
+              <div style="margin-top:18px;{{ type.title }}color:{{ palette.accent }};">Legend</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;border-collapse:collapse;">
                 <tr>
-                  <td style="padding:0 8px 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};">Metric</td>
-                  <td style="padding:0 8px 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};white-space:nowrap;"><span style="color:{{ palette.green }};">strong</span> &middot; <span style="color:{{ palette.amber }};">fair</span> &middot; <span style="color:{{ palette.red }};">weak</span></td>
-                  <td style="padding:0 0 4px 0;font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:{{ palette.muted }};">Reads as</td>
+                  <td style="padding:0 8px 4px 0;{{ type.label }}color:{{ palette.muted }};">Metric</td>
+                  <td style="padding:0 8px 4px 0;{{ type.label }}color:{{ palette.muted }};white-space:nowrap;"><span style="color:{{ palette.green }};">strong</span> &middot; <span style="color:{{ palette.amber }};">fair</span> &middot; <span style="color:{{ palette.red }};">weak</span></td>
+                  <td style="padding:0 0 4px 0;{{ type.label }}color:{{ palette.muted }};">Reads as</td>
                 </tr>
                 {% for r in risk_profile.legend %}
                 <tr>
-                  <td valign="top" style="padding:3px 8px 3px 0;font-size:10.5px;font-weight:700;color:{{ palette.ink }};white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.label }}</td>
-                  <td valign="top" style="padding:3px 8px 3px 0;white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span></td>
-                  <td valign="top" style="padding:3px 0;font-size:10px;line-height:1.4;color:{{ palette.muted }};{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.description }}</td>
+                  <td valign="top" style="padding:3px 8px 3px 0;{{ type.data }}color:{{ palette.ink }};white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.label }}</td>
+                  <td valign="top" style="padding:3px 8px 3px 0;white-space:nowrap;{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}"><span style="display:inline-block;padding:0 4px;border-radius:3px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:{{ type_px.label }}px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.strong }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:{{ type_px.label }}px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.fair }}</span><span style="display:inline-block;margin-left:2px;padding:0 4px;border-radius:3px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:{{ type_px.label }}px;font-weight:700;font-variant-numeric:tabular-nums;">{{ r.weak }}</span></td>
+                  <td valign="top" style="padding:3px 0;{{ type.prose }}color:{{ palette.muted }};{% if not loop.first %}border-top:1px solid {{ palette.border }};{% endif %}">{{ r.description }}</td>
                 </tr>
                 {% endfor %}
               </table>
@@ -340,20 +341,20 @@
             <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
-              <div style="margin-top:16px;font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">
+              <div style="margin-top:16px;{{ type.title }}color:{{ palette.accent }};">
                 {{ plan.label }}
                 {# Which plan the configuration runs, then whether it can be
                    executed. Both plans are computed every run and both can be
                    executable, so the status alone left the reader with two trade
                    lists and no way to tell which one is the proposal. #}
-                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.accent_bg if plan.active else palette.card_alt }};color:{{ palette.accent if plan.active else palette.muted }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span>
+                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.accent_bg if plan.active else palette.card_alt }};color:{{ palette.accent if plan.active else palette.muted }};font-size:{{ type_px.label }}px;font-weight:700;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span>
                 {% if plan.execution_status %}
-                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:9px;letter-spacing:0.04em;vertical-align:middle;">{% if plan.executable %}✓ {% endif %}{{ plan.execution_status|replace('_', ' ') }}</span>
+                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:{{ type_px.label }}px;font-weight:700;vertical-align:middle;">{% if plan.executable %}✓ {% endif %}{{ plan.execution_status|replace('_', ' ') }}</span>
                 {% endif %}
               </div>
               {% if plan.execution_status == 'NON_EXECUTABLE' %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;background:{{ palette.red_bg }};border:1px solid {{ palette.red }};border-radius:8px;border-collapse:separate;border-spacing:0;">
-                <tr><td style="padding:10px 12px;font-size:12px;color:{{ palette.ink }};line-height:1.5;">
+                <tr><td style="padding:10px 12px;{{ type.prose }}color:{{ palette.ink }};">
                   <strong style="color:{{ palette.red }};">Not executable — draft only.</strong>
                   The funding proof ends with {{ plan.funding_ending_cash_eur }} cash against a protected {{ plan.funding_protected_cash_eur }} buffer{% if plan.funding_shortfall_eur %}, a {{ plan.funding_shortfall_eur }} shortfall{% endif %}. Do not treat the trades below as executable instructions.
                 </td></tr>
@@ -363,7 +364,7 @@
                  and out, and what executing costs. It was three lines -- a
                  green "funding verified" strip repeating the EXECUTABLE pill
                  beside the plan name, a totals line, and a cost line. #}
-              <div style="margin-top:6px;font-size:11px;line-height:1.6;color:{{ palette.muted }};">
+              <div style="margin-top:6px;{{ type.prose }}color:{{ palette.muted }};">
                 {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} buy &middot; {{ plan.n_sell }} sell &middot; in <strong style="color:{{ palette.green }};">{{ plan.total_buy }}</strong> &middot; out <strong style="color:{{ palette.red }};">{{ plan.total_sell }}</strong>{% if plan.cost_total_eur %} &middot; estimated cost <strong style="color:{{ palette.red }};">{{ plan.cost_total_eur }}</strong>{% if plan.cgt_eur and plan.fees_eur %} of which CGT {{ plan.cgt_eur }} and fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}, all tax (CGT){% else %}, all commission fees{% endif %}{% endif %}
               </div>
               {% if plan.actions %}
@@ -372,9 +373,9 @@
                  evidence but is explicitly labeled draft-only above. #}
               {{ plan.table_html|safe }}
               {% elif plan.execution_status == 'NON_EXECUTABLE' %}
-              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.red_bg }};border-radius:8px;font-size:12px;color:{{ palette.red }};">No executable trade set was produced.</div>
+              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.red_bg }};border-radius:8px;{{ type.prose }}color:{{ palette.red }};">No executable trade set was produced.</div>
               {% else %}
-              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;font-size:12px;color:{{ palette.ink }};">Already on target: no trades needed.</div>
+              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">Already on target: no trades needed.</div>
               {% endif %}
               {% endfor %}
             </td>
@@ -430,25 +431,25 @@
           {% if ticker_sources.available %}
           <tr>
             <td class="px-32" style="padding:12px 20px 0 20px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Instrument data sources</div>
-              <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Every instrument this issue names · the exact provider listing behind its daily bars (Hist.) and its intraday series (Intr.). Held first, then watchlist, then closed positions; alphabetical within each.</div>
+              <div style="{{ type.title }}color:{{ palette.accent }};">Instrument data sources</div>
+              <div style="margin-top:3px;{{ type.prose }}color:{{ palette.muted }};">Every instrument this issue names · the exact provider listing behind its daily bars (Hist.) and its intraday series (Intr.). Held first, then watchlist, then closed positions; alphabetical within each.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
                 <tr style="background:{{ palette.page }};">
-                  <td width="11%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Ticker</td>
-                  <td width="31%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Name</td>
-                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">ISIN</td>
-                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Hist. RIC</td>
-                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Intr. RIC</td>
-                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Presence</td>
+                  <td width="11%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Ticker</td>
+                  <td width="27%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Name</td>
+                  <td width="15%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">ISIN</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Hist. RIC</td>
+                  <td width="15%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Intr. RIC</td>
+                  <td width="18%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Presence</td>
                 </tr>
                 {% for row in ticker_sources.rows %}
                 <tr>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:{{ palette.accent }};line-height:1.25;">{{ row.ticker or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:8.5px;font-weight:600;color:{{ palette.ink }};line-height:1.25;">{{ row.name or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:{{ palette.subtle }};line-height:1.25;">{{ row.isin or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:{{ palette.ink }};line-height:1.25;">{{ row.hist_ric or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:{{ palette.ink }};line-height:1.25;">{{ row.intr_ric or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:7.5px;color:{{ palette.muted }};line-height:1.25;">{{ row.presence or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.accent }};">{{ row.ticker or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;{{ type.data }}color:{{ palette.ink }};">{{ row.name or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.subtle }};">{{ row.isin or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.hist_ric or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.intr_ric or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;{{ type.data }}color:{{ palette.muted }};">{{ row.presence or "—" }}</td>
                 </tr>
                 {% endfor %}
               </table>
@@ -459,7 +460,7 @@
           {# ─── FOOTER ────────────────────────────────────── #}
           <tr>
             <td class="px-32" style="padding:24px 20px 32px 20px;border-top:1px solid {{ palette.border }};">
-              <div style="font-size:10px;color:{{ palette.subtle }};line-height:1.7;text-align:center;">
+              <div style="{{ type.prose }}color:{{ palette.subtle }};text-align:center;">
                 generated {{ footer.generated_at }} · tarzan {{ footer.version }} · issue {{ header.issue_number }}<br>
                 personal portfolio analytics · not investment advice · point-in-time, may be revised
               </div>
@@ -467,7 +468,7 @@
           </tr>
 
         </table>
-        <div style="margin-top:14px;font-size:11px;color:{{ palette.subtle }};">🌿 Tarzan. Built for the long swing.</div>
+        <div style="margin-top:14px;{{ type.prose }}color:{{ palette.subtle }};">🌿 Tarzan. Built for the long swing.</div>
       </td>
     </tr>
   </table>

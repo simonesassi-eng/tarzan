@@ -21,9 +21,12 @@ from tarzan.version import APPLICATION_VERSION
 from tarzan.export.newsletter._constants import (  # noqa: F401 (re-exported)
     ASSET_COLORS,
     ASSET_CLASS_ORDER,
+    FONT_STACK,
     GEO_COLORS,
     MARKET_REGION_COLORS,
     PALETTE,
+    TYPE,
+    TYPE_PX,
     _NEWSLETTER_CLASS_ORDER,
     _NewsletterContext,
     _PERF_CLASS_ORDER,
@@ -114,6 +117,12 @@ def build_context(
     hero = _build_hero(nctx)
     return {
         "palette": PALETTE,
+        # The type scale, on the same footing as the palette: the template sets a
+        # ROLE ("{{ type.label }}") and then only what is local to the element,
+        # instead of restating a size, a weight, a tracking and a case per span.
+        "type": TYPE,
+        "type_px": TYPE_PX,
+        "font_stack": FONT_STACK,
         "header": _build_header(nctx),
         "headline": _build_headline(nctx, hero),
         "hero": hero,
