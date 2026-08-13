@@ -129,7 +129,7 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(tzname)
-        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+        n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return None
     if n.weekday() >= 5:  # Saturday / Sunday
@@ -182,7 +182,7 @@ def futures_open_now(now: Optional[datetime] = None) -> bool:
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(_SESSIONS["US"][0])
-        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+        n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return False
     wd, t = n.weekday(), n.time()
@@ -199,18 +199,23 @@ def futures_open_now(now: Optional[datetime] = None) -> bool:
 _WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def _cash_session_day(n: datetime, oh: int, om: int) -> str:
-    """The plain calendar weekday (exchange-local) whose cash session is
-    live right now, or was the most recently completed one: today once
-    today's own session has started, otherwise the previous trading day
-    (walking back over a weekend one weekday further)."""
+def _session_date(n: datetime, oh: int, om: int):
+    """The exchange-local DATE whose cash session is live at ``n``, or was the
+    most recently started one: today once today's own session has opened,
+    otherwise the previous trading day (walking back over a weekend one
+    weekday further). ``n`` must already be in exchange-local time."""
     from datetime import timedelta
     d = n
     if not (d.weekday() < 5 and d.time() >= dtime(oh, om)):
         d = d - timedelta(days=1)
         while d.weekday() >= 5:
             d = d - timedelta(days=1)
-    return _WD[d.weekday()]
+    return d.date()
+
+
+def _cash_session_day(n: datetime, oh: int, om: int) -> str:
+    """The weekday label of :func:`_session_date` — the caption form."""
+    return _WD[_session_date(n, oh, om).weekday()]
 
 
 def fx_open_now(now: Optional[datetime] = None) -> bool:
@@ -226,7 +231,7 @@ def fx_open_now(now: Optional[datetime] = None) -> bool:
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(_SESSIONS["US"][0])
-        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+        n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return False
     wd, t = n.weekday(), n.time()
@@ -258,7 +263,7 @@ def market_status(ticker: str, now: Optional[datetime] = None) -> tuple:
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(_SESSIONS["US"][0])
-            n = now.astimezone(tz) if now is not None else datetime.now(tz)
+            n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
         except Exception:  # noqa: BLE001
             return None, ""
         is_open = futures_open_now(n) if t.endswith("=F") else fx_open_now(n)
@@ -275,7 +280,7 @@ def market_status(ticker: str, now: Optional[datetime] = None) -> tuple:
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(tzname)
-        n = now.astimezone(tz) if now is not None else datetime.now(tz)
+        n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return None, ""
     return market_open_now(ticker, now), _cash_session_day(n, oh, om)
@@ -515,12 +520,140 @@ _INTRADAY_STALE_AFTER_SECONDS = 10800  # 3h — Yahoo's EU ETF 15m feed lags
 
 
 def _intraday_reference_now(tzinfo=None):
-    """Real current time, tz-aware. A thin, monkeypatchable seam (mirrors
-    the ``now=`` pattern used by ``market_open_now`` elsewhere in this
-    module) so tests can pin "now" without threading a parameter through
-    the whole intraday call chain."""
+    """The ONE reference instant for every market-data freshness/session
+    decision in a run, tz-aware. A thin, monkeypatchable seam (mirrors the
+    ``now=`` pattern used by ``market_open_now`` elsewhere in this module) so
+    tests can pin "now" without threading a parameter through the whole
+    intraday call chain.
+
+    It reads the run clock, not the wall clock: LIVE runs use the run's own
+    capture instant, so every section of one issue judges "is this market open"
+    and "is this bar current" against the same moment instead of each drifting
+    to whenever it happened to execute. A POINT_IN_TIME / REPRODUCIBLE run gets
+    the END of its effective date, which is what makes the no-observation-later-
+    than-``as_of`` invariant expressible as a single comparison. Falls back to
+    the wall clock only if the run context cannot be read.
+    """
     from datetime import timezone as _tz
-    return datetime.now(tzinfo or _tz.utc)
+    tz = tzinfo or _tz.utc
+    try:
+        from tarzan import runtime
+        ctx = runtime.context()
+        if ctx.effective_date is not None:
+            return datetime.combine(
+                ctx.effective_date, dtime.max, tzinfo=_tz.utc).astimezone(tz)
+        return ctx.captured_at.astimezone(tz)
+    except Exception:  # noqa: BLE001 — a clock must never break a render
+        return datetime.now(tz)
+
+
+def _exchange_tz(ticker: str):
+    """The IANA zone of the instrument's exchange, or None when no cash
+    session is modelled for it (futures/FX/crypto/unknown venue)."""
+    ex = _exchange_for((ticker or "").upper())
+    if ex is None or ex not in _SESSIONS:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(_SESSIONS[ex][0])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def session_day(ticker: str, now: Optional[datetime] = None):
+    """The exchange-local DATE of the cash session that is live right now, or
+    of the most recently started one.
+
+    This is the authority for "which session do today's figures belong to",
+    and it is deliberately separate from :func:`market_open_now` ("is the
+    venue trading"). Minutes after an open the two disagree in the way that
+    matters: the venue is open, but no observation from that session exists
+    yet, and a figure carried over from the previous session must not be
+    presented as this one's. ``None`` when no cash session is modelled
+    (futures/FX/crypto), where the caller keeps its own day convention.
+    """
+    ex = _exchange_for((ticker or "").upper())
+    if ex is None or ex not in _SESSIONS:
+        return None
+    tzname, (oh, om), _close = _SESSIONS[ex]
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tzname)
+        n = (now or _intraday_reference_now()).astimezone(tz)
+    except Exception:  # noqa: BLE001
+        return None
+    return _session_date(n, oh, om)
+
+
+def _clip_to_reference(ser, now, tz=None):
+    """Drop observations later than ``now`` — the run's reference instant.
+
+    The invariant is that nothing an issue prints can post-date its own
+    ``as_of``. A vendor window is requested by period ("5d"), not by bound, so
+    under ``--as_of`` it happily returns bars from after the effective date;
+    clipping here, at the one place intraday series enter the system, is what
+    keeps every downstream section on the same side of the boundary. A tz-naive
+    index is read as exchange-local time (``tz``), which is what such an index
+    means when the vendor or a fixture supplies one."""
+    try:
+        import pandas as pd
+
+        ref = pd.Timestamp(now)
+        if getattr(ser.index, "tz", None) is None:
+            if ref.tzinfo is not None:
+                ref = ref.tz_convert(tz) if tz is not None else ref.tz_convert("UTC")
+                ref = ref.tz_localize(None)
+        elif ref.tzinfo is None:
+            ref = ref.tz_localize("UTC")
+        return ser[ser.index <= ref]
+    except Exception:  # noqa: BLE001 — never drop a series over a clip
+        return ser
+
+
+def _select_session_series(ser, ticker: str, now: Optional[datetime] = None):
+    """Narrow an intraday close series to ONE session: the current one.
+
+    ``ser`` arrives as several days of bars (the vendor is asked for a window
+    wide enough to survive a long weekend). Picking "the last calendar day
+    present" — which is what this used to do, in UTC — silently returns the
+    PREVIOUS session whenever the current one has not printed yet, which is
+    every run in the first ~half hour after an open. Every consumer then treats
+    yesterday's completed session as today's, so a close-to-close return gets
+    rendered under an "Intraday" heading. Selecting by the exchange's own
+    session date instead means "not yet" comes back as absent, which callers
+    already handle honestly.
+
+    Bars are also matched in the EXCHANGE's timezone, not UTC: a session that
+    straddles UTC midnight (Sydney on summer time) would otherwise be cut in
+    half. Returns an empty series when the current session has fewer than two
+    bars. Continuous markets (futures/FX/crypto) have no cash session, so they
+    keep the last-day-present convention."""
+    now = now or _intraday_reference_now()
+    tz = _exchange_tz(ticker)
+    ser = _clip_to_reference(ser, now, tz)
+    if ser is None or len(ser) < 2:
+        return ser[:0] if ser is not None else ser
+    # No cash session modelled (futures/FX/crypto) → session_day is None and
+    # this falls back to the last day present, their own day convention.
+    day = session_day(ticker, now) or _observed_day(ser.index[-1], tz)
+    return ser[[_observed_day(ts, tz) == day for ts in ser.index]]
+
+
+def _observed_day(ts, tz=None):
+    """The session date an observation belongs to, in the exchange's own
+    timezone.
+
+    A bar timestamped in UTC lands on the PREVIOUS UTC date for any venue far
+    enough east — Sydney on summer time opens at 23:00 UTC — so reading its
+    plain ``.date()`` dates a live session one day early, and every comparison
+    against :func:`session_day` (also exchange-local) then calls it stale. Every
+    reader of "which session is this observation from" goes through here so the
+    two can only ever disagree about a real difference."""
+    try:
+        return (ts.astimezone(tz) if tz is not None and ts.tzinfo is not None
+                else ts).date()
+    except Exception:  # noqa: BLE001
+        return ts.date()
 
 
 def _no_trading_day_skipped(ticker: str, last_ts, now) -> bool:
@@ -750,27 +883,27 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                 warnings.simplefilter("ignore")
                 # 5d, not 1d: a market closed for a long weekend or a
                 # holiday needs more than one day of lookback to still find
-                # its last completed session. The per-symbol filter below
-                # then keeps exactly one day out of whatever comes back -
-                # today's if the market is open, otherwise the most recent
-                # one present - so a wider window never means a multi-day
-                # chart, only a better chance of finding a single real one.
+                # its last completed session. _select_session_series then
+                # keeps exactly the CURRENT session out of whatever comes
+                # back, so a wider window never means a multi-day chart,
+                # only a better chance of finding a single real one.
                 return yf.download(symbols, period="5d", interval="15m",
                                    group_by="ticker", progress=False, threads=True)
         # Shared spacing+retry so the intraday batch survives a 429 burst.
         raw = _yf_net.fetch_yf(_download, what="intraday batch", log=logger)
         if raw is None or len(raw) == 0:
             return {}
+        # One instant for the whole batch: every symbol's session and freshness
+        # is judged against the same moment, so two strips in one issue cannot
+        # disagree about what "now" is.
+        now = _intraday_reference_now()
         level0 = set(raw.columns.get_level_values(0)) if hasattr(raw.columns, "get_level_values") else set()
         for s in symbols:
             try:
                 if s in level0 and "Close" in raw[s].columns:
-                    cl = raw[s]["Close"].dropna()
-                    if len(cl) >= 2:
-                        last_day = cl.index[-1].date()
-                        same_day = cl[[ts.date() == last_day for ts in cl.index]]
-                        if len(same_day) >= 2:
-                            out[s] = same_day
+                    cl = _select_session_series(raw[s]["Close"].dropna(), s, now)
+                    if cl is not None and len(cl) >= 2:
+                        out[s] = cl
             except Exception:  # noqa: BLE001
                 continue
         missing = [s for s in symbols if s not in out]
@@ -846,7 +979,8 @@ def _fetch_official_prev_closes(symbols: list[str]) -> dict:
 
 
 def _quote(dclose, intra, spark_points: int = 40,
-           official_prev: Optional[float] = None) -> Optional[dict]:
+           official_prev: Optional[float] = None,
+           current_session_day=None, session_tz=None) -> Optional[dict]:
     """Assemble one quote from the daily close series and (optional)
     intraday close series. Returns None when there is not enough data.
 
@@ -858,35 +992,61 @@ def _quote(dclose, intra, spark_points: int = 40,
     which inflated the strip's daily % by that much versus every site quoting
     Yahoo's headline. Falls back to the daily-history close, then the first
     intraday tick, when the official close is absent (offline runs, or a symbol
-    the batch quote did not return)."""
+    the batch quote did not return).
+
+    ``current_session_day`` is :func:`session_day` for the symbol — the session
+    the run is IN. It is what makes ``official_prev`` safe to use: that field is
+    the close before the CURRENT session, so pairing it with a level from an
+    earlier session measures nothing. At the London open with no Thursday bars
+    yet, Wednesday's close paired with Wednesday's ``previousClose`` printed
+    "+0.00%"; the same level paired with Tuesday's close prints Wednesday's
+    real move, which is what the figure actually is. ``None`` for continuously
+    traded instruments (futures/FX/crypto), which have no cash session and keep
+    ``official_prev`` unconditionally. ``session_tz`` is that exchange's zone,
+    so the level is dated in the same timezone as ``current_session_day`` and
+    the two are comparable. The returned ``observed_day`` states which session
+    the level belongs to, so callers can label it honestly instead of assuming
+    it is today's."""
     spark_series = None
     official = official_prev if (official_prev and official_prev > 0) else None
+
+    def _close_before(day):
+        if dclose is None or not len(dclose) or day is None:
+            return None
+        prior = dclose[[ts.date() < day for ts in dclose.index]]
+        return float(prior.iloc[-1]) if len(prior) else None
+
     if intra is not None and len(intra) >= 2:
         cur = float(intra.iloc[-1])
-        iday = intra.index[-1].date()
-        prev = official
-        if prev is None and dclose is not None and len(dclose):
-            prior = dclose[[ts.date() < iday for ts in dclose.index]]
-            if len(prior):
-                prev = float(prior.iloc[-1])
-        if prev is None:
-            prev = float(intra.iloc[0])
+        observed_day = _observed_day(intra.index[-1], session_tz)
         spark = [float(x) for x in intra.values]
-        baseline = prev
         # Keep the timestamped intraday series so the newsletter can draw it
         # on a full-session time axis (line grows through the day).
         spark_series = intra
+        fallback = float(intra.iloc[0])
     elif dclose is not None and len(dclose) >= 2:
         cur = float(dclose.iloc[-1])
-        prev = official if official is not None else float(dclose.iloc[-2])
+        observed_day = dclose.index[-1].date()
         spark = [float(x) for x in dclose.iloc[-spark_points:].values]
-        baseline = spark[0]
+        fallback = float(dclose.iloc[-2])
     else:
         return None
+
+    # ``official_prev`` belongs to the current session, so a level from an
+    # earlier one is measured against the close before ITS OWN session instead.
+    stale_session = bool(current_session_day is not None
+                         and observed_day < current_session_day)
+    prev = None if stale_session else official
+    if prev is None:
+        prev = _close_before(observed_day)
+    if prev is None:
+        prev = fallback
+    baseline = prev if spark_series is not None else spark[0]
     change = cur - prev
     pct = (change / prev * 100.0) if prev else 0.0
     return {"value": cur, "change": change, "pct": pct,
-            "spark": spark, "baseline": baseline, "spark_series": spark_series}
+            "spark": spark, "baseline": baseline, "spark_series": spark_series,
+            "observed_day": observed_day, "stale_session": stale_session}
 
 
 def broker_1d(
@@ -958,7 +1118,10 @@ def broker_1d(
             )
         except (TypeError, ValueError, OverflowError):
             intraday_observation_timestamp = None
-        iday = last_ts.date()
+        # Dated in the SOURCE VENUE's timezone: the daily history this indexes
+        # into is keyed by exchange-local dates, so a UTC read would look up
+        # the wrong session's official close for any venue east of UTC.
+        iday = _observed_day(last_ts, _exchange_tz(src))
         # "live" = the source listing's exchange is in its regular session
         # right now, judged by EXCHANGE HOURS (not bar recency). Uses ``src``
         # so a Milan holding served by its Xetra twin is judged by the venue
@@ -1085,6 +1248,9 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
     symbols = [s for _, s, _ in MARKETS]
     intraday = _fetch_intraday(symbols)
     prev_closes = _fetch_official_prev_closes(symbols)
+    # One instant for the whole strip, so two rows cannot disagree about which
+    # session is current.
+    now = _intraday_reference_now()
     out: list[dict] = []
     for name, symbol, category in MARKETS:
         try:
@@ -1104,7 +1270,9 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             # last session (market closed) both still pass.
             if intra is not None and not _has_intraday(intra, symbol):
                 intra = None
-            q = _quote(dclose, intra, official_prev=prev_closes.get(symbol))
+            q = _quote(dclose, intra, official_prev=prev_closes.get(symbol),
+                       current_session_day=session_day(symbol, now),
+                       session_tz=_exchange_tz(symbol))
             if q is None:
                 continue
             out.append({"name": name, "symbol": symbol, "category": category, **q})
