@@ -363,10 +363,30 @@ def _timeline_vals(series: Optional[list], key: str) -> Optional[list[float]]:
     vals = [float(pt.get(key, 0.0)) for pt in series]
     return vals if any(v > 0 for v in vals) else None
 
+def _session_xs(ts: list, start, end, w: int) -> Optional[list]:
+    """X positions of ``ts`` within the window ``[start, end]``, scaled to ``w``.
+
+    Returns None when the window or the timestamps cannot be compared (a naive
+    index against a tz-aware window, a zero-length window), so the caller can
+    fall back rather than draw a line at x=0. Timestamps outside the window are
+    clamped: a venue that quotes past its modelled close still ends at the right
+    edge instead of running off the chart."""
+    try:
+        start, end = pd.Timestamp(start), pd.Timestamp(end)
+        width = (end - start).total_seconds()
+        if width <= 0:
+            return None
+        return [max(0.0, min(1.0, (pd.Timestamp(t) - start).total_seconds() / width)) * w
+                for t in ts]
+    except Exception:  # noqa: BLE001 — mismatched tz-awareness, unorderable index
+        return None
+
+
 def _intraday_spark(intra: "pd.Series", baseline: float,
                     w: int = 62, h: int = 22,
                     in_progress: Optional[bool] = None,
-                    session_hours: Optional[float] = None) -> str:
+                    session_hours: Optional[float] = None,
+                    span: Optional[tuple] = None) -> str:
     """Intraday sparkline on a full-session time axis.
 
     Unlike the stretched ``_day_spark`` (which spreads N points across the
@@ -390,6 +410,14 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     it, a bar an hour into a 23-hour session would be placed as if the
     session were 6.5-8.5 hours long, clamped to the right edge and making a
     just-opened market look like a nearly complete one.
+
+    ``span`` is the venue's real ``(open, close)`` for this session
+    (market_quotes.session_span) and supersedes both: with it the axis is the
+    session itself rather than "the first bar plus a guess", so a market that
+    printed three times in its first hour draws three points in the left tenth,
+    and a session with a late first print does not start at x=0. Only when no
+    span is known does ``in_progress`` still choose between the elapsed-time
+    axis and evenly spreading the points.
     """
     global _day_spark_uid
     ts = list(intra.index)
@@ -398,51 +426,50 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     if n < 2:
         return ""
     t0, t_last = ts[0], ts[-1]
-    # A completed session (e.g. a US index in the European morning, or any
-    # market viewed after its close) fills the full width. Only the session
-    # trading *now* grows from the left, so early in that market's day the
-    # line covers just the elapsed portion. Prefer the caller's exchange-hours
-    # signal; fall back to bar recency when it isn't provided.
-    if in_progress is None:
-        try:
-            _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
-                   else t_last.tz_localize("UTC"))
-            _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
-            in_progress = _age_min <= 60
-        except Exception:  # noqa: BLE001
-            in_progress = False
-    if in_progress:
-        if session_hours is not None:
-            sess = session_hours * 3600.0
-        else:
-            # Session length from the open's UTC hour (yfinance returns
-            # intraday timestamps in UTC): US cash opens ~13:30 UTC, Europe
-            # ~07:00 UTC.
+    # Where each bar sits horizontally. Best: the venue's real session window,
+    # so the drawn extent is the traded extent — a completed session fills the
+    # width, a quiet morning does not, and neither needs a flag to say so.
+    xs = _session_xs(ts, span[0], span[1], w) if span else None
+    if xs is None:
+        # No session window (continuous market, or an unmodelled venue). Fall
+        # back to elapsed time from the first bar over an assumed session
+        # length; only a session known to be OVER is spread evenly, since then
+        # the bars cover it by definition. Prefer the caller's exchange-hours
+        # signal; fall back to bar recency when it isn't provided.
+        if in_progress is None:
             try:
-                oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
+                _lt = (t_last.tz_convert("UTC") if getattr(t_last, "tzinfo", None)
+                       else t_last.tz_localize("UTC"))
+                _age_min = (pd.Timestamp.now(tz="UTC") - _lt).total_seconds() / 60.0
+                in_progress = _age_min <= 60
             except Exception:  # noqa: BLE001
-                oh = 8
-            sess = (6.5 if oh >= 12 else 8.5) * 3600.0
-
-        def _xpos(t) -> float:
-            try:
-                return max(0.0, min(1.0, (t - t0).total_seconds() / sess)) * w
-            except Exception:  # noqa: BLE001
-                return 0.0
-        xs = [_xpos(t) for t in ts]
-    else:
-        xs = [i / (n - 1) * w for i in range(n)]
+                in_progress = False
+        if in_progress:
+            if session_hours is not None:
+                sess = session_hours * 3600.0
+            else:
+                # Session length from the open's UTC hour (yfinance returns
+                # intraday timestamps in UTC): US cash opens ~13:30 UTC, Europe
+                # ~07:00 UTC.
+                try:
+                    oh = (t0.tz_convert("UTC").hour if getattr(t0, "tzinfo", None) else t0.hour)
+                except Exception:  # noqa: BLE001
+                    oh = 8
+                sess = (6.5 if oh >= 12 else 8.5) * 3600.0
+            xs = _session_xs(ts, t0, pd.Timestamp(t0) + pd.Timedelta(seconds=sess), w) or []
+        if not xs:
+            xs = [i / (n - 1) * w for i in range(n)]
 
     lo = min(min(vals), baseline)
     hi = max(max(vals), baseline)
-    span = (hi - lo) or 1.0
-    pad = span * 0.16
+    rng = (hi - lo) or 1.0
+    pad = rng * 0.16
     lo -= pad
     hi += pad
-    span = hi - lo
+    rng = hi - lo
 
     def _yy(v: float) -> float:
-        return h - (v - lo) / span * h
+        return h - (v - lo) / rng * h
 
     yb = _yy(baseline)
     line = " ".join(f"{x:.1f},{_yy(v):.1f}" for x, v in zip(xs, vals))

@@ -65,10 +65,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     P = PALETTE
     COLS = 5
 
-    def market_open_now(_ticker):  # safe default if the import below fails
-        return None
-
-    def is_continuous_market(_ticker):  # safe default if the import fails
+    def is_continuous_market(_ticker):  # safe default if the import below fails
         return False
 
     def session_caption(_ticker):  # safe default if the import fails
@@ -77,10 +74,13 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def market_status(_ticker, _now=None):  # safe default if the import fails
         return None, ""
 
+    def session_span(_ticker, _now=None):  # safe default if the import fails
+        return None
+
     try:
         from tarzan.data.market_quotes import (fetch_market_quotes, CATEGORY_ORDER,
-                                               market_open_now, is_continuous_market,
-                                               session_caption, market_status)
+                                               is_continuous_market, session_caption,
+                                               market_status, session_span)
         snap = fetch_market_quotes()
     except Exception:  # noqa: BLE001
         snap, CATEGORY_ORDER = [], []
@@ -99,50 +99,54 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         there is one, else the daily fallback. Narrow, because this is context
         rather than subject matter."""
         sym = d.get("symbol", "")
+        up = str(sym).upper()
+        # ONE answer to "is this venue trading right now", for every instrument
+        # kind: market_status resolves the futures/FX weekly cycle and crypto
+        # too, and returns None only for a venue with no modelled session.
+        trading, _day = market_status(sym)
         ss = d.get("spark_series")
         if ss is not None and len(ss) >= 2:
-            up = str(sym).upper()
             if up.endswith("=F") or up.endswith("=X"):
-                # Futures/FX are nearly continuous but not literally 24/7
-                # (market_status models the real weekly cycle) -- forcing
-                # in_progress=False stretched a chart an hour into its
-                # ~23-24h window to fill the full cell, making it look like
-                # a completed session when only a fraction had elapsed.
-                is_open, _day = market_status(sym)
-                in_progress = bool(is_open)
+                # Futures/FX have no cash session to draw on, so they keep the
+                # elapsed-fraction axis -- forcing in_progress=False stretched a
+                # chart an hour into its ~23-24h window to fill the full cell,
+                # making it look like a completed session.
+                in_progress = bool(trading)
                 sess_hours = 23.0 if up.endswith("=F") else 24.0
             else:
                 # Crypto (-USD) never closes and has no session boundary to
                 # grow from, so it keeps the full-width view. Exchange-listed
-                # instruments grow through their bounded session while open.
-                in_progress = (False if is_continuous_market(sym)
-                              else market_open_now(sym))
+                # instruments are drawn on their real session window (span),
+                # which makes the flag moot; it still covers venues whose
+                # session is unmodelled.
+                in_progress = (False if is_continuous_market(sym) else trading)
                 sess_hours = None
             return _intraday_spark(ss, d.get("baseline", d["value"]),
-                                   w=66, h=20, in_progress=in_progress,
+                                   w=66, h=20, span=session_span(sym),
+                                   in_progress=in_progress,
                                    session_hours=sess_hours)
-        if d.get("stale_session"):
-            # The venue has moved on to a session this data does not cover yet
-            # (every run in the first minutes after an open). A 40-day chart
-            # stretched to full width is shaped exactly like a completed session
-            # path, so it read as "the market just opened but the chart is
-            # already full" on a row whose own "Op." badge said it had only just
-            # started. The dashed placeholder says there is no session to draw,
-            # and the caption names the session the level and % actually are.
-            day = d.get("observed_day")
-            note = f'{day.strftime("%a")} close' if day is not None else "prev. close"
-            return (_flat_dashed_spark(w=66, h=20)
-                    + f'<div style="font-size:7px;color:{P["subtle"]};'
-                      f'margin-top:1px;">{note}</div>')
+        if d.get("stale_session") or trading:
+            # Nothing to draw: either the venue has moved on to a session this
+            # data does not cover yet (every run in the first minutes after an
+            # open), or Yahoo has no intraday feed for the listing at all (Bund
+            # 10Y). While the venue trades, BOTH used to draw ~40 DAILY closes
+            # stretched to full width -- shaped exactly like a completed session
+            # path, on a row whose own "Op." badge said it had only just started.
+            # The dashed placeholder says there is no session to draw, and the
+            # caption names the session the level and % actually belong to.
+            day = d.get("observed_day") if d.get("stale_session") else None
+            note = (f'<div style="font-size:7px;color:{P["subtle"]};'
+                    f'margin-top:1px;">{day.strftime("%a")} close</div>'
+                    if day is not None else "")
+            return _flat_dashed_spark(w=66, h=20) + note
+        # Venue closed and no intraday feed for it -- a real, if uneven, gap in
+        # Yahoo's coverage for some exchanges. The last ~40 daily closes are a
+        # COMPLETE period, so filling the width claims nothing false. Label
+        # matches _flat_dashed_spark's own wording for the same gap.
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
                            w=66, h=20, stretch=True)
         if not chart:
             return chart
-        # No timestamped intraday series for this ticker -- a real, if
-        # uneven, gap in Yahoo's coverage for some exchanges (mainland
-        # China/Hong Kong among them) -- so this falls back to the last
-        # ~40 daily closes instead. Label matches _flat_dashed_spark's own
-        # wording for the same gap elsewhere in the issue.
         return (chart + f'<div style="font-size:7px;color:{P["subtle"]};'
                         f'margin-top:1px;">no intraday</div>')
 
@@ -719,6 +723,26 @@ def _shared_performance_intraday(ctx: _NewsletterContext) -> dict:
         }
     return result
 
+
+def _bar_session_span(quote, raw_ticker: str):
+    """Trading-session window of the venue whose bars these are, or ``None``.
+
+    WHICH listing produced the series is the question, not which ticker the
+    portfolio names: the quote resolver falls back to sibling venues (an ISIN
+    Yahoo only quotes in Munich), and it is that venue's hours the chart's
+    x-axis must span.
+    """
+    src = raw_ticker
+    if isinstance(quote, dict):
+        src = (quote.get("intraday_source_ticker")
+               or quote.get("source_ticker") or raw_ticker)
+    try:
+        from tarzan.data.market_quotes import session_span
+        return session_span(str(src or ""))
+    except Exception:  # noqa: BLE001 — chart falls back to the elapsed-time axis
+        return None
+
+
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
                      live: bool = False) -> tuple:
@@ -765,10 +789,15 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                 baseline = last / (1.0 + dv / 100.0)
             else:
                 baseline = float(intra.iloc[0])
-        # Time-axis intraday: line fills only the elapsed part of the session.
-        # ``live`` (from exchange hours) drives whether the session is still in
-        # progress, so a closed same-day session renders full width.
-        spark = _intraday_spark(intra, baseline, in_progress=live)
+        # Time-axis intraday, on the real session window of the venue that
+        # PRODUCED these bars -- a sibling listing keeps its own hours (IS39 is
+        # only quoted in Munich, 08:00-22:00, not on Milan's clock) -- so the
+        # drawn extent is the traded extent: three prints from an illiquid ETF's
+        # first hour cover a sliver, a completed session fills the width, and
+        # neither needs a flag to say which. ``live`` only still decides for
+        # venues with no modelled session.
+        spark = _intraday_spark(intra, baseline, in_progress=live,
+                                span=_bar_session_span(quote, raw_ticker))
     else:
         # No intraday trades → a dashed placeholder line (prev-close
         # reference), so the cell keeps the same height and the pill stays
