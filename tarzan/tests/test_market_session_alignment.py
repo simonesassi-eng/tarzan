@@ -97,6 +97,60 @@ class TestSessionDay:
         assert mq.session_day("SGLD.MI") == date(2026, 8, 12)
 
 
+class TestEveryReachableVenueHasASession:
+    """A suffix the resolver can pick but ``_SUFFIX_EXCHANGE`` does not know has
+    no session: ``session_day`` returns None and that instrument silently keeps
+    the old "whatever day the data ends on" convention. IS39 (quoted only in
+    Munich) is how that gap put the previous session's bars in a live column."""
+
+    def test_every_isin_resolver_suffix_maps_to_a_session(self):
+        from tarzan.data.enricher import ISIN_EXCHANGE_SUFFIXES
+        missing = [s for s in ISIN_EXCHANGE_SUFFIXES
+                   if s.lstrip(".").upper() not in mq._SUFFIX_EXCHANGE]
+        assert missing == []
+
+    def test_every_sibling_fallback_suffix_maps_to_a_session(self):
+        reachable = set(mq._SIBLING_SUFFIXES)
+        for sibs in mq._SIBLING_SUFFIXES.values():
+            reachable.update(sibs)
+        assert [s for s in sorted(reachable)
+                if s not in mq._SUFFIX_EXCHANGE] == []
+
+    def test_every_mapped_group_is_a_modelled_session(self):
+        for table in (mq._SUFFIX_EXCHANGE, mq._INDEX_EXCHANGE):
+            for key, group in table.items():
+                assert group in mq._SESSIONS, f"{key} → {group}"
+
+    def test_a_munich_only_listing_gets_munich_hours(self, monkeypatch):
+        """08:30 CEST: Xetra is shut, the German regional venues have traded for
+        half an hour, so their session is TODAY, not yesterday."""
+        _pin(monkeypatch, "2026-08-13 08:30")
+        assert mq.session_day("IS39.MU") == date(2026, 8, 13)
+        assert mq.session_day("IS39.MI") == date(2026, 8, 12)   # Milan not open
+
+
+class TestSessionSpan:
+    """``session_span`` is the x-axis a session chart must be drawn on."""
+
+    def test_it_is_the_venues_own_open_and_close(self, monkeypatch):
+        _pin(monkeypatch, "2026-08-13 09:09")
+        start, end = mq.session_span("SGLD.MI")
+        assert (start.hour, start.minute) == (9, 0)
+        assert (end.hour, end.minute) == (17, 30)
+        assert start.date() == date(2026, 8, 13)
+        assert (end - start).total_seconds() == 8.5 * 3600
+
+    def test_it_follows_session_day_before_the_open(self, monkeypatch):
+        _pin(monkeypatch, "2026-08-13 08:00")
+        start, _end = mq.session_span("SGLD.MI")
+        assert start.date() == date(2026, 8, 12)
+
+    def test_none_when_no_cash_session_is_modelled(self, monkeypatch):
+        _pin(monkeypatch, "2026-08-13 09:09")
+        for sym in ("CL=F", "EURUSD=X", "BTC-USD", "WHATEVER.XYZ"):
+            assert mq.session_span(sym) is None, sym
+
+
 class TestReferenceInstantIsTheRunClock:
     """One tz-aware ``as_of`` for the whole issue, from the run context."""
 
@@ -393,3 +447,72 @@ class TestStripSparklineAtTheOpen:
         _pin(monkeypatch, "2026-08-13 20:00")  # after the London close
         html = self._spark(self._quote(stale_session=False))
         assert "<polyline" in html
+
+    def test_an_open_venue_with_no_intraday_feed_draws_no_session_path(
+            self, monkeypatch):
+        """Bund 10Y: Yahoo has a daily row for today but no 15m feed at all, so
+        it is not "stale" — and 40 daily closes stretched wide next to an "Op."
+        badge is the same lie the stale case was fixed for."""
+        _pin(monkeypatch, "2026-08-13 10:30")   # London trading
+        html = self._spark(self._quote(stale_session=False))
+        assert "no intraday" in html
+        assert "<polyline" not in html
+
+
+# ── the chart's drawn extent is the traded extent ──────────────────────────
+
+def _poly_xs(html: str) -> list:
+    """X coordinates of the drawn path in a sparkline SVG."""
+    import re
+    m = re.search(r'<polyline points="([^"]+)"', html)
+    assert m is not None, html[:300]
+    return [float(p.split(",")[0]) for p in m.group(1).split()]
+
+
+class TestChartExtentIsTradedExtent:
+    """A session chart spread over the full width says "a whole session traded"
+    no matter how little of one the bars cover. Drawing on the venue's real
+    session window makes the claim true by construction — no flag needed."""
+
+    def test_a_sliver_of_a_session_covers_a_sliver_of_the_width(self, monkeypatch):
+        from tarzan.export.newsletter._charts import _intraday_spark
+        _pin(monkeypatch, "2026-08-13 09:40")
+        ser = _bars([100.0, 101.0, 102.0], "2026-08-13", "09:00", "Europe/Rome")
+        html = _intraday_spark(ser, 100.0, w=62, h=22,
+                               span=mq.session_span("SGLD.MI"))
+        xs = _poly_xs(html)
+        # 09:00→09:30 of an 09:00–17:30 session: under a tenth of the width.
+        assert max(xs) < 62 * 0.12
+
+    def test_a_completed_session_fills_the_width(self, monkeypatch):
+        from tarzan.export.newsletter._charts import _intraday_spark
+        _pin(monkeypatch, "2026-08-13 18:00")
+        ser = _bars([100.0 + i for i in range(35)], "2026-08-13", "09:00",
+                    "Europe/Rome")  # 09:00 → 17:30
+        html = _intraday_spark(ser, 100.0, w=62, h=22,
+                               span=mq.session_span("SGLD.MI"))
+        assert max(_poly_xs(html)) == 62.0
+
+    def test_a_sparse_watchlist_row_is_not_stretched(self, monkeypatch):
+        """IS39: three prints, ``live=False`` (its venue was unmodelled, so
+        exchange hours read None) — the old axis spread them over a whole
+        session. The venue that PRODUCED the bars supplies the window."""
+        from tarzan.export.newsletter._sections_perf import _perf_spark_cell
+        _pin(monkeypatch, "2026-08-13 09:40", tz="Europe/Berlin")
+        ser = _bars([50.0, 50.2, 50.1], "2026-08-13", "09:00", "Europe/Berlin")
+        quote = {"intraday_series": ser, "intraday_baseline": 50.0,
+                 "intraday_source_ticker": "IS39.MU"}
+        _cell, inner = _perf_spark_cell(0.2, "IS39", {"IS39": quote}, live=False)
+        xs = _poly_xs(inner)
+        # 09:00→09:30 of Munich's 08:00–22:00 quoting day.
+        assert max(xs) < 62 * 0.15
+
+    def test_an_unmodelled_venue_keeps_the_elapsed_time_axis(self, monkeypatch):
+        """No span → the pre-existing behaviour, unchanged: an open session grows
+        from its first bar, a closed one spreads evenly."""
+        from tarzan.export.newsletter._charts import _intraday_spark
+        ser = _bars([100.0, 101.0, 102.0], "2026-08-13", "09:00", "UTC")
+        growing = _poly_xs(_intraday_spark(ser, 100.0, w=62, in_progress=True))
+        spread = _poly_xs(_intraday_spark(ser, 100.0, w=62, in_progress=False))
+        assert max(growing) < 62 * 0.15
+        assert max(spread) == 62.0

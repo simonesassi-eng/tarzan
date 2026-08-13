@@ -53,6 +53,11 @@ _SESSIONS: dict[str, tuple[str, tuple[int, int], tuple[int, int]]] = {
     "CN": ("Asia/Shanghai", (9, 30), (15, 0)),    # Shanghai
     "AU": ("Australia/Sydney", (10, 0), (16, 0)),  # Sydney
     "KR": ("Asia/Seoul", (9, 0), (15, 30)),       # Seoul
+    # German regional/retail venues (Munich, Stuttgart, Berlin, Düsseldorf,
+    # Hamburg, Hanover, Tradegate), which really do quote 08:00–22:00 — an ETF
+    # whose only Yahoo listing is one of these prints hours before and after
+    # Xetra, and calling that "the previous session" would discard most of it.
+    "DE_REG": ("Europe/Berlin", (8, 0), (22, 0)),
 }
 
 # Index / bare symbols → exchange group (symbols without a Yahoo suffix).
@@ -65,9 +70,19 @@ _INDEX_EXCHANGE: dict[str, str] = {
     "^N225": "JP", "^HSI": "HK", "^AXJO": "AU", "^KS11": "KR",
 }
 
-# Yahoo listing suffix → exchange group.
+# Yahoo listing suffix → exchange group. This must cover EVERY venue the ISIN
+# resolver can settle on (config's isin_exchange_suffixes) and every sibling it
+# can fall back to: a suffix missing from here has no session at all, so
+# session_day() returns None and the instrument silently reverts to the
+# "whatever day the data ends on" convention this module exists to replace.
+# That gap is how one Munich-listed ETF (IS39.MU) carried the previous
+# session's bars into the 09:09 issue and flipped a whole column to "Intraday".
+# test_market_session_alignment asserts the coverage so the lists cannot drift.
 _SUFFIX_EXCHANGE: dict[str, str] = {
     "MI": "EU", "DE": "EU", "PA": "EU", "AS": "EU", "F": "EU",
+    "ETLX": "EU", "BR": "EU", "LS": "EU", "MC": "EU", "VI": "EU", "SW": "EU",
+    "MU": "DE_REG", "SG": "DE_REG", "BE": "DE_REG", "DU": "DE_REG",
+    "HM": "DE_REG", "HA": "DE_REG", "TG": "DE_REG",
     "L": "L",
     "SS": "CN", "SZ": "CN", "HK": "HK", "T": "JP",
     "AX": "AU", "KS": "KR",
@@ -588,6 +603,33 @@ def session_day(ticker: str, now: Optional[datetime] = None):
     except Exception:  # noqa: BLE001
         return None
     return _session_date(n, oh, om)
+
+
+def session_span(ticker: str, now: Optional[datetime] = None):
+    """``(open, close)`` instants of the session :func:`session_day` names,
+    tz-aware, or ``None`` when no cash session is modelled.
+
+    This is the x-axis a session chart must be drawn on. Spreading N bars evenly
+    across the full width instead — which is what a sparkline does by default —
+    says "this is a whole session" no matter how little of one the bars cover:
+    three prints from an illiquid ETF's first hour came out shaped like a
+    completed day. Placing each bar at its real offset in [open, close] makes a
+    quiet morning look quiet and a finished session fill the width, from the
+    same code path."""
+    ex = _exchange_for((ticker or "").upper())
+    if ex is None or ex not in _SESSIONS:
+        return None
+    tzname, (oh, om), (ch, cm) = _SESSIONS[ex]
+    day = session_day(ticker, now)
+    if day is None:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tzname)
+        return (datetime.combine(day, dtime(oh, om), tzinfo=tz),
+                datetime.combine(day, dtime(ch, cm), tzinfo=tz))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _clip_to_reference(ser, now, tz=None):
