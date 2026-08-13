@@ -56,6 +56,20 @@ from tarzan.export.newsletter._charts import (
     bullet as _bullet,
 )
 
+def _market_is_open(perf: Optional[dict]) -> bool:
+    """Whether a venue the portfolio holds is TRADING, per exchange hours.
+
+    ``market_open`` is the engine's exchange-hours fact; ``1d_live`` is a
+    different one — that the 1D figures are intraday rather than close-to-close.
+    Reading the latter for this caption is what printed "market CLOSED" at 09:09
+    with Milan and London both trading: minutes after an open the venue is open
+    but no intraday bar exists yet. Falls back to ``1d_live`` only when the
+    engine did not state it (no live transport, or an older projection)."""
+    p = perf or {}
+    open_now = p.get("market_open")
+    return bool(p.get("1d_live")) if open_now is None else bool(open_now)
+
+
 def _funding_verification(verifications) -> Optional[dict[str, Any]]:
     """Return the final serialized-action funding proof, when available."""
     return next(
@@ -191,11 +205,10 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     # against, and whether a session is open. All three change what the numbers
     # below mean, and none of them was stated before.
     close_label = _prev_session_label(m, "%d %b")
-    live = bool((perf or {}).get("1d_live"))
     stamp = now.strftime("%a, %d %b %Y")
     if close_label:
         stamp += f" \u00b7 close {close_label}"
-    stamp += f' \u00b7 market {"LIVE" if live else "CLOSED"}'
+    stamp += f' \u00b7 market {"OPEN" if _market_is_open(perf) else "CLOSED"}'
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
         "stamp": stamp,
@@ -337,7 +350,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     if session_pct is not None:
         # What the session was worth and whether it is over: a percentage alone
         # does not say either.
-        market = "open" if bool(perf.get("1d_live")) else "closed"
+        market = "open" if _market_is_open(perf) else "closed"
         caption = (f'{_eur_smart(session_eur, signed=True)} \u00b7 market {market}'
                    if session_eur is not None else f'market {market}')
         state_tiles.append(_tile(

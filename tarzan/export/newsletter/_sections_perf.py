@@ -121,6 +121,19 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             return _intraday_spark(ss, d.get("baseline", d["value"]),
                                    w=66, h=20, in_progress=in_progress,
                                    session_hours=sess_hours)
+        if d.get("stale_session"):
+            # The venue has moved on to a session this data does not cover yet
+            # (every run in the first minutes after an open). A 40-day chart
+            # stretched to full width is shaped exactly like a completed session
+            # path, so it read as "the market just opened but the chart is
+            # already full" on a row whose own "Op." badge said it had only just
+            # started. The dashed placeholder says there is no session to draw,
+            # and the caption names the session the level and % actually are.
+            day = d.get("observed_day")
+            note = f'{day.strftime("%a")} close' if day is not None else "prev. close"
+            return (_flat_dashed_spark(w=66, h=20)
+                    + f'<div style="font-size:7px;color:{P["subtle"]};'
+                      f'margin-top:1px;">{note}</div>')
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
                            w=66, h=20, stretch=True)
         if not chart:
@@ -128,13 +141,8 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         # No timestamped intraday series for this ticker -- a real, if
         # uneven, gap in Yahoo's coverage for some exchanges (mainland
         # China/Hong Kong among them) -- so this falls back to the last
-        # ~40 daily closes instead. Drawn with the same shape as a live
-        # session path, it looks exactly like one that has been running all
-        # day, with nothing marking it as weeks of history instead: that is
-        # what read as "the market just opened but the chart is already
-        # full" on an index whose "Open Mon" line said it had only just
-        # started. Label matches _flat_dashed_spark's own wording for the
-        # same gap elsewhere in the issue.
+        # ~40 daily closes instead. Label matches _flat_dashed_spark's own
+        # wording for the same gap elsewhere in the issue.
         return (chart + f'<div style="font-size:7px;color:{P["subtle"]};'
                         f'margin-top:1px;">no intraday</div>')
 
@@ -957,6 +965,19 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
                                 zebra=False, dense=True, radius=4,
                                 fixed_layout=True)
 
+def _intraday_column(flags) -> bool:
+    """Whether the session column's header may say "Intraday" rather than "1D".
+
+    The header states ONE basis for the whole column, so it may only claim
+    intraday when every row in that column actually is. ``any`` was the rule,
+    and at the 09:09 send a single instrument with bars — a German venue
+    printing before Milan's open — put "INTRADAY" over thirty-nine
+    close-to-close figures, which is precisely the "these look like yesterday's
+    returns" report. Empty is not intraday."""
+    flags = [bool(f) for f in flags]
+    return bool(flags) and all(flags)
+
+
 def _perf_name_html(name: str, ticker: str, tags: list, *,
                     name_chars: Optional[int] = None) -> str:
     """Instrument label used in the returns tables. Delegates to the shared
@@ -1121,11 +1142,16 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # ordered) so this table splits/colours instruments identically to Holdings
     # and the Optimizer.
     row_items = []
+    # Per-row session basis, for the column header (see _intraday_column). Built
+    # from the rows actually rendered, not from hp — hp carries the watchlist
+    # benchmarks too, and they are a different table.
+    row_live: list = []
     for _, h in df.iterrows():
         ticker = str(h.get("ticker", "") or "")
         isin = str(h.get("isin", "") or "")
         raw_name = str(h.get("name", "") or ticker)
         display_tk = _display_ticker(ticker) or ""
+        row_live.append(bool(_live1d.get(ticker, False)))
         _, inner = _perf_spark_cell(
             _raw1d.get(ticker), ticker, _snap_intraday,
             live=bool(_live1d.get(ticker, False)))
@@ -1152,8 +1178,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         "table_html": _returns_table_html(
             period_keys, portfolio, groups,
             day_label=day_column_label(
-                m, live=bool(port_full.get("1d_live"))
-                or any(_live1d.values()))),
+                m, live=_intraday_column(
+                    [bool(port_full.get("1d_live"))] + row_live))),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }
@@ -1480,7 +1506,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     table_html = _returns_table_html(
         period_cols, None, groups,
         day_label=day_column_label(
-            m, live=any(bool(r.get("live")) for r in benchmark_rows)))
+            m, live=_intraday_column(r.get("live") for r in benchmark_rows)))
 
     subtitle_html = (
         f'Portfolio vs {ctx.benchmark_alpha_beta or "S&amp;P 500"}: '

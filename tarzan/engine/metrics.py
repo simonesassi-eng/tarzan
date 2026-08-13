@@ -1221,6 +1221,25 @@ class MetricsEngine:
         if not runtime.allows_live_transport():
             return
 
+        # Whether any venue the portfolio holds is TRADING right now, from
+        # exchange hours alone. Deliberately separate from ``1d_live`` below,
+        # and computed before any fetch so a provider failure cannot silence
+        # it: ``1d_live`` says "the 1D figures are intraday", this says "the
+        # market is open". They disagree for the ~half hour after an open,
+        # when the venue trades but no bar exists yet — and reporting "market
+        # closed" then (the 09:09 send) is wrong, while flipping ``1d_live``
+        # would put an "Intraday" heading over close-to-close returns.
+        try:
+            from tarzan.data.market_quotes import market_open_now
+            is_open = any(market_open_now(t) for t in keys)
+            ctx["market_open"] = is_open
+            for key in ("performance", "performance_full"):
+                projection = ctx.get(key)
+                if isinstance(projection, dict):
+                    projection["market_open"] = is_open
+        except Exception as e:  # noqa: BLE001
+            logger.debug("market-open check failed: %s", e)
+
         try:
             from tarzan.data.market_quotes import broker_1d, _sibling_symbols
 

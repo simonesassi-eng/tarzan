@@ -18,20 +18,23 @@ def _close(values):
     return pd.DataFrame({"Close": values}, index=idx)
 
 
-def test_fetch_intraday_keeps_only_the_most_recent_available_day(monkeypatch):
+def _batch(symbol, idx, values):
+    """A yf.download(group_by="ticker") response for one symbol."""
+    cols = pd.MultiIndex.from_product([[symbol], ["Close", "Volume"]])
+    return pd.DataFrame([[v, 1000] for v in values], index=idx, columns=cols)
+
+
+def test_fetch_intraday_keeps_only_the_current_session(monkeypatch):
     """The 5d lookback window can span more than one calendar day for a
     symbol that's been closed a while (weekend/holiday) - the chart must
-    still reflect ONE session: today's if the market is open, otherwise the
-    most recent one traded, never several days concatenated together."""
+    still reflect ONE session, never several days concatenated together."""
     monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
 
     friday = pd.date_range("2026-08-07 09:30", periods=3, freq="15min")
     monday = pd.date_range("2026-08-10 09:30", periods=4, freq="15min")
-    idx = friday.append(monday)
-    cols = pd.MultiIndex.from_product([["^GSPC"], ["Close", "Volume"]])
-    values = [[100.0, 1000]] * 3 + [[105.0, 1000]] * 4
-    raw = pd.DataFrame(values, index=idx, columns=cols)
+    raw = _batch("^GSPC", friday.append(monday), [100.0] * 3 + [105.0] * 4)
     monkeypatch.setattr("tarzan.data._yf_net.fetch_yf", lambda fn, **kw: raw)
+    _pin_now(monkeypatch, "2026-08-10 20:00")  # Monday, mid-US-session
 
     out = mq._fetch_intraday(["^GSPC"])
 
@@ -58,6 +61,7 @@ def test_fetch_intraday_logs_symbols_missing_from_batch_response(monkeypatch, ca
         index=idx, columns=cols,
     )
     monkeypatch.setattr("tarzan.data._yf_net.fetch_yf", lambda fn, **kw: raw)
+    _pin_now(monkeypatch, "2026-08-10 20:00")  # Monday, mid-US-session
 
     with caplog.at_level(logging.INFO):
         out = mq._fetch_intraday(["^GSPC", "ES=F", "GC=F"])
@@ -130,6 +134,7 @@ def test_intraday_path_sets_baseline_to_prior_close(monkeypatch):
     monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {"^GSPC": intra})
     monkeypatch.setattr(mq, "_fetch_official_prev_closes", lambda symbols: {})
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", lambda symbol: daily)
+    _pin_now(monkeypatch, "2026-06-25 22:00")  # inside the fixture's own session
     q = {d["name"]: d for d in fetch_market_quotes(force=True)}
     try:
         sp = q["S&P 500"]
@@ -157,6 +162,7 @@ def test_official_prev_close_overrides_bad_daily_close(monkeypatch):
     # Official prior settlement is 250, not the daily-history 200.
     monkeypatch.setattr(mq, "_fetch_official_prev_closes",
                         lambda symbols: {"^GSPC": 250.0})
+    _pin_now(monkeypatch, "2026-06-25 22:00")  # inside the fixture's own session
     q = {d["name"]: d for d in fetch_market_quotes(force=True)}
     try:
         sp = q["S&P 500"]
