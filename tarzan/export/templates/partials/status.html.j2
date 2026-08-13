@@ -40,9 +40,9 @@
                       <tr>
                         {% for t in row %}
                         <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
-                          <div style="font-size:9px;font-weight:700;letter-spacing:0.09em;color:{{ palette.muted }};text-transform:uppercase;">{{ t.label }}</div>
-                          <div style="margin-top:3px;font-size:22px;font-weight:700;line-height:1.1;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
-                          <div style="margin-top:2px;font-size:10px;color:{{ palette.muted }};line-height:1.4;">{{ t.caption }}</div>
+                          <div style="{{ type.label }}color:{{ palette.muted }};">{{ t.label }}</div>
+                          <div style="margin-top:3px;{{ type.display }}color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
+                          <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};">{{ t.caption }}</div>
                         </td>
                         {% endfor %}
                         {% for _ in range(3 - row|length) %}
@@ -58,7 +58,7 @@
               {# Data-quality note: current snapshot provenance is kept
                  separate from historical order-price reconstruction. #}
               {% if performance.returns %}
-              <div style="margin-top:10px;font-size:10px;color:{{ palette.subtle }};line-height:1.5;">
+              <div style="margin-top:10px;{{ type.prose }}color:{{ palette.subtle }};">
                 {% if performance.returns.current_fallback_count %}
                 Current portfolio: {{ performance.returns.current_fallback_count }} identifier{{ 's' if performance.returns.current_fallback_count != 1 else '' }} priced by order-price fallback.
                 {% else %}

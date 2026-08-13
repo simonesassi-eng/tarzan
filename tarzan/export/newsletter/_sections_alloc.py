@@ -28,10 +28,13 @@ from tarzan.export.newsletter._constants import (
     ASSET_COLORS,
     GEO_COLORS,
     PALETTE,
+    TYPE,
+    TYPE_PX,
     _NewsletterContext,
     group_by_class_role,
     render_unified_table,
     role_for,
+    ticker_span,
     uni_cell,
     uni_name,
     geo_label,
@@ -586,10 +589,11 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;'
         f'border-collapse:separate;border-spacing:0;"><tr><td style="padding:12px 14px;">'
-        f'<div style="font-size:11px;color:{P["muted"]};line-height:1.5;">'
+        f'<div style="{TYPE["prose"]}color:{P["muted"]};">'
         f'<span style="font-weight:700;color:{P["ink"]};">Net-of-tax estimate</span>'
         + (f' &nbsp;{figs_html}' if figs_html else "")
-        + f'<div style="margin-top:4px;font-size:10px;color:{P["subtle"]};">Estimate only: average-cost basis, '
+        + f'<div style="margin-top:4px;{TYPE["prose"]}color:{P["subtle"]};">'
+        f'Estimate only: average-cost basis, '
         f'{rate_txt}, realized losses offset later gains where Italian rules allow '
         f'(ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of '
         f'transferred-in positions. TWROR is gross of tax.</div>'
@@ -655,10 +659,11 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="background:{P["card_alt"]};border:1px solid {P["border"]};border-radius:10px;'
         f'border-collapse:separate;border-spacing:0;"><tr><td style="padding:12px 14px;">'
-        f'<div style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:{P["accent"]};'
-        f'text-transform:uppercase;">Methodology &middot; return windows</div>'
-        f'<div style="margin-top:6px;font-size:11px;color:{P["muted"]};line-height:1.7;">{windows}</div>'
-        f'<div style="margin-top:6px;font-size:10px;color:{P["subtle"]};line-height:1.5;">'
+        f'<div style="{TYPE["title"]}color:{P["accent"]};">'
+        f'Methodology &middot; return windows</div>'
+        f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["muted"]};">'
+        f'{windows}</div>'
+        f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
         f'Closing prices, ending at the last available close. If an instrument&rsquo;s history '
         f'is shorter than a window, its start is capped (or it shows &ldquo;\u2014&rdquo;).</div>'
         f'</td></tr></table>'
@@ -946,21 +951,6 @@ def _recent_timeline(series: Optional[list], dates: Optional[list],
         keep = list(range(max(0, len(dates) - 5), len(dates)))
     return [series[i] for i in keep]
 
-def _div_pin(ticker: Optional[str]) -> str:
-    """The ticker as accent-coloured monospace text, matching ``uni_name``.
-
-    It was a bordered chip. The border, background and padding cost about 34px
-    of every row, taken out of the name column, which is what made instrument
-    names wrap onto two and three lines here.
-    """
-    if not ticker:
-        return ""
-    P = PALETTE
-    return (f'<span style="font-family:SFMono-Regular,Menlo,Consolas,monospace;'
-            f'font-size:10px;font-weight:700;letter-spacing:0.02em;'
-            f'color:{P["accent"]};">{ticker}</span>'
-            f'<span style="padding-left:7px;"></span>')
-
 def _div_label(name: str, color: Optional[str] = None,
                ticker: Optional[str] = None) -> str:
     """Row label for the diversification tables: an optional colour swatch, an
@@ -975,7 +965,7 @@ def _div_label(name: str, color: Optional[str] = None,
     sw = (f'<span style="display:inline-block;width:9px;height:9px;'
           f'border-radius:2px;background:{color};vertical-align:middle;'
           f'margin-right:6px;"></span>') if color else ""
-    return f'{sw}{_div_pin(ticker)}<span style="color:{P["ink"]};">{name}</span>'
+    return f'{sw}{ticker_span(ticker or "")}<span style="color:{P["ink"]};">{name}</span>'
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                show_leverage: bool = False, first_label: str = "Name",
@@ -1033,8 +1023,8 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         A blank cell is ambiguous: it reads as a flat weight rather than as an
         instrument that has not been held long enough to have a trend.
         """
-        return (f'<span style="font-size:9px;color:{P["subtle"]};'
-                f'font-style:normal;">no series</span>')
+        return (f'<span style="font-size:{TYPE_PX["label"]}px;'
+                f'color:{P["subtle"]};">no series</span>')
 
     def _trend_pp(vals) -> str:
         """The window's change in weight, in percentage points, for the line
@@ -1077,10 +1067,9 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         return _bullet(a, t, tol=tol, w=BULLET_W, h=MARK_H,
                        scale_max=_bullet_scale)
 
-    FS = 11  # one type size across the row, label included
+    FS = TYPE_PX["data"]  # one type size across the row, label included
 
-    def _stack(main: str, sub: str, *, color: str, weight: int = 700,
-               size: float = FS) -> str:
+    def _stack(main: str, sub: str, *, color: str, weight: int = 700) -> str:
         """A value and its qualifier, stacked.
 
         The qualifier used to sit inline after a middot ("77.6% \u00b7 \u20ac177k"),
@@ -1089,12 +1078,13 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         lines. Stacked, the column is a third as wide, the figures still align
         because both lines are tabular, and the eye reads one number per column.
         """
-        top = (f'<div style="font-size:{size}px;font-weight:{weight};'
+        top = (f'<div style="font-size:{FS}px;font-weight:{weight};'
                f'color:{color};font-variant-numeric:tabular-nums;'
                f'white-space:nowrap;">{main}</div>')
         if not sub:
             return top
-        return (top + f'<div style="margin-top:1px;font-size:9.5px;'
+        return (top + f'<div style="margin-top:1px;'
+                      f'font-size:{TYPE_PX["label"]}px;'
                       f'color:{P["subtle"]};font-variant-numeric:tabular-nums;'
                       f'white-space:nowrap;">{sub}</div>')
 
@@ -1110,7 +1100,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
         """The cash row's value cell: a EUR amount and no percentage, because
         cash is not a share of the invested base."""
         return _stack(_eur_smart(eur_val, signed=signed), "",
-                      color=color, weight=weight, size=11)
+                      color=color, weight=weight)
 
     body = []
     for r in rows:
@@ -1200,18 +1190,18 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     _drift_label = "Drift \u00b7 lev" if show_leverage else "Drift"
     head = (
         f'<tr>'
-        f'<td style="padding:4px 8px;font-size:10px;font-weight:700;letter-spacing:0.04em;'
-        f'text-transform:uppercase;color:{P["muted"]};">{first_label}</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Now</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Target</td>'
-        f'<td align="right" style="padding:4px 6px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_BULLET}px;">vs target</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_TREND}px;">Trend</td>'
-        f'<td align="right" style="padding:4px 8px;font-size:10px;font-weight:700;'
-        f'letter-spacing:0.04em;text-transform:uppercase;white-space:nowrap;color:{P["muted"]};width:{W_DRIFT}px;">{_drift_label}</td>'
+        f'<td style="padding:4px 8px;{TYPE["label"]}'
+        f'color:{P["muted"]};">{first_label}</td>'
+        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
+        f'white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Now</td>'
+        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
+        f'white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Target</td>'
+        f'<td align="right" style="padding:4px 6px;{TYPE["label"]}'
+        f'white-space:nowrap;color:{P["muted"]};width:{W_BULLET}px;">vs target</td>'
+        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
+        f'white-space:nowrap;color:{P["muted"]};width:{W_TREND}px;">Trend</td>'
+        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
+        f'white-space:nowrap;color:{P["muted"]};width:{W_DRIFT}px;">{_drift_label}</td>'
         + '</tr>'
     )
     return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
@@ -1331,14 +1321,13 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
         pills = " ".join(
             f'<span style="display:inline-block;margin:0 4px 4px 0;'
             f'padding:1px 6px;border-radius:5px;background:{P["red_bg"]};'
-            f'color:{P["red"]};font-size:10px;font-weight:700;'
+            f'color:{P["red"]};font-size:{TYPE_PX["label"]}px;font-weight:700;'
             f'white-space:nowrap;">'
             f'{(_display_ticker(it.get("ticker") or "") or short_instrument_name(it.get("category") or "", 16))}'
             f'</span>'
             for it in held_exits)
         note = (
-            f'<div style="margin-top:8px;font-size:11px;color:{P["muted"]};'
-            f'line-height:1.6;">'
+            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
             f'<b style="color:{P["red"]};">Targeted to 0%:</b> '
             f'{len(held_exits)} position{"s" if len(held_exits) != 1 else ""} '
             + (f'worth <b style="color:{P["ink"]};">{_eur_smart(exit_eur)}</b>, '
@@ -1522,7 +1511,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         # no separate sentence -- the total row states it and the x factors in
         # the drift column say where it comes from.
         html.append(
-            f'<div style="margin-top:8px;font-size:10.5px;color:{P["muted"]};">'
+            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
             f'Band {tol:.1f}pp tolerance \u00b7 tick target \u00b7 faint rule '
             f'100% of capital \u00b7 trend is the weight over the last month '
             f'against its target, green closing, red widening \u00b7 '
@@ -1532,7 +1521,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         html.append(_div_table(geo_rows, tol, base=equity_base,
                                first_label="Equity geography"))
         html.append(
-            f'<div style="margin-top:8px;font-size:10.5px;color:{P["muted"]};">'
+            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
             f'Geography targets partition the equity sleeve only, so they '
             f'total 100%.</div>'
         )
@@ -1648,8 +1637,8 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
     # fits on one line, and the swatch is what ties a class to its colour in the
     # group headers below.
     chips = " ".join(
-        f'<span style="display:inline-block;margin:0 10px 6px 0;font-size:10.5px;'
-        f'color:{PALETTE["muted"]};"><span style="display:inline-block;width:9px;'
+        f'<span style="display:inline-block;margin:0 10px 6px 0;'
+        f'{TYPE["prose"]}color:{PALETTE["muted"]};"><span style="display:inline-block;width:9px;'
         f'height:9px;border-radius:2px;background:{it["color"]};'
         f'vertical-align:middle;margin-right:5px;"></span>{it["name"]} '
         f'<b style="color:{PALETTE["ink"]};">{it["count"]}</b></span>'
@@ -1688,8 +1677,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
         c = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
         return (f'<span style="display:inline-block;padding:1px 6px;'
                 f'background:{PALETTE["card"]};'
-                f'color:{c};border:1px solid {c}33;border-radius:999px;font-weight:700;'
-                f'font-size:9px;letter-spacing:0.04em;vertical-align:middle;'
+                f'color:{c};border:1px solid {c}33;border-radius:999px;'
+                f'font-weight:700;font-size:{TYPE_PX["label"]}px;'
+                f'vertical-align:middle;'
                 f'margin-right:5px;">{direction}</span>')
 
     actions = []

@@ -20,9 +20,8 @@ import pandas as pd
 # this module), but they meant chart axes could drift from the tables beside
 # them whenever the palette changed in only one place.
 from tarzan.export._format import eur_smart as _eur_smart
-from tarzan.export._palette import PALETTE as _P
+from tarzan.export._palette import FONT_STACK, PALETTE as _P, TYPE_PX
 
-INK = _P["ink"]
 MUTED = _P["muted"]
 SUBTLE = _P["subtle"]
 BORDER = _P["border"]
@@ -76,7 +75,8 @@ def fmt_pct_tick(v: float) -> str:
     return f"{sign}{txt}%"
 
 
-def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
+def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
+                      fs=TYPE_PX["label"],
                       date_fmt="%b %d", month_ticks=False, min_day_ticks=0,
                       end_gutter: int = 0) -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
@@ -120,7 +120,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
 
     out = [f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
            f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;height:auto;'
-           f'font-family:-apple-system,Helvetica,Arial,sans-serif;">']
+           f'font-family:{FONT_STACK};">']
     for t in ticks:
         if t < vmin - 1e-9 or t > vmax + 1e-9:
             continue
@@ -142,11 +142,9 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
         if _rotate:
             # Tilt ~35° and right-anchor at the tick so dense labels never
             # overlap. Anchor the text end at (x, baseline) and rotate about it.
-            # A slightly smaller font buys horizontal room at ~12 ticks.
             y = mt + ph + 10
-            rfs = max(7, fs - 1)
             out.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="end" '
-                       f'font-size="{rfs}" fill="{SUBTLE}" '
+                       f'font-size="{fs}" fill="{SUBTLE}" '
                        f'transform="rotate(-35 {x:.1f} {y:.1f})">{text}</text>')
         else:
             anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
@@ -257,27 +255,10 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150, fs=9,
                            f'stroke="{color}" stroke-width="0.75" '
                            f'stroke-opacity="0.5"/>')
             out.append(f'<text x="{lx + 6:.1f}" y="{ey:.1f}" '
-                       f'text-anchor="start" font-size="9" font-weight="700" '
+                       f'text-anchor="start" font-size="{TYPE_PX["label"]}" font-weight="700" '
                        f'fill="{color}">{label}</text>')
     out.append("</svg>")
     return "".join(out)
-
-
-# ── presentational HTML atoms (legend + flow chips) ──────────────────────────
-
-def legend(items, size: int = 11) -> str:
-    """Inline legend. ``items``: list of ``(label, color, is_dashed)``."""
-    out = []
-    for label, color, dash in items:
-        if dash:
-            mark = (f'<span style="display:inline-block;width:24px;height:0;'
-                    f'border-top:3px dashed {color};vertical-align:middle;margin-right:6px;"></span>')
-        else:
-            mark = (f'<span style="display:inline-block;width:24px;height:5px;'
-                    f'background:{color};border-radius:3px;vertical-align:middle;margin-right:6px;"></span>')
-        out.append(f'<span style="display:inline-block;margin:0 14px 2px 0;font-size:{size}px;'
-                   f'font-weight:600;color:{INK};white-space:nowrap;">{mark}{label}</span>')
-    return '<div style="margin-top:6px;line-height:1.35;">' + "".join(out) + "</div>"
 
 
 def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
@@ -317,7 +298,8 @@ def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
     out = [f'<svg width="100%" viewBox="0 0 {w} {h}" '
            f'preserveAspectRatio="xMidYMid meet" '
            f'xmlns="http://www.w3.org/2000/svg" style="display:block;'
-           f'width:100%;background:{_P["card_alt"]};">']
+           f'width:100%;background:{_P["card_alt"]};'
+           f'font-family:{FONT_STACK};">']
     for t in ticks:
         if t < lo - 1e-9 or t > hi + 1e-9:
             continue
@@ -327,7 +309,7 @@ def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
                    f'stroke-width="{1.2 if zero else 1}"/>')
         sign = "+" if t > 0 else ("−" if t < 0 else "")
         out.append(f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" '
-                   f'font-size="9" fill="{SUBTLE}">{sign}{abs(t):.1f}%</text>')
+                   f'font-size="{TYPE_PX["label"]}" fill="{SUBTLE}">{sign}{abs(t):.1f}%</text>')
 
     prev_x = None
     for i, (label, val, y0, y1) in enumerate(steps):
@@ -339,10 +321,10 @@ def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
         out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{bw:.1f}" '
                    f'height="{max(1.5, bot - top):.1f}" fill="{col}" rx="1.5"/>')
         out.append(f'<text x="{cx:.1f}" y="{(top - 4) if val >= 0 else (bot + 11):.1f}" '
-                   f'text-anchor="middle" font-size="9.5" font-weight="700" '
+                   f'text-anchor="middle" font-size="{TYPE_PX["data"]}" font-weight="700" '
                    f'fill="{col}">{sign}{abs(val):.2f}%</text>')
         out.append(f'<text x="{cx:.1f}" y="{h - 24}" text-anchor="middle" '
-                   f'font-size="8.5" font-weight="700" fill="{MUTED}">{label}</text>')
+                   f'font-size="{TYPE_PX["label"]}" font-weight="700" fill="{MUTED}">{label}</text>')
         # Connector from the previous bar's end to this bar's start: the line
         # that makes it a waterfall rather than a row of floating bars.
         if prev_x is not None:
@@ -358,12 +340,12 @@ def waterfall(items, *, w: int = 580, h: int = 205, total_label: str = "Net",
     out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{bw:.1f}" '
                f'height="{max(1.5, bot - top):.1f}" fill="{accent}" rx="1.5"/>')
     out.append(f'<text x="{cx:.1f}" y="{top - 4:.1f}" text-anchor="middle" '
-               f'font-size="10" font-weight="700" fill="{accent}">'
+               f'font-size="{TYPE_PX["data"]}" font-weight="700" fill="{accent}">'
                f'{"+" if total >= 0 else "−"}{abs(total):.2f}%</text>')
     out.append(f'<text x="{cx:.1f}" y="{h - 24}" text-anchor="middle" '
-               f'font-size="8.5" font-weight="700" fill="{accent}">{total_label}</text>')
+               f'font-size="{TYPE_PX["label"]}" font-weight="700" fill="{accent}">{total_label}</text>')
     if footnote:
-        out.append(f'<text x="{ML}" y="{h - 8}" font-size="9" '
+        out.append(f'<text x="{ML}" y="{h - 8}" font-size="{TYPE_PX["label"]}" '
                    f'fill="{SUBTLE}">{footnote}</text>')
     out.append("</svg>")
     return "".join(out)
@@ -397,7 +379,8 @@ def band_gauge(value: float, *, good: float, warn: float,
                  (X(good), float(w), green)]
     ty, th = 8, 8
     out = [f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
-           f'xmlns="http://www.w3.org/2000/svg" style="display:block;">']
+           f'xmlns="http://www.w3.org/2000/svg" '
+           f'style="display:block;font-family:{FONT_STACK};">']
     for x0, x1, colour in zones:
         out.append(f'<rect x="{x0:.1f}" y="{ty}" width="{max(0.0, x1 - x0):.1f}" '
                    f'height="{th}" fill="{colour}" fill-opacity="0.22"/>')
@@ -406,9 +389,9 @@ def band_gauge(value: float, *, good: float, warn: float,
     out.append(f'<line x1="{vx:.1f}" y1="{ty - 4}" x2="{vx:.1f}" '
                f'y2="{ty + th + 4}" stroke="{inzone}" stroke-width="2.6"/>')
     left_cap, right_cap = ("strong", "weak") if invert else ("weak", "strong")
-    out.append(f'<text x="0" y="{h - 1}" font-size="8" fill="{SUBTLE}">'
+    out.append(f'<text x="0" y="{h - 1}" font-size="{TYPE_PX["label"]}" fill="{SUBTLE}">'
                f'{left_cap}</text>')
-    out.append(f'<text x="{w}" y="{h - 1}" text-anchor="end" font-size="8" '
+    out.append(f'<text x="{w}" y="{h - 1}" text-anchor="end" font-size="{TYPE_PX["label"]}" '
                f'fill="{SUBTLE}">{right_cap}</text>')
     out.append("</svg>")
     return "".join(out)

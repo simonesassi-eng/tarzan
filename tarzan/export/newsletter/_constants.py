@@ -23,7 +23,12 @@ from tarzan.export._format import (
 
 # The palette lives in a leaf module so tarzan.export._charts can read the
 # same colours without closing an import cycle through this package.
-from tarzan.export._palette import PALETTE  # noqa: E402 (re-exported)
+from tarzan.export._palette import (  # noqa: E402 (re-exported)
+    FONT_STACK,
+    PALETTE,
+    TYPE,
+    TYPE_PX,
+)
 
 
 ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
@@ -150,7 +155,7 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
 # alternating row stripe. Only the columns + per-cell colours (which encode
 # data) differ. Before, four separate renderers had drifted.
 
-def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=1.35):
+def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=None):
     """Canonical instrument label: an optional action pill (BUY/SELL), the
     ticker, then the name, then reference tags and a faint history-span chip.
 
@@ -163,22 +168,42 @@ def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=1.35):
     of names with badges stuck on the end.
     """
     P = PALETTE
-    tk = (f'<span style="font-family:SFMono-Regular,Menlo,Consolas,monospace;'
-          f'font-size:10px;font-weight:700;letter-spacing:0.02em;'
-          f'color:{P["accent"]};">{ticker}</span>'
-          f'<span style="padding-left:7px;"></span>') if ticker else ""
+    tk = ticker_span(ticker)
     tag_html = "".join(
         f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
-        f'background:{t[2]};color:{t[1]};border-radius:4px;font-size:9px;font-weight:700;'
-        f'letter-spacing:0.04em;vertical-align:middle;">{t[0]}</span>' for t in (tags or ()))
-    span_html = (f'<span style="margin-left:6px;font-size:9px;'
+        f'background:{t[2]};color:{t[1]};border-radius:4px;'
+        f'font-size:{TYPE_PX["label"]}px;font-weight:700;'
+        f'vertical-align:middle;">{t[0]}</span>' for t in (tags or ()))
+    span_html = (f'<span style="margin-left:6px;'
+                 f'font-size:{TYPE_PX["label"]}px;'
                  f'font-weight:600;color:{P["subtle"]};">{span}</span>'
                  if span else "")
     name_html = (f'<span style="color:{P["muted"]};">{name}</span>'
                  if name else "")
     inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'
-    return (f'<div style="font-size:10.5px;font-weight:600;'
-            f'line-height:{line_height};color:{P["ink"]};">{inner}</div>')
+    # The row takes the DATA role's leading unless a caller sets its own. The
+    # only reason to override it is a name allowed to wrap onto a second line,
+    # where tight leading is what keeps the row the same height as its
+    # neighbours -- not a preference about how the first line looks.
+    lh = f"line-height:{line_height};" if line_height else ""
+    return f'<div style="{TYPE["data"]}{lh}color:{P["ink"]};">{inner}</div>'
+
+
+def ticker_span(ticker: str) -> str:
+    """The ticker that leads an instrument row: accent-coloured text on the
+    document type scale, plus the gap before the name.
+
+    It was a bordered chip. The border, background and padding cost about 34px
+    of every row, taken out of the name column, which is what made instrument
+    names wrap onto two and three lines. The allocation tables carried their
+    own copy of this span (``_div_pin``), whose docstring said it existed to
+    match this one — so the two could and did drift apart.
+    """
+    if not ticker:
+        return ""
+    return (f'<span style="font-family:{FONT_STACK};{TYPE["data"]}'
+            f'color:{PALETTE["accent"]};">{ticker}</span>'
+            f'<span style="padding-left:7px;"></span>')
 
 
 def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
@@ -206,18 +231,20 @@ def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
 _COL_RULE = PALETTE["col_rule"]
 
 
-def _uni_td(cell, rbg, default_pad="8px 8px", fs="", sep=False):
+def _uni_td(cell, rbg, default_pad="8px 8px", sep=False):
     P = PALETTE
     w = f'width:{cell["width"]}px;' if cell.get("width") else ""
     pad = cell.get("pad") or default_pad
     lb = f'border-left:1px solid {_COL_RULE};' if (sep and not cell.get("no_sep")) else ""
-    sub = (f'<div style="margin-top:2px;font-size:9.5px;font-weight:600;'
+    sub = (f'<div style="margin-top:2px;'
+           f'font-size:{TYPE_PX["label"]}px;font-weight:600;'
            f'color:{P["subtle"]};font-variant-numeric:tabular-nums;">'
            f'{cell["sub"]}</div>' if cell.get("sub") else "")
     bg = cell.get("bg") or rbg
     return (f'<td align="{cell["align"]}" style="padding:{pad};background:{bg};'
             f'border-bottom:1px solid {P["row_rule"]};{lb}'
-            f'font-variant-numeric:tabular-nums;{fs}'
+            f'font-variant-numeric:tabular-nums;'
+            f'font-size:{TYPE_PX["data"]}px;'
             f'font-weight:{cell["weight"]};color:{cell["color"]};'
             f'vertical-align:{cell.get("valign", "middle")};{w}">{cell["html"]}{sub}</td>')
 
@@ -226,8 +253,8 @@ def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
     P = PALETTE
     fw = f'width:{first_col_width}px;' if first_col_width else ""
     hc = (f'<td style="padding:7px 10px;background:{P["head_bg"]};'
-          f'border-bottom:1px solid {P["border"]};font-size:9.5px;font-weight:700;'
-          f'letter-spacing:0.06em;color:{P["muted"]};text-transform:uppercase;{fw}">'
+          f'border-bottom:1px solid {P["border"]};{TYPE["label"]}'
+          f'color:{P["muted"]};{fw}">'
           f'{first_col_label}</td>')
     for idx, col in enumerate(columns):
         label, align = col[0], col[1]
@@ -239,8 +266,8 @@ def _uni_header(first_col_label, columns, vpad, first_col_width, sep):
         lb = (f'border-left:1px solid {_COL_RULE};'
               if (sep and idx > 0 and not no_sep) else "")
         hc += (f'<td align="{align}" style="padding:{vpad};background:{P["head_bg"]};'
-               f'border-bottom:1px solid {P["border"]};{lb}font-size:9.5px;font-weight:700;'
-               f'letter-spacing:0.06em;color:{P["muted"]};text-transform:uppercase;{w}">'
+               f'border-bottom:1px solid {P["border"]};{lb}{TYPE["label"]}'
+               f'color:{P["muted"]};{w}">'
                f'{label}</td>')
     return f"<tr>{hc}</tr>"
 
@@ -291,14 +318,15 @@ def render_unified_table(first_col_label, columns, groups, *,
     """
     P = PALETTE
     ncols = len(columns) + 1
-    # Value-cell padding + font: tight/smaller for dense tables (Risk = 10
-    # columns) so the name column keeps enough width; normal otherwise. The
-    # name column keeps its wider padding regardless.
-    # ``dense`` is the returns-grid setting: the tint has to fill its column, so
-    # the padding is trimmed rather than the figure.
+    # Value-cell padding: tight for dense tables (Risk = 10 columns, the
+    # returns grids = 8) so the name column keeps enough width; normal
+    # otherwise. The name column keeps its wider padding regardless.
+    #
+    # These flags used to trim the FIGURE as well (9.5 / 10 / 10.5px), which is
+    # why the same instrument's 1M return was set three different sizes
+    # depending on which section drew it. Padding is what a crowded table
+    # actually has to give up: it is furniture, the figure is the content.
     vpad = "5px 4px" if dense else ("7px 3px" if compact else "7px 8px")
-    fs = ("font-size:9.5px;" if dense
-          else ("font-size:10px;" if compact else "font-size:10.5px;"))
     # Per-value-column separator flags: on for every column except the first
     # (the 1D sparkline / first metric), and honouring an explicit no_sep.
     seps = [separators and i > 0 and not (len(c) > 3 and c[3])
@@ -307,11 +335,12 @@ def render_unified_table(first_col_label, columns, groups, *,
     out = ['<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
            'border="0" style="margin-top:14px;border:1px solid '
            f'{P["border"]};border-radius:{radius}px;overflow:hidden;border-collapse:separate;'
-           f'border-spacing:0;font-size:12px;{layout}">',
+           f'border-spacing:0;font-family:{FONT_STACK};'
+           f'font-size:{TYPE_PX["data"]}px;{layout}">',
            _uni_header(first_col_label, columns, vpad, first_col_width, separators)]
 
     def _cells_html(cells, bg):
-        return "".join(_uni_td(c, bg, vpad, fs, sep=seps[i])
+        return "".join(_uni_td(c, bg, vpad, sep=seps[i])
                        for i, c in enumerate(cells))
 
     if portfolio_row is not None:
@@ -320,7 +349,8 @@ def render_unified_table(first_col_label, columns, groups, *,
         out.append(
             '<tr>'
             f'<td style="padding:8px 10px;background:{abg};color:{P["accent"]};'
-            f'font-weight:700;font-size:11px;vertical-align:middle;{fw}">'
+            f'font-weight:700;font-size:{TYPE_PX["data"]}px;'
+            f'vertical-align:middle;{fw}">'
             f'{portfolio_row["name_html"]}</td>'
             + _cells_html(portfolio_row["cells"], abg) + '</tr>')
 
@@ -347,7 +377,8 @@ def render_unified_table(first_col_label, columns, groups, *,
                     out.append(
                         f'<tr><td style="padding:7px 10px;background:{rbg};'
                         f'border-bottom:1px solid {P["row_rule"]};'
-                        f'font-size:10.5px;vertical-align:middle;{fw}">'
+                        f'font-size:{TYPE_PX["data"]}px;'
+                        f'vertical-align:middle;{fw}">'
                         f'{row["name_html"]}</td>'
                         + _cells_html(row["cells"], rbg) + '</tr>')
                 continue
@@ -360,7 +391,7 @@ def render_unified_table(first_col_label, columns, groups, *,
                 f'<tr><td colspan="{ncols}" style="padding:8px 10px;'
                 f'background:{P["group_bg"]};'
                 f'border-bottom:1px solid {P["border"]};'
-                f'font-size:10px;letter-spacing:0.06em;text-transform:uppercase;">'
+                f'{TYPE["label"]}">'
                 f'<span style="color:{col};font-weight:700;">{cls}</span>{role_html}</td></tr>')
             fw = f'width:{first_col_width}px;' if first_col_width else ""
             for row in rows:
@@ -371,7 +402,8 @@ def render_unified_table(first_col_label, columns, groups, *,
                 out.append(
                     f'<tr><td style="padding:7px 10px;background:{rbg};'
                     f'border-bottom:1px solid {P["row_rule"]};'
-                    f'font-size:10.5px;vertical-align:middle;{fw}">'
+                    f'font-size:{TYPE_PX["data"]}px;'
+                    f'vertical-align:middle;{fw}">'
                     f'{row["name_html"]}</td>'
                     + _cells_html(row["cells"], rbg) + '</tr>')
     out.append("</table>")

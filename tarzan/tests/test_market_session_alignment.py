@@ -439,7 +439,7 @@ class TestStripSparklineAtTheOpen:
     def test_a_stale_session_draws_no_session_path(self, monkeypatch):
         _pin(monkeypatch, "2026-08-13 09:09")
         html = self._spark(self._quote(stale_session=True))
-        assert "no intraday" in html          # the dashed placeholder
+        assert "stroke-dasharray" in html     # the dashed placeholder
         assert "Wed close" in html            # and which session the % is
         assert "<polyline" not in html        # NOT a 40-day path stretched wide
 
@@ -455,7 +455,7 @@ class TestStripSparklineAtTheOpen:
         badge is the same lie the stale case was fixed for."""
         _pin(monkeypatch, "2026-08-13 10:30")   # London trading
         html = self._spark(self._quote(stale_session=False))
-        assert "no intraday" in html
+        assert "stroke-dasharray" in html       # the dashed placeholder
         assert "<polyline" not in html
 
 
