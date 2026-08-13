@@ -14,7 +14,6 @@ from tarzan.export._format import (
     display_instrument_name,
     greek_safe,
     eur_smart as _eur_smart,
-    short_instrument_name,
 )
 from tarzan.export import _charts as _charts
 from tarzan.export._perf_series import (
@@ -38,7 +37,6 @@ from tarzan.export.newsletter._constants import (
     uni_cell,
 )
 from tarzan.export.newsletter._format import (
-    _colorize_pct,
     _display_ticker,
     _pct,
     _pct_compact,
@@ -63,7 +61,6 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     benchmark-derived snapshot if the live fetch yields nothing."""
     m = ctx.metrics
     P = PALETTE
-    COLS = 5
 
     def is_continuous_market(_ticker):  # safe default if the import below fails
         return False
@@ -340,11 +337,6 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 f'<div style="font-size:13px;font-weight:700;color:{c};font-variant-numeric:tabular-nums;">{eur_s}</div>'
                 + (f'<div style="font-size:11px;color:{c};font-variant-numeric:tabular-nums;">{pct_s}</div>' if pct_s else "")
                 + '</td>')
-
-    def _pct_cell(v) -> str:
-        return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};font-size:13px;'
-                f'font-weight:700;color:{_sgn(v)};font-variant-numeric:tabular-nums;">'
-                f'{_pct(v, signed=True) if v is not None else "—"}</td>')
 
     # ── The matrix, windows as ROWS ──────────────────────────────────────
     # Transposed from measures-as-rows. A reader asks "how did the last week
@@ -1047,7 +1039,6 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     hp = m.holding_performance
     port_full = m.performance_full or {}
-    from tarzan.export._format import short_instrument_name
 
     # Same history span label the Performance section shows in its
     # disclaimer (e.g. "2.0Y"): the consolidated portfolio history is
@@ -1483,22 +1474,6 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     P = PALETTE
     period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
     intraday_map = _shared_performance_intraday(ctx)
-
-    # Portfolio row (highlighted): a real 1D sparkline from a value-weighted
-    # synthetic intraday path over the holdings (the portfolio has no single
-    # ticker, but its holdings trade intraday); dashed placeholder when the
-    # exact-symbol intraday data is unavailable.
-    _pf_series = _portfolio_intraday_series(m, intraday_map=intraday_map)
-    if _pf_series is not None and len(_pf_series) >= 2:
-        _, port_inner = _perf_spark_cell(
-            pf.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
-            live=bool(pf.get("1d_live")))
-    else:
-        _, port_inner = _perf_spark_cell(
-            pf.get("1d"), "", {}, live=bool(pf.get("1d_live")))
-    portfolio = {"name": portfolio_row["name"], "spark_inner": port_inner,
-                 "day_raw": pf.get("1d"),
-                 "returns": portfolio_row["returns"]}
 
     # Group benchmark rows by asset class → role, in the configured order,
     # then hand off to the shared table renderer.

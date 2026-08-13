@@ -911,8 +911,6 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     P = PALETTE
     value_subs = subs if value_subs is None else value_subs
 
-    _bb = f'border-bottom:1px solid {P["border"]};'
-
     # One bar scale across this sub-table's rows, so a 78% sleeve and a 2% one
     # are comparable bars instead of each filling its own cell.
     _weights = []
@@ -1332,7 +1330,6 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         return float(row["weight_pct"].iloc[0]) / 100.0 * invested_base
 
     equity_base = _notional_sleeve_eur("Equities")
-    fi_base = _notional_sleeve_eur("Fixed Income")
 
     tl = ctx.metrics.allocation_timeline or {}
     dates = tl.get("dates") or []
@@ -1425,11 +1422,6 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     if asset_rows:
         html.append(_div_table(asset_rows, tol, base=invested_base,
                                show_leverage=True, first_label="Asset class"))
-        # Notional note: when capital-efficient/leveraged funds push total
-        # exposure past 100% of capital, make the leverage explicit. Sum only
-        # the per-class rows (exclude the Total and cash rows).
-        _tot_notional = sum(float(r.get("now") or 0.0) for r in asset_rows
-                            if not r.get("is_total") and not r.get("eur_row"))
         # What the table's own marks mean, in one line: the band, the tick, the
         # 100% rule and which way a trend colour reads. The sum past 100% needs
         # no separate sentence -- the total row states it and the x factors in
@@ -1514,7 +1506,6 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             weight_str = _pct(value / invested_base * 100, decimals=1)
         gain_color = (PALETTE["green"] if (gain_pct or 0) >= 0
                       else PALETTE["red"]) if has_gain else PALETTE["muted"]
-        cls_color = ASSET_COLORS.get(klass, PALETTE["accent"])
         row_items.append({
             "_ac": klass,
             "_isin": h.get("isin", ""),
