@@ -41,6 +41,7 @@ from tarzan.export.newsletter._sections_alloc import (
     _build_optimizer,
     _build_return_contrib,
     _build_preheader,
+    _build_ticker_sources,
 )
 from tarzan.export.newsletter._sections_strategy import _build_strategy
 from tarzan.export.newsletter._sections_perf import (
@@ -111,27 +112,6 @@ def build_context(
         semantic_audit=semantic_audit if semantic_audit is not None else {},
     )
     hero = _build_hero(nctx)
-    ticker_records = getattr(metrics, "ticker_resolutions", ()) or ()
-    ticker_sources = {
-        "available": bool(ticker_records),
-        "rows": tuple({
-            "isin": str(record.get("isin") or ""),
-            "name": str(record.get("name") or ""),
-            "ticker": str(record.get("canonical_ticker") or ""),
-            "canonical_refresh_timestamp": str(
-                record.get("canonical_refresh_timestamp") or ""
-            ),
-            "intraday_ticker": str(
-                record.get("intraday_effective_ticker") or ""
-            ),
-            "intraday_refresh_timestamp": str(
-                record.get("intraday_refresh_timestamp") or ""
-            ),
-            "portfolio_presence": str(
-                record.get("portfolio_presence") or ""
-            ),
-        } for record in ticker_records),
-    }
     return {
         "palette": PALETTE,
         "header": _build_header(nctx),
@@ -152,7 +132,7 @@ def build_context(
         "strategy": _build_strategy(nctx),
         "tax_note": _build_tax_note(nctx),
         "methodology": _build_methodology(nctx),
-        "ticker_sources": ticker_sources,
+        "ticker_sources": _build_ticker_sources(nctx),
         "preheader": _build_preheader(nctx, hero),
         "footer": {
             # Pinned stamp in deterministic mode so the header does not vary

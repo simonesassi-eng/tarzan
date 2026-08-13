@@ -665,6 +665,101 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
     )
     return {"available": True, "html": html}
 
+
+# Presence bands, in the order the table lists them: why this instrument is in
+# this issue at all. Also the sort's primary key — within a band rows are
+# alphabetical by ticker, and there is no class/role grouping: this is a
+# reference table looked up by symbol, not a view of the portfolio's shape.
+_PRESENCE_BANDS = ("Portfolio", "Watchlist", "Hist. Portfolio only")
+
+# Holding-resolution presence -> band. "Rebalance target" (a seeded optimizer
+# target, never held) has no band and keeps its own label, sorted last: a target
+# that is also a watchlist instrument is upgraded to Watchlist below, so what
+# survives this map is genuinely neither held nor tracked.
+_PRESENCE_BAND_OF = {
+    "Current + Historical": "Portfolio",
+    "Current": "Portfolio",
+    "Historical only": "Hist. Portfolio only",
+}
+
+
+def _presence_rank(presence: str) -> int:
+    return (_PRESENCE_BANDS.index(presence) if presence in _PRESENCE_BANDS
+            else len(_PRESENCE_BANDS))
+
+
+def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
+    """Appendix feed audit: every instrument this issue names, with the exact
+    provider listings behind its daily bars and its intraday series.
+
+    Two sources, because neither alone covers the issue. ``ticker_resolutions``
+    holds every carrier the portfolio has ever owned — including one with no
+    feed at all (a BTP), which the performance frame drops for having under two
+    price rows. The benchmark catalog holds the watchlist, which is not a
+    holding and so has no resolution record. They meet on ISIN, then on bare
+    ticker (a rebalance target carries a symbol but no ISIN), so an instrument
+    that is both is one row: held wins, exactly as the Watchlist table drops a
+    benchmark the portfolio owns.
+    """
+    from tarzan import config as _cfg
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+    m = ctx.metrics
+    rows: list[dict] = []
+    by_identity: dict[str, dict] = {}
+
+    def _add(row: dict, *keys: str) -> None:
+        rows.append(row)
+        for key in keys:
+            if key:
+                by_identity.setdefault(key, row)
+
+    for record in getattr(m, "ticker_resolutions", ()) or ():
+        canonical = str(record.get("canonical_ticker") or "")
+        isin = normalize_isin(record.get("isin"))
+        presence = str(record.get("portfolio_presence") or "")
+        _add({
+            "ticker": _display_ticker(canonical) or "",
+            "name": _cfg.name_for(isin, canonical) or str(record.get("name") or ""),
+            "isin": isin,
+            # The listing the daily bars came from; the selected symbol when the
+            # instrument resolved but never returned history.
+            "hist_ric": str(record.get("history_ticker")
+                            or record.get("current_ticker") or canonical),
+            "intr_ric": str(record.get("intraday_effective_ticker") or ""),
+            "presence": _PRESENCE_BAND_OF.get(presence, presence),
+        }, isin, normalize_ticker(canonical))
+
+    resolved = getattr(m, "benchmark_tickers", {}) or {}
+    quotes = getattr(m, "intraday_quotes", {}) or {}
+    for name, requested, isin in _cfg.benchmark_identities():
+        hist = str(resolved.get(name) or "")
+        known = next((by_identity[k] for k in (isin, normalize_ticker(hist or requested))
+                      if k and k in by_identity), None)
+        if known is not None:
+            if _presence_rank(known["presence"]) > _PRESENCE_BANDS.index("Watchlist"):
+                known["presence"] = "Watchlist"
+            known["isin"] = known["isin"] or isin
+            continue
+        quote = quotes.get(hist)
+        quote = quote if isinstance(quote, dict) else {}
+        _add({
+            "ticker": _display_ticker(requested) or requested,
+            "name": name,
+            "isin": isin,
+            "hist_ric": hist,
+            # A benchmark's intraday series can come from a sibling venue, and
+            # it is the catalog — not the request — that records which one.
+            "intr_ric": str(quote.get("intraday_source_ticker")
+                            or quote.get("source_ticker") or ""),
+            "presence": "Watchlist",
+        }, isin, normalize_ticker(hist or requested))
+
+    rows.sort(key=lambda r: (_presence_rank(r["presence"]),
+                             (r["ticker"] or r["name"]).upper()))
+    return {"available": bool(rows), "rows": tuple(rows)}
+
+
 def _build_allocation(ctx: _NewsletterContext) -> dict:
     """Build asset-class allocation rows (Excel Dashboard pattern)."""
     m = ctx.metrics

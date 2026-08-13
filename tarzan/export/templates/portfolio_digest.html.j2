@@ -431,29 +431,24 @@
           <tr>
             <td class="px-32" style="padding:12px 20px 0 20px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:{{ palette.accent }};text-transform:uppercase;">Instrument data sources</div>
-              <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Canonical and intraday ticker · latest dated provider observation in UTC. Daily bars may use a midnight date anchor.</div>
+              <div style="margin-top:3px;font-size:9px;color:{{ palette.muted }};line-height:1.35;">Every instrument this issue names · the exact provider listing behind its daily bars (Hist.) and its intraday series (Intr.). Held first, then watchlist, then closed positions; alphabetical within each.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
                 <tr style="background:{{ palette.page }};">
-                  <td width="36%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Instrument</td>
-                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Canonical feed</td>
-                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Intraday feed</td>
-                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Presence</td>
+                  <td width="11%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Ticker</td>
+                  <td width="31%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Name</td>
+                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">ISIN</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Hist. RIC</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Intr. RIC</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};font-size:7.5px;font-weight:700;color:{{ palette.muted }};text-transform:uppercase;">Presence</td>
                 </tr>
                 {% for row in ticker_sources.rows %}
                 <tr>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
-                    <div style="font-size:8.5px;font-weight:600;color:{{ palette.ink }};">{{ row.name or row.ticker or "—" }}</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7px;color:{{ palette.subtle }};">{{ row.isin or "—" }}</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:{{ palette.accent }};">{{ row.ticker or "—" }}</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:{{ palette.subtle }};white-space:nowrap;">{{ row.canonical_refresh_timestamp or "—" }}</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:{{ palette.ink }};">{{ row.intraday_ticker or "—" }}</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:{{ palette.subtle }};white-space:nowrap;">{{ row.intraday_refresh_timestamp or "—" }}</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:7.5px;color:{{ palette.muted }};line-height:1.25;">{{ row.portfolio_presence or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:{{ palette.accent }};line-height:1.25;">{{ row.ticker or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:8.5px;font-weight:600;color:{{ palette.ink }};line-height:1.25;">{{ row.name or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:{{ palette.subtle }};line-height:1.25;">{{ row.isin or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:{{ palette.ink }};line-height:1.25;">{{ row.hist_ric or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:{{ palette.ink }};line-height:1.25;">{{ row.intr_ric or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;font-size:7.5px;color:{{ palette.muted }};line-height:1.25;">{{ row.presence or "—" }}</td>
                 </tr>
                 {% endfor %}
               </table>

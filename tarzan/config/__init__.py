@@ -610,6 +610,25 @@ def benchmarks() -> dict[str, str]:
     return result or dict(default_benchmarks())
 
 
+def benchmark_identities() -> tuple[tuple[str, str, str], ...]:
+    """``(name, requested ticker, ISIN)`` per is_benchmark taxonomy row.
+
+    :func:`benchmarks` drops the ISIN because alpha/beta only ever needs a
+    symbol. The appendix's feed audit prints the ISIN of every instrument it
+    lists, and a watchlist instrument is not a holding — its taxonomy row is
+    the only place that ISIN exists. Empty when the taxonomy flags none: there
+    is then no watchlist to list, unlike ``benchmarks``, which substitutes
+    defaults so alpha/beta still computes.
+    """
+    from tarzan.models.instrument_key import normalize_isin
+
+    return tuple(
+        (name, str(row.get("ticker", "")).strip(), normalize_isin(row.get("isin")))
+        for _, row in _flagged_rows("is_benchmark").iterrows()
+        if (name := str(row.get("name", "")).strip())
+    )
+
+
 # --- Allocation defaults ---
 
 def default_invested_allocation_targets_pctg() -> dict[str, float]:

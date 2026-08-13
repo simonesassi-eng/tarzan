@@ -332,43 +332,415 @@
           <tr>
             <td class="px-32" style="padding:12px 20px 0 20px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:#6E9BFF;text-transform:uppercase;">Instrument data sources</div>
-              <div style="margin-top:3px;font-size:9px;color:#8FA3BC;line-height:1.35;">Canonical and intraday ticker · latest dated provider observation in UTC. Daily bars may use a midnight date anchor.</div>
+              <div style="margin-top:3px;font-size:9px;color:#8FA3BC;line-height:1.35;">Every instrument this issue names · the exact provider listing behind its daily bars (Hist.) and its intraday series (Intr.). Held first, then watchlist, then closed positions; alphabetical within each.</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid #22303F;background:#111A24;">
                 <tr style="background:#05090D;">
-                  <td width="36%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Instrument</td>
-                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Canonical feed</td>
-                  <td width="24%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Intraday feed</td>
-                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Presence</td>
+                  <td width="11%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Ticker</td>
+                  <td width="31%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Name</td>
+                  <td width="16%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">ISIN</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Hist. RIC</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Intr. RIC</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid #22303F;font-size:7.5px;font-weight:700;color:#8FA3BC;text-transform:uppercase;">Presence</td>
                 </tr>
                 <tr>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-size:8.5px;font-weight:600;color:#E6EDF6;">IE00B4L5Y983</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7px;color:#66798F;">IE00B4L5Y983</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:#6E9BFF;">—</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:#66798F;white-space:nowrap;">—</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:#E6EDF6;">—</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:#66798F;white-space:nowrap;">—</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Current + Historical</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">IE00B4L5Y983</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00B4L5Y983</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Portfolio</td>
                 </tr>
                 <tr>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-size:8.5px;font-weight:600;color:#E6EDF6;">IE00B4WXJJ64</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7px;color:#66798F;">IE00B4WXJJ64</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:#6E9BFF;">—</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:#66798F;white-space:nowrap;">—</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;line-height:1.2;">
-                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;font-weight:700;color:#E6EDF6;">—</div>
-                    <div style="margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:6.8px;color:#66798F;white-space:nowrap;">—</div>
-                  </td>
-                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Current + Historical</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">IE00B4WXJJ64</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00B4WXJJ64</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Portfolio</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AGGH</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iShares Core Global Aggregate Bond EUR Hedged</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00BDBRDM35</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVEM</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis Emerging Markets Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000K975W13</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVEU</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis Europe Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000SDFJUU0</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVPE</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis Pacific Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000T62NEO6</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVUS</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis America Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000OW54ZX1</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVWC</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis Global Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000RJECXS5</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">AVWS</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Avantis Global Small Cap Value</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE0003R87OG3</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CAOS</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Alpha Architect Tail Risk</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US02072L5167</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CATB</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">KRC Cat Bond</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CL2</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Amundi MSCI USA (2x) Leveraged</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CMOD</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Invesco Bloomberg Commodity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CNDX</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iShares Nasdaq 100 UCITS ETF</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">COM</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Direxion Auspice Broad Commodity Strategy</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US25460E3071</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">COMN</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">L&G Market Neutral Commodities</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CRRY</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree Enhanced Commodity Carry</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CSPX</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iShares Core S&P 500 UCITS ETF</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">CTAP</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Simplify US Equity PLUS Managed Futures</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US82889N2282</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">DBMFE</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iMGP DBi Managed Futures R EUR</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">LU2951555403</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">DDUM</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Dimensional US Core Equity Market</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000XKK4AV2</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">DDXM</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Dimensional Global ex US Core Equity Market</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE0002YHUWS3</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">DEGC</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Dimensional Global Core Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000EGGFVG6</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">DEGT</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Dimensional Global Targeted Value</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000S67ID55</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">EEAU</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">BNP Paribas Easy Managed Futures</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">LU3307218399</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">ENCO</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">L&G Multi-Strategy Enhanced Commodities</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">GDE</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree Efficient Gold Plus Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US97717Y5684</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">IS39</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iShares Bloomberg Roll Select Commodity Swap</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00BZ1NCS44</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">ISAC</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iShares MSCI ACWI</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">KMLM</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">KraneShares Mount Lucas Managed Futures</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US5007676522</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">LVWC</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Amundi MSCI World (2x) Leveraged</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">MFEH</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">iMGP DBi Managed Futures (EUR Hedged)</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">NTSG</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree Global Efficient Core</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00077IIPQ8</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">NTSX</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree US Efficient Core</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000KF370H3</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">NTSZ</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree Eurozone Efficient Core</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE000OV4XWA3</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">R2US</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">SPDR Russell 2000 US Small Cap UCITS ETF</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">RSIT</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Return Stacked Intl Stocks & Managed Futures</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US88636Y8396</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">RSSB</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Return Stacked Global Stocks & Bonds</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US88636J2042</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">RSST</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Return Stacked US Stocks & Managed Futures</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US88636J8163</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">RSSX</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Return Stacked US Stocks & Gold/Bitcoin</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US88636V7029</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">RSSY</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Return Stacked US Stocks & Futures Yield</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US88636J3453</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">SC2X</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Xtrackers MSCI ACWI (2x) Leveraged</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">LU3386643970</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">TAIL</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Cambria Tail Risk</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">US1320618622</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">UEQC</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">UBS CMCI Commodity Carry</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">IE00BKFB6L02</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">V60A</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Vanguard LifeStrategy 60% Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">V80A</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Vanguard LifeStrategy 80% Equity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">VWRL</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Vanguard FTSE All-World</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">WCOA</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">WisdomTree Enhanced Commodity</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">X25E</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Xtrackers II Eurozone Government Bond 25+</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8.5px;font-weight:700;color:#6E9BFF;line-height:1.25;">X710</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:8.5px;font-weight:600;color:#E6EDF6;line-height:1.25;">Xtrackers II Eurozone Government Bond 7-10</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:7.5px;color:#66798F;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:8px;color:#E6EDF6;line-height:1.25;">—</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid #22303F;vertical-align:top;font-size:7.5px;color:#8FA3BC;line-height:1.25;">Watchlist</td>
                 </tr>
               </table>
             </td>
