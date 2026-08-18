@@ -84,7 +84,7 @@ Gemini receives only typed portfolio/analysis domain content and explicit instru
 
 Each normal or critical-failure intent has a purpose-specific stable logical identity. The final publication step must create a durable transactional claim before SMTP, checkpoint local evidence, and mark `SMTP_INVOCATION_STARTED` immediately before `send_message`. Duplicate claims suppress SMTP. A post-invocation interruption becomes `UNCERTAIN` and is never retried automatically. A human-authorized resend requires a new audited token and therefore a new identity.
 
-GitHub validation is credential-free and must pass before the final publication step receives Drive, Gemini, claim-service, recipient, or SMTP secrets. Workflow actions use full commit SHAs; Python installation uses `--require-hashes`. Pins are reviewed monthly and immediately after an applicable critical advisory.
+GitHub validation is credential-free and must pass before the final publication step receives Drive, Gemini, claim-service, recipient, or SMTP secrets. Workflow actions use full commit SHAs; Python installation uses `--require-hashes`. Pins are reviewed monthly and immediately after an applicable critical advisory. An overdue review annotates every run for 14 days and only then blocks publication, so a missed review date costs a warning rather than a digest.
 
 ## Development and evidence
 
