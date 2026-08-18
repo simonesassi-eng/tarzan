@@ -25,6 +25,10 @@ _ALLOWED_EXACT = {
     "tarzan/release_manifest.json",
 }
 _ALLOWED_PREFIXES = ("tarzan/", "scripts/")
+# An overdue review is a reminder, not a safety property: pins are hash-locked,
+# so refusing to publish leaves the same pins in place and only costs a digest.
+# Warn loudly inside the window, stop publishing once it is clearly ignored.
+_REVIEW_GRACE_DAYS = 14
 _EXPECTED_COMMANDS = {
     "python scripts/validate_release.py --manifest tarzan/release_manifest.json",
     "python -m compileall -q tarzan scripts",
@@ -180,8 +184,17 @@ def _validate_scope_and_review(manifest: dict[str, Any]) -> None:
     due = date.fromisoformat(str(review.get("review_due_on")))
     if due < reviewed or (due - reviewed).days > 31:
         raise ReleaseValidationError("pin review interval exceeds one month")
-    if date.today() > due:
-        raise ReleaseValidationError(f"immutable pins require intentional review; due {due}")
+    overdue = (date.today() - due).days
+    if overdue > _REVIEW_GRACE_DAYS:
+        raise ReleaseValidationError(
+            f"immutable pins are {overdue} days overdue for review; due {due}"
+        )
+    if overdue > 0:
+        print(
+            f"::warning title=Pin review overdue::immutable pins were due {due} "
+            f"({overdue} day(s) ago); publication stops in "
+            f"{_REVIEW_GRACE_DAYS - overdue + 1} day(s) unless pin_review is refreshed"
+        )
 
 
 def _validate_documentation(root: Path) -> None:

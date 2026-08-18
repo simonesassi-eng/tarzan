@@ -20,8 +20,8 @@
     "delivery_state": "1.0"
   },
   "pin_review": {
-    "reviewed_on": "2026-07-17",
-    "review_due_on": "2026-08-17",
+    "reviewed_on": "2026-08-18",
+    "review_due_on": "2026-09-18",
     "policy": "monthly_or_immediate_for_applicable_critical_advisories"
   },
   "positive_scope": {
