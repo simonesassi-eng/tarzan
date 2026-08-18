@@ -119,22 +119,19 @@ def _flow_list(external_flows, start, end, threshold: float = 500.0):
     return sorted(out, key=lambda t: t[0])
 
 
-def _window_twror(nav: Optional[pd.Series], days: int) -> Optional[float]:
-    """Window TWROR (%) from the flow-adjusted NAV index over the last
-    ``days`` calendar days.
+def _window_twror(nav: Optional[pd.Series], bucket: str) -> Optional[float]:
+    """Window TWROR (%) from the flow-adjusted NAV index over a
+    ``PERIOD_WINDOWS`` bucket ("1d", "1w", "1m", …).
 
-    Delegates to the engine's ``compute_period_return`` so this matches the
-    authoritative ``performance_full`` figures exactly — the matrix cell and
-    the chart line then tell one story. (Previously this anchored on the last
-    point *before* the window while ``compute_period_return`` anchors on the
-    first point *inside* it, producing the 30-day TWROR split.)"""
+    Delegates to the engine's ``compute_period_return`` so the matrix cell and
+    the chart line tell one story."""
     if nav is None:
         return None
     from tarzan.engine.stats import compute_period_return
     s = nav.replace([float("inf"), float("-inf")], float("nan")).dropna()
     if len(s) < 2:
         return None
-    return compute_period_return(s, days)
+    return compute_period_return(s, bucket)
 
 
 def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":

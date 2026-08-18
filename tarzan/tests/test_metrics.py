@@ -284,17 +284,17 @@ class TestPeriodReturn:
     def test_period_return_flat_series_is_zero(self):
         idx = pd.date_range("2024-01-01", periods=365, freq="D")
         series = pd.Series([100.0] * 365, index=idx)
-        assert compute_period_return(series, days=30) == 0.0
+        assert compute_period_return(series, "1m") == 0.0
 
-    def test_period_return_1d_uses_last_two_points(self):
-        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+    def test_period_return_1d_uses_last_two_sessions(self):
+        idx = pd.bdate_range("2024-01-01", periods=5)
         series = pd.Series([100, 101, 102, 103, 105], index=idx)
         # 1d: (105/103 - 1) * 100 = 1.94%
-        result = compute_period_return(series, days=1)
+        result = compute_period_return(series, "1d")
         assert abs(result - 1.9417) < 0.01
 
     def test_period_return_empty_returns_none(self):
-        assert compute_period_return(pd.Series(dtype=float), days=30) is None
+        assert compute_period_return(pd.Series(dtype=float), "1m") is None
 
 
 class TestYTD:

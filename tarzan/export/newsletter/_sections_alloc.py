@@ -621,10 +621,10 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
     """Bottom-of-newsletter methodology note: the *actual* calendar spans each
     return bucket covers, computed live from the longest available price
     series so the reader sees exactly which dates a 1D / 1W / … return is
-    measured between. Window lengths come from the shared ``stats.PERIOD_DAYS``
+    measured between. Window lengths come from the shared ``stats.PERIOD_WINDOWS``
     map (same buckets the engine uses everywhere), so this note can never
     drift from the numbers in the tables."""
-    from tarzan.engine.stats import PERIOD_DAYS, window_anchor
+    from tarzan.engine.stats import PERIOD_WINDOWS, window_anchor
     P = PALETTE
     m = ctx.metrics
 
@@ -653,13 +653,13 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
               "1y": "1Y", "3y": "3Y", "5y": "5Y"}
     order = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
     spans: dict = {}
-    for k, days in PERIOD_DAYS.items():
+    for k in PERIOD_WINDOWS:
         if k == "1d":
             continue  # 1D is broker-style (live vs previous close), not a fixed span
         # The engine's own window edge, not a second reading of it: this note
         # exists to state where a bucket starts, so computing that start twice
         # is how the note and the number drift apart.
-        anchor = window_anchor(s, days)
+        anchor = window_anchor(s, k)
         spans[k] = (anchor, end) if anchor is not None and anchor < end else None
     # YTD is measured from the last close of the prior year (what
     # compute_ytd_return anchors on), falling back to the first in-year close.

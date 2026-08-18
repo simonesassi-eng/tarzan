@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 
 import tarzan.data.market_quotes as mq
-from tarzan.engine.stats import PERIOD_DAYS, compute_period_return, window_anchor
+from tarzan.engine.stats import compute_period_return, window_anchor
 
 
 def _closes(pairs):
@@ -36,32 +36,30 @@ def _business_series(start: str, end: str, step: float = 0.1):
     return pd.Series([100.0 + i * step for i in range(len(idx))], index=idx)
 
 
-class TestWindowEdgesAreYahoosRanges:
-    def test_three_months_is_three_calendar_months_not_ninety_days(self):
-        # 18 May → 18 Aug 2026 is 92 days: a 90-day window starts two sessions
-        # late, which is exactly the gap measured against the site.
-        s = _business_series("2026-01-02", "2026-08-18")
-        anchor = window_anchor(s, PERIOD_DAYS["3m"])
-        assert anchor == pd.Timestamp("2026-05-18")
-
-    def test_five_years_follows_the_calendar_across_leap_days(self):
-        s = _business_series("2019-01-01", "2026-08-18")
-        assert window_anchor(s, PERIOD_DAYS["5y"]) == pd.Timestamp("2021-08-18")
-
-    def test_one_week_is_five_sessions_counted_on_the_calendar(self):
-        """The last five sessions, so a vendor gap cannot widen the window.
-
-        Milan's 17 Aug 2026 is missing from Yahoo's daily feed; counting five
-        ROWS back from Tue 18 Aug lands on 11 Aug, a session earlier than the
-        site's own 5D range, and printed -0.74% against its -0.95%.
+class TestTrailingWindowAnchor:
+    def test_a_month_snaps_to_the_last_session_on_or_before(self):
+        """The bug the user caught: XMME.MI 1M read +1.13% (from Mon 20 Jul)
+        where the published figure is +2.55% (from Fri 17 Jul). The window
+        starts one calendar month back — 18 Jul, a Saturday — so the anchor is
+        the last session AT OR BEFORE it (Friday), not the first one after.
         """
-        holed = _closes([
-            ("2026-08-10", 100.0), ("2026-08-11", 101.0), ("2026-08-12", 102.0),
-            ("2026-08-13", 103.0), ("2026-08-14", 104.0),
-            # 17 Aug traded but the vendor has no bar for it.
-            ("2026-08-18", 105.0),
+        s = _closes([
+            ("2026-07-16", 78.53), ("2026-07-17", 76.78),   # window start = Fri
+            ("2026-07-20", 77.86),                           # NOT this Monday
+            ("2026-08-14", 80.12), ("2026-08-18", 78.74),
         ])
-        assert window_anchor(holed, PERIOD_DAYS["1w"]) == pd.Timestamp("2026-08-12")
+        assert window_anchor(s, "1m") == pd.Timestamp("2026-07-17")
+        assert round(compute_period_return(s, "1m"), 2) == 2.55
+
+    def test_three_months_and_five_years_follow_the_calendar(self):
+        s = _business_series("2019-01-01", "2026-08-18")
+        assert window_anchor(s, "3m") == pd.Timestamp("2026-05-18")
+        assert window_anchor(s, "5y") == pd.Timestamp("2021-08-18")
+
+    def test_one_week_is_five_sessions(self):
+        s = _business_series("2026-07-01", "2026-08-18")
+        # 18 Aug (Tue) back four business days → 12 Aug (Wed): five sessions.
+        assert window_anchor(s, "1w") == pd.Timestamp("2026-08-12")
 
     def test_a_bucket_the_series_cannot_cover_is_unavailable(self):
         """Yahoo silently shows MAX for a range longer than the history (EXUS.MI
@@ -69,8 +67,8 @@ class TestWindowEdgesAreYahoosRanges:
         Tarzan reports the bucket as absent instead of relabelling a short
         window."""
         s = _business_series("2024-05-13", "2026-08-18")
-        assert window_anchor(s, PERIOD_DAYS["5y"]) is None
-        assert compute_period_return(s, PERIOD_DAYS["5y"]) is None
+        assert window_anchor(s, "5y") is None
+        assert compute_period_return(s, "5y") is None
 
 
 class TestOneDayIsTheQuotePair:
