@@ -26,7 +26,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     RISK_FREE_RATE,
     DAYS_PER_YEAR,
     TwrorResult,
-    PERIOD_DAYS,
+    PERIOD_WINDOWS,
     compute_cagr,
     compute_cvar,
     compute_max_drawdown,
@@ -741,8 +741,8 @@ class MetricsEngine:
                                   "3y": None, "5y": None}
         else:
             result = {"cagr": compute_cagr(ph), "ytd": compute_ytd_return(ph)}
-            for key, days in PERIOD_DAYS.items():
-                result[key] = compute_period_return(ph, days)
+            for key in PERIOD_WINDOWS:
+                result[key] = compute_period_return(ph, key)
             ctx["performance"] = result
 
         # Also compute full (non-inception) performance for Performance tab

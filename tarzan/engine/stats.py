@@ -37,67 +37,66 @@ TRADING_DAYS = cfg.trading_days()
 # the money-weighted and time-weighted figures are directly comparable.
 DAYS_PER_YEAR = 365.25
 
-# The single source of truth for return-bucket windows, in *calendar* days.
-# Every per-instrument / portfolio period return in Tarzan (benchmarks,
-# holding performance, the portfolio performance_full, the newsletter Returns
-# tables and the Excel Performance tab) is computed from this mapping, so the
-# columns mean exactly the same thing everywhere. ``ytd`` is special-cased
-# (since Jan 1) and handled by ``compute_ytd_return``.
-PERIOD_DAYS: dict[str, int] = {
-    "1d": 1, "1w": 7, "1m": 30, "3m": 90, "6m": 180,
-    "1y": 365, "3y": 1095, "5y": 1825,
-}
-
-# What each bucket's window actually is, so a Tarzan return can be checked
-# against the instrument's own Yahoo Finance page and agree. Yahoo's ranges are
-# CALENDAR spans (1mo, 3mo, 6mo, 1y, 5y) and its 5D is five SESSIONS; a fixed
-# day count drifts from both, silently. Measured on EXUS.MI on 18 Aug 2026:
-# 90 days anchored on 20 May and read +6.45% where the site's 3mo range
-# anchored on 18 May and read +7.87% — a 1.4pp gap from arithmetic alone.
-# Buckets absent here keep the plain calendar-day window.
-_PERIOD_WINDOW: dict[int, tuple[str, int]] = {
-    7: ("sessions", 5),
-    30: ("months", 1),
-    90: ("months", 3),
-    180: ("months", 6),
-    365: ("years", 1),
-    1095: ("years", 3),
-    1825: ("years", 5),
+# The single source of truth for return-bucket windows: bucket → (unit, span).
+# Every per-instrument / portfolio period return in Tarzan (benchmarks, holding
+# performance, the portfolio performance_full, the newsletter Returns tables and
+# the Excel Performance tab) is measured through this one mapping, so the columns
+# mean exactly the same thing everywhere. ``ytd`` is special-cased (since Jan 1)
+# and handled by ``compute_ytd_return``.
+#
+# The units are the ones a published trailing return uses: calendar months and
+# years, and sessions for the short buckets. Fixed day counts (90 for "3M", 1825
+# for "5Y") were what drifted — 90 days landed two sessions past three calendar
+# months and read 3M +6.45% for EXUS.MI on 18 Aug 2026 where three months read
+# +7.87%.
+PERIOD_WINDOWS: dict[str, tuple[str, int]] = {
+    "1d": ("sessions", 2),
+    "1w": ("sessions", 5),
+    "1m": ("months", 1),
+    "3m": ("months", 3),
+    "6m": ("months", 6),
+    "1y": ("years", 1),
+    "3y": ("years", 3),
+    "5y": ("years", 5),
 }
 
 
-def window_anchor(series: pd.Series, days: int):
+def window_anchor(series: pd.Series, bucket: str):
     """The observation a bucket is measured FROM, or None when the series does
     not reach back that far.
 
     One authority for every window edge: the returns themselves, the
-    newsletter's methodology note, and any check against Yahoo all read this,
-    so a bucket cannot mean one span in a table and another in its footnote.
+    newsletter's methodology note, and any check against a published figure all
+    read this, so a bucket cannot mean one span in a table and another in its
+    footnote.
+
+    The anchor is the last close AT OR BEFORE the window's start date, which is
+    what "one month ago" means everywhere it is quoted: for XMME.MI on 18 Aug
+    2026 that is Friday 17 Jul (76.78, 1M = +2.55%). Taking the first close
+    at or *after* it instead skipped to Monday 20 Jul (77.86) and reported
+    +1.13% — a whole weekend of the window silently dropped.
     """
     if series is None or len(series) < 2:
         return None
+    unit, span = PERIOD_WINDOWS.get(bucket, ("days", 0))
     end = series.index[-1]
-    kind, span = _PERIOD_WINDOW.get(days, ("days", days))
-    if kind == "sessions":
-        # Yahoo's 5D spans the last five sessions and measures across them, so
-        # the anchor is the FIRST of those five. Counted on the CALENDAR, not on
-        # the series' own rows: a vendor gap (Milan's missing 17 Aug 2026) would
-        # otherwise slide the window a session further back than the site's.
+    if unit == "sessions":
         cutoff = end - pd.tseries.offsets.BDay(span - 1)
-    elif kind == "months":
+    elif unit == "months":
         cutoff = end - pd.DateOffset(months=span)
-    elif kind == "years":
+    elif unit == "years":
         cutoff = end - pd.DateOffset(years=span)
     else:
-        cutoff = end - pd.Timedelta(days=span)
-    # The series must actually reach the window, else the bucket is reported as
-    # unavailable rather than silently measuring a shorter span (a 2y book must
-    # not print a "5Y" return). ~7 days of slack absorbs a weekend or holiday
-    # at the far edge.
-    if series.index[0] > cutoff + pd.Timedelta(days=7):
         return None
-    inside = series.index[series.index >= cutoff]
-    return inside[0] if len(inside) else None
+    at_or_before = series.index[series.index <= cutoff]
+    if len(at_or_before):
+        return at_or_before[-1]
+    # Nothing that old: report the bucket only if the series still covers
+    # essentially the whole window (a weekend or holiday of slack), so a 2y book
+    # cannot print a "5Y" return off its own first close.
+    if series.index[0] <= cutoff + pd.Timedelta(days=7):
+        return series.index[0]
+    return None
 
 
 # ======================================================================
@@ -123,18 +122,16 @@ def compute_cagr(series: pd.Series) -> float:
     return ((end / start) ** (1 / (days / DAYS_PER_YEAR)) - 1) * 100
 
 
-def compute_period_return(series: pd.Series, days: int) -> Optional[float]:
-    """Return the % change over the last ``days`` calendar days.
+def compute_period_return(series: pd.Series, bucket: str) -> Optional[float]:
+    """Return the % change over a ``PERIOD_WINDOWS`` bucket ("1w", "3m", …).
 
-    If the series does not actually cover ``days`` of history we return
-    ``None`` instead of silently falling back to the full available window.
-    This avoids misleading comparisons (e.g. a 2Y portfolio reporting "3Y"
-    returns that are actually 2Y returns next to a 3Y benchmark return).
+    ``None`` when the series does not cover the window, instead of silently
+    measuring a shorter one (a 2Y book must not print a "5Y" return next to a
+    benchmark's real one).
 
     Args:
         series: Daily price series (datetime-indexed).
-        days: Lookback window in calendar days. ``1`` is a special case
-            that returns the last-trading-day change.
+        bucket: A key of :data:`PERIOD_WINDOWS`.
 
     Returns:
         Percentage return over the period, or ``None`` if there is not
@@ -149,13 +146,10 @@ def compute_period_return(series: pd.Series, days: int) -> Optional[float]:
         series = series.dropna()
     if series is None or series.empty or len(series) < 2:
         return None
-    if days <= 1:
-        start = float(series.iloc[-2])
-        return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-    anchor = window_anchor(series, days)
+    anchor = window_anchor(series, bucket)
     if anchor is None or anchor >= series.index[-1]:
         return None
-    start = float(series[series.index >= anchor].iloc[0])
+    start = float(series.loc[:anchor].iloc[-1])
     return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
 
 

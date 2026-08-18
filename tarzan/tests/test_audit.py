@@ -92,5 +92,5 @@ class TestPerfSeriesExtraction:
 
     def test_window_twror_none_on_short_series(self):
         from tarzan.export._perf_series import _window_twror
-        assert _window_twror(None, 30) is None
-        assert _window_twror(pd.Series([100.0]), 30) is None
+        assert _window_twror(None, "1m") is None
+        assert _window_twror(pd.Series([100.0]), "1m") is None

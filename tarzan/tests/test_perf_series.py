@@ -100,8 +100,8 @@ def test_window_twror_matches_engine_period_return():
     from tarzan.engine.stats import compute_period_return
     idx = pd.date_range("2026-04-01", "2026-07-13", freq="B")
     nav = pd.Series(np.linspace(100, 108, len(idx)), index=idx)
-    for days in (7, 30, 90):
-        assert _window_twror(_norm_series(nav), days) == compute_period_return(_norm_series(nav), days)
+    for bucket in ("1w", "1m", "3m"):
+        assert _window_twror(_norm_series(nav), bucket) == compute_period_return(_norm_series(nav), bucket)
 
 
 # ── CONTRACT: newsletter numbers == engine authoritative fields ──────────────
@@ -175,8 +175,8 @@ def test_contract_matrix_twror_equals_performance_full(_contract_metrics):
     m = _contract_metrics
     pf = m.performance_full or {}
     nav = _norm_series(m.portfolio_history)
-    for days, key in ((7, "1w"), (30, "1m")):
-        chart = _window_twror(nav, days)
+    for key in ("1w", "1m"):
+        chart = _window_twror(nav, key)
         eng = pf.get(key)
         if chart is not None and eng is not None:
             assert abs(chart - eng) < 1e-6, f"{key}: matrix {chart} != engine {eng}"

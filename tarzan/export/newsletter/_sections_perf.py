@@ -300,7 +300,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     unr = {d: _window_money_pnl(m.unrealized_series, m.actual_value_series, d) for d in (1, 7, 30)}
     unr_since = (m.unrealized_pnl_eur, m.unrealized_pnl_pct)
     nav_norm = _norm_series(m.portfolio_history)
-    tw = {d: _window_twror(nav_norm, d) for d in (1, 7, 30)}
+    tw = {d: _window_twror(nav_norm, b)
+          for d, b in ((1, "1d"), (7, "1w"), (30, "1m"))}
     tw_since = m.twror_pct
 
     # Broker-style 1 Day: use the live "since previous close" portfolio move

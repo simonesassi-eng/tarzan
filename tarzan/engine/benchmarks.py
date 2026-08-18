@@ -18,7 +18,7 @@ import pandas as pd
 from tarzan import config as cfg
 from tarzan.engine.stats import (
     DAYS_PER_YEAR,
-    PERIOD_DAYS,
+    PERIOD_WINDOWS,
     compute_period_return,
     compute_ytd_return,
     _compute_beta_alpha,
@@ -210,7 +210,7 @@ def _compute_single_benchmark_metrics(
     """
     metrics = {
         **risk_metric_row(bench, rf_daily),
-        **{k: compute_period_return(bench, d) for k, d in PERIOD_DAYS.items()},
+        **{k: compute_period_return(bench, k) for k in PERIOD_WINDOWS},
         "ytd": compute_ytd_return(bench),
         "alpha": float("nan"),
         "beta": float("nan"),
@@ -269,10 +269,10 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     ``rf_daily`` is the optional time-varying daily risk-free path used for the
     Sharpe/Sortino excess-return form; ``None`` falls back to the scalar rate.
     """
-    # Period returns — single shared bucket→days mapping (stats.PERIOD_DAYS)
+    # Period returns — single shared bucket→window mapping (stats.PERIOD_WINDOWS)
     # so every table in Tarzan measures the same windows.
-    for key, days in PERIOD_DAYS.items():
-        row[key] = compute_period_return(s, days)
+    for key in PERIOD_WINDOWS:
+        row[key] = compute_period_return(s, key)
     row["ytd"] = compute_ytd_return(s)
 
     # Risk metrics on full series (same shared block as the benchmark rows).
