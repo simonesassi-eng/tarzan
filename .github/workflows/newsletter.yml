@@ -95,7 +95,11 @@ jobs:
         id: cachedate
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
+      # A speed optimisation, never a precondition: the run refetches whatever
+      # the cache does not hand back, so a cache service outage or a future
+      # incompatible action release must not cost a digest.
       - name: Restore market-data cache
+        continue-on-error: true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/tarzan
