@@ -28,6 +28,34 @@ logger = logging.getLogger("backtest.loader")
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Curated Fama-French (Developed) factor loadings for SHORT-HISTORY factor ETFs.
+# Part of the script's own reference data (NOT a user input): used only as the
+# fallback tilt when a fund has too little real history (~24 months) to regress
+# its own, so the pre-inception past is simulated as
+#   base(geo/market) + smb·SMB + hml·HML + rmw·RMW  on the real Ken French
+# Developed factor legs (see ``backtest.engine.portfolio_long_returns``). Funds
+# with enough real history keep their REGRESSED loadings; this table is ignored.
+#
+# Values are ESTIMATES of each strategy's TARGET exposure (Avantis/DFA
+# methodology + published RR-community regressions of the US-listed siblings
+# AVUV/AVDV/DFSVX), not a promise. MOM is omitted (≈0): Avantis screens to stay
+# momentum-neutral, unlike passive ZPRV/ZPRX which run negative. Emerging-market
+# funds (AVEM) are intentionally absent — Developed factors are the wrong
+# regressors for EM.
+CURATED_FACTOR_LOADINGS: dict[str, dict[str, float]] = {
+    "AVWS": {"SMB": 0.80, "HML": 0.35, "RMW": 0.25},   # global dev small-cap value
+    "AVWC": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # global dev all-cap value
+    "AVUS": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # US all-cap value
+    "AVEU": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # Europe all-cap value
+    "AVPE": {"SMB": 0.20, "HML": 0.25, "RMW": 0.25},   # Pacific all-cap value
+}
+
+
+def curated_factor_loadings() -> dict[str, dict]:
+    """Curated FF-Developed factor loadings keyed by bare ticker (see
+    :data:`CURATED_FACTOR_LOADINGS`)."""
+    return CURATED_FACTOR_LOADINGS
+
 
 def is_isin(s: str) -> bool:
     """True if ``s`` is a structurally valid ISIN (delegates to contracts)."""

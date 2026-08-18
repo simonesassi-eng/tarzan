@@ -130,7 +130,7 @@ def factor_loadings(long_ret: pd.Series, short_ret: pd.Series,
 
 
 def factor_splice(long_ret: pd.Series, short_ret: pd.Series, factors: pd.DataFrame,
-                  *, load_bound: float = 1.5) -> pd.Series:
+                  *, load_bound: float = 1.5, loadings: dict | None = None) -> pd.Series:
     """Factor-AWARE backfill for factor ETFs (value / momentum / quality / size).
 
     The tilt loadings are estimated on MONTHLY returns (see
@@ -146,6 +146,11 @@ def factor_splice(long_ret: pd.Series, short_ret: pd.Series, factors: pd.DataFra
     short or the factor data is unavailable, so it is never worse than the
     calibrated backfill. The reconstructed tail omits the regression residual,
     so its idiosyncratic volatility is a lower bound (disclosed in the report).
+
+    ``loadings`` may be supplied to bypass the regression entirely — used for
+    SHORT-HISTORY factor funds (e.g. a just-launched Avantis small-value ETF)
+    whose own history is too brief to regress, so a curated target tilt drives
+    the pre-inception reconstruction instead.
     """
     if short_ret is None or short_ret.empty:
         return long_ret
@@ -157,14 +162,19 @@ def factor_splice(long_ret: pd.Series, short_ret: pd.Series, factors: pd.DataFra
     pre = long_ret.loc[long_ret.index < start]
     if pre.empty:
         return splice_returns(long_ret, short_ret)
-    loadings = factor_loadings(long_ret, short_ret, factors, load_bound=load_bound)
+    if loadings is None:
+        loadings = factor_loadings(long_ret, short_ret, factors, load_bound=load_bound)
+    else:
+        loadings = {k: float(np.clip(v, -load_bound, load_bound))
+                    for k, v in loadings.items()}
     if not loadings:
         return calibrated_splice(long_ret, short_ret)
     # Reconstruct the pre-inception tail: geo/market base + discovered tilt.
     fac_pre = factors.reindex(pre.index).fillna(0.0)
     tilt = pd.Series(0.0, index=pre.index)
     for c, load in loadings.items():
-        tilt = tilt + load * fac_pre[c]
+        if c in fac_pre.columns:               # ignore any curated leg we lack a factor for
+            tilt = tilt + load * fac_pre[c]
     backfill = pre + tilt
     return pd.concat([backfill, short_ret]).sort_index()
 

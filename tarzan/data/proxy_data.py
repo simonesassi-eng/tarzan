@@ -17,6 +17,7 @@ history for stress/rolling analysis, not an exact EUR replication.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -413,6 +414,34 @@ _FF_DEV5_URL = ("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
 _FF_DEVMOM_URL = ("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
                   "Developed_Mom_Factor_Daily_CSV.zip")
 _FF_CACHE_KEY = "FF_DEV_FACTORS_DAILY"
+# Vendored snapshot of the Developed factor series, shipped WITH the script so
+# the backtest is self-contained and reproducible offline (no live Ken French
+# fetch required). The live fetch, when allowed, only EXTENDS this base with
+# newer rows. Path is package-relative.
+_FF_BUNDLED = Path(__file__).resolve().parent / "ff_developed_factors.csv.gz"
+_FF_BUNDLED_CACHE: Optional[pd.DataFrame] = None
+
+
+def _ff_bundled() -> Optional[pd.DataFrame]:
+    """The vendored Developed-factor series (already fractions), read once."""
+    global _FF_BUNDLED_CACHE
+    if _FF_BUNDLED_CACHE is None:
+        if not _FF_BUNDLED.exists():
+            return None
+        df = pd.read_csv(_FF_BUNDLED, index_col="date", parse_dates=True)
+        df.index = df.index.normalize()
+        _FF_BUNDLED_CACHE = df.sort_index()
+    return _FF_BUNDLED_CACHE
+
+
+def _ff_merge(base: Optional[pd.DataFrame],
+              extra: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Union two factor frames, preferring ``extra`` rows on overlap."""
+    frames = [f for f in (base, extra) if f is not None and not f.empty]
+    if not frames:
+        return None
+    merged = pd.concat(frames)
+    return merged[~merged.index.duplicated(keep="last")].sort_index()
 
 
 def _ff_download(url: str, colnames: list[str]) -> Optional[pd.DataFrame]:
@@ -459,11 +488,13 @@ def factor_daily() -> Optional[pd.DataFrame]:
     World indices our factor ETFs track, which is what recovers the momentum
     loading. The CMA (investment) leg is intentionally excluded: it is highly
     collinear with HML/RMW and not a standard ETF factor, so it only
-    destabilises the fitted loadings. Fetched from the Ken French Data Library
-    and disk-cached with staleness refresh; pinned runs use only cache rows at
-    or before ``as_of``. None if unavailable (caller falls back to
-    calibrated/naive)."""
-    cached = price_cache.load_history(_FF_CACHE_KEY)
+    destabilises the fitted loadings. Shipped as a VENDORED snapshot in the
+    package (self-contained, reproducible offline); a live Ken French fetch,
+    when allowed and stale, only EXTENDS it with newer rows. Pinned runs use the
+    bundled+cached rows at or before ``as_of``. None only if the bundle is
+    missing AND nothing is cached (caller falls back to calibrated/naive)."""
+    bundled = _ff_bundled()
+    cached = _ff_merge(bundled, price_cache.load_history(_FF_CACHE_KEY))
     from tarzan import runtime
 
     if not runtime.allows_live_transport():
@@ -488,7 +519,10 @@ def factor_daily() -> Optional[pd.DataFrame]:
         df = (df / 100.0).sort_index()          # percent → fraction
         df.index = df.index.normalize()
         df = df[~df.index.duplicated(keep="last")].dropna(how="all")
-        if not df.empty:
+        # Merge the fresh pull over the vendored base so the series only ever
+        # grows, then persist the union.
+        df = _ff_merge(bundled, df)
+        if df is not None and not df.empty:
             price_cache.store_history(_FF_CACHE_KEY, df)
             return df
     except Exception as e:  # noqa: BLE001
