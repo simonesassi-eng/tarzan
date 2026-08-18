@@ -379,6 +379,83 @@ class TestMarketOpenCaption:
         assert not ctx["performance"].get("1d_live")
 
 
+class TestMarketOpenSpeaksForThePortfolio:
+    """The 08:58 CEST send of 18 Aug 2026: "market OPEN" with every holding's
+    venue shut, because one Munich-only tracked listing quotes from 08:00."""
+
+    def _holding(self, ticker, value):
+        from tarzan.models.holding import Holding
+
+        return Holding(isin=f"TEST{ticker}", ticker=ticker, quantity=1.0,
+                       cost_basis_eur=value, market_value_eur=value,
+                       currency="EUR", current_value=value)
+
+    def _open_flag(self, monkeypatch, holdings, tickers):
+        from tarzan.engine.metrics import MetricsEngine
+
+        monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+
+        def _boom(*a, **kw):
+            raise RuntimeError("provider down")
+
+        monkeypatch.setattr(mq, "broker_1d", _boom)
+        engine = MetricsEngine.__new__(MetricsEngine)
+        engine.holdings = holdings
+        ctx = {"holding_performance": pd.DataFrame({"ticker": tickers}),
+               "performance": {}, "performance_full": {}}
+        engine._live_1d(ctx)
+        return ctx["market_open"]
+
+    def test_an_early_regional_venue_does_not_open_the_portfolio(self, monkeypatch):
+        _pin(monkeypatch, "2026-08-18 08:58")     # Munich trading, Milan is not
+        assert mq.market_open_now("IS39.MU") is True
+        assert self._open_flag(
+            monkeypatch,
+            [self._holding("EXUS.MI", 100_000.0), self._holding("IS39.MU", 1_000.0)],
+            ["EXUS.MI", "IS39.MU"],
+        ) is False
+
+    def test_the_venues_carrying_the_value_do_open_it(self, monkeypatch):
+        _pin(monkeypatch, "2026-08-18 09:30")     # Milan two minutes in… and on
+        assert self._open_flag(
+            monkeypatch,
+            [self._holding("EXUS.MI", 100_000.0), self._holding("IS39.MU", 1_000.0)],
+            ["EXUS.MI", "IS39.MU"],
+        ) is True
+
+    def test_cash_and_futures_weigh_on_neither_side(self, monkeypatch):
+        """No modelled session → no opinion: a big cash row must not outvote the
+        equity sleeve that is actually trading."""
+        _pin(monkeypatch, "2026-08-18 09:30")
+        assert self._open_flag(
+            monkeypatch,
+            [self._holding("EXUS.MI", 10_000.0), self._holding("EURUSD=X", 90_000.0)],
+            ["EXUS.MI", "EURUSD=X"],
+        ) is True
+
+
+class TestSessionTileNamesItsBasis:
+    """A completed session's move must not be captioned as the live one."""
+
+    def _basis(self, perf, last_close="14 Aug"):
+        from tarzan.export.newsletter._sections_alloc import _session_basis
+
+        class _M:
+            portfolio_history = pd.DataFrame(
+                {"value": [1.0, 2.0]},
+                index=pd.to_datetime(["2026-08-13", "2026-08-14"]))
+
+        return _session_basis(perf, _M())
+
+    def test_a_non_live_figure_states_the_close_it_measures_from(self):
+        # The Tuesday 08:58 shape: a real close-to-close move, no intraday feed.
+        assert self._basis({"market_open": True, "1d_live": False}) == \
+            "close-to-close vs 14 Aug"
+
+    def test_a_live_figure_states_the_exchange_hours(self):
+        assert self._basis({"market_open": True, "1d_live": True}) == "market open"
+
+
 class TestIntradayColumnHeader:
     """"Intraday" is one claim about a whole column."""
 

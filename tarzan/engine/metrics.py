@@ -1229,9 +1229,35 @@ class MetricsEngine:
         # when the venue trades but no bar exists yet — and reporting "market
         # closed" then (the 09:09 send) is wrong, while flipping ``1d_live``
         # would put an "Intraday" heading over close-to-close returns.
+        # It is the venues carrying the VALUE that answer it, not whichever
+        # tracked listing happens to quote earliest: at 08:58 CEST on 18 Aug
+        # 2026 one Munich-only watchlist row (08:00–22:00) reported the
+        # portfolio's market open while Milan, Xetra, London and New York — all
+        # of its actual holdings — were shut. Same rule the Intraday header
+        # already follows: one row does not speak for the whole column.
+        # Instruments with no modelled cash session (cash, FX, futures) state
+        # nothing either way and are counted on neither side.
         try:
             from tarzan.data.market_quotes import market_open_now
-            is_open = any(market_open_now(t) for t in keys)
+            states = {t: market_open_now(t) for t in keys}
+            value_by_ticker: dict[str, float] = {}
+            for holding in self.holdings:
+                ticker = str(getattr(holding, "ticker", "") or "")
+                if states.get(ticker) is None:
+                    continue
+                value_by_ticker[ticker] = value_by_ticker.get(ticker, 0.0) + float(
+                    getattr(holding, "current_value", None)
+                    or getattr(holding, "market_value_eur", None)
+                    or 0.0
+                )
+            judged = sum(value_by_ticker.values())
+            if judged > 0.0:
+                open_value = sum(v for t, v in value_by_ticker.items() if states[t])
+                is_open = open_value > judged / 2.0
+            else:
+                # Nothing valued to weigh (watchlist-only projection): fall back
+                # to the presence of any open venue.
+                is_open = any(bool(state) for state in states.values())
             ctx["market_open"] = is_open
             for key in ("performance", "performance_full"):
                 projection = ctx.get(key)

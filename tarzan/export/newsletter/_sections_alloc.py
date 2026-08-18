@@ -73,6 +73,22 @@ def _market_is_open(perf: Optional[dict]) -> bool:
     return bool(p.get("1d_live")) if open_now is None else bool(open_now)
 
 
+def _session_basis(perf: Optional[dict], m) -> str:
+    """What the Session figure IS, in the caption's own words.
+
+    ``1d_live`` false means the number is a completed session's close-to-close
+    move. Captioning that "market open" — which it legitimately can be, minutes
+    before the holdings' own venues open — invites reading a finished session as
+    today's, which is how a Tuesday 08:58 digest showed Monday's +0.41% as the
+    live session. Name the basis instead, the way the Markets strip prints
+    "Cl. Mon" rather than a bare percentage."""
+    p = perf or {}
+    if bool(p.get("1d_live")):
+        return f'market {"open" if _market_is_open(p) else "closed"}'
+    close_label = _prev_session_label(m, "%d %b")
+    return f"close-to-close vs {close_label}" if close_label else "close-to-close"
+
+
 def _funding_verification(verifications) -> Optional[dict[str, Any]]:
     """Return the final serialized-action funding proof, when available."""
     return next(
@@ -351,11 +367,11 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             f"vs {ctx.benchmark_geo}", f"{sign}{abs(now_pp):.2f}pp",
             caption, _tone(now_pp)))
     if session_pct is not None:
-        # What the session was worth and whether it is over: a percentage alone
-        # does not say either.
-        market = "open" if _market_is_open(perf) else "closed"
-        caption = (f'{_eur_smart(session_eur, signed=True)} \u00b7 market {market}'
-                   if session_eur is not None else f'market {market}')
+        # What the session was worth and which session it was: a percentage
+        # alone does not say either.
+        basis = _session_basis(perf, m)
+        caption = (f'{_eur_smart(session_eur, signed=True)} \u00b7 {basis}'
+                   if session_eur is not None else basis)
         state_tiles.append(_tile(
             "Session", _pct(session_pct, signed=True),
             caption, _tone(session_pct)))
