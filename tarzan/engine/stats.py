@@ -61,6 +61,37 @@ PERIOD_WINDOWS: dict[str, tuple[str, int]] = {
 }
 
 
+def _window_end(series_end):
+    """The date a window is measured back FROM: the run's own today, not the
+    instrument's last close.
+
+    A listing whose feed runs a day or two behind must still be measured over
+    the same sessions as everything else. NTSG.MI on 18 Aug 2026 had no close
+    after the 14th; anchoring on its own last row stretched its 5D back to
+    8 Aug and reported +0.79%, where the five sessions the window actually
+    contains give +0.60%. The endpoint stays the last close available — only
+    the window's start moves — so a stale instrument reports the part of the
+    window it has data for, exactly as its published figure does.
+
+    Reads the run-owned clock (a pinned ``--as_of`` run measures back from its
+    effective date), and falls back to the series' own end if no run context is
+    readable. Never returns a date before the series ends.
+    """
+    try:
+        from tarzan import runtime
+
+        today = pd.Timestamp(runtime.today())
+    except Exception:  # noqa: BLE001 — a clock must never break a return
+        return series_end
+    tz = getattr(series_end, "tzinfo", None)
+    if tz is not None:
+        today = (today.tz_localize(tz) if today.tzinfo is None
+                 else today.tz_convert(tz))
+    elif today.tzinfo is not None:
+        today = today.tz_localize(None)
+    return max(today, series_end)
+
+
 def window_anchor(series: pd.Series, bucket: str):
     """The observation a bucket is measured FROM, or None when the series does
     not reach back that far.
@@ -75,11 +106,15 @@ def window_anchor(series: pd.Series, bucket: str):
     2026 that is Friday 17 Jul (76.78, 1M = +2.55%). Taking the first close
     at or *after* it instead skipped to Monday 20 Jul (77.86) and reported
     +1.13% — a whole weekend of the window silently dropped.
+
+    The start date is counted back from the run's today (see
+    :func:`_window_end`), so a stale feed shortens the window rather than
+    sliding it into the past.
     """
     if series is None or len(series) < 2:
         return None
     unit, span = PERIOD_WINDOWS.get(bucket, ("days", 0))
-    end = series.index[-1]
+    end = _window_end(series.index[-1])
     if unit == "sessions":
         # "5D" the way Yahoo and the brokers count it: five trading days back on
         # the exchange calendar, not five ROWS of the vendor's series — Milan's
@@ -97,7 +132,11 @@ def window_anchor(series: pd.Series, bucket: str):
         return None
     at_or_before = series.index[series.index <= cutoff]
     if len(at_or_before):
-        return at_or_before[-1]
+        anchor = at_or_before[-1]
+        # The whole series sits before the window: there is nothing to measure
+        # across, and reporting the last close against itself would print a
+        # confident 0.00% (or +€0) for a feed that simply stopped.
+        return None if anchor == series.index[-1] else anchor
     # Nothing that old: report the bucket only if the series still covers
     # essentially the whole window (a weekend or holiday of slack), so a 2y book
     # cannot print a "5Y" return off its own first close.
@@ -154,7 +193,7 @@ def compute_period_return(series: pd.Series, bucket: str) -> Optional[float]:
     if series is None or series.empty or len(series) < 2:
         return None
     anchor = window_anchor(series, bucket)
-    if anchor is None or anchor >= series.index[-1]:
+    if anchor is None:
         return None
     start = float(series.loc[:anchor].iloc[-1])
     return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None

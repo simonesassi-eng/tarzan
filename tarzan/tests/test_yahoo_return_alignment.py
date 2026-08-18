@@ -61,6 +61,22 @@ class TestTrailingWindowAnchor:
         # 18 Aug (Tue) back four business days → 12 Aug (Wed): five sessions.
         assert window_anchor(s, "5d") == pd.Timestamp("2026-08-12")
 
+    def test_a_stale_feed_shortens_the_window_instead_of_sliding_it(self, monkeypatch):
+        """NTSG.MI on 18 Aug 2026: no close after the 14th. Counting five
+        sessions back from its OWN last row reached 8 Aug and reported +0.79%;
+        counting back from today gives the +0.60% its page shows over the
+        sessions the window really contains.
+        """
+        import datetime
+
+        monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2026, 8, 18))
+        stale = _closes([
+            ("2026-08-07", 28.8), ("2026-08-10", 29.0), ("2026-08-11", 29.1),
+            ("2026-08-12", 29.2), ("2026-08-13", 29.4), ("2026-08-14", 29.6),
+        ])
+        assert window_anchor(stale, "5d") == pd.Timestamp("2026-08-12")
+        assert round(compute_period_return(stale, "5d"), 2) == round((29.6 / 29.2 - 1) * 100, 2)
+
     def test_the_money_and_percent_columns_share_one_window(self):
         """The matrix row said "7 days" and mixed two spans: the euros walked
         seven CALENDAR days while the TWROR beside them measured five sessions.

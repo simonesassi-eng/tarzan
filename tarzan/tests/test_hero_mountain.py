@@ -6,7 +6,10 @@ PortfolioMetrics and assert the hero contract, plus a full-render smoke test.
 
 from __future__ import annotations
 
+import datetime
+
 import pandas as pd
+import pytest
 
 from tarzan.export.newsletter import build_context, render_newsletter
 from tarzan.models.investor_config import InvestorConfig
@@ -17,6 +20,13 @@ def _config() -> InvestorConfig:
     c = InvestorConfig()
     c.invested_allocation_targets_pctg = {"Equities": 100.0}
     return c
+
+
+@pytest.fixture(autouse=True)
+def _pin_clock(monkeypatch):
+    """The fixture series end 1 Feb 2026; return windows are measured back from
+    the run's today, so the reference date belongs to the fixture."""
+    monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2026, 2, 1))
 
 
 def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
