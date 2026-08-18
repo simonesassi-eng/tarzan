@@ -42,6 +42,21 @@ def _isolate_run_context():
 
 
 @pytest.fixture(autouse=True)
+def _no_official_quote_batch(monkeypatch):
+    """Stub the batched Yahoo quote pair network-free for the whole suite.
+
+    ``broker_1d`` measures the 1D against ``regularMarketPrice`` /
+    ``regularMarketPreviousClose`` — the pair the instrument's own page shows.
+    Left unstubbed, every fixture-driven quote test would reach the live
+    endpoint and assert against whatever the market did today. Tests that
+    exercise the quote path install their own values.
+    """
+    monkeypatch.setattr("tarzan.data.market_quotes._fetch_official_quotes",
+                        lambda symbols: {}, raising=True)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _disable_ai_summary(monkeypatch):
     """Force the AI portfolio summary off for the whole suite so tests
     never hit the network or consume API tokens. Tests that exercise the

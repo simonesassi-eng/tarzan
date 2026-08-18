@@ -624,7 +624,7 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
     measured between. Window lengths come from the shared ``stats.PERIOD_DAYS``
     map (same buckets the engine uses everywhere), so this note can never
     drift from the numbers in the tables."""
-    from tarzan.engine.stats import PERIOD_DAYS
+    from tarzan.engine.stats import PERIOD_DAYS, window_anchor
     P = PALETTE
     m = ctx.metrics
 
@@ -656,10 +656,19 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
     for k, days in PERIOD_DAYS.items():
         if k == "1d":
             continue  # 1D is broker-style (live vs previous close), not a fixed span
-        sub = s[s.index >= end - pd.Timedelta(days=days)]
-        spans[k] = (sub.index[0], sub.index[-1]) if len(sub) >= 2 else None
+        # The engine's own window edge, not a second reading of it: this note
+        # exists to state where a bucket starts, so computing that start twice
+        # is how the note and the number drift apart.
+        anchor = window_anchor(s, days)
+        spans[k] = (anchor, end) if anchor is not None and anchor < end else None
+    # YTD is measured from the last close of the prior year (what
+    # compute_ytd_return anchors on), falling back to the first in-year close.
+    prior = s[s.index.year < end.year]
     ytd = s[s.index.year == end.year]
-    spans["ytd"] = (ytd.index[0], ytd.index[-1]) if len(ytd) >= 2 else None
+    if len(prior):
+        spans["ytd"] = (prior.index[-1], end)
+    else:
+        spans["ytd"] = (ytd.index[0], ytd.index[-1]) if len(ytd) >= 2 else None
 
     parts = [f'<strong style="color:{P["ink"]};">1D</strong> latest price vs previous close (live)']
     for k in order:
@@ -680,8 +689,10 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
         f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["muted"]};">'
         f'{windows}</div>'
         f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
-        f'Closing prices, ending at the last available close. If an instrument&rsquo;s history '
-        f'is shorter than a window, its start is capped (or it shows &ldquo;\u2014&rdquo;).</div>'
+        f'Closing prices, ending at the last available close, on the same spans '
+        f'Yahoo Finance measures (five sessions for 1W, calendar months and years '
+        f'beyond it). A window longer than the available history is not reported, '
+        f'here or in the tables.</div>'
         f'</td></tr></table>'
     )
     return {"available": True, "html": html}

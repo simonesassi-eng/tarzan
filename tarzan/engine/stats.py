@@ -48,6 +48,57 @@ PERIOD_DAYS: dict[str, int] = {
     "1y": 365, "3y": 1095, "5y": 1825,
 }
 
+# What each bucket's window actually is, so a Tarzan return can be checked
+# against the instrument's own Yahoo Finance page and agree. Yahoo's ranges are
+# CALENDAR spans (1mo, 3mo, 6mo, 1y, 5y) and its 5D is five SESSIONS; a fixed
+# day count drifts from both, silently. Measured on EXUS.MI on 18 Aug 2026:
+# 90 days anchored on 20 May and read +6.45% where the site's 3mo range
+# anchored on 18 May and read +7.87% — a 1.4pp gap from arithmetic alone.
+# Buckets absent here keep the plain calendar-day window.
+_PERIOD_WINDOW: dict[int, tuple[str, int]] = {
+    7: ("sessions", 5),
+    30: ("months", 1),
+    90: ("months", 3),
+    180: ("months", 6),
+    365: ("years", 1),
+    1095: ("years", 3),
+    1825: ("years", 5),
+}
+
+
+def window_anchor(series: pd.Series, days: int):
+    """The observation a bucket is measured FROM, or None when the series does
+    not reach back that far.
+
+    One authority for every window edge: the returns themselves, the
+    newsletter's methodology note, and any check against Yahoo all read this,
+    so a bucket cannot mean one span in a table and another in its footnote.
+    """
+    if series is None or len(series) < 2:
+        return None
+    end = series.index[-1]
+    kind, span = _PERIOD_WINDOW.get(days, ("days", days))
+    if kind == "sessions":
+        # Yahoo's 5D spans the last five sessions and measures across them, so
+        # the anchor is the FIRST of those five. Counted on the CALENDAR, not on
+        # the series' own rows: a vendor gap (Milan's missing 17 Aug 2026) would
+        # otherwise slide the window a session further back than the site's.
+        cutoff = end - pd.tseries.offsets.BDay(span - 1)
+    elif kind == "months":
+        cutoff = end - pd.DateOffset(months=span)
+    elif kind == "years":
+        cutoff = end - pd.DateOffset(years=span)
+    else:
+        cutoff = end - pd.Timedelta(days=span)
+    # The series must actually reach the window, else the bucket is reported as
+    # unavailable rather than silently measuring a shorter span (a 2y book must
+    # not print a "5Y" return). ~7 days of slack absorbs a weekend or holiday
+    # at the far edge.
+    if series.index[0] > cutoff + pd.Timedelta(days=7):
+        return None
+    inside = series.index[series.index >= cutoff]
+    return inside[0] if len(inside) else None
+
 
 # ======================================================================
 # Period returns
@@ -101,17 +152,11 @@ def compute_period_return(series: pd.Series, days: int) -> Optional[float]:
     if days <= 1:
         start = float(series.iloc[-2])
         return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
-    # Series must cover the full requested window. We allow a small
-    # slack (~7 days) to absorb weekends/holidays at the edges.
-    actual_span_days = (series.index[-1] - series.index[0]).days
-    if actual_span_days < days - 7:
+    anchor = window_anchor(series, days)
+    if anchor is None or anchor >= series.index[-1]:
         return None
-    cutoff = series.index[-1] - pd.Timedelta(days=days)
-    subset = series[series.index >= cutoff]
-    if subset.empty or len(subset) < 2:
-        return None
-    start = float(subset.iloc[0])
-    return (((float(subset.iloc[-1]) / start) - 1) * 100) if start > 0 else None
+    start = float(series[series.index >= anchor].iloc[0])
+    return (((float(series.iloc[-1]) / start) - 1) * 100) if start > 0 else None
 
 
 def compute_ytd_return(series: pd.Series) -> Optional[float]:
