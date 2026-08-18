@@ -26,7 +26,8 @@ from tarzan.engine import synthetic as syn
 from tarzan.engine.stats import TRADING_DAYS
 
 from tarzan.backtest.loader import (
-    build_symbol_map, enrich_universe, load_portfolios, portfolio_items,
+    build_symbol_map, curated_factor_loadings, enrich_universe, load_portfolios,
+    portfolio_items,
 )
 from tarzan.backtest.model import (
     CASH, COMM, CRYPTO, EQ, FI, GOLD, ALT, Portfolio, WhatIfItem,
@@ -141,9 +142,17 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
         eq_dominant = (it.comp_notional.get(EQ, 0.0) >= 50.0)
         if backfill == "factor" and eq_dominant and is_factor_fund(it):
             loads = syn.factor_loadings(base, real, factors)
+            curated = None
+            if not loads:
+                # Too little real history to regress (e.g. a just-launched
+                # Avantis small-value ETF) → drive the pre-inception tail with
+                # the fund's curated target tilt on the real FF factor legs.
+                curated = curated_factor_loadings().get(it.bare.upper())
             if loads:
                 _FACTOR_TILT[it.bare] = loads
-            spliced = syn.factor_splice(base, real, factors)
+            elif curated:
+                _FACTOR_TILT[it.bare] = {**curated, "_curated": True}
+            spliced = syn.factor_splice(base, real, factors, loadings=curated)
         elif backfill == "calibrated":
             spliced = syn.calibrated_splice(base, real)
         else:
@@ -251,11 +260,14 @@ def simulation_rows(portfolios) -> list[dict]:
         base = ", ".join(parts) + (f"  [lev {lev:.2f}x, fin ^IRX+0.5%]" if lev > 1.01 else "")
         tilt = _FACTOR_TILT.get(bare)
         if tilt:
-            shown = {k: v for k, v in tilt.items() if abs(v) >= 0.05}
+            is_curated = tilt.get("_curated", False)
+            shown = {k: v for k, v in tilt.items()
+                     if k != "_curated" and abs(v) >= 0.05}
             if shown:
                 legs = ", ".join(f"{k}{v:+.2f}"
                                  for k, v in sorted(shown.items(), key=lambda kv: -abs(kv[1])))
-                base += f"  + factor tilt ⟨{legs}⟩"
+                label = "curated factor tilt" if is_curated else "factor tilt"
+                base += f"  + {label} ⟨{legs}⟩"
         rows.append({"ticker": bare, "real_from": real_from,
                      "base_from": base_from, "base": base})
     return rows

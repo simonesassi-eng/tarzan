@@ -15,9 +15,6 @@ import logging
 from datetime import datetime
 
 from openpyxl import Workbook
-from openpyxl.chart import LineChart, Reference
-from openpyxl.chart.shapes import GraphicalProperties
-from openpyxl.drawing.line import LineProperties
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -47,31 +44,12 @@ _C = {
 # High-contrast, colour-blind-friendlier series palette for charts (indigo,
 # red, green, amber, cyan, pink, violet, slate). Distinct hues + brightness so
 # adjacent portfolio lines/bars are easy to tell apart.
-_CHART_COLORS = ["5B5BD6", "DC2626", "16A34A", "D97706",
-                 "0891B2", "DB2777", "7C3AED", "475569"]
+# Categorical palette in the validated fixed order (dataviz skill): worst
+# adjacent CVD ΔE 9.1 (the previous green↔red pair failed deutan at 5.0).
+# Assigned in order, never cycled for identity.
+_CHART_COLORS = ["2A78D6", "EB6834", "1BAF7A", "EDA100",
+                 "E87BA4", "008300", "4A3AA7", "E34948"]
 
-
-def _style_line_series(chart) -> None:
-    """Give each series a distinct solid colour and a readable line width."""
-    for i, s in enumerate(chart.series):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        s.graphicalProperties = GraphicalProperties()
-        s.graphicalProperties.line = LineProperties(solidFill=color, w=26000)  # ~2pt
-        s.smooth = False
-
-
-def _show_axes(chart, x_title: str, y_title: str) -> None:
-    """Force both axes (and their titles/tick labels) to render — openpyxl
-    leaves ``delete`` unset, which makes Excel hide the axes entirely so the
-    chart looks empty. Setting delete=False restores the scale and labels."""
-    chart.x_axis.title = x_title
-    chart.y_axis.title = y_title
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-    chart.x_axis.tickLblPos = "low"
-    chart.y_axis.majorGridlines = chart.y_axis.majorGridlines  # keep y gridlines
-    if chart.legend is not None:
-        chart.legend.position = "b"                            # legend at bottom
 
 from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
 from tarzan.engine.robustness import HORIZON_YEARS as _HORIZON_YEARS
@@ -698,13 +676,23 @@ def _hz(p, yrs, kind, *keys):
 
 
 def _robustness_charts(ws, portfolios, start_row, ncol) -> int:
-    """Line charts from the aligned monthly NAV: growth-of-100, drawdown, and
-    rolling 5Y / 10Y annualised return. Source data lives on a hidden helper
-    SHEET (not hidden columns — Excel refuses to plot hidden cells, which is why
-    the earlier version showed blank charts)."""
+    """Testfol.io-style charts from the aligned monthly NAV — growth (log),
+    drawdown, rolling 5Y / 10Y annualised return — rendered with matplotlib and
+    embedded as images. Native Excel line charts can't direct-label lines or
+    anti-alias, so near-identical portfolios overlapped illegibly and the legend
+    sat on top of the plot; images fix both. No baseline portfolio: every series
+    is shown on its own absolute scale, log for growth so equal % moves are
+    equal distances (the reason testfol growth charts read cleanly)."""
     try:
         import pandas as pd
-    except Exception:  # noqa: BLE001
+        from io import BytesIO
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        import numpy as np
+        from openpyxl.drawing.image import Image as XLImage
+    except Exception:  # noqa: BLE001 — chart deps optional; skip silently
         return start_row
     navs = {p.name: p.nav[p.nav > 0] for p in portfolios
             if getattr(p, "nav", None) is not None and len(p.nav) >= 30}
@@ -714,68 +702,101 @@ def _robustness_charts(ws, portfolios, start_row, ncol) -> int:
     if daily.empty or daily.shape[0] < 30:
         return start_row
     cols = list(daily.columns)
-    n = len(cols)
 
     def _roll_ann(df, win):
-        r = (df / df.shift(win)) ** (252.0 / win) - 1.0
-        return r * 100.0
+        return ((df / df.shift(win)) ** (252.0 / win) - 1.0) * 100.0
 
     growth = (daily / daily.iloc[0] * 100.0).iloc[::21]
     dd = ((daily / daily.cummax() - 1.0) * 100.0).iloc[::21]
     r5 = _roll_ann(daily, 5 * 252).iloc[::21].dropna(how="all")
     r10 = _roll_ann(daily, 10 * 252).iloc[::21].dropna(how="all")
 
-    # Dedicated hidden data sheet (charts still plot from a hidden sheet).
-    wb = ws.parent
-    data_title = "ChartData"
-    dws = wb[data_title] if data_title in wb.sheetnames else wb.create_sheet(data_title)
+    palette = {name: "#" + _CHART_COLORS[i % len(_CHART_COLORS)]
+               for i, name in enumerate(cols)}
+    ink, muted, grid = "#1F2937", "#6B7280", "#E5E7EB"
 
-    anchor_col = 1
+    def _short(name):
+        return name.replace("LAYNE_", "")
 
-    def _write_block(frame, title):
-        """Write [Date | names...] starting at the next free column; return the
-        (first_data_col, n, header_row, last_row) needed to build References."""
-        nonlocal anchor_col
-        c0 = anchor_col
-        dws.cell(row=1, column=c0, value=title)
-        dws.cell(row=2, column=c0, value="Date")
-        for j, name in enumerate(cols):
-            dws.cell(row=2, column=c0 + 1 + j, value=name)
-        for i, (idx, r) in enumerate(frame.iterrows(), start=3):
-            dws.cell(row=i, column=c0, value=idx.to_pydatetime().date())
-            for j, name in enumerate(cols):
-                v = r[name]
-                dws.cell(row=i, column=c0 + 1 + j,
-                         value=None if pd.isna(v) else round(float(v), 2))
-        last = frame.shape[0] + 2
-        anchor_col = c0 + n + 2          # leave a gap before the next block
-        return c0, last
+    def _declutter(ys, gap):
+        """Push end-label y-positions apart by at least ``gap`` (data units),
+        preserving order — so labels of near-identical lines don't overprint."""
+        order = np.argsort(ys)
+        adj = np.array(ys, dtype=float)
+        for i in range(1, len(order)):
+            a, b = order[i - 1], order[i]
+            if adj[b] - adj[a] < gap:
+                adj[b] = adj[a] + gap
+        return adj
 
-    def _line(frame, title, y_title, at_cell, logscale=False):
-        c0, last = _write_block(frame, title)
-        ch = LineChart()
-        ch.title = title
-        ch.height, ch.width = 9, 22
-        ch.x_axis.number_format = "yyyy"
-        ch.x_axis.majorTimeUnit = "years"
-        if logscale:
-            ch.y_axis.scaling.logBase = 10
-        data = Reference(dws, min_col=c0 + 1, max_col=c0 + n, min_row=2, max_row=last)
-        cats = Reference(dws, min_col=c0, min_row=3, max_row=last)
-        ch.add_data(data, titles_from_data=True)
-        ch.set_categories(cats)
-        _style_line_series(ch)                 # distinct colours + line width
-        _show_axes(ch, "Year", y_title)        # force axes/titles to render
-        ws.add_chart(ch, at_cell)
+    def _png(frame, title, ylabel, *, log=False, pct=False):
+        fig, ax = plt.subplots(figsize=(9.2, 3.9), dpi=130)
+        fig.subplots_adjust(left=0.07, right=0.80, top=0.88, bottom=0.12)
+        ends = []
+        for name in frame.columns:
+            s = frame[name].dropna()
+            if s.empty:
+                continue
+            ax.plot(s.index, s.values, color=palette[name], lw=1.5,
+                    solid_capstyle="round", zorder=3)
+            ends.append((s.index[-1], float(s.values[-1]), name))
+        if log:
+            ax.set_yscale("log")
+        # direct end-labels in the reserved right margin, decluttered. The gap is
+        # a fraction of the FULL axis height (not of the tiny spread between the
+        # near-identical endpoints), else the labels overprint each other.
+        if ends:
+            space = "log" if log else "lin"
+            def _t(v):
+                return np.log10(v) if space == "log" else v
+            def _inv(v):
+                return 10 ** v if space == "log" else v
+            y0, y1 = ax.get_ylim()
+            full = _t(y1) - _t(y0)
+            gap = full * 0.062
+            yvals = [_t(y) for _, y, _ in ends]
+            placed = _declutter(yvals, gap)
+            overflow = max(placed) - _t(y1)          # keep the stack inside the axis
+            if overflow > 0:
+                placed = [p - overflow for p in placed]
+            xr = ends[0][0]
+            for (x, y, name), yp in zip(ends, placed):
+                ax.annotate(f" {_short(name)}", xy=(xr, _inv(yp)),
+                            xytext=(6, 0), textcoords="offset points",
+                            va="center", ha="left", fontsize=8.5,
+                            color=palette[name], fontweight="bold",
+                            annotation_clip=False)
+        ax.set_title(title, fontsize=11, fontweight="bold", color=ink, loc="left")
+        ax.set_ylabel(ylabel, fontsize=8.5, color=muted)
+        ax.grid(axis="y", color=grid, lw=0.7, zorder=0)
+        ax.xaxis.set_major_locator(mdates.YearLocator(base=5))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(grid)
+        ax.tick_params(colors=muted, labelsize=8, length=0)
+        if pct:
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
+        buf = BytesIO()
+        fig.savefig(buf, format="png"); plt.close(fig); buf.seek(0)
+        return buf
 
-    _line(growth, "Growth of 100 — aligned history (monthly)", "Index (start = 100)",
-          f"A{start_row}")
-    _line(dd, "Drawdown (underwater), monthly", "Drawdown %", f"A{start_row + 19}")
-    _line(r5, "Rolling 5-year return (annualised)", "Ann. return %", f"A{start_row + 38}")
-    _line(r10, "Rolling 10-year return (annualised)", "Ann. return %", f"A{start_row + 57}")
-
-    dws.sheet_state = "hidden"
-    return start_row + 76
+    specs = [
+        (growth, "Growth of 100 — aligned history (log scale)", "Index (start=100)",
+         dict(log=True)),
+        (dd, "Drawdown (underwater)", "Drawdown", dict(pct=True)),
+        (r5, "Rolling 5-year return (annualised)", "Ann. return", dict(pct=True)),
+        (r10, "Rolling 10-year return (annualised)", "Ann. return", dict(pct=True)),
+    ]
+    row = start_row
+    for frame, title, ylab, kw in specs:
+        if frame.empty:
+            continue
+        img = XLImage(_png(frame, title, ylab, **kw))
+        ws.add_image(img, f"A{row}")
+        row += 21
+    return row + 1
 
 
 def _simulation_sheet(wb, sim_rows) -> None:
