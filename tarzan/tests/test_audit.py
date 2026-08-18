@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pandas as pd
 
 from tarzan.runtime import audit
@@ -81,11 +83,14 @@ class TestPerfSeriesExtraction:
         assert len(out) == 2                 # duplicate collapsed (keep last)
         assert out.iloc[0] == 2.0
 
-    def test_window_money_pnl_basic(self):
+    def test_window_money_pnl_basic(self, monkeypatch):
         from tarzan.export._perf_series import _window_money_pnl
         idx = pd.date_range("2025-01-01", periods=40, freq="D")
         pnl = pd.Series(range(40), index=idx, dtype=float)     # +1/day
         actual = pd.Series([1000.0] * 40, index=idx)
+        # Windows are measured back from the run's today; here that is the
+        # fixture's own last day.
+        monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2025, 2, 9))
         gain, pct = _window_money_pnl(pnl, actual, "1m")
         # 1M is a calendar month: 9 Feb back to 9 Jan (index 8), so 39 - 8.
         assert gain == 31.0

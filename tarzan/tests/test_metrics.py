@@ -281,14 +281,19 @@ class TestVaR:
 
 
 class TestPeriodReturn:
-    def test_period_return_flat_series_is_zero(self):
+    """Windows are measured back from the run's today, so each fixture pins it
+    to its own last observation."""
+
+    def test_period_return_flat_series_is_zero(self, monkeypatch):
         idx = pd.date_range("2024-01-01", periods=365, freq="D")
         series = pd.Series([100.0] * 365, index=idx)
+        monkeypatch.setattr("tarzan.runtime.today", lambda: idx[-1].date())
         assert compute_period_return(series, "1m") == 0.0
 
-    def test_period_return_1d_uses_last_two_sessions(self):
+    def test_period_return_1d_uses_last_two_sessions(self, monkeypatch):
         idx = pd.bdate_range("2024-01-01", periods=5)
         series = pd.Series([100, 101, 102, 103, 105], index=idx)
+        monkeypatch.setattr("tarzan.runtime.today", lambda: idx[-1].date())
         # 1d: (105/103 - 1) * 100 = 1.94%
         result = compute_period_return(series, "1d")
         assert abs(result - 1.9417) < 0.01
