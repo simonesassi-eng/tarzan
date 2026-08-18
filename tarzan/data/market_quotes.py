@@ -969,8 +969,24 @@ def _fetch_intraday(symbols: list[str]) -> dict:
 
 
 def _fetch_official_prev_closes(symbols: list[str]) -> dict:
-    """One batched Yahoo v7 quote call → ``{symbol:
-    regularMarketPreviousClose}`` (positive floats only).
+    """``{symbol: regularMarketPreviousClose}`` — see ``_fetch_official_quotes``."""
+    return {
+        symbol: quote["prev_close"]
+        for symbol, quote in _fetch_official_quotes(symbols).items()
+        if quote.get("prev_close")
+    }
+
+
+def _fetch_official_quotes(symbols: list[str]) -> dict:
+    """One batched Yahoo v7 quote call → ``{symbol: {"price", "prev_close"}}``
+    (positive floats only; either key may be absent).
+
+    This pair IS the instrument's headline change on its own Yahoo page, and it
+    comes from the quote pipeline rather than the daily chart — which for some
+    listings drops a whole session: on 18 Aug 2026 the chart had a null close
+    for Monday 17 on every Milan ETF while this endpoint carried the official
+    40.815 for EXUS.MI. Measuring the 1D against it is therefore both the
+    robust choice (a second, independent vendor path) and the aligned one.
 
     This is the OFFICIAL prior settlement/close Yahoo shows behind its headline
     change — the authoritative daily-% baseline. Needed because yfinance's
@@ -1000,17 +1016,24 @@ def _fetch_official_prev_closes(symbols: list[str]) -> dict:
             resp.raise_for_status()
             return resp.json()
 
-        payload = _yf_net.fetch_yf(_get, what="markets prev-close batch", log=logger)
+        payload = _yf_net.fetch_yf(_get, what="markets quote batch", log=logger)
         if not payload:
             return {}
         for q in payload.get("quoteResponse", {}).get("result", []):
             sym = q.get("symbol")
-            pc = q.get("regularMarketPreviousClose")
-            try:
-                if sym and pc is not None and float(pc) > 0:
-                    out[sym] = float(pc)
-            except (TypeError, ValueError):
+            if not sym:
                 continue
+            fields: dict = {}
+            for key, name in (("price", "regularMarketPrice"),
+                              ("prev_close", "regularMarketPreviousClose")):
+                try:
+                    value = q.get(name)
+                    if value is not None and float(value) > 0:
+                        fields[key] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            if fields:
+                out[sym] = fields
         missing = [s for s in symbols if s not in out]
         if missing:
             # INFO, not DEBUG: a symbol absent here silently falls back to the
@@ -1148,9 +1171,33 @@ def broker_1d(
         uniq,
         allow_sibling_fallback=allow_sibling_fallback,
     )
+    # Yahoo's own headline pair for every requested ticker, batched once. It is
+    # the authority for the 1D: same two numbers the instrument's page shows,
+    # and sourced from the quote pipeline rather than the daily chart, which can
+    # be missing the very session being measured.
+    official = _fetch_official_quotes(uniq)
     out: dict = {}
-    for tk, (intra, src) in resolved.items():
+    for tk in uniq:
+        intra, src = resolved.get(tk, (None, tk))
+        quote = official.get(tk) or {}
+        q_price, q_prev = quote.get("price"), quote.get("prev_close")
         if intra is None or len(intra) < 2:
+            # No usable intraday series: the quote pair alone still yields the
+            # published 1D (live during the session, the last completed
+            # session's move outside it), where before the row fell back to a
+            # close-to-close read of a chart that may have a hole in it.
+            if q_price and q_prev:
+                is_open = market_open_now(tk, now=_intraday_reference_now())
+                out[tk] = {
+                    "pct": (q_price / q_prev - 1.0) * 100.0,
+                    "live": bool(is_open),
+                    "source_ticker": tk,
+                    "intraday_source_ticker": tk,
+                    "intraday_series": None,
+                    "intraday_baseline": q_prev,
+                    "intraday_observation_timestamp": None,
+                    "source_reason": "yahoo official quote (no intraday feed)",
+                }
             continue
         cur = float(intra.iloc[-1])
         last_ts = intra.index[-1]
@@ -1205,6 +1252,26 @@ def broker_1d(
             if source_previous_close
             else float(intra.iloc[0])
         )
+
+        # Yahoo's published pair wins for the percentage: for the canonical
+        # listing it IS the figure on the instrument's page, in both session
+        # states, and it survives a daily chart that lost the session being
+        # measured (17 Aug 2026 on every Milan ETF). The intraday series stays
+        # as resolved so the sparkline still comes from the venue that produced
+        # the bars; its baseline follows the same close as the percentage
+        # whenever the bars are the canonical listing's own.
+        if q_price and q_prev:
+            out[tk] = {
+                "pct": (q_price / q_prev - 1.0) * 100.0,
+                "live": bool(is_live),
+                "source_ticker": tk,
+                "intraday_source_ticker": src,
+                "intraday_series": intra,
+                "intraday_baseline": q_prev if src == tk else intraday_baseline,
+                "intraday_observation_timestamp": intraday_observation_timestamp,
+                "source_reason": "yahoo official quote (price vs previous close)",
+            }
+            continue
 
         # --- Closed session: the authoritative 1D move is the instrument's
         # OWN primary-listing official daily close (which includes the closing
