@@ -19,25 +19,29 @@ from tarzan.models.portfolio import PortfolioMetrics
 
 
 def _window_money_pnl(
-    pnl_series, actual_series, days: int
+    pnl_series, actual_series, bucket: str
 ) -> tuple[Optional[float], Optional[float]]:
-    """Real money P&L over the last ``days`` calendar days, net of any
+    """Real money P&L over a ``PERIOD_WINDOWS`` bucket, net of any
     contributions in that window.
+
+    Reads the same ``window_anchor`` as the percentages beside it: the matrix's
+    "5D" row used to walk seven CALENDAR days for the euros while its TWROR
+    measured five sessions, so one row described two different spans.
 
     Returns ``(gain_eur, gain_pct)`` where the € gain is the delta of the
     cumulative P&L series across the window and the % expresses it over the
     portfolio value at the window start. Either may be None when the order
     path produced no series (holdings-only run) or the data is too short.
     """
+    from tarzan.engine.stats import window_anchor
+
     if pnl_series is None:
         return None, None
     pnl = pnl_series.dropna()
     if len(pnl) < 2:
         return None, None
-    last_date = pnl.index[-1]
-    try:
-        cutoff = last_date - pd.Timedelta(days=days)
-    except (TypeError, ValueError):
+    cutoff = window_anchor(pnl, bucket)
+    if cutoff is None:
         return None, None
     prior = pnl[pnl.index <= cutoff]
     start_pnl = float(prior.iloc[-1]) if len(prior) else float(pnl.iloc[0])
@@ -121,7 +125,7 @@ def _flow_list(external_flows, start, end, threshold: float = 500.0):
 
 def _window_twror(nav: Optional[pd.Series], bucket: str) -> Optional[float]:
     """Window TWROR (%) from the flow-adjusted NAV index over a
-    ``PERIOD_WINDOWS`` bucket ("1d", "1w", "1m", …).
+    ``PERIOD_WINDOWS`` bucket ("1d", "5d", "1m", …).
 
     Delegates to the engine's ``compute_period_return`` so the matrix cell and
     the chart line tell one story."""

@@ -295,13 +295,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     # ── Matrix values (windows reuse _window_money_pnl / _window_twror;
     #    "since inception" uses the authoritative lifetime fields). ──────
-    tot = {d: _window_money_pnl(m.pnl_series, m.actual_value_series, d) for d in (1, 7, 30)}
+    tot = {b: _window_money_pnl(m.pnl_series, m.actual_value_series, b)
+           for b in ("1d", "5d", "1m")}
     tot_since = (m.pnl_eur, m.pnl_pct)
-    unr = {d: _window_money_pnl(m.unrealized_series, m.actual_value_series, d) for d in (1, 7, 30)}
+    unr = {b: _window_money_pnl(m.unrealized_series, m.actual_value_series, b)
+           for b in ("1d", "5d", "1m")}
     unr_since = (m.unrealized_pnl_eur, m.unrealized_pnl_pct)
     nav_norm = _norm_series(m.portfolio_history)
-    tw = {d: _window_twror(nav_norm, b)
-          for d, b in ((1, "1d"), (7, "1w"), (30, "1m"))}
+    tw = {b: _window_twror(nav_norm, b) for b in ("1d", "5d", "1m")}
     tw_since = m.twror_pct
 
     # Broker-style 1 Day: use the live "since previous close" portfolio move
@@ -311,7 +312,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # when no live quote is available.
     live_1d = (m.performance_full or {}).get("1d")
     if live_1d is not None and not (isinstance(live_1d, float) and math.isnan(live_1d)):
-        tw[1] = float(live_1d)
+        tw["1d"] = float(live_1d)
         # Bill the session € against the PRICED sleeve (invested_value), NOT
         # total_value. performance_full["1d"] is a value-weighted move over the
         # priced holdings (metrics._portfolio_1d: Σ weight·pct / Σ weight over
@@ -394,9 +395,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     windows = [
         # No "\u25cf LIVE" on the row label: the masthead states whether a
         # session is open, and the 1 day row is live whenever it is.
-        ("1 day", tot[1], unr[1], tw[1]),
-        ("7 days", tot[7], unr[7], tw[7]),
-        ("30 days", tot[30], unr[30], tw[30]),
+        ("1D", tot["1d"], unr["1d"], tw["1d"]),
+        ("5D", tot["5d"], unr["5d"], tw["5d"]),
+        ("1M", tot["1m"], unr["1m"], tw["1m"]),
         ("Since inception", tot_since, unr_since, tw_since),
     ]
     body = ""
@@ -973,7 +974,7 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
         for cls, col, role_list in groups]
     # Compact numeric cells + a capped name column (so it can't hoard width and
     # leave a gap before the sparkline) + faint vertical separators so a reader
-    # can tell 1W from 1M from 1Y at a glance. Role lives in the group header
+    # can tell 5D from 1M from 1Y at a glance. Role lives in the group header
     # and the ticker trails the name, so names wrap cleanly.
     # ``zebra=False``: the alternating row stripe fights the heat. Under a tinted
     # matrix an uncoloured cell has to be ONE surface, or the eye reads the
@@ -981,7 +982,7 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     # fills its column instead of floating in it.
     # ``fixed_layout``: the Returns and Watchlist tables share a container
     # width, so pinning every column to the width declared here makes the two
-    # grids align — same sparkline start, same 1W/1M/… x positions — instead of
+    # grids align — same sparkline start, same 5D/1M/… x positions — instead of
     # each sizing its columns from its own content (short tickers/small % vs
     # long names/large %), which drifted them apart.
     return render_unified_table("Instrument", columns, uni_groups,
@@ -1028,7 +1029,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
 
     Mirrors the Excel ``Performance`` tab and uses the exact same eight
     time-return columns as the "Returns vs benchmarks" table below —
-    1D / 1W / 1M / 3M / YTD / 1Y / 3Y / 5Y — so the two newsletter
+    1D / 5D / 1M / 3M / YTD / 1Y / 3Y / 5Y — so the two newsletter
     tables read as one consistent view. Risk metrics (Sharpe, Vol,
     alpha, beta) are not included here — the Excel report keeps the
     detailed risk-adjusted view for users who need it.
@@ -1055,7 +1056,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # 1D is now its own sparkline column (same concept as the "How markets
     # moved" table), so it is dropped from the numeric columns here. The rest
     # stay aligned with ``_build_performance``.
-    period_keys = ["1w", "1m", "3m", "ytd", "1y", "3y", "5y"]
+    period_keys = ["5d", "1m", "3m", "ytd", "1y", "3y", "5y"]
 
     # Intraday + live flags use the one render-wide batch of exact full
     # symbols already selected in preprocessing. Presentation never maps a
@@ -1219,10 +1220,10 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
     if "type" in hp.columns:
         hp = hp[hp["type"].astype(str).str.lower().str.contains("portfolio") |
                 ~hp["type"].astype(str).str.lower().str.contains("benchmark")]
-    if hp.empty or "1w" not in hp.columns:
+    if hp.empty or "5d" not in hp.columns:
         return {"available": False}
 
-    sorted_hp = hp.sort_values("1w", ascending=False, na_position="last")
+    sorted_hp = hp.sort_values("5d", ascending=False, na_position="last")
     best = sorted_hp.iloc[0]
     worst = sorted_hp.iloc[-1]
 
@@ -1233,7 +1234,7 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
         match = df[df["ticker"] == ticker] if not df.empty else pd.DataFrame()
         klass = match["asset_class"].iloc[0] if not match.empty else "Equities"
         value = float(match["current_value"].iloc[0]) if not match.empty else 0.0
-        pct = float(row.get("1w") or 0.0)
+        pct = float(row.get("5d") or 0.0)
         eur = value * pct / 100
         return {
             "name": row.get("name", ticker),
@@ -1281,7 +1282,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
     # Period order shown in the Returns table (mirrors the Excel
     # Performance tab): 1D first, then progressively longer windows.
-    periods = ("1d", "1w", "1m", "3m", "ytd", "1y", "3y", "5y")
+    periods = ("1d", "5d", "1m", "3m", "ytd", "1y", "3y", "5y")
 
     def _as_float(value):
         """The signed percent behind a cell, or None. The heat ramp needs the
@@ -1476,7 +1477,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # One exact-symbol batch is shared with the holding snapshot above. Missing
     # series remain unavailable; no renderer-side listing fallback is allowed.
     P = PALETTE
-    period_cols = ("1w", "1m", "3m", "ytd", "1y", "3y", "5y")
+    period_cols = ("5d", "1m", "3m", "ytd", "1y", "3y", "5y")
     intraday_map = _shared_performance_intraday(ctx)
 
     # Group benchmark rows by asset class → role, in the configured order,

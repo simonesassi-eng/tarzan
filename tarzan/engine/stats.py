@@ -51,7 +51,7 @@ DAYS_PER_YEAR = 365.25
 # +7.87%.
 PERIOD_WINDOWS: dict[str, tuple[str, int]] = {
     "1d": ("sessions", 2),
-    "1w": ("sessions", 5),
+    "5d": ("sessions", 5),
     "1m": ("months", 1),
     "3m": ("months", 3),
     "6m": ("months", 6),
@@ -81,6 +81,13 @@ def window_anchor(series: pd.Series, bucket: str):
     unit, span = PERIOD_WINDOWS.get(bucket, ("days", 0))
     end = series.index[-1]
     if unit == "sessions":
+        # "5D" the way Yahoo and the brokers count it: five trading days back on
+        # the exchange calendar, not five ROWS of the vendor's series — Milan's
+        # 17 Aug 2026 is missing a close, and counting rows would then reach a
+        # session further back than the site's own 5D range.
+        # ponytail: business days, holidays not modelled; a holiday inside the
+        # window makes it span one session more. Needs an exchange calendar to
+        # be exact, which is a dependency for ~6 days a year.
         cutoff = end - pd.tseries.offsets.BDay(span - 1)
     elif unit == "months":
         cutoff = end - pd.DateOffset(months=span)
@@ -123,7 +130,7 @@ def compute_cagr(series: pd.Series) -> float:
 
 
 def compute_period_return(series: pd.Series, bucket: str) -> Optional[float]:
-    """Return the % change over a ``PERIOD_WINDOWS`` bucket ("1w", "3m", …).
+    """Return the % change over a ``PERIOD_WINDOWS`` bucket ("5d", "3m", …).
 
     ``None`` when the series does not cover the window, instead of silently
     measuring a shorter one (a 2Y book must not print a "5Y" return next to a

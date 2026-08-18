@@ -34,7 +34,7 @@ def _metrics() -> PortfolioMetrics:
         total_value=6000.0, invested_value=6000.0, cash_value=0.0,
         holdings_df=df,
         allocation_by_class=pd.DataFrame([{"category": "Equities", "weight_pct": 100.0}]),
-        performance_full={"1w": 0.5, "1m": 1.2, "ytd": 8.0, "period_used": "1.0Y"},
+        performance_full={"5d": 0.5, "1m": 1.2, "ytd": 8.0, "period_used": "1.0Y"},
     )
     m.pnl_eur = 1000.0
     m.pnl_pct = 20.0
