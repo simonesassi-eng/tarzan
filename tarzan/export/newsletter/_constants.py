@@ -72,7 +72,7 @@ _PERF_ROLE_ORDER = {
                      "Long Duration"],
     "Commodities": ["Broad Basket", "Carry", "Market Neutral"],
     "Gold": ["Gold"],
-    "Alternative": ["Managed Futures", "Cat Bond"],
+    "Alternative": ["Managed Futures", "Currency", "Cat Bond", "Tail Hedge"],
     "Cash & Cash Equivalents": ["Cash / Money Market"],
 }
 
