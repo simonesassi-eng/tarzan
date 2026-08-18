@@ -13,12 +13,14 @@ def test_c16_version_and_release_scope_have_single_positive_authorities():
     root = Path(__file__).resolve().parents[2]
     package_init = (root / "tarzan/__init__.py").read_text(encoding="utf-8")
     main_source = (root / "tarzan/main.py").read_text(encoding="utf-8")
-    workflow = (root / ".github/workflows/newsletter.yml").read_text(encoding="utf-8")
+    # The manifest is audited by the push-triggered Checks workflow, not by the
+    # newsletter delivery workflow: a declaration drift must never withhold a digest.
+    audit_workflow = (root / ".github/workflows/checks.yml").read_text(encoding="utf-8")
     release_manifest = root / "tarzan/release_manifest.json"
 
     assert "__version__" in package_init
     assert "from tarzan import __version__" in main_source
-    assert "release_manifest.json" in workflow
+    assert "release_manifest.json" in audit_workflow
     assert release_manifest.is_file(), (
         "no positive Tarzan release/package manifest exists; release discovery "
         "and version metadata can drift"

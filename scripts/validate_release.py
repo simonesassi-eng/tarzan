@@ -2,6 +2,11 @@
 
 The checker reads only the manifest and explicitly named positive Tarzan paths.
 It never discovers repository contents recursively.
+
+This runs in the ``Checks`` workflow on every push, NOT in the newsletter
+delivery path: a declaration that drifts must cost a red commit, never a
+missed digest. It therefore holds no clock — nothing here can start failing
+because a date passed.
 """
 
 from __future__ import annotations
@@ -9,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -17,6 +21,7 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)")
 _EXACT_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^\s;]+)(?:\s|$)")
 _ALLOWED_EXACT = {
+    ".github/workflows/checks.yml",
     ".github/workflows/newsletter.yml",
     "README.md",
     "requirements.in",
@@ -25,10 +30,6 @@ _ALLOWED_EXACT = {
     "tarzan/release_manifest.json",
 }
 _ALLOWED_PREFIXES = ("tarzan/", "scripts/")
-# An overdue review is a reminder, not a safety property: pins are hash-locked,
-# so refusing to publish leaves the same pins in place and only costs a digest.
-# Warn loudly inside the window, stop publishing once it is clearly ignored.
-_REVIEW_GRACE_DAYS = 14
 _EXPECTED_COMMANDS = {
     "python scripts/validate_release.py --manifest tarzan/release_manifest.json",
     "python -m compileall -q tarzan scripts",
@@ -112,8 +113,11 @@ def _validate_workflow(root: Path) -> None:
         raise ReleaseValidationError("publication credentials cannot be job scoped")
     if "pip install --require-hashes -r requirements.txt" not in workflow:
         raise ReleaseValidationError("workflow installation is not hash enforced")
-    if "tarzan/release_manifest.json" not in workflow:
-        raise ReleaseValidationError("workflow does not validate the release manifest")
+    audit = _read(root, ".github/workflows/checks.yml")
+    if "scripts/validate_release.py --manifest tarzan/release_manifest.json" not in audit:
+        raise ReleaseValidationError("the audit workflow does not validate the release manifest")
+    if "validate_release.py" in workflow:
+        raise ReleaseValidationError("declaration audits must not gate publication")
 
     current_step = ""
     for raw_line in workflow.splitlines():
@@ -164,7 +168,7 @@ def _validate_versions(root: Path, manifest: dict[str, Any]) -> None:
         raise ReleaseValidationError("Gemini API pin drift")
 
 
-def _validate_scope_and_review(manifest: dict[str, Any]) -> None:
+def _validate_positive_scope(manifest: dict[str, Any]) -> None:
     scope = manifest.get("positive_scope", {})
     values: list[str] = []
     for key in ("package_entries", "test_roots", "script_roots", "named_release_files"):
@@ -178,23 +182,6 @@ def _validate_scope_and_review(manifest: dict[str, Any]) -> None:
     commands = set(manifest.get("validation_commands", ()))
     if commands != _EXPECTED_COMMANDS:
         raise ReleaseValidationError("validation commands must use the reviewed positive paths")
-
-    review = manifest.get("pin_review", {})
-    reviewed = date.fromisoformat(str(review.get("reviewed_on")))
-    due = date.fromisoformat(str(review.get("review_due_on")))
-    if due < reviewed or (due - reviewed).days > 31:
-        raise ReleaseValidationError("pin review interval exceeds one month")
-    overdue = (date.today() - due).days
-    if overdue > _REVIEW_GRACE_DAYS:
-        raise ReleaseValidationError(
-            f"immutable pins are {overdue} days overdue for review; due {due}"
-        )
-    if overdue > 0:
-        print(
-            f"::warning title=Pin review overdue::immutable pins were due {due} "
-            f"({overdue} day(s) ago); publication stops in "
-            f"{_REVIEW_GRACE_DAYS - overdue + 1} day(s) unless pin_review is refreshed"
-        )
 
 
 def _validate_documentation(root: Path) -> None:
@@ -228,7 +215,7 @@ def validate(manifest_path: Path) -> None:
         raise ReleaseValidationError("unsupported release manifest schema")
     if manifest.get("python_version") != "3.12":
         raise ReleaseValidationError("release Python version drift")
-    _validate_scope_and_review(manifest)
+    _validate_positive_scope(manifest)
     _validate_requirements(root)
     _validate_workflow(root)
     _validate_versions(root, manifest)
