@@ -673,7 +673,7 @@ def build_digest(metrics, config) -> dict:
 
     # Per-period TWROR (short/medium/long-term trend).
     perf = m.performance_full or {}
-    periods = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
+    periods = ["1d", "5d", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
     digest["twror_by_period_pct"] = _clean({p: _num(perf.get(p)) for p in periods})
 
     # Risk.
@@ -771,18 +771,18 @@ def _holdings_rows(m) -> list[dict]:
 def _movers(m) -> dict:
     hp = getattr(m, "holding_performance", None)
     try:
-        if hp is None or hp.empty or "1w" not in hp.columns:
+        if hp is None or hp.empty or "5d" not in hp.columns:
             return {}
         sub = hp.copy()
         if "type" in sub.columns:
             sub = sub[sub["type"].astype(str).str.contains("portfolio", case=False, na=False)]
-        sub = sub.dropna(subset=["1w"])
+        sub = sub.dropna(subset=["5d"])
         if sub.empty:
             return {}
-        sub = sub.sort_values("1w", ascending=False)
+        sub = sub.sort_values("5d", ascending=False)
 
         def _row(r):
-            return _clean({"name": r.get("name") or r.get("ticker"), "ret_1w_pct": _num(r.get("1w"))})
+            return _clean({"name": r.get("name") or r.get("ticker"), "ret_5d_pct": _num(r.get("5d"))})
 
         best = [_row(r) for _, r in sub.head(3).iterrows()]
         worst = [_row(r) for _, r in sub.tail(3).iterrows()]

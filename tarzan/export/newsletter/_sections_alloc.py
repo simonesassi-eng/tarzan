@@ -110,7 +110,7 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
     """
     m = ctx.metrics
     perf_full = m.performance_full or {}
-    week_return = perf_full.get("1w")
+    week_return = perf_full.get("5d")
 
     parts: list[str] = []
 
@@ -314,7 +314,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         if pct_val != -1.0:
             session_eur = base * pct_val / (1.0 + pct_val)
     if session_eur is None and m.pnl_series is not None and m.actual_value_series is not None:
-        pair = _window_money_pnl(m.pnl_series, m.actual_value_series, 1)
+        pair = _window_money_pnl(m.pnl_series, m.actual_value_series, "1d")
         if pair and pair[0] is not None:
             session_eur = float(pair[0])
     def _tile(label, value, caption, tone="flat"):
@@ -422,22 +422,22 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         hero_flow_chips = _hero_flow_chips(win["flows"])
 
     # This-week figures, mirroring the since-inception group:
-    #   * Total PnL — the real money gained over the last 7 days, net of any
-    #     contributions in the week (delta of the cumulative P&L series);
-    #   * TWROR — the 1-week time-weighted return (performance_full['1w']),
+    #   * Total PnL — the real money gained over the last five sessions, net
+    #     of any contributions in them (delta of the cumulative P&L series);
+    #   * TWROR — the 5-session time-weighted return (performance_full['5d']),
     #     the same series the Returns tables use.
     perf_full = m.performance_full or {}
-    week_twror = perf_full.get("1w")
+    week_twror = perf_full.get("5d")
     try:
         week_twror = float(week_twror) if week_twror is not None else None
         if week_twror != week_twror:  # NaN
             week_twror = None
     except (TypeError, ValueError):
         week_twror = None
-    week_pnl_eur, week_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, 7)
+    week_pnl_eur, week_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, "5d")
     # Last-30-days money P&L (net of contributions) for the scoreboard's
     # "Last 30 days" row, mirroring the chart window.
-    month_pnl_eur, month_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, 30)
+    month_pnl_eur, month_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, "1m")
     month_twror = perf_full.get("1m")
     try:
         month_twror = float(month_twror) if month_twror is not None else None
@@ -620,7 +620,7 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
 def _build_methodology(ctx: _NewsletterContext) -> dict:
     """Bottom-of-newsletter methodology note: the *actual* calendar spans each
     return bucket covers, computed live from the longest available price
-    series so the reader sees exactly which dates a 1D / 1W / … return is
+    series so the reader sees exactly which dates a 1D / 5D / … return is
     measured between. Window lengths come from the shared ``stats.PERIOD_WINDOWS``
     map (same buckets the engine uses everywhere), so this note can never
     drift from the numbers in the tables."""
@@ -649,9 +649,9 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
             return f"{x.day} {x.strftime('%b')}" + (f" &rsquo;{x.strftime('%y')}" if cross else "")
         return f"{d(a)}\u2192{d(b)}"
 
-    labels = {"1d": "1D", "1w": "1W", "1m": "1M", "3m": "3M", "6m": "6M",
+    labels = {"1d": "1D", "5d": "5D", "1m": "1M", "3m": "3M", "6m": "6M",
               "1y": "1Y", "3y": "3Y", "5y": "5Y"}
-    order = ["1d", "1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
+    order = ["1d", "5d", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
     spans: dict = {}
     for k in PERIOD_WINDOWS:
         if k == "1d":
@@ -690,7 +690,7 @@ def _build_methodology(ctx: _NewsletterContext) -> dict:
         f'{windows}</div>'
         f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
         f'Closing prices, ending at the last available close, on the same spans '
-        f'Yahoo Finance measures (five sessions for 1W, calendar months and years '
+        f'Yahoo Finance measures (five sessions for 5D, calendar months and years '
         f'beyond it). A window longer than the available history is not reported, '
         f'here or in the tables.</div>'
         f'</td></tr></table>'

@@ -86,9 +86,10 @@ class TestPerfSeriesExtraction:
         idx = pd.date_range("2025-01-01", periods=40, freq="D")
         pnl = pd.Series(range(40), index=idx, dtype=float)     # +1/day
         actual = pd.Series([1000.0] * 40, index=idx)
-        gain, pct = _window_money_pnl(pnl, actual, days=30)
-        assert gain == 30.0                  # 39 - 9 across the 30-day window
-        assert pct == 3.0                    # 30 / 1000 * 100
+        gain, pct = _window_money_pnl(pnl, actual, "1m")
+        # 1M is a calendar month: 9 Feb back to 9 Jan (index 8), so 39 - 8.
+        assert gain == 31.0
+        assert pct == 3.1                    # 31 / 1000 * 100
 
     def test_window_twror_none_on_short_series(self):
         from tarzan.export._perf_series import _window_twror

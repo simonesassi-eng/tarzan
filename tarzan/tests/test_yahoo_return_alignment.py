@@ -56,10 +56,26 @@ class TestTrailingWindowAnchor:
         assert window_anchor(s, "3m") == pd.Timestamp("2026-05-18")
         assert window_anchor(s, "5y") == pd.Timestamp("2021-08-18")
 
-    def test_one_week_is_five_sessions(self):
+    def test_five_days_is_five_sessions(self):
         s = _business_series("2026-07-01", "2026-08-18")
         # 18 Aug (Tue) back four business days → 12 Aug (Wed): five sessions.
-        assert window_anchor(s, "1w") == pd.Timestamp("2026-08-12")
+        assert window_anchor(s, "5d") == pd.Timestamp("2026-08-12")
+
+    def test_the_money_and_percent_columns_share_one_window(self):
+        """The matrix row said "7 days" and mixed two spans: the euros walked
+        seven CALENDAR days while the TWROR beside them measured five sessions.
+        Both now read window_anchor, so 5D bills the same five sessions.
+        """
+        from tarzan.export._perf_series import _window_money_pnl
+
+        idx = pd.date_range("2026-08-04", "2026-08-18", freq="D")  # ends Tuesday
+        pnl = pd.Series(range(len(idx)), index=idx, dtype=float)    # +€1/day
+        actual = pd.Series([1000.0] * len(idx), index=idx)
+
+        gain, _pct = _window_money_pnl(pnl, actual, "5d")
+        # Tue 18 Aug back four sessions is Wed 12 Aug: six calendar days of P&L,
+        # not the seven a "1 week" window used to bill.
+        assert gain == 6.0
 
     def test_a_bucket_the_series_cannot_cover_is_unavailable(self):
         """Yahoo silently shows MAX for a range longer than the history (EXUS.MI

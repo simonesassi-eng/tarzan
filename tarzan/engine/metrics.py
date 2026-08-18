@@ -736,7 +736,7 @@ class MetricsEngine:
             return
         ph = ctx.get("portfolio_history", pd.Series(dtype=float))
         if ph.empty:
-            ctx["performance"] = {"cagr": 0.0, "ytd": None, "1d": None, "1w": None,
+            ctx["performance"] = {"cagr": 0.0, "ytd": None, "1d": None, "5d": None,
                                   "1m": None, "3m": None, "6m": None, "1y": None,
                                   "3y": None, "5y": None}
         else:

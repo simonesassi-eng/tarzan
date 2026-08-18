@@ -20,7 +20,7 @@ def _minimal_metrics(with_returns: bool) -> PortfolioMetrics:
         total_value=6000.0, invested_value=6000.0, cash_value=0.0,
         holdings_df=df,
         allocation_by_class=pd.DataFrame([{"category": "Equities", "weight_pct": 100.0}]),
-        performance_full={"1d": 0.1, "1w": 0.5, "ytd": 8.0, "period_used": "1.0Y"},
+        performance_full={"1d": 0.1, "5d": 0.5, "ytd": 8.0, "period_used": "1.0Y"},
     )
     if with_returns:
         m.xirr_pct = 11.09
