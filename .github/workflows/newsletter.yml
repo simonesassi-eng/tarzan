@@ -1,6 +1,11 @@
 # Tarzan portfolio newsletter automation.
 # Scheduling remains external: Apps Script dispatches named market slots and
 # this workflow serializes them without cancelling an active run.
+#
+# The validate job gates publication on behaviour only — the code imports,
+# compiles, and passes its tests. Declaration audits (manifest, pins, scope,
+# documentation) live in checks.yml, which runs on every push: an out-of-date
+# declaration must never be the reason a digest is not delivered.
 name: Tarzan Newsletter
 
 on:
@@ -25,10 +30,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -36,9 +41,6 @@ jobs:
 
       - name: Install immutable dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-
-      - name: Validate release declarations
-        run: python scripts/validate_release.py --manifest tarzan/release_manifest.json
 
       - name: Compile positive Tarzan scopes
         run: python -m compileall -q tarzan scripts
@@ -57,7 +59,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repo
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve trigger label
         id: trigger
@@ -80,7 +82,7 @@ jobs:
           echo "event_id=$EVENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -94,7 +96,7 @@ jobs:
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Restore market-data cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/tarzan
           key: tarzan-market-cache-${{ steps.cachedate.outputs.date }}

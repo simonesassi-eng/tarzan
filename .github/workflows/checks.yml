@@ -1,0 +1,46 @@
+# Repository hygiene, deliberately OUTSIDE the delivery path.
+#
+# Everything that audits declarations rather than behaviour lives here: the
+# release manifest, the pins, the positive scope, the documentation claims. A
+# drifting declaration is a real problem, but the honest place to surface it is
+# the commit that caused it — not tomorrow morning's digest. Nothing in this
+# workflow can stop a newsletter from going out.
+name: Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install immutable dependencies
+        run: python -m pip install --require-hashes -r requirements.txt
+
+      - name: Validate release declarations
+        run: python scripts/validate_release.py --manifest tarzan/release_manifest.json
+
+      - name: Compile positive Tarzan scopes
+        run: python -m compileall -q tarzan scripts
+
+      - name: Check installed dependency consistency
+        run: python -m pip check
+
+      - name: Run Tarzan tests
+        run: python -m pytest tarzan/tests -q

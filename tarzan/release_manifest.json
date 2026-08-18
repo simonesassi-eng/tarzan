@@ -19,11 +19,7 @@
     "delivery_identity": "1.0",
     "delivery_state": "1.0"
   },
-  "pin_review": {
-    "reviewed_on": "2026-08-18",
-    "review_due_on": "2026-09-18",
-    "policy": "monthly_or_immediate_for_applicable_critical_advisories"
-  },
+  "pin_policy": "refresh_on_applicable_advisory_or_dependency_need_never_on_a_clock",
   "positive_scope": {
     "package_entries": [
       "tarzan/__init__.py",
@@ -49,6 +45,7 @@
       "scripts/"
     ],
     "named_release_files": [
+      ".github/workflows/checks.yml",
       ".github/workflows/newsletter.yml",
       "README.md",
       "tarzan/README.md",
