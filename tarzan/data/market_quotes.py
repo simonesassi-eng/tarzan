@@ -977,6 +977,33 @@ def _fetch_official_prev_closes(symbols: list[str]) -> dict:
     }
 
 
+_quote_memo: dict[str, dict] = {}
+
+
+def reset_quote_memo() -> None:
+    """Drop the run-scoped quote pairs (mirrors ``enricher.reset_run_caches``)."""
+    _quote_memo.clear()
+
+
+def official_quotes(symbols: list[str]) -> dict:
+    """``{symbol: {"price", "prev_close"}}`` for ``symbols``, fetched once per run.
+
+    The published pair is the ONE authority for an instrument's current price
+    and the close before it, so the current point of a price series, the 1D of
+    that series and the portfolio's own valuation cannot come from three
+    different snapshots of two different feeds. Batched: only symbols not
+    already memoized reach the network.
+    """
+    missing = [s for s in dict.fromkeys(symbols) if s and s not in _quote_memo]
+    if missing:
+        fetched = _fetch_official_quotes(missing)
+        for symbol in missing:
+            # Cache the miss too: one attempt per symbol per run.
+            _quote_memo[symbol] = fetched.get(symbol, {})
+    return {s: _quote_memo[s] for s in dict.fromkeys(symbols)
+            if s and _quote_memo.get(s)}
+
+
 def _fetch_official_quotes(symbols: list[str]) -> dict:
     """One batched Yahoo v7 quote call → ``{symbol: {"price", "prev_close"}}``
     (positive floats only; either key may be absent).

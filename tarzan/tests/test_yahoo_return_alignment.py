@@ -111,19 +111,19 @@ class TestTrailingWindowAnchor:
         assert compute_period_return(s, "5y") is None
 
 
-class TestWindowMatrixOneDayRow:
-    """The 1D row and the STATE Session tile must be the same number.
+class TestWindowMatrixHasOneSource:
+    """Every WINDOW row, including 1D, is derived from the one price series.
 
-    Both are "today's move", but they were reading different sources: the tile
-    takes ``performance["1d"]`` (the value-weighted quote move) while the row
-    took the close-based window off the daily feed, which mid-session lags the
-    quote endpoint. The live override existed — it just wrote to ``tot[1]``,
-    an integer key left behind when the buckets were renamed to strings, so
-    nothing read it and the row kept the close-based figure. On 19 Aug 2026 the
-    tile read +€11 while the row read -€2.8k.
+    The 1D row used to be overwritten by a separate live-quote move
+    (``performance_full["1d"]``, de-compounded against invested_value), so the
+    row could print a number the series never contained — -€2.8k beside a +€11
+    Session tile on 19 Aug 2026. The override is gone: the row reads the same
+    ``pnl_series`` / ``portfolio_history`` as the 5D and 1M rows, whose current
+    point the engine has already stamped from the live valuation. A divergent
+    ``performance_full`` must not be able to move it.
     """
 
-    def _matrix(self, monkeypatch, live_1d):
+    def _matrix(self, monkeypatch, injected_1d):
         import datetime
         import re
 
@@ -153,27 +153,27 @@ class TestWindowMatrixOneDayRow:
         metrics.unrealized_series = pnl
         metrics.portfolio_history = pd.Series([v / 1000 for v in values], index=idx)
         metrics.pnl_eur, metrics.pnl_pct, metrics.twror_pct = 6_010.0, 6.7, 6.5
-        metrics.performance_full = {"1d": live_1d}
+        metrics.performance_full = {"1d": injected_1d}
 
         html = _build_performance30(_NewsletterContext(
             metrics=metrics, config=InvestorConfig()))["matrix_html"]
-        rows = re.findall(r">(1D|5D|1M)<.*?</tr>", html, flags=re.S)
         cells = {}
-        for label in rows:
+        for label in ("1D", "5D", "1M"):
             block = re.search(rf">{label}<.*?</tr>", html, flags=re.S).group(0)
             cells[label] = re.findall(r">([+\-−]?€?[\d.,k]+%?)<", block)
         return cells
 
-    def test_the_one_day_row_carries_the_live_move(self, monkeypatch):
-        cells = self._matrix(monkeypatch, live_1d=0.5)
+    def test_the_one_day_row_is_the_series_last_session_move(self, monkeypatch):
+        # 19 Aug (Tue) vs 18 Aug (Mon): +€10, +0.01%. The injected +99% must
+        # NOT appear — the row has no path to performance_full any more.
+        cells = self._matrix(monkeypatch, injected_1d=99.0)
         joined = " ".join(cells["1D"])
-        assert "+0.50%" in joined, joined
-        # €478 = 96,010 · 0.005/1.005 — the same de-compounding the tile uses,
-        # not the -€4k the close-based window would bill for yesterday.
-        assert "€478" in joined, joined
+        assert "+€10" in joined, joined
+        assert "+0.01%" in joined, joined
+        assert "99" not in joined, joined
 
-    def test_the_five_day_row_stays_close_based(self, monkeypatch):
-        cells = self._matrix(monkeypatch, live_1d=0.5)
+    def test_the_five_day_row_is_series_derived(self, monkeypatch):
+        cells = self._matrix(monkeypatch, injected_1d=99.0)
         assert "−3.99%" in " ".join(cells["5D"])
 
 

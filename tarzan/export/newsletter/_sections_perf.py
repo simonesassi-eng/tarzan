@@ -305,28 +305,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     tw = {b: _window_twror(nav_norm, b) for b in ("1d", "5d", "1m")}
     tw_since = m.twror_pct
 
-    # Broker-style 1 Day: use the live "since previous close" portfolio move
-    # (value-weighted from the intraday quotes, in performance_full["1d"]) so
-    # the 1-day column updates during the session like the Returns tables.
-    # The 7/30-day columns stay close-based. Falls back to the window figures
-    # when no live quote is available.
-    live_1d = (m.performance_full or {}).get("1d")
-    if live_1d is not None and not (isinstance(live_1d, float) and math.isnan(live_1d)):
-        tw["1d"] = float(live_1d)
-        # Bill the session € against the PRICED sleeve (invested_value), NOT
-        # total_value. performance_full["1d"] is a value-weighted move over the
-        # priced holdings (metrics._portfolio_1d: Σ weight·pct / Σ weight over
-        # holdings with a live quote) — cash carries no move into it, so a base
-        # that includes cash inflates the euro by the cash weight. This is the
-        # same fix already applied to the hero's Session tile; billed against a
-        # different base, the two 1-day euros were diverging by exactly that
-        # cash weight. base is an END-of-session value and the % is measured
-        # from the session START, so de-compound: end - end/(1+p).
-        base = m.invested_value if (m.invested_value or 0) > 0 else m.total_value
-        p = float(live_1d) / 100.0
-        eur_1d = (base - base / (1.0 + p)) if (1.0 + p) else None
-        tot["1d"] = (eur_1d, float(live_1d))
-        unr["1d"] = (eur_1d, float(live_1d))
+    # No live-quote override here. The 1D row reads the same series as every
+    # other row, and that series' current point IS the live valuation
+    # (metrics._current_prices stamps it), so re-deriving the session move from
+    # performance_full would be a second answer to a question already answered
+    # — which is exactly how this row came to print -€2.8k beside a +€11
+    # Session tile on 19 Aug 2026.
 
     bt = f"1px solid {P['border']}"
 

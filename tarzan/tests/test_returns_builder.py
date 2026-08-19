@@ -1877,7 +1877,13 @@ class TestUnavailableOrderHistory:
         valid_row = result.holding_performance.set_index("ticker").loc[
             "VALID-STOCK"
         ]
-        assert valid_row["1d"] == pytest.approx(3.25)
+        # The Returns-table 1D now comes from the same price series as every
+        # other window and as the historical-risk 1D below — 121/110-1 = 10%.
+        # It used to be overwritten by the mocked broker quote (3.25), so one
+        # reproducible run reported two different 1D figures for one holding;
+        # unifying on the series removed the second source (and a live quote
+        # can no longer leak into a deterministic run).
+        assert valid_row["1d"] == pytest.approx(10.0)
         assert bool(valid_row["live_1d"]) is True
         # The valid holding remains usable in the independent static
         # backtest, while the conflicting -50% series is excluded. If it
