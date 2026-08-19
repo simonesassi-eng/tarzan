@@ -86,6 +86,8 @@ class MetricsEngine:
             # only the resulting full provider ticker and its matching series.
             self._preprocess_benchmarks,
             self._valuation,
+            # One current point per price series, before anything reads one.
+            self._current_prices,
             self._portfolio_history,
             self._performance,
             self._risk,
@@ -1200,6 +1202,80 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     # Broker-style (live) 1D
     # ------------------------------------------------------------------
+    def _current_prices(self, ctx: dict) -> None:
+        """Stamp ONE current point onto every holding's price series.
+
+        Every "today" figure in Tarzan reads a price series: the hero chart and
+        the value/P&L series through ``PriceResolver``, the window matrix and
+        the Returns tables through ``compute_period_return``. The portfolio's
+        own valuation, though, is selected by the capability policy from the
+        published quote — so "today" existed twice, and the two disagreed
+        whenever the daily feed's snapshot lagged the quote's (the 19 Aug 2026
+        digest showed a flat +€11 Session tile beside a chart that dropped).
+
+        This makes the valuation the series' terminal point, so there is one
+        number and everything downstream derives from it:
+
+        * the current session's point is the policy-selected EUR price — the
+          same one behind NAV, so the chart ends where the masthead says the
+          portfolio is;
+        * the previous session's close is the published ``prev_close`` when the
+          listing quotes in EUR, which also repairs a vendor gap (every Milan
+          ETF came back with a null close for 17 Aug 2026, leaving the 1D to
+          measure two sessions). Non-EUR listings keep the feed's own close:
+          converting a native quote here would need an FX rate this computer
+          has no authority over.
+
+        Pinned runs (``--as_of`` / ``--deterministic``) stamp nothing: their
+        valuation IS the historical close already in the series, and no live
+        observation may enter a reproducible run.
+        """
+        from tarzan import runtime
+
+        if not runtime.allows_live_transport():
+            return
+        assessment = self.valuation_assessment
+        if assessment is None:
+            return
+
+        selected = {
+            holding.ticker: holding.current_price
+            for holding in self._current_valuation_holdings()
+            if holding.ticker and holding.current_price
+        }
+        if not selected:
+            return
+
+        from tarzan.data.market_quotes import official_quotes
+
+        today = pd.Timestamp(runtime.today())
+        quotes = official_quotes(list(selected))
+        stamped: list[str] = []
+        for holding in self.holdings:
+            series = getattr(holding, "price_history", None)
+            price = selected.get(holding.ticker)
+            if series is None or len(series) == 0 or not price:
+                continue
+            series = series.copy()
+            stamp = today.tz_localize(series.index.tz) if series.index.tz else today
+            quote = quotes.get(holding.ticker) or {}
+            prev_close = quote.get("prev_close")
+            native_price = quote.get("price")
+            # EUR-listed only: the pair is already in the series' currency, so
+            # the published close can replace the feed's without a conversion.
+            # abs(1 - price/native) is the FX factor; ~0 means EUR quoting.
+            if (prev_close and native_price
+                    and abs(1.0 - float(price) / float(native_price)) < 0.01):
+                previous = series.index[series.index < stamp]
+                if len(previous):
+                    series.loc[previous[-1]] = float(prev_close)
+            series.loc[stamp] = float(price)
+            holding.price_history = series.sort_index()
+            stamped.append(holding.ticker)
+        if stamped:
+            logger.info("Stamped the current valuation onto %d price series", len(stamped))
+        ctx["current_price_stamped"] = tuple(stamped)
+
     def _live_1d(self, ctx: dict) -> None:
         """Resolve each run's intraday feed once and project broker-style 1D.
 
@@ -1361,40 +1437,28 @@ class MetricsEngine:
             logger.debug("live 1D preprocessing failed: %s", e)
             return
 
+        # The percentages are NOT projected onto hp["1d"] or performance["1d"]
+        # any more: those come from each instrument's price series, whose
+        # current point _current_prices already stamped from this same quote
+        # pair (see that computer). Recomputing the move here gave the digest
+        # two answers for one KPI — a Session tile from the quote and a chart,
+        # a 1D row and a window matrix from the series, drifting apart by
+        # whatever the two feeds' snapshots disagreed on (0.18pp on 19 Aug
+        # 2026). What this computer still owns is the evidence the series
+        # cannot carry: the intraday path for the sparklines, and whether the
+        # figures are intraday at all.
         hp["live_1d"] = [
             bool(live_flag.get(str(ticker), False)) for ticker in hp["ticker"]
-        ]
-        hp["1d"] = [
-            live.get(str(ticker), old)
-            for ticker, old in zip(hp["ticker"], hp["1d"])
         ]
         ctx["holding_performance"] = hp
         ctx["live_1d"] = live
         if not live:
             return
-
-        # Portfolio 1D is value-weighted over covered canonical holdings. Each
-        # percentage was calculated against the selected feed's own previous
-        # close, so no cross-venue prices are mixed.
-        df = ctx.get("holdings_df")
-        if df is not None and not df.empty and {"ticker", "weight_pct"}.issubset(df.columns):
-            num = 0.0
-            wsum = 0.0
-            any_live = False
-            for ticker, weight in zip(df["ticker"], df["weight_pct"]):
-                pct = live.get(str(ticker))
-                if pct is None or weight is None:
-                    continue
-                num += float(weight) * float(pct)
-                wsum += float(weight)
-                any_live = any_live or bool(live_flag.get(str(ticker), False))
-            if wsum > 0:
-                port_1d = num / wsum
-                for key in ("performance", "performance_full"):
-                    projection = ctx.get(key)
-                    if isinstance(projection, dict):
-                        projection["1d"] = port_1d
-                        projection["1d_live"] = any_live
+        any_live = any(bool(flag) for flag in live_flag.values())
+        for key in ("performance", "performance_full"):
+            projection = ctx.get(key)
+            if isinstance(projection, dict):
+                projection["1d_live"] = any_live
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)

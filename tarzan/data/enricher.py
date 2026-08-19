@@ -125,6 +125,8 @@ def reset_run_caches() -> None:
         _geo_breakdown_memo.clear()
         _geo_source_memo.clear()
         _openfigi_last_call[0] = 0.0
+    from tarzan.data import market_quotes as _mq
+    _mq.reset_quote_memo()
     _yf_net.reset()
 
 

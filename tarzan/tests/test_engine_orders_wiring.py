@@ -58,9 +58,12 @@ class TestProperty1Identity:
         # order path to feed the newsletter Diversification sparklines.
         assert names[-1] == "_allocation_timeline"
         # Benchmark preprocessing is the first base computer. The order path
-        # keeps that 15-computer base, swaps the history provider in place,
+        # keeps that 16-computer base, swaps the history provider in place,
         # then appends _returns and _allocation_timeline.
-        assert len(names) == 17
+        assert len(names) == 18
+        # One current point is stamped onto every price series before anything
+        # reads a price, so "today" has a single source.
+        assert "_current_prices" in names
         # Broker-style live 1D runs after per-instrument performance.
         assert "_live_1d" in names
         # The historical-risk computer is part of the base pipeline.
