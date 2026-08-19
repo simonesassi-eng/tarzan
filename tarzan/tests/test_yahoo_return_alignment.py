@@ -37,6 +37,17 @@ def _business_series(start: str, end: str, step: float = 0.1):
 
 
 class TestTrailingWindowAnchor:
+    @pytest.fixture(autouse=True)
+    def _pin_today(self, monkeypatch):
+        # Every fixture below ends 2026-08-18 and reasons about windows
+        # measured back from it (see _window_end's docstring). Without this,
+        # window_anchor reads the real run-owned clock (runtime.today()),
+        # so a fixture written against one date silently drifts by a day
+        # each day the suite runs after it - which is exactly what the
+        # three tests below this one, before this fixture existed, did.
+        import datetime
+        monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2026, 8, 18))
+
     def test_a_month_snaps_to_the_last_session_on_or_before(self):
         """The bug the user caught: XMME.MI 1M read +1.13% (from Mon 20 Jul)
         where the published figure is +2.55% (from Fri 17 Jul). The window
@@ -61,15 +72,12 @@ class TestTrailingWindowAnchor:
         # 18 Aug (Tue) back four business days → 12 Aug (Wed): five sessions.
         assert window_anchor(s, "5d") == pd.Timestamp("2026-08-12")
 
-    def test_a_stale_feed_shortens_the_window_instead_of_sliding_it(self, monkeypatch):
+    def test_a_stale_feed_shortens_the_window_instead_of_sliding_it(self):
         """NTSG.MI on 18 Aug 2026: no close after the 14th. Counting five
         sessions back from its OWN last row reached 8 Aug and reported +0.79%;
         counting back from today gives the +0.60% its page shows over the
         sessions the window really contains.
         """
-        import datetime
-
-        monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2026, 8, 18))
         stale = _closes([
             ("2026-08-07", 28.8), ("2026-08-10", 29.0), ("2026-08-11", 29.1),
             ("2026-08-12", 29.2), ("2026-08-13", 29.4), ("2026-08-14", 29.6),
