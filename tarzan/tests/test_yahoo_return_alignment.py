@@ -178,38 +178,41 @@ class TestWindowMatrixHasOneSource:
 
 
 class TestPrevCloseEUR:
-    """The previous-close baseline is put in the series' EUR currency for every
-    venue — EUR taken as-is, non-EUR converted through the valuation-vs-native
-    FX — so a US Treasury or a ZAR bond gets its published 1D just like a Milan
-    ETF, and the FX drops out of the percentage."""
+    """The previous-close baseline is scaled onto the same ruler as the
+    valuation being stamped, so the 1D is the venue's published move for a Milan
+    ETF, a US Treasury and a split-mismatched feed alike, and the FX/scale drops
+    out of the percentage."""
 
     def _prev(self, quote, price_eur):
         from tarzan.engine.metrics import MetricsEngine
         return MetricsEngine._prev_close_eur(quote, price_eur)
 
-    def test_eur_listing_takes_the_close_verbatim(self):
-        # EXUS.MI: EUR quote, so no conversion and no ratio noise even though
-        # the valuation (40.82) and the quote price (40.815) differ slightly.
-        assert self._prev({"currency": "EUR", "price": 40.815, "prev_close": 40.81},
-                          40.82) == 40.81
+    def test_eur_listing_reproduces_the_quote_move(self):
+        # EXUS.MI: valuation 40.82, quote 40.815/40.81. The stamped 1D
+        # (valuation / prev_eur) must equal the quote's own move.
+        prev_eur = self._prev({"price": 40.815, "prev_close": 40.81}, 40.82)
+        assert round(40.82 / prev_eur - 1, 8) == round(40.815 / 40.81 - 1, 8)
 
     def test_non_eur_listing_converts_and_the_fx_cancels(self):
-        # US Treasury quoted in USD: native 98.60 vs prev 98.38, a +0.2236%
-        # session. The EUR valuation is native x 0.86 FX. The converted EUR
-        # baseline must reproduce exactly that native move.
+        # US Treasury in USD: native 98.60 vs prev 98.38. The EUR valuation is
+        # native x 0.86 FX; the converted baseline reproduces the native move.
         native_now, native_prev, fx = 98.60, 98.38, 0.86
         price_eur = native_now * fx
-        prev_eur = self._prev(
-            {"currency": "USD", "price": native_now, "prev_close": native_prev},
-            price_eur)
-        one_day = (price_eur / prev_eur - 1) * 100
-        assert round(one_day, 6) == round((native_now / native_prev - 1) * 100, 6)
+        prev_eur = self._prev({"price": native_now, "prev_close": native_prev}, price_eur)
+        assert round(price_eur / prev_eur - 1, 6) == round(native_now / native_prev - 1, 6)
+
+    def test_a_scale_mismatch_does_not_fabricate_a_jump(self):
+        # NTSG.MI: history ran at ~29.9, the quote pair at ~25.5 (a split in one
+        # feed only). Pairing 29.9 against a raw 25.8 gave +16%; scaling makes
+        # the 1D the quote's real -1.12% move instead.
+        prev_eur = self._prev({"price": 25.515, "prev_close": 25.805}, 29.9)
+        assert round(29.9 / prev_eur - 1, 6) == round(25.515 / 25.805 - 1, 6)
 
     def test_a_bond_without_a_quote_keeps_the_feed(self):
         # No Yahoo quote (the EIB ZAR bond is priced via Borsa/synthetic):
         # None tells the caller to leave the feed's own close in place.
         assert self._prev({}, 100.0) is None
-        assert self._prev({"price": 100.0, "prev_close": 99.0}, 100.0) is None  # no currency
+        assert self._prev({"prev_close": 99.0}, 100.0) is None  # no price
 
 
 class TestOneDayIsTheQuotePair:

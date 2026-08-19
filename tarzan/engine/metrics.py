@@ -1219,12 +1219,12 @@ class MetricsEngine:
         * the current session's point is the policy-selected EUR price — the
           same one behind NAV, so the chart ends where the masthead says the
           portfolio is;
-        * the previous session's close is the published ``prev_close``,
-          converted to EUR through the instrument's own valuation-vs-native FX
-          for a non-EUR venue and taken as-is for a EUR one (see
-          ``_prev_close_eur``). This repairs a vendor gap (every Milan ETF came
-          back with a null close for 17 Aug 2026, leaving the 1D to measure two
-          sessions) for every listing, EUR or not. Instruments Yahoo does not
+        * the previous session's close is the published ``prev_close``, scaled
+          onto the valuation's own ruler (see ``_prev_close_eur``) — the same
+          currency and the same price scale, so FX and any split/venue mismatch
+          between the two feeds drop out. This repairs a vendor gap (every Milan
+          ETF came back with a null close for 17 Aug 2026, leaving the 1D to
+          measure two sessions) for every listing. Instruments Yahoo does not
           quote at all (bonds via Borsa Italiana / synthetic order prices) keep
           the feed's close.
 
@@ -1275,27 +1275,26 @@ class MetricsEngine:
 
     @staticmethod
     def _prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:
-        """The published previous close, in the price series' EUR currency.
+        """The published previous close, on the SAME ruler as the valuation
+        being stamped as today's point.
 
-        ``price_eur`` is the holding's own EUR valuation and ``quote["price"]``
-        the same instrument's native quote, so their ratio is the EUR-per-native
-        FX. Converting ``prev_close`` by it makes the 1D equal the venue's own
-        published move (the FX cancels: EUR_now/EUR_prev == native_now/native_prev),
-        for a Milan ETF and a US Treasury alike. A EUR listing takes the close
-        as-is — no ratio noise from the valuation and quote being sampled a
-        moment apart. Returns None when the quote is absent (bonds Yahoo does not
-        quote) or its currency is unknown, so the caller keeps the feed's close.
+        Scale it by this instrument's own valuation-vs-native ratio
+        (``price_eur / quote_price``): ~1 for a EUR listing, the FX for a
+        USD/ZAR one, so the 1D equals the venue's own published move
+        (EUR_now/EUR_prev == native_now/native_prev). Crucially the ratio also
+        absorbs a scale mismatch between the two feeds: NTSG.MI's history ran at
+        ~29.9 while its quote pair sat at ~25.5 (a split reflected in one feed
+        and not the other), and pairing 29.9 (today) with a raw 25.8 prev_close
+        printed a +16% one-day move. Scaling keeps both points on one ruler.
+
+        Returns None when the quote carries no price or previous close (bonds
+        Yahoo does not quote) so the caller keeps the feed's own close.
         """
         prev_close = quote.get("prev_close")
         native_price = quote.get("price")
-        currency = quote.get("currency")
-        if not prev_close:
+        if not prev_close or not native_price:
             return None
-        if currency == "EUR":
-            return float(prev_close)
-        if native_price and currency:
-            return float(prev_close) * (float(price_eur) / float(native_price))
-        return None
+        return float(prev_close) * (float(price_eur) / float(native_price))
 
     def _live_1d(self, ctx: dict) -> None:
         """Resolve each run's intraday feed once and project broker-style 1D.
