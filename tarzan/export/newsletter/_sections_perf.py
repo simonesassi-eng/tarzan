@@ -325,8 +325,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         base = m.invested_value if (m.invested_value or 0) > 0 else m.total_value
         p = float(live_1d) / 100.0
         eur_1d = (base - base / (1.0 + p)) if (1.0 + p) else None
-        tot[1] = (eur_1d, float(live_1d))
-        unr[1] = (eur_1d, float(live_1d))
+        tot["1d"] = (eur_1d, float(live_1d))
+        unr["1d"] = (eur_1d, float(live_1d))
 
     bt = f"1px solid {P['border']}"
 
