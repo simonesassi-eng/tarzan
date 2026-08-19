@@ -1059,12 +1059,6 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
                         fields[key] = float(value)
                 except (TypeError, ValueError):
                     continue
-            # The quote's own listing currency, so a consumer converting the
-            # pair to EUR knows whether it must (a USD/ZAR venue) or not (EUR),
-            # rather than guessing from the numbers.
-            currency = q.get("currency")
-            if currency:
-                fields["currency"] = str(currency).upper()
             if fields:
                 out[sym] = fields
         missing = [s for s in symbols if s not in out]
