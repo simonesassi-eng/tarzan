@@ -1219,12 +1219,14 @@ class MetricsEngine:
         * the current session's point is the policy-selected EUR price — the
           same one behind NAV, so the chart ends where the masthead says the
           portfolio is;
-        * the previous session's close is the published ``prev_close`` when the
-          listing quotes in EUR, which also repairs a vendor gap (every Milan
-          ETF came back with a null close for 17 Aug 2026, leaving the 1D to
-          measure two sessions). Non-EUR listings keep the feed's own close:
-          converting a native quote here would need an FX rate this computer
-          has no authority over.
+        * the previous session's close is the published ``prev_close``,
+          converted to EUR through the instrument's own valuation-vs-native FX
+          for a non-EUR venue and taken as-is for a EUR one (see
+          ``_prev_close_eur``). This repairs a vendor gap (every Milan ETF came
+          back with a null close for 17 Aug 2026, leaving the 1D to measure two
+          sessions) for every listing, EUR or not. Instruments Yahoo does not
+          quote at all (bonds via Borsa Italiana / synthetic order prices) keep
+          the feed's close.
 
         Pinned runs (``--as_of`` / ``--deterministic``) stamp nothing: their
         valuation IS the historical close already in the series, and no live
@@ -1259,22 +1261,41 @@ class MetricsEngine:
             series = series.copy()
             stamp = today.tz_localize(series.index.tz) if series.index.tz else today
             quote = quotes.get(holding.ticker) or {}
-            prev_close = quote.get("prev_close")
-            native_price = quote.get("price")
-            # EUR-listed only: the pair is already in the series' currency, so
-            # the published close can replace the feed's without a conversion.
-            # abs(1 - price/native) is the FX factor; ~0 means EUR quoting.
-            if (prev_close and native_price
-                    and abs(1.0 - float(price) / float(native_price)) < 0.01):
+            prev_eur = self._prev_close_eur(quote, price)
+            if prev_eur is not None:
                 previous = series.index[series.index < stamp]
                 if len(previous):
-                    series.loc[previous[-1]] = float(prev_close)
+                    series.loc[previous[-1]] = prev_eur
             series.loc[stamp] = float(price)
             holding.price_history = series.sort_index()
             stamped.append(holding.ticker)
         if stamped:
             logger.info("Stamped the current valuation onto %d price series", len(stamped))
         ctx["current_price_stamped"] = tuple(stamped)
+
+    @staticmethod
+    def _prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:
+        """The published previous close, in the price series' EUR currency.
+
+        ``price_eur`` is the holding's own EUR valuation and ``quote["price"]``
+        the same instrument's native quote, so their ratio is the EUR-per-native
+        FX. Converting ``prev_close`` by it makes the 1D equal the venue's own
+        published move (the FX cancels: EUR_now/EUR_prev == native_now/native_prev),
+        for a Milan ETF and a US Treasury alike. A EUR listing takes the close
+        as-is — no ratio noise from the valuation and quote being sampled a
+        moment apart. Returns None when the quote is absent (bonds Yahoo does not
+        quote) or its currency is unknown, so the caller keeps the feed's close.
+        """
+        prev_close = quote.get("prev_close")
+        native_price = quote.get("price")
+        currency = quote.get("currency")
+        if not prev_close:
+            return None
+        if currency == "EUR":
+            return float(prev_close)
+        if native_price and currency:
+            return float(prev_close) * (float(price_eur) / float(native_price))
+        return None
 
     def _live_1d(self, ctx: dict) -> None:
         """Resolve each run's intraday feed once and project broker-style 1D.
