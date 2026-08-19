@@ -111,6 +111,72 @@ class TestTrailingWindowAnchor:
         assert compute_period_return(s, "5y") is None
 
 
+class TestWindowMatrixOneDayRow:
+    """The 1D row and the STATE Session tile must be the same number.
+
+    Both are "today's move", but they were reading different sources: the tile
+    takes ``performance["1d"]`` (the value-weighted quote move) while the row
+    took the close-based window off the daily feed, which mid-session lags the
+    quote endpoint. The live override existed — it just wrote to ``tot[1]``,
+    an integer key left behind when the buckets were renamed to strings, so
+    nothing read it and the row kept the close-based figure. On 19 Aug 2026 the
+    tile read +€11 while the row read -€2.8k.
+    """
+
+    def _matrix(self, monkeypatch, live_1d):
+        import datetime
+        import re
+
+        from tarzan.export.newsletter._constants import _NewsletterContext
+        from tarzan.export.newsletter._sections_perf import _build_performance30
+        from tarzan.models.investor_config import InvestorConfig
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2026, 8, 19))
+        idx = pd.date_range("2026-06-20", "2026-08-19", freq="D")
+        values = []
+        for day in idx:
+            value = 100_000.0
+            if day >= pd.Timestamp("2026-08-18"):
+                value = 96_000.0          # yesterday dropped 4%
+            if day == pd.Timestamp("2026-08-19"):
+                value = 96_010.0          # today is flat: +€10
+            values.append(value)
+        actual = pd.Series(values, index=idx)
+        pnl = actual - 90_000.0
+        metrics = PortfolioMetrics(
+            total_value=96_010.0, invested_value=96_010.0, cash_value=0.0,
+            holdings_df=pd.DataFrame([{"cost_basis_eur": 90_000.0, "ticker": "AAA",
+                                       "weight_pct": 100.0}]))
+        metrics.actual_value_series = actual
+        metrics.pnl_series = pnl
+        metrics.unrealized_series = pnl
+        metrics.portfolio_history = pd.Series([v / 1000 for v in values], index=idx)
+        metrics.pnl_eur, metrics.pnl_pct, metrics.twror_pct = 6_010.0, 6.7, 6.5
+        metrics.performance_full = {"1d": live_1d}
+
+        html = _build_performance30(_NewsletterContext(
+            metrics=metrics, config=InvestorConfig()))["matrix_html"]
+        rows = re.findall(r">(1D|5D|1M)<.*?</tr>", html, flags=re.S)
+        cells = {}
+        for label in rows:
+            block = re.search(rf">{label}<.*?</tr>", html, flags=re.S).group(0)
+            cells[label] = re.findall(r">([+\-−]?€?[\d.,k]+%?)<", block)
+        return cells
+
+    def test_the_one_day_row_carries_the_live_move(self, monkeypatch):
+        cells = self._matrix(monkeypatch, live_1d=0.5)
+        joined = " ".join(cells["1D"])
+        assert "+0.50%" in joined, joined
+        # €478 = 96,010 · 0.005/1.005 — the same de-compounding the tile uses,
+        # not the -€4k the close-based window would bill for yesterday.
+        assert "€478" in joined, joined
+
+    def test_the_five_day_row_stays_close_based(self, monkeypatch):
+        cells = self._matrix(monkeypatch, live_1d=0.5)
+        assert "−3.99%" in " ".join(cells["5D"])
+
+
 class TestOneDayIsTheQuotePair:
     def _intraday(self, values, day, start, tz="Europe/Rome", freq="15min"):
         idx = pd.date_range(f"{day} {start}", periods=len(values), freq=freq, tz=tz)
