@@ -102,6 +102,28 @@ def test_refresh_start_is_tail_before_last_date():
     assert start == last - timedelta(days=price_cache.REFRESH_TAIL_DAYS)
 
 
+# ── covers_period: backfill a cache that does not span the window ────────────
+
+def test_covers_period_true_when_span_reaches_window():
+    cached = _history("2020-01-01", 2000)  # ~5.5y
+    assert price_cache.covers_period(cached, "5y") is True
+
+
+def test_covers_period_false_for_a_young_series():
+    # SC2X.MI shape: a fund cached from only a few weeks ago cannot span 5y,
+    # so its head must be backfilled by a full fetch, not a tail refresh.
+    cached = _history("2026-08-07", 8)
+    assert price_cache.covers_period(cached, "5y") is False
+
+
+def test_covers_period_false_when_head_is_missing():
+    # 2 years cached against a 5y window: the early 3 years are absent, so the
+    # since-inception / long-window anchor would be wrong — pull the full period.
+    cached = _history("2024-08-01", 730)
+    assert price_cache.covers_period(cached, "5y") is False
+    assert price_cache.covers_period(cached, "2y") is True
+
+
 # ── Resolution cache (with TTL + self-heal) ─────────────────────────────────
 
 def test_resolution_roundtrip():

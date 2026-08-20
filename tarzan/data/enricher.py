@@ -1479,6 +1479,12 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
 
     cached = price_cache.load_history(symbol)
     start = price_cache.refresh_start(cached)
+    # A tail refresh can only extend the END; if the cache does not yet span the
+    # full backtest window its HEAD may be missing (an instrument cached after
+    # its inception), so pull the whole period to backfill it. merge_history
+    # then keeps the union. Guards the young-fund YTD/since-inception anchor.
+    if start is not None and not price_cache.covers_period(cached, _backtest_period()):
+        start = None
 
     def _call():
         _space_yf_call()
