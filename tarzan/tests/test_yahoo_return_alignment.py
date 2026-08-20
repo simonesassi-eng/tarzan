@@ -215,6 +215,39 @@ class TestPrevCloseEUR:
         assert self._prev({"prev_close": 99.0}, 100.0) is None  # no price
 
 
+class TestPickQuoteSanityGate:
+    """_current_prices picks the quote whose level matches the instrument, the
+    same sibling-aware resolution the intraday feed uses — so a corrupt canonical
+    quote is skipped for a clean sibling instead of poisoning the baseline."""
+
+    def _pick(self, symbols, quotes, ref):
+        from tarzan.engine.metrics import MetricsEngine
+        return MetricsEngine._pick_quote(symbols, quotes, ref)
+
+    def test_clean_canonical_is_used(self):
+        q = self._pick(["EXUS.MI", "EXUS.DE"],
+                       {"EXUS.MI": {"price": 40.3, "prev_close": 40.8}}, 40.31)
+        assert q.get("prev_close") == 40.8
+
+    def test_corrupt_canonical_falls_through_to_the_sibling(self):
+        # NTSG.MI on 20 Aug 2026: quote 25.5 against a ~29.4 valuation → rejected;
+        # the .DE sibling at 29.35 is within tolerance and supplies the close.
+        q = self._pick(
+            ["NTSG.MI", "NTSG.DE"],
+            {"NTSG.MI": {"price": 25.515, "prev_close": 25.805},
+             "NTSG.DE": {"price": 29.35, "prev_close": 29.45}},
+            29.7)
+        assert q.get("prev_close") == 29.45
+
+    def test_all_off_scale_returns_empty(self):
+        # Nothing agrees with the valuation → {}, so the caller keeps the feed.
+        q = self._pick(["X.MI", "X.DE"],
+                       {"X.MI": {"price": 10.0, "prev_close": 10.0},
+                        "X.DE": {"price": 200.0, "prev_close": 200.0}},
+                       29.7)
+        assert q == {}
+
+
 class TestOneDayIsTheQuotePair:
     def _intraday(self, values, day, start, tz="Europe/Rome", freq="15min"):
         idx = pd.date_range(f"{day} {start}", periods=len(values), freq=freq, tz=tz)

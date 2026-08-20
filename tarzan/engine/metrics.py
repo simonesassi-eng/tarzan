@@ -1248,19 +1248,25 @@ class MetricsEngine:
         if not selected:
             return
 
-        from tarzan.data.market_quotes import official_quotes
+        from tarzan.data.market_quotes import official_quotes, _sibling_symbols
 
         today = pd.Timestamp(runtime.today())
-        quotes = official_quotes(list(selected))
+        # Resolve the quote the same way the intraday feed does: the canonical
+        # listing PLUS its sibling venues. A ``.MI`` quote can be corrupt while
+        # the fund's ``.DE`` line is clean (NTSG.MI returned 25.5 against a real
+        # ~29.4 on 20 Aug 2026), so we fetch all of them and let the sanity gate
+        # in _pick_quote choose the one whose level matches this instrument.
+        candidates = {tk: [tk, *_sibling_symbols(tk)] for tk in selected}
+        quotes = official_quotes(sorted({s for c in candidates.values() for s in c}))
         stamped: list[str] = []
         for holding in self.holdings:
             series = getattr(holding, "price_history", None)
             price = selected.get(holding.ticker)
-            if series is None or len(series) == 0 or not price:
+            if series is None or len(series.dropna()) == 0 or not price:
                 continue
             series = series.copy()
             stamp = today.tz_localize(series.index.tz) if series.index.tz else today
-            quote = quotes.get(holding.ticker) or {}
+            quote = self._pick_quote(candidates.get(holding.ticker, []), quotes, price)
             prev_eur = self._prev_close_eur(quote, price)
             if prev_eur is not None:
                 previous = series.index[series.index < stamp]
@@ -1272,6 +1278,28 @@ class MetricsEngine:
         if stamped:
             logger.info("Stamped the current valuation onto %d price series", len(stamped))
         ctx["current_price_stamped"] = tuple(stamped)
+
+    @staticmethod
+    def _pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
+        """The first candidate quote whose price agrees with ``reference_price``
+        (the instrument's own EUR valuation) within the sibling tolerance.
+
+        This is the sanity gate that rejects a corrupt feed: NTSG.MI's quote
+        priced the fund at 25.5 while its valuation and its .DE sibling sat at
+        ~29.4, so the canonical is skipped and the clean sibling supplies the
+        previous close instead. Returns {} when nothing agrees, so the caller
+        keeps the feed's own close rather than stamp from bad data.
+        """
+        from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
+
+        for symbol in symbols:
+            quote = quotes.get(symbol) or {}
+            native = quote.get("price")
+            if not native:
+                continue
+            if abs(float(native) / float(reference_price) - 1.0) <= _SIBLING_PRICE_TOLERANCE:
+                return quote
+        return {}
 
     @staticmethod
     def _prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:
