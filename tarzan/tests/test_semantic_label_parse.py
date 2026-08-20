@@ -153,3 +153,56 @@ def test_renderer_dropping_a_performance_ticker_is_still_caught():
     errors = validate_newsletter_semantics(
         _M(hp, pd.DataFrame([{"ticker": "AVEM.DE"}]), requested, quotes), audit, "")
     assert _mismatch_errors(errors), "the gate went blind to a dropped ticker"
+
+
+# ── Benchmark availability degrades; only critical benchmarks block ──────────
+# A single tracked index (X25E) with no history under Yahoo throttling used to
+# block the whole digest and cost three sends. Only the geo/alpha-beta
+# reference the "vs market" chart is drawn against is required now.
+
+class _Bench:
+    """Minimal metrics whose only contract is the benchmark universe."""
+    degraded_computers = ()
+    benchmark_comparison = None
+    holding_performance = None
+    historical_risk = {}
+    ticker_resolutions = ()
+
+    def __init__(self, selected, resolution_errors):
+        from tarzan import config as cfg
+        self.benchmark_tickers = selected
+        self.benchmark_resolution_errors = resolution_errors
+        defs = cfg.benchmarks()
+        histories = {}
+        for name, ticker in selected.items():
+            s = pd.Series([1.0, 2.0], index=pd.DatetimeIndex(["2026-07-01", "2026-07-02"]))
+            s.name = ticker
+            s.attrs["resolved_ticker"] = ticker
+            s.attrs["requested_ticker"] = defs.get(name, ticker)
+            histories[name] = s
+        self.benchmark_histories = histories
+
+
+def _critical_name():
+    from tarzan import config as cfg
+    return cfg.benchmark_geo_allocation()
+
+
+def test_unavailable_tracked_benchmark_does_not_block():
+    crit = _critical_name()
+    from tarzan import config as cfg
+    selected = {crit: cfg.benchmarks()[crit]}  # only the critical one resolved
+    errors = validate_newsletter_semantics(
+        _Bench(selected, ("Xtrackers II Eurozone Government Bond 25+: no usable history for X25E",)),
+        {}, "")
+    joined = " | ".join(errors)
+    assert "X25E" not in joined, joined
+    assert "did not resolve" not in joined, joined
+    assert "catalog" not in joined, joined
+
+
+def test_unresolved_critical_benchmark_blocks():
+    errors = validate_newsletter_semantics(
+        _Bench({}, ("iShares MSCI ACWI: no usable history for ISAC",)), {}, "")
+    joined = " | ".join(errors)
+    assert "critical benchmark(s) did not resolve" in joined, joined
