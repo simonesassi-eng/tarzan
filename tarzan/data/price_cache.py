@@ -353,6 +353,40 @@ def refresh_start(cached: Optional[pd.DataFrame]) -> Optional[datetime]:
     return last.to_pydatetime() - timedelta(days=REFRESH_TAIL_DAYS)
 
 
+def _period_to_days(period: str) -> int:
+    """yfinance period string → its length in calendar days. 'max'/unknown map
+    to 5y, so we neither refetch forever nor demand more than we report on."""
+    text = str(period or "").strip().lower()
+    if text.endswith("y") and text[:-1].isdigit():
+        return int(text[:-1]) * 365
+    if text.endswith("mo") and text[:-2].isdigit():
+        return int(text[:-2]) * 30
+    if text.endswith("d") and text[:-1].isdigit():
+        return int(text[:-1])
+    return 5 * 365
+
+
+def covers_period(cached: Optional[pd.DataFrame], period: str,
+                  slack_days: int = 10) -> bool:
+    """Whether ``cached`` already spans the full backtest ``period``.
+
+    A False here tells the fetcher to pull the whole period rather than just a
+    tail: the incremental refresh only ever extends the END of the series, so a
+    cache first written after an instrument's inception (SC2X.DE was cached from
+    7 Aug though it launched 28 Jul) keeps a permanently missing HEAD, and its
+    since-inception / YTD anchor lands on the wrong first close. Re-pulling the
+    whole period backfills it, then merge_history keeps the union.
+
+    An instrument genuinely younger than the period never spans it, so it is
+    re-pulled every run — cheap (its whole life is a few hundred rows) and
+    self-correcting. Mature, fully-cached series span it and take the tail path.
+    """
+    if cached is None or cached.empty or len(cached) < 2:
+        return False
+    span_days = (cached.index.max() - cached.index.min()).days
+    return span_days + slack_days >= _period_to_days(period)
+
+
 # ---------------------------------------------------------------------------
 # ISIN → resolved symbol
 # ---------------------------------------------------------------------------
