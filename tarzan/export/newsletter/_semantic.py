@@ -8,9 +8,12 @@ before any durable delivery claim or SMTP invocation.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections.abc import Mapping
+
+logger = logging.getLogger("tarzan.newsletter")
 
 
 # The sign is OPTIONAL. ``_pct(..., signed=True)`` deliberately omits it when
@@ -107,22 +110,48 @@ def validate_newsletter_semantics(
     definitions = {_text(name): _text(ticker) for name, ticker in cfg.benchmarks().items()}
     expected_names = set(definitions)
     selected_names = set(selected)
-    if resolution_errors:
+
+    # Only the benchmarks the portfolio is actually MEASURED against — the geo
+    # and alpha/beta references drawn in the "vs market" chart — are required.
+    # The other ~50 configured names are tracked for reference; a transient
+    # Yahoo outage on one of them (X25E returned no history on 20 Aug 2026 under
+    # runner throttling) must drop that one row, NOT block the whole digest —
+    # three sends were lost to exactly this. Availability degrades; identity is
+    # still fully enforced below on whatever DID resolve.
+    critical = {_text(cfg.benchmark_geo_allocation()), _text(cfg.benchmark_beta_name())}
+    critical.discard("")
+    unresolved = expected_names - selected_names
+    missing_critical = sorted(unresolved & critical)
+    if missing_critical:
         errors.append(
-            "benchmark preprocessing did not resolve the complete universe: "
-            + "; ".join(resolution_errors)
+            f"critical benchmark(s) did not resolve: {missing_critical!r}"
+        )
+    dropped = sorted(unresolved - critical)
+    if dropped:
+        logger.warning(
+            "Benchmark(s) unavailable this run, dropped from the digest (not a "
+            "delivery blocker): %s",
+            dropped,
+        )
+    extra = sorted(selected_names - expected_names)
+    if extra:
+        errors.append(
+            f"benchmark ticker catalog has unexpected entries: extra={extra!r}"
+        )
+    # A resolution error blocks only when it concerns a CRITICAL benchmark.
+    critical_resolution_errors = [
+        error for error in resolution_errors
+        if any(name and name in error for name in critical)
+    ]
+    if critical_resolution_errors:
+        errors.append(
+            "critical benchmark preprocessing did not resolve: "
+            + "; ".join(critical_resolution_errors)
         )
     if "_preprocess_benchmarks" in degraded:
         errors.append("benchmark preprocessing computer failed")
     if "_live_1d" in degraded:
         errors.append("intraday preprocessing source validation failed")
-    if selected_names != expected_names:
-        missing = sorted(expected_names - selected_names)
-        extra = sorted(selected_names - expected_names)
-        errors.append(
-            f"benchmark ticker catalog differs from configuration "
-            f"(missing={missing!r}, extra={extra!r})"
-        )
     for name, ticker in selected.items():
         if not ticker:
             errors.append(f"benchmark {name} has an empty provider ticker")
