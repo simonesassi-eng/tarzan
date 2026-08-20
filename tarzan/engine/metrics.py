@@ -1248,6 +1248,8 @@ class MetricsEngine:
         if not selected:
             return
 
+        from dataclasses import replace
+
         from tarzan.data.market_quotes import official_quotes, _sibling_symbols
 
         today = pd.Timestamp(runtime.today())
@@ -1256,28 +1258,68 @@ class MetricsEngine:
         # the fund's ``.DE`` line is clean (NTSG.MI returned 25.5 against a real
         # ~29.4 on 20 Aug 2026), so we fetch all of them and let the sanity gate
         # in _pick_quote choose the one whose level matches this instrument.
-        candidates = {tk: [tk, *_sibling_symbols(tk)] for tk in selected}
+        catalog = ctx.get("_benchmark_catalog") or {}
+        tickers = set(selected) | {r.ticker for r in catalog.values() if r.ticker}
+        candidates = {tk: [tk, *_sibling_symbols(tk)] for tk in tickers}
         quotes = official_quotes(sorted({s for c in candidates.values() for s in c}))
+
         stamped: list[str] = []
+        # Held positions: the current point is the policy valuation (the NAV
+        # number), so the chart ends where the masthead says the portfolio is.
         for holding in self.holdings:
             series = getattr(holding, "price_history", None)
             price = selected.get(holding.ticker)
             if series is None or len(series.dropna()) == 0 or not price:
                 continue
-            series = series.copy()
-            stamp = today.tz_localize(series.index.tz) if series.index.tz else today
             quote = self._pick_quote(candidates.get(holding.ticker, []), quotes, price)
-            prev_eur = self._prev_close_eur(quote, price)
-            if prev_eur is not None:
-                previous = series.index[series.index < stamp]
-                if len(previous):
-                    series.loc[previous[-1]] = prev_eur
-            series.loc[stamp] = float(price)
-            holding.price_history = series.sort_index()
+            holding.price_history = self._stamp_today(series, today, float(price), quote)
             stamped.append(holding.ticker)
+
+        # Tracked benchmarks are not "held", so they have no valuation to stamp;
+        # their current point is the clean quote's own price. Without this a
+        # benchmark whose daily feed lags (NTSG.MI / NTSZ.MI on Milan) shows a
+        # blank 1D in the watchlist table, since _current_prices used to touch
+        # only held series — the exact held-vs-watchlist gap behind "molti 1D
+        # non popolati". The sanity gate keeps a foreign-currency quote off an
+        # EUR series (its native level fails the tolerance), so nothing is
+        # corrupted; such a benchmark simply keeps its feed close.
+        for name, record in list(catalog.items()):
+            series = record.history
+            usable = None if series is None else series.dropna()
+            if usable is None or len(usable) == 0:
+                continue
+            quote = self._pick_quote(
+                candidates.get(record.ticker, []), quotes, float(usable.iloc[-1]))
+            price = quote.get("price")
+            if not price:
+                continue
+            ctx["_benchmark_catalog"][name] = replace(
+                record, history=self._stamp_today(series, today, float(price), quote))
+            stamped.append(record.ticker)
+
         if stamped:
-            logger.info("Stamped the current valuation onto %d price series", len(stamped))
+            logger.info("Stamped a current point onto %d price series", len(stamped))
         ctx["current_price_stamped"] = tuple(stamped)
+
+    def _stamp_today(self, series, today, today_value: float, quote: dict):
+        """Return ``series`` with today's point set to ``today_value`` and the
+        prior session's close reconciled onto the same ruler via ``quote``.
+
+        Preserves the series' ``name`` and ``attrs`` (the benchmark identity the
+        semantic gate checks), and appends today after the last close so no
+        re-sort is needed."""
+        out = series.copy()
+        stamp = today.tz_localize(series.index.tz) if series.index.tz else today
+        prev_eur = self._prev_close_eur(quote, today_value)
+        if prev_eur is not None:
+            previous = out.index[out.index < stamp]
+            if len(previous):
+                out.loc[previous[-1]] = prev_eur
+        out.loc[stamp] = float(today_value)
+        out = out.sort_index()
+        out.name = series.name
+        out.attrs = dict(getattr(series, "attrs", {}) or {})
+        return out
 
     @staticmethod
     def _pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
