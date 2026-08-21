@@ -1213,39 +1213,30 @@ class MetricsEngine:
         whenever the daily feed's snapshot lagged the quote's (the 19 Aug 2026
         digest showed a flat +€11 Session tile beside a chart that dropped).
 
-        This makes the valuation the series' terminal point, so there is one
-        number and everything downstream derives from it:
+        This stamps ONE market-consistent current point onto the series, so
+        there is one number and everything downstream derives from it:
 
-        * the current session's point is the policy-selected EUR price — the
-          same one behind NAV, so the chart ends where the masthead says the
-          portfolio is;
+        * the current session's point is the clean market QUOTE, validated
+          against the series' OWN last real close — NOT the policy valuation.
+          The valuation can fall back to an order price when the daily feed
+          lags (MONEY.MI ran on real ~10.18 closes while its valuation dropped
+          to the 10.09 order price), and stamping that put a 10.09 endpoint
+          against a 10.18 anchor — a spurious -0.92% 5D. Anchoring the stamp to
+          the series' own scale keeps every window market-consistent;
         * the previous session's close is the published ``prev_close``, scaled
-          onto the valuation's own ruler (see ``_prev_close_eur``) — the same
-          currency and the same price scale, so FX and any split/venue mismatch
-          between the two feeds drop out. This repairs a vendor gap (every Milan
-          ETF came back with a null close for 17 Aug 2026, leaving the 1D to
-          measure two sessions) for every listing. Instruments Yahoo does not
-          quote at all (bonds via Borsa Italiana / synthetic order prices) keep
-          the feed's close.
+          onto that same ruler (see ``_prev_close_eur``), so FX and any
+          split/venue mismatch between the two feeds drop out. This repairs a
+          vendor gap (every Milan ETF came back with a null close for 17 Aug
+          2026, leaving the 1D to measure two sessions) for every listing.
 
-        Pinned runs (``--as_of`` / ``--deterministic``) stamp nothing: their
-        valuation IS the historical close already in the series, and no live
-        observation may enter a reproducible run.
+        The sanity gate (``_pick_quote``) rejects a corrupt or foreign-currency
+        quote whose level does not match the series, so that instrument simply
+        keeps its feed close. Pinned runs (``--as_of`` / ``--deterministic``)
+        stamp nothing: no live observation may enter a reproducible run.
         """
         from tarzan import runtime
 
         if not runtime.allows_live_transport():
-            return
-        assessment = self.valuation_assessment
-        if assessment is None:
-            return
-
-        selected = {
-            holding.ticker: holding.current_price
-            for holding in self._current_valuation_holdings()
-            if holding.ticker and holding.current_price
-        }
-        if not selected:
             return
 
         from dataclasses import replace
@@ -1259,30 +1250,40 @@ class MetricsEngine:
         # ~29.4 on 20 Aug 2026), so we fetch all of them and let the sanity gate
         # in _pick_quote choose the one whose level matches this instrument.
         catalog = ctx.get("_benchmark_catalog") or {}
-        tickers = set(selected) | {r.ticker for r in catalog.values() if r.ticker}
+        tickers = ({str(h.ticker) for h in self.holdings if h.ticker}
+                   | {r.ticker for r in catalog.values() if r.ticker})
+        if not tickers:
+            return
         candidates = {tk: [tk, *_sibling_symbols(tk)] for tk in tickers}
         quotes = official_quotes(sorted({s for c in candidates.values() for s in c}))
 
         stamped: list[str] = []
-        # Held positions: the current point is the policy valuation (the NAV
-        # number), so the chart ends where the masthead says the portfolio is.
+        # ONE rule for held and tracked alike: today's point is the clean market
+        # quote, validated against the series' OWN last real close — never the
+        # valuation. The valuation can fall back to an order price when the
+        # daily feed lags (MONEY.MI's series ran on real closes ~10.18 while its
+        # valuation dropped to the 10.09 order price, so a valuation stamp put a
+        # 10.09 endpoint against a 10.18 anchor and printed a spurious -0.92% 5D
+        # — the same scale mismatch NTSG's corrupt quote caused). Anchoring the
+        # stamp to the series' own scale keeps every window market-consistent.
+        # The sanity gate rejects a corrupt or foreign-currency quote (its level
+        # fails the tolerance), so that instrument simply keeps its feed close.
+        def _series_of(holding):
+            return getattr(holding, "price_history", None)
+
         for holding in self.holdings:
-            series = getattr(holding, "price_history", None)
-            price = selected.get(holding.ticker)
-            if series is None or len(series.dropna()) == 0 or not price:
+            series = _series_of(holding)
+            usable = None if series is None else series.dropna()
+            if usable is None or len(usable) == 0:
                 continue
-            quote = self._pick_quote(candidates.get(holding.ticker, []), quotes, price)
+            quote = self._pick_quote(
+                candidates.get(holding.ticker, []), quotes, float(usable.iloc[-1]))
+            price = quote.get("price")
+            if not price:
+                continue
             holding.price_history = self._stamp_today(series, today, float(price), quote)
             stamped.append(holding.ticker)
 
-        # Tracked benchmarks are not "held", so they have no valuation to stamp;
-        # their current point is the clean quote's own price. Without this a
-        # benchmark whose daily feed lags (NTSG.MI / NTSZ.MI on Milan) shows a
-        # blank 1D in the watchlist table, since _current_prices used to touch
-        # only held series — the exact held-vs-watchlist gap behind "molti 1D
-        # non popolati". The sanity gate keeps a foreign-currency quote off an
-        # EUR series (its native level fails the tolerance), so nothing is
-        # corrupted; such a benchmark simply keeps its feed close.
         for name, record in list(catalog.items()):
             series = record.history
             usable = None if series is None else series.dropna()
