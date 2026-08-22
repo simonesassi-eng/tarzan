@@ -81,6 +81,17 @@ def _window_end(series_end):
         from tarzan import runtime
 
         today = pd.Timestamp(runtime.today())
+        # A window ends on the last SESSION, not the calendar day. On a weekend
+        # (or holiday) 'today' never traded, so measuring back from it slides
+        # every cutoff a day or two past the last close: on Sat 22 Aug 2026 it
+        # put MSCI ACWI's 1M anchor on the 22 Jul dip and read +1.7% where
+        # Yahoo, measuring from Friday's close, showed +0.57%. Roll back to the
+        # last business day so a weekend run measures the same window Yahoo
+        # does; on a trading day this is a no-op, so a lagging single feed still
+        # measures from today via the max() below.
+        # ponytail: business days only, holidays not modelled — same ceiling as
+        # window_anchor's BDay cutoff; an exchange calendar would be exact.
+        today = pd.tseries.offsets.BDay().rollback(today.normalize())
     except Exception:  # noqa: BLE001 — a clock must never break a return
         return series_end
     tz = getattr(series_end, "tzinfo", None)

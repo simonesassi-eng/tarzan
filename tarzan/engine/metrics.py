@@ -1239,11 +1239,21 @@ class MetricsEngine:
         if not runtime.allows_live_transport():
             return
 
+        today = pd.Timestamp(runtime.today())
+        # A weekend/holiday run has no live session to stamp: the last real
+        # close IS the current value (Yahoo shows exactly that on its
+        # closed-market quote). Stamping a non-trading "today" both trusts a
+        # throttled weekend quote and appends a weekend-dated point that slides
+        # window_anchor onto the day a month before the WEEKEND rather than the
+        # last session — reading MSCI ACWI 1M at +1.7% where Yahoo, measuring
+        # from Friday's 106.47 close, showed +0.57% on 23 Aug 2026.
+        # ponytail: weekends only, holidays not modelled (see stats._window_end).
+        if today.weekday() >= 5:
+            return
+
         from dataclasses import replace
 
         from tarzan.data.market_quotes import official_quotes, _sibling_symbols
-
-        today = pd.Timestamp(runtime.today())
         # Resolve the quote the same way the intraday feed does: the canonical
         # listing PLUS its sibling venues. A ``.MI`` quote can be corrupt while
         # the fund's ``.DE`` line is clean (NTSG.MI returned 25.5 against a real

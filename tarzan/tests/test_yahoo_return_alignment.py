@@ -342,3 +342,26 @@ class TestBenchmarkWeekendContamination:
         )
         out = _drop_weekends(s)
         assert list(out.index.strftime("%Y-%m-%d")) == ["2026-08-14"]
+
+
+class TestWeekendWindowEnd:
+    """A window run on a weekend must measure from the last SESSION, not the
+    calendar day. On Sun 29 Jun 2025 the golden's 1D was blank (anchor == last
+    close) and every window ran a day long; rolling 'today' back to the last
+    business day makes a weekend run measure exactly what Yahoo shows from
+    Friday's close."""
+
+    def test_window_end_rolls_a_weekend_today_back_to_friday(self, monkeypatch):
+        import tarzan.runtime as rt
+        from tarzan.engine.stats import _window_end
+        # Sunday 2026-08-23; the series' last real close is Friday 2026-08-21.
+        monkeypatch.setattr(rt, "today", lambda: __import__("datetime").date(2026, 8, 23))
+        series_end = pd.Timestamp("2026-08-21")
+        assert _window_end(series_end) == pd.Timestamp("2026-08-21")  # Friday, not Sunday
+
+    def test_window_end_is_a_noop_on_a_trading_day(self, monkeypatch):
+        import tarzan.runtime as rt
+        from tarzan.engine.stats import _window_end
+        # Friday 2026-08-21; a lagging feed ends Wednesday — still measure from today.
+        monkeypatch.setattr(rt, "today", lambda: __import__("datetime").date(2026, 8, 21))
+        assert _window_end(pd.Timestamp("2026-08-19")) == pd.Timestamp("2026-08-21")
