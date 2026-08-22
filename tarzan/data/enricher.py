@@ -315,6 +315,30 @@ def _as_fraction(value) -> Optional[float]:
     return v / 100.0 if v >= 1.0 else v
 
 
+# Exchanges that quote exclusively in EUR. A listing on one of these is EUR by
+# definition, so a flaky ``info.currency`` (Yahoo intermittently returns USD or
+# None for a Milan line under load) must never trigger an FX conversion of an
+# already-EUR series — that corrupted the MSCI ACWI (ISAC.MI) benchmark to
+# +1.7% against a real +0.08% on 22 Aug 2026. ``.L`` (GBP/USD), ``.SW`` (CHF)
+# and suffixless US tickers are deliberately absent: their currency is genuinely
+# ambiguous from the suffix and must be read from the provider.
+_EUR_VENUE_SUFFIXES = (
+    ".MI", ".SG", ".ETLX", ".DE", ".F", ".PA", ".MU", ".AS",
+    ".VI", ".BR", ".LS", ".MC", ".HE", ".IR",
+)
+
+
+def venue_currency(symbol: str) -> Optional[str]:
+    """The currency a venue quotes in when the suffix makes it unambiguous
+    (EUR for a Eurozone exchange), else None so the caller reads the provider's
+    reported currency. Authoritative over ``info.currency`` for EUR venues."""
+    text = (symbol or "").upper()
+    for suffix in _EUR_VENUE_SUFFIXES:
+        if text.endswith(suffix):
+            return "EUR"
+    return None
+
+
 def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
     """Convert prices to EUR using only contemporaneous-or-earlier FX rows.
 
@@ -2800,7 +2824,10 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
 
         # Price history and current price. Selection records the actual close
         # observation and whether the chosen value came from non-primary data.
-        currency = info.get("currency", holding.currency or "EUR")
+        # A EUR venue is EUR regardless of a flaky info.currency (see
+        # venue_currency), so an EUR-native listing is never FX-converted.
+        currency = (venue_currency(selected_ticker)
+                    or info.get("currency", holding.currency or "EUR"))
         _set_price_data(holding, history, info, currency)
         if selected_ticker:
             if holding.price_history is not None and len(holding.price_history) > 0:

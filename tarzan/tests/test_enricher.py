@@ -82,6 +82,48 @@ class TestNormalizeMinorCurrency:
         assert rescaled.iloc[0] == 42.0
 
 
+class TestVenueCurrency:
+    """A EUR-quoting venue is EUR by definition, so a flaky ``info.currency``
+    cannot trigger an FX conversion of an already-EUR listing — the bug that
+    corrupted MSCI ACWI (ISAC.MI) to +1.7% against a real +0.08%."""
+
+    def test_eur_venues_are_eur(self):
+        from tarzan.data.enricher import venue_currency
+        for sym in ("ISAC.MI", "NTSG.DE", "XESC.PA", "IS39.MU", "AGGH.MI"):
+            assert venue_currency(sym) == "EUR", sym
+
+    def test_ambiguous_or_foreign_venues_defer_to_provider(self):
+        from tarzan.data.enricher import venue_currency
+        for sym in ("ISAC.L", "NTSX", "ISAC.SW", ""):
+            assert venue_currency(sym) is None, sym
+
+    def test_benchmark_eur_venue_not_converted_despite_bad_info_currency(self, monkeypatch):
+        """The exact ISAC.MI failure: Yahoo returns info.currency='USD' for a
+        Milan (EUR) line under load. The benchmark series must stay EUR, not be
+        FX-converted (which corrupted it to +1.7%)."""
+        import tarzan.data.enricher as enricher
+        from tarzan.engine import benchmarks
+
+        idx = pd.to_datetime(["2026-07-22", "2026-08-20"])
+        raw = pd.DataFrame({"Close": [106.02, 106.10]}, index=idx)
+        enricher._benchmark_memo.clear()
+        monkeypatch.setattr(
+            enricher, "_fetch_ticker_data",
+            lambda ticker, expected_name="": {
+                "info": {"currency": "USD"},          # flaky/wrong under load
+                "history": raw,
+                enricher._TICKER_SYMBOL_KEY: "ISAC.MI",
+            })
+
+        def _boom(*a, **k):
+            raise AssertionError("EUR venue must not be FX-converted")
+
+        monkeypatch.setattr(enricher, "convert_to_eur", _boom)
+        series = benchmarks._fetch_benchmark_history("ISAC").dropna()
+        # Untouched EUR closes → the real +0.08% 1M, not a converted figure.
+        assert round((float(series.iloc[-1]) / float(series.iloc[0]) - 1) * 100, 2) == 0.08
+
+
 class TestConvertToEurFxFailure:
     """A total FX failure must NOT value a non-EUR holding 1:1 as EUR."""
 

@@ -94,9 +94,11 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         series = pd.Series(dtype=float)
     else:
         prices = history["Close"]
-        # A missing currency is not evidence of USD; leave an already-EUR
-        # series untouched rather than applying a speculative FX conversion.
-        currency = data.get("info", {}).get("currency")
+        # A EUR venue is EUR by definition, so a flaky info.currency cannot
+        # trigger a spurious FX conversion of an already-EUR benchmark (this
+        # corrupted MSCI ACWI / ISAC.MI). A missing currency is likewise not
+        # evidence of USD; only a positively non-EUR currency converts.
+        currency = _enr.venue_currency(selected_ticker) or data.get("info", {}).get("currency")
         series = (
             _enr.convert_to_eur(prices, currency)
             if currency and currency != "EUR"
