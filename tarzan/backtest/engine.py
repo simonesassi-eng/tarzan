@@ -26,8 +26,8 @@ from tarzan.engine import synthetic as syn
 from tarzan.engine.stats import TRADING_DAYS
 
 from tarzan.backtest.loader import (
-    build_symbol_map, curated_factor_loadings, enrich_universe, load_portfolios,
-    portfolio_items,
+    build_symbol_map, curated_em_factor_loadings, curated_factor_loadings,
+    enrich_universe, load_portfolios, portfolio_items,
 )
 from tarzan.backtest.model import (
     CASH, COMM, CRYPTO, EQ, FI, GOLD, ALT, Portfolio, WhatIfItem,
@@ -121,7 +121,7 @@ def _real_daily_returns(holding) -> Optional[pd.Series]:
 def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
                            backfill: str = "naive",
                            rebalance: str = "quarterly",
-                           factors=None) -> pd.Series:
+                           factors=None, em_factors=None) -> pd.Series:
     """Portfolio long-history daily returns from PER-INSTRUMENT spliced series.
 
     Each instrument gets a long base (its composition replicated on index
@@ -140,14 +140,26 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
             base = base - (instrument_ter(it) / 100.0) / TRADING_DAYS
         real = _real_daily_returns(it.holding)
         eq_dominant = (it.comp_notional.get(EQ, 0.0) >= 50.0)
-        if backfill == "factor" and eq_dominant and is_factor_fund(it):
+        curated_avail = curated_factor_loadings().get(it.bare.upper())
+        curated_em = curated_em_factor_loadings().get(it.bare.upper())
+        # A curated loading entry IS an explicit "this is a factor fund" flag, so
+        # honour it even when the keyword sniff (is_factor_fund) misses the name
+        # (e.g. "Avantis Global Equity" carries no value/quality keyword).
+        if backfill == "factor" and eq_dominant and curated_em is not None:
+            # EMERGING-markets factor fund: regress on the EM legs (monthly) if it
+            # has enough real history, else drive the pre-inception tail with the
+            # curated EM tilt. The Developed legs are the wrong regressors here.
+            loads = syn.factor_loadings(base, real, em_factors) if em_factors is not None else {}
+            _FACTOR_TILT[it.bare] = ({**loads, "_em": True} if loads
+                                     else {**curated_em, "_curated": True, "_em": True})
+            spliced = syn.factor_splice_monthly(base, real, em_factors,
+                                                loadings=(loads or curated_em))
+        elif backfill == "factor" and eq_dominant and (is_factor_fund(it) or curated_avail):
             loads = syn.factor_loadings(base, real, factors)
-            curated = None
-            if not loads:
-                # Too little real history to regress (e.g. a just-launched
-                # Avantis small-value ETF) → drive the pre-inception tail with
-                # the fund's curated target tilt on the real FF factor legs.
-                curated = curated_factor_loadings().get(it.bare.upper())
+            # Too little real history to regress (e.g. a just-launched Avantis
+            # fund) → drive the pre-inception tail with the fund's curated target
+            # tilt on the real FF factor legs.
+            curated = None if loads else curated_avail
             if loads:
                 _FACTOR_TILT[it.bare] = loads
             elif curated:
@@ -181,6 +193,7 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
             needed |= set(instrument_exposures(it))
 
     factors = proxy_data.factor_daily() if backfill == "factor" else None
+    em_factors = proxy_data.em_factor_monthly() if backfill == "factor" else None
 
     default_ccy = proxy_data._TARGET_CCY or "EUR"
     currencies = [c for c in ("EUR", "USD") if c != default_ccy] + [default_ccy]
@@ -192,7 +205,8 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
         proxies, fin = proxy_data.proxy_returns_for(needed)
 
         synth = {p.name: syn.returns_to_price(
-                    portfolio_long_returns(p, proxies, fin, backfill, rebalance, factors))
+                    portfolio_long_returns(p, proxies, fin, backfill, rebalance,
+                                           factors, em_factors))
                  for p in portfolios}
 
         navs = [n for n in synth.values() if n is not None and not n.empty]
@@ -262,11 +276,13 @@ def simulation_rows(portfolios) -> list[dict]:
         if tilt:
             is_curated = tilt.get("_curated", False)
             shown = {k: v for k, v in tilt.items()
-                     if k != "_curated" and abs(v) >= 0.05}
+                     if not k.startswith("_") and abs(v) >= 0.05}
             if shown:
                 legs = ", ".join(f"{k}{v:+.2f}"
                                  for k, v in sorted(shown.items(), key=lambda kv: -abs(kv[1])))
-                label = "curated factor tilt" if is_curated else "factor tilt"
+                is_em = tilt.get("_em", False)
+                base_lbl = "EM factor tilt" if is_em else "factor tilt"
+                label = f"curated {base_lbl}" if is_curated else base_lbl
                 base += f"  + {label} ⟨{legs}⟩"
         rows.append({"ticker": bare, "real_from": real_from,
                      "base_from": base_from, "base": base})

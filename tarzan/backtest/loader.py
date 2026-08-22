@@ -43,11 +43,21 @@ ROOT = Path(__file__).resolve().parents[2]
 # funds (AVEM) are intentionally absent — Developed factors are the wrong
 # regressors for EM.
 CURATED_FACTOR_LOADINGS: dict[str, dict[str, float]] = {
+    # Avantis (integrated value + profitability + size)
     "AVWS": {"SMB": 0.80, "HML": 0.35, "RMW": 0.25},   # global dev small-cap value
     "AVWC": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # global dev all-cap value
     "AVUS": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # US all-cap value
     "AVEU": {"SMB": 0.15, "HML": 0.25, "RMW": 0.25},   # Europe all-cap value
     "AVPE": {"SMB": 0.20, "HML": 0.25, "RMW": 0.25},   # Pacific all-cap value
+    # Dimensional (same integrated multi-factor school; Core = milder tilt,
+    # Targeted Value = strong small/mid value). Estimates from DFA methodology.
+    "DEGC": {"SMB": 0.20, "HML": 0.20, "RMW": 0.20},   # global dev all-cap core
+    "DEGT": {"SMB": 0.50, "HML": 0.45, "RMW": 0.20},   # global dev small/mid targeted value
+    "DDUM": {"SMB": 0.15, "HML": 0.20, "RMW": 0.20},   # US total-market core
+    "DDXM": {"SMB": 0.20, "HML": 0.20, "RMW": 0.15},   # ex-US core incl EM (EM leg approx: dev factors)
+    # AVEM (100% EM value+profitability) intentionally absent: the Developed FF
+    # legs are the wrong regressors for emerging markets, so a curated tilt on
+    # them would misstate it. AVEM stays modelled as broad EM (no factor tilt).
 }
 
 
@@ -55,6 +65,26 @@ def curated_factor_loadings() -> dict[str, dict]:
     """Curated FF-Developed factor loadings keyed by bare ticker (see
     :data:`CURATED_FACTOR_LOADINGS`)."""
     return CURATED_FACTOR_LOADINGS
+
+
+# Curated Fama-French EMERGING-markets factor loadings for EM factor ETFs. These
+# are regressed against the EM research legs (:func:`proxy_data.em_factor_monthly`),
+# NOT the Developed legs — an EM fund's tilt only shows up cleanly on EM factors.
+# Values estimate each strategy's TARGET EM exposure from Avantis/DFA methodology
+# and published RR-community regressions of the US-listed sibling AVES (Avantis
+# Emerging Markets Equity): a real but milder-and-noisier value+profitability
+# tilt than the developed funds. MOM omitted (Avantis screens momentum-neutral).
+# A fund with enough real history keeps its own EM-regressed loadings; this table
+# is only the short-history fallback.
+CURATED_EM_FACTOR_LOADINGS: dict[str, dict[str, float]] = {
+    "AVEM": {"SMB": 0.15, "HML": 0.30, "RMW": 0.25},   # Avantis EM value+profitability
+}
+
+
+def curated_em_factor_loadings() -> dict[str, dict]:
+    """Curated FF-Emerging factor loadings keyed by bare ticker (see
+    :data:`CURATED_EM_FACTOR_LOADINGS`)."""
+    return CURATED_EM_FACTOR_LOADINGS
 
 
 def is_isin(s: str) -> bool:

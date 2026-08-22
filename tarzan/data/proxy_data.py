@@ -421,6 +421,48 @@ _FF_CACHE_KEY = "FF_DEV_FACTORS_DAILY"
 _FF_BUNDLED = Path(__file__).resolve().parent / "ff_developed_factors.csv.gz"
 _FF_BUNDLED_CACHE: Optional[pd.DataFrame] = None
 
+# EMERGING-markets factor set. Ken French publishes the EM research factors only
+# MONTHLY (no daily), from 1991-07 (RMW-complete). The Developed legs are the
+# WRONG regressors for an EM fund, so EM factor ETFs (e.g. Avantis AVEM) get
+# their tilt from THESE legs instead — reconstructed at monthly resolution and
+# spread over each month's trading days (see synthetic.factor_splice_monthly).
+_FF_EM5_URL = ("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+               "Emerging_5_Factors_CSV.zip")
+_FF_EM_CACHE_KEY = "FF_EM_FACTORS_MONTHLY"
+_FF_EM_BUNDLED = Path(__file__).resolve().parent / "ff_emerging_factors.csv.gz"
+_FF_EM_BUNDLED_CACHE: Optional[pd.DataFrame] = None
+
+# Vendored Bloomberg Commodity Index (BCOM) daily LEVELS, 1991+. BCOM is an
+# EXCESS-return index (^BCOM); the broad-commodity total-return proxy adds T-bill
+# collateral on top. Shipped with the script so the commodity sleeve reconstructs
+# to 1991 offline — the live ^BCOM feed is flaky (why broad commodities failed to
+# backfill before). Same self-contained pattern as the FF factor bundle.
+_BCOM_BUNDLED = Path(__file__).resolve().parent / "bcom_commodity.csv.gz"
+_BCOM_BUNDLED_CACHE: Optional[pd.Series] = None
+
+
+def _bcom_bundled() -> Optional[pd.Series]:
+    """Vendored BCOM daily index levels (read once)."""
+    global _BCOM_BUNDLED_CACHE
+    if _BCOM_BUNDLED_CACHE is None:
+        if not _BCOM_BUNDLED.exists():
+            return None
+        df = pd.read_csv(_BCOM_BUNDLED, index_col="date", parse_dates=True)
+        df.index = df.index.normalize()
+        _BCOM_BUNDLED_CACHE = df["level"].sort_index()
+    return _BCOM_BUNDLED_CACHE
+
+
+def _bcom_returns(fin: Optional[pd.Series]) -> pd.Series:
+    """Broad-commodity TOTAL return from the vendored BCOM excess-return index
+    (1991+) plus T-bill collateral. Self-contained/offline and pinned-run safe
+    (clipped to as_of). Empty only if the bundle is missing."""
+    lvl = _clip_cached_to_as_of(_bcom_bundled())
+    if lvl is None or lvl.empty:
+        return pd.Series(dtype=float)
+    r = lvl.pct_change().dropna()
+    return _apply_collateral(r, fin)            # excess → total return
+
 
 def _ff_bundled() -> Optional[pd.DataFrame]:
     """The vendored Developed-factor series (already fractions), read once."""
@@ -530,6 +572,92 @@ def factor_daily() -> Optional[pd.DataFrame]:
     return cached
 
 
+def _ff_em_bundled() -> Optional[pd.DataFrame]:
+    """The vendored Emerging-markets factor series (monthly, already fractions)."""
+    global _FF_EM_BUNDLED_CACHE
+    if _FF_EM_BUNDLED_CACHE is None:
+        if not _FF_EM_BUNDLED.exists():
+            return None
+        df = pd.read_csv(_FF_EM_BUNDLED, index_col="date", parse_dates=True)
+        df.index = df.index.normalize()
+        _FF_EM_BUNDLED_CACHE = df.sort_index()
+    return _FF_EM_BUNDLED_CACHE
+
+
+def _ff_download_monthly(url: str, colnames: list[str]) -> Optional[pd.DataFrame]:
+    """Download and parse one Ken French MONTHLY-factor CSV archive (YYYYMM
+    dated rows), stamping each row at its month-end. Missing values (French's
+    -99.99/-999 codes) become NaN. Fail-closed outside live mode."""
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
+    import io
+    import re
+    import urllib.request
+    import zipfile
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    raw = urllib.request.urlopen(req, timeout=40).read()
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    text = z.read(z.namelist()[0]).decode("latin-1")
+    idx, rows = [], []
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if not parts or not re.fullmatch(r"\d{6}", parts[0] or ""):
+            continue
+        vals = parts[1:1 + len(colnames)]
+        try:
+            fv = [float(v) for v in vals]
+        except ValueError:
+            continue
+        if len(fv) == len(colnames):
+            idx.append(pd.Period(parts[0], freq="M").to_timestamp("M"))
+            rows.append(fv)
+    if not idx:
+        return None
+    df = pd.DataFrame(rows, index=pd.DatetimeIndex(idx), columns=colnames)
+    return df.replace(-99.99, float("nan")).replace(-999.0, float("nan"))
+
+
+def em_factor_monthly() -> Optional[pd.DataFrame]:
+    """Monthly EMERGING-markets factor-leg returns as FRACTIONS: ``SMB`` (size),
+    ``HML`` (value), ``RMW`` (profitability) plus ``MKT``/``RF`` controls, from
+    the Ken French Emerging Markets 5-factor set (monthly-only; RMW-complete from
+    1991-07). These are the correct regressors for an EM factor ETF; the Developed
+    legs are not. Vendored snapshot (offline-reproducible); a live fetch, when
+    allowed and stale, only EXTENDS it with newer month-ends. None if the bundle
+    is missing and nothing is cached."""
+    bundled = _ff_em_bundled()
+    cached = _ff_merge(bundled, price_cache.load_history(_FF_EM_CACHE_KEY))
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return _clip_cached_to_as_of(cached)
+    if cached is not None and not cached.empty:
+        last = pd.Timestamp(cached.index.max())
+        # Monthly series: only refetch when more than a couple of months stale.
+        if (pd.Timestamp.now().normalize() - last).days <= max(_STALE_DAYS, 45):
+            return cached
+    try:
+        em = _ff_download_monthly(_FF_EM5_URL,
+                                  ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"])
+        if em is None or em.empty:
+            return cached
+        df = em[["SMB", "HML", "RMW"]].copy()
+        df["MKT"] = em["Mkt-RF"]
+        df["RF"] = em["RF"]
+        df = (df / 100.0).sort_index()
+        df.index = df.index.normalize()
+        df = df[~df.index.duplicated(keep="last")].dropna(subset=["SMB", "HML", "RMW"])
+        df = _ff_merge(bundled, df)
+        if df is not None and not df.empty:
+            price_cache.store_history(_FF_EM_CACHE_KEY, df)
+            return df
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Ken French EM factor fetch failed: %s", e)
+    return cached
+
+
 def _apply_collateral(excess_ret: pd.Series, fin: Optional[pd.Series]) -> pd.Series:
     """Turn an EXCESS-return series (e.g. ^BCOM) into TOTAL return by adding the
     T-bill collateral yield: (1+r_tr) = (1+r_excess)·(1+r_cash)."""
@@ -550,13 +678,16 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
     ccy = "" if _TARGET_CCY == "USD" else " → EUR"
     out: dict[str, pd.Series] = {}
     for k in keys:
-        if k in EQUITY_GEO_PROXY or k in ASSET_PROXY:
+        if k == "Commodities":
+            # Broad commodities from the VENDORED BCOM excess-return index + T-bill
+            # collateral — robust to 1991 offline, unlike the flaky live ^BCOM feed.
+            r = _bcom_returns(fin)
+            if not r.empty:
+                USED_PROXY[k] = (f"BCOM 1991+ vendored+coll{ccy}", r.index.min())
+            out[k] = _usd_returns_to_eur(r)
+        elif k in EQUITY_GEO_PROXY or k in ASSET_PROXY:
             candidates = EQUITY_GEO_PROXY.get(k) or ASSET_PROXY.get(k)
             r, sym = _resolve_bucket(candidates)
-            # ^BCOM is an EXCESS-return index → add T-bill collateral for total
-            # return (DBC and the funds are already total-return via auto_adjust).
-            if k == "Commodities" and sym == "^BCOM":
-                r = _apply_collateral(r, fin)
             if sym is not None and not r.empty:
                 USED_PROXY[k] = (f"{sym}{ccy}", r.index.min())
             out[k] = _usd_returns_to_eur(r)
