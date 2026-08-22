@@ -11,8 +11,10 @@ Colors come from the shared taxonomy in ``tarzan.export._format``.
 
 from __future__ import annotations
 
+import csv
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -92,6 +94,45 @@ def _dev_color(delta, tol):
 # ---------------------------------------------------------------------------
 # Building blocks
 # ---------------------------------------------------------------------------
+
+_NOTES_PATH = Path(__file__).resolve().parents[2] / "input" / "portfolio_notes.csv"
+
+
+def _load_portfolio_notes() -> dict[str, str]:
+    """Optional per-portfolio lineage notes (name → description) from
+    input/portfolio_notes.csv. Missing file → {} (section is skipped)."""
+    if not _NOTES_PATH.exists():
+        return {}
+    try:
+        with _NOTES_PATH.open(encoding="utf-8") as f:
+            return {r["portfolio_name"].strip(): (r.get("description") or "").strip()
+                    for r in csv.DictReader(f) if r.get("portfolio_name")}
+    except (OSError, csv.Error, KeyError):
+        return {}
+
+
+def _lineage_block(ws, row, portfolios, ncol):
+    """Render 'How we got here' — one row per portfolio with its lineage note
+    (from input/portfolio_notes.csv), so the reader can tell the candidates
+    apart. Skipped entirely when no notes file is present."""
+    notes = _load_portfolio_notes()
+    have = [(p.name, notes.get(p.name, "")) for p in portfolios]
+    if not any(desc for _, desc in have):
+        return row
+    row = _section_header(ws, row, "How we got here — portfolio lineage", ncol)
+    for k, (name, desc) in enumerate(have):
+        bg = _C["alt"] if k % 2 else _C["white"]
+        a = ws.cell(row=row, column=1, value=name)
+        a.font = _font(9, bold=True, color=_C["band"]); a.fill = _fill(bg)
+        a.border = _border(); a.alignment = _align("left", "top")
+        b = ws.cell(row=row, column=2, value=desc)
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
+        b.font = _font(9, color=_C["muted"]); b.fill = _fill(bg); b.border = _border()
+        b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        ws.row_dimensions[row].height = 42
+        row += 1
+    return row + 1
+
 
 def _section_header(ws, row, text, span):
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
@@ -321,6 +362,28 @@ def _metrics_block(ws, row, portfolios, attr, ccy_label) -> int:
             c.border = _border()
             c.font = _font(9)
         row += 1
+    # Two derived, money-terms rows over the FULL aligned window: cumulative total
+    # return, and the future value of €100k invested at t0 — the same compounded
+    # CAGR, expressed as growth and as euros.
+    def _growth(p):
+        m = getattr(p, attr, {}) or {}
+        cagr, w = m.get("cagr"), getattr(p, "window", None)
+        if cagr is None or (isinstance(cagr, float) and cagr != cagr) or not w:
+            return None
+        yrs = (w[1] - w[0]).days / 365.25
+        return (1.0 + cagr / 100.0) ** yrs        # final / initial multiple
+    for off, (label, fmt) in enumerate((("Total return (cumulative)", "pct"),
+                                        ("€100k at t0 →", "eur"))):
+        bg = _C["alt"] if (len(_METRIC_ROWS) + off) % 2 else _C["white"]
+        _merge_label(ws, row, label, bold=True, bg=bg)
+        for j, p in enumerate(portfolios):
+            g = _growth(p)
+            txt = ("n/a" if g is None else
+                   f"{(g - 1) * 100:.0f}%" if fmt == "pct" else eur_smart(100_000 * g))
+            c = ws.cell(row=row, column=_PCOL0 + j, value=txt)
+            c.alignment = _align("center"); c.fill = _fill(bg)
+            c.border = _border(); c.font = _font(9)
+        row += 1
     return row
 
 
@@ -376,6 +439,7 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     # leverage-by-class + geography), (3) portfolio risk metrics EUR/USD,
     # (4) robustness sheet, (5) simulation sheet.
     row = 4
+    row = _lineage_block(ws, row, portfolios, ncol)
     row = _instrument_matrix_block(ws, row, portfolios)
 
     # --- Diversification: asset class NOTIONAL exposure (gross, leverage-aware),

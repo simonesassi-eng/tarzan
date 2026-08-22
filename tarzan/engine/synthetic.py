@@ -179,6 +179,55 @@ def factor_splice(long_ret: pd.Series, short_ret: pd.Series, factors: pd.DataFra
     return pd.concat([backfill, short_ret]).sort_index()
 
 
+def factor_splice_monthly(long_ret: pd.Series, short_ret: pd.Series,
+                          monthly_factors: pd.DataFrame, *, load_bound: float = 1.5,
+                          loadings: dict | None = None) -> pd.Series:
+    """Factor-aware backfill for EMERGING-markets factor funds using MONTHLY legs.
+
+    Ken French publishes the EM research factors only monthly (the Developed
+    daily legs are the wrong regressors for an EM fund). The monthly tilt
+    ``Σ loadingᵢ·legᵢ`` is spread GEOMETRICALLY across each month's pre-inception
+    trading days — a constant daily drift ``(1+tiltₘ)^(1/nₘ)−1`` added to the
+    daily EM base — so it compounds to exactly the month's factor contribution
+    while keeping the daily base grid (needed to combine with the rest of the
+    portfolio). Same contract as :func:`factor_splice`: real returns take
+    precedence, only the pre-inception tail is reconstructed, loadings are
+    clipped to ``±load_bound``, and the reconstructed tail omits the regression
+    residual (idiosyncratic vol is a lower bound). Falls back to
+    :func:`calibrated_splice` when legs/loadings are unavailable.
+    """
+    if short_ret is None or short_ret.empty:
+        return long_ret
+    if long_ret is None or long_ret.empty:
+        return short_ret
+    if (monthly_factors is None or getattr(monthly_factors, "empty", True)
+            or not loadings):
+        return calibrated_splice(long_ret, short_ret)
+    start = short_ret.index.min()
+    pre = long_ret.loc[long_ret.index < start]
+    if pre.empty:
+        return splice_returns(long_ret, short_ret)
+    loadings = {k: float(np.clip(v, -load_bound, load_bound))
+                for k, v in loadings.items()}
+    # Monthly tilt series, keyed by calendar month for a fast per-day lookup.
+    mtilt = pd.Series(0.0, index=monthly_factors.index)
+    for c, load in loadings.items():
+        if c in monthly_factors.columns:
+            mtilt = mtilt + load * monthly_factors[c].fillna(0.0)
+    mtilt.index = mtilt.index.to_period("M")
+    mtilt = mtilt[~mtilt.index.duplicated(keep="last")]
+    # Spread each month's tilt across its own pre-inception trading days.
+    daily_tilt = pd.Series(0.0, index=pre.index)
+    for period, day_idx in pre.groupby(pre.index.to_period("M")).groups.items():
+        n = len(day_idx)
+        t = mtilt.get(period, 0.0)
+        if pd.isna(t) or n == 0:
+            continue
+        daily_tilt.loc[day_idx] = (1.0 + t) ** (1.0 / n) - 1.0
+    backfill = pre + daily_tilt
+    return pd.concat([backfill, short_ret]).sort_index()
+
+
 def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
                                 financing_daily=None,
                                 spread_annual: float = 0.0) -> pd.Series:
