@@ -293,3 +293,52 @@ class TestOneDayIsTheQuotePair:
         assert round(selected["pct"], 4) == 0.5
         assert selected["intraday_series"] is None
         assert selected["live"] is False
+
+
+class TestBenchmarkWeekendContamination:
+    """A weekend-dated close in a benchmark series steals the window anchor.
+
+    MSCI ACWI (ISAC.MI) is a weekday-traded ETF, so it can only have real
+    closes Mon–Fri. When ``convert_to_eur`` (which aligns against a ~24/5 FX
+    series) or a weekend "today" stamp injects a Saturday/Sunday row, that row
+    sits nearer the one-month cutoff than the real close and ``window_anchor``
+    picks it — the reported +1.7% against a real +0.08% on 22 Aug 2026.
+    ``_drop_weekends`` removes such rows at the benchmark boundary.
+    """
+
+    def test_interior_weekend_point_steals_1m_anchor(self):
+        from tarzan.engine.benchmarks import _drop_weekends
+
+        # Real weekday closes flat at ~106; a spurious Saturday FX point at
+        # 104.3 lands just after the ~1M cutoff.
+        pairs = [(f"2026-07-{d:02d}", 106.0) for d in (20, 21, 22, 23, 24)]
+        pairs += [(f"2026-08-{d:02d}", 106.1)
+                  for d in (17, 18, 19, 20, 21)]  # Mon–Fri
+        contaminated = _closes(pairs + [("2026-07-25", 104.3)]).sort_index()
+        # 2026-07-25 is a Saturday.
+        assert (contaminated.index.weekday >= 5).sum() == 1
+
+        cleaned = _drop_weekends(contaminated)
+        assert (cleaned.index.weekday >= 5).sum() == 0
+        assert len(cleaned) == len(contaminated) - 1
+
+    def test_drop_weekends_is_a_noop_on_clean_weekday_series(self):
+        from tarzan.engine.benchmarks import _drop_weekends
+
+        clean = _business_series("2026-05-01", "2026-08-21")
+        out = _drop_weekends(clean)
+        assert len(out) == len(clean)
+        assert out.equals(clean)
+
+    def test_tz_aware_friday_close_is_kept(self):
+        # Yahoo stamps Milan daily bars tz-aware; a Friday bar must survive.
+        from tarzan.engine.benchmarks import _drop_weekends
+
+        s = pd.Series(
+            [1.0, 2.0],
+            index=pd.to_datetime(
+                ["2026-08-14T00:00:00+00:00", "2026-08-15T00:00:00+00:00"]
+            ),  # Fri, Sat (UTC)
+        )
+        out = _drop_weekends(s)
+        assert list(out.index.strftime("%Y-%m-%d")) == ["2026-08-14"]
