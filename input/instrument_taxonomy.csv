@@ -14,7 +14,7 @@ WisdomTree Eurozone Efficient Core,NTSZ,IE000OV4XWA3,etf,Equities,Efficient Core
 Vanguard FTSE All-World,VWRL,,etf,Equities,Equity Broad,True,,,62.15,10.12,7.85,6.1,13.78,,,,,,,,Large and mid-cap stocks across developed and emerging markets.,2/21/26
 iShares MSCI ACWI,ISAC,,etf,Equities,Equity Broad,True,True,True,63.85,10.27,7.39,5.05,13.44,,,,,,,,Comprehensive global equity across developed and emerging markets (MSCI ACWI).,6/15/26
 iShares Core MSCI World,SWDA,,etf,Equities,Equity Broad,,,,72.5,0.0,8.5,5.7,13.3,,,,,,,0.0012,Large and mid-cap stocks across 23 developed markets (MSCI World).,6/15/26
-iShares Nasdaq 100 UCITS ETF,CNDX,,etf,Equities,Equity Broad,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,Nasdaq 100 (top 100 non-financial Nasdaq companies) via iShares UCITS ETF (Acc).,7/12/26
+iShares Nasdaq 100 UCITS ETF,SXRV,,etf,Equities,Equity Broad,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,Nasdaq 100 (top 100 non-financial Nasdaq companies) via iShares UCITS ETF (Acc).,7/12/26
 iShares Core S&P 500 UCITS ETF,CSPX,,etf,Equities,Equity Broad,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,S&P 500 (500 leading large-cap US companies) via iShares Core UCITS ETF (Acc).,7/12/26
 Amundi CAC 40 UCITS ETF,CACC,,etf,Equities,Equity Broad,,,,0.0,0.0,100.0,0.0,0.0,,,,,,,,French large-cap (CAC 40) via Amundi UCITS ETF (Acc).,7/12/26
 iShares Core DAX UCITS ETF,EXS1,,etf,Equities,Equity Broad,,,,0.0,0.0,100.0,0.0,0.0,,,,,,,,German blue-chip (DAX 40) via iShares Core UCITS ETF (Acc).,7/12/26
@@ -35,8 +35,8 @@ Avantis Europe Equity,AVEU,IE000SDFJUU0,etf,Equities,Equity Factor,True,,,0.0,0.
 Avantis Emerging Markets Equity,AVEM,IE000K975W13,etf,Equities,Equity Factor,True,,,0.0,100.0,0.0,0.0,0.0,,,,,,,0.0033,Emerging markets all-cap with value and profitability tilt (vs MSCI Emerging Markets IMI).,7/3/26
 Dimensional Global Core Equity,DEGC,IE000EGGFVG6,etf,Equities,Equity Factor,True,,,68.0,0.0,9.0,6.5,16.5,,,,,,,,Developed all-cap integrated size/value/profitability tilt (vs MSCI World).,7/3/26
 Dimensional Global Targeted Value,DEGT,IE000S67ID55,etf,Equities,Equity Factor,True,,,59.0,0.0,9.5,12.0,19.5,,,,,,,,Developed small/mid value with profitability tilt (vs MSCI World SMID).,7/3/26
-Dimensional Global ex US Core Equity Market,DDXM,IE0002YHUWS3,etf,Equities,Equity Factor,True,,,0.0,26.0,21.0,15.0,38.0,,,,,,,,Ex-US core equity market incl emerging (vs MSCI ACWI ex USA IMI).,7/3/26
-Dimensional US Core Equity Market,DDUM,IE000XKK4AV2,etf,Equities,Equity Factor,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,US total market with integrated size/value/profitability tilt (vs Russell 3000).,7/3/26
+Dimensional Global ex US Core Equity Market,DEGB,IE0002YHUWS3,etf,Equities,Equity Factor,True,,,0.0,26.0,21.0,15.0,38.0,,,,,,,,Ex-US core equity market incl emerging (vs MSCI ACWI ex USA IMI).,7/3/26
+Dimensional US Core Equity Market,DEGA,IE000XKK4AV2,etf,Equities,Equity Factor,True,,,100.0,0.0,0.0,0.0,0.0,,,,,,,,US total market with integrated size/value/profitability tilt (vs Russell 3000).,7/3/26
 Avantis Pacific Equity,AVPE,IE000T62NEO6,etf,Equities,Equity Factor,True,,,0.0,0.0,0.0,61.0,39.0,,,,,,,,Developed Pacific all-cap incl. Japan with value and profitability tilt (vs MSCI Pacific IMI).,7/8/26
 Invesco MSCI World Equal Weight,MWEQ,,etf,Equities,Equity Factor,,,,42.07,0.8,16.45,12.88,27.8,,,,,,,,Equal-weighted developed-market global equity.,6/15/26
 iShares Edge MSCI World Minimum Volatility,MVOL,,etf,Equities,Equity Factor,,,,66.64,0.0,8.35,10.24,14.77,,,,,,,,Developed-market stocks with lower volatility characteristics.,6/15/26
