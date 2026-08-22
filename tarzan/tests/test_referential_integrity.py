@@ -41,10 +41,11 @@ class TestTaxonomyCoverage:
         assert not [i for i in dq.issues() if i.source == "taxonomy"]
 
     def test_ticker_only_match_not_flagged(self):
-        # A raw index / ETF present in the taxonomy by ticker (e.g. CSPX.L)
-        # must match on the bare ticker even without an ISIN.
+        # A raw index / ETF present in the taxonomy by ticker (e.g. SXR8, the
+        # EUR line of iShares Core S&P 500) must match on the bare ticker even
+        # without an ISIN.
         dq.reset()
-        _check_taxonomy_coverage([_h("", "CSPX.L", AssetClass.EQUITIES)])
+        _check_taxonomy_coverage([_h("", "SXR8.DE", AssetClass.EQUITIES)])
         assert not [i for i in dq.issues() if i.source == "taxonomy"]
 
     def test_seeded_targets_skipped(self):
