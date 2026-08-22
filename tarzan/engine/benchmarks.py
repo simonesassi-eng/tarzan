@@ -71,6 +71,28 @@ class ResolvedBenchmark:
     history: pd.Series
 
 
+def _drop_weekends(series: pd.Series) -> pd.Series:
+    """Drop weekend-dated rows from a benchmark price series.
+
+    Every Tarzan benchmark is a weekday-traded ETF/index/fund (the crypto
+    target is 0; bitcoin appears only *inside* weekday-listed ETFs like RSSX),
+    so a Saturday/Sunday close is never real — it is an FX-conversion artifact
+    (``convert_to_eur`` aligns against a ~24/5 FX series) or a weekend "today"
+    stamp. Left in, such a point sits between real closes and steals the window
+    anchor: ``window_anchor`` takes the last row on-or-before the cutoff, so a
+    weekend row nearer the cutoff than the real close is picked instead. That
+    drove MSCI ACWI (ISAC.MI) to a reported +1.7% against a real +0.08% on
+    22 Aug 2026. Weekday is read on the tz-collapsed UTC date, matching the
+    rest of the return math (see :func:`normalize_index`).
+    """
+    if series is None or series.empty or not isinstance(series.index, pd.DatetimeIndex):
+        return series
+    idx = series.index
+    if idx.tz is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    return series[idx.weekday < 5]
+
+
 def _fetch_benchmark_history(ticker: str) -> pd.Series:
     """Resolve and fetch one benchmark for preprocessing only.
 
@@ -104,6 +126,7 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
             if currency and currency != "EUR"
             else prices
         )
+        series = _drop_weekends(series)
 
     # The exact provider symbol is part of the series contract.  ``name`` is
     # intentionally the same full symbol so serialized/debug series cannot
