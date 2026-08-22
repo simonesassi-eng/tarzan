@@ -74,6 +74,30 @@ def test_chart_benchmark_matches_period_return_definition():
     )
 
 
+def test_chart_benchmark_window_opens_after_an_edge_dip():
+    # The 30-day window must open on the window_anchor date (last close at or
+    # before the cutoff) measured from the LATEST observation, not on the first
+    # close after a common_end-relative cutoff. MSCI ACWI dipped to 104.7 on
+    # 22 Jul 2026 — exactly the naive cutoff (common_end 21 Aug − 30d) — so the
+    # old first-in-window anchor read +1.2% while the 1M table column, anchored
+    # a day later, read ~0%. The benchmark's live "today" stamp (21→23 Aug)
+    # pushes the cutoff to 24 Jul, past the dip, so the two now agree.
+    b = pd.Series(106.0, index=pd.date_range("2026-06-01", "2026-08-23", freq="D"))
+    b.loc["2026-07-22"] = 104.7  # a one-day dip on the naive cutoff
+    val_idx = pd.date_range("2026-07-01", "2026-08-21", freq="D")  # ends before b
+    m = PortfolioMetrics(total_value=10100.0, invested_value=10100.0, cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 10000.0}]))
+    m.actual_value_series = pd.Series(np.linspace(10000, 10100, len(val_idx)), index=val_idx)
+    m.portfolio_history = pd.Series(np.linspace(100, 101, len(val_idx)), index=val_idx)
+    m.pnl_series = pd.Series(np.linspace(0, 100, len(val_idx)), index=val_idx)
+    m.benchmark_histories = {"ACWI": b}
+
+    chart_acwi = _perf_window(m, 30, "ACWI")["acwi"][-1]
+    # Anchored after the dip: b is flat 106, so ~0% — not the +1.24% that
+    # anchoring on the 104.7 dip (106/104.7 − 1) would print.
+    assert abs(chart_acwi) < 0.3, f"edge dip not skipped: {chart_acwi:.3f}%"
+
+
 def test_full_series_spans_inception_and_downsamples():
     idx = pd.date_range("2024-07-01", "2026-07-01", freq="B")  # 2 years
     m = PortfolioMetrics(total_value=14000.0, invested_value=14000.0, cash_value=0.0,
