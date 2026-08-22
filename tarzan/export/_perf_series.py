@@ -147,6 +147,11 @@ def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | Non
     No observation after ``idx[-1]`` can affect the line.  Returns a percentage
     list aligned to ``idx``, or ``None`` when fewer than two real in-window
     observations exist.
+
+    The window is opened by the caller on the ``window_anchor`` date (the last
+    close on-or-before the trailing cutoff), so ``idx[0]`` is already the same
+    reference every return table column uses — no per-series anchor override is
+    needed here.
     """
     a = _norm_series(araw)
     if a is None:
@@ -225,8 +230,25 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
             # comparable line; retain the portfolio-only window instead.
             acwi_all = None
 
-    cutoff = common_end - pd.Timedelta(days=n_days)
-    val = val_all[(val_all.index >= cutoff) & (val_all.index <= common_end)]
+    # Measure the trailing window back from the latest observation across the
+    # plotted series (the benchmark carries a live "today" stamp, so this is
+    # effectively the run's today whenever the feed is current — the same end
+    # the return tables use — yet stays data-relative so a fixture or a stale
+    # feed still yields a window instead of collapsing). THEN open the window on
+    # the last close AT OR BEFORE the cutoff — the window_anchor rule every
+    # return-table column obeys. Opening it on the first close *after* the
+    # cutoff let a window whose edge landed on a dip (MSCI ACWI, 22 Jul 2026 =
+    # 104.7) overstate the 30-day line to +1.7% while the 1M table column,
+    # anchored a day later, read +0.4%. Anchoring every line on this shared
+    # start keeps the chart's endpoints consistent with the holdings/watchlist
+    # tables and Yahoo.
+    end_ref = val_all.index[-1]
+    if acwi_all is not None:
+        end_ref = max(end_ref, acwi_all.index[-1])
+    cutoff = end_ref - pd.Timedelta(days=n_days)
+    at_or_before = val_all.index[val_all.index <= cutoff]
+    start = at_or_before[-1] if len(at_or_before) else val_all.index[0]
+    val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
     if len(val) < 2:
         return None
     idx = val.index
