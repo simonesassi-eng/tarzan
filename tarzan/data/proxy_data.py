@@ -271,11 +271,21 @@ def _usd_returns_to_eur(usd_ret: pd.Series) -> pd.Series:
 
 
 def _carry_returns(fin: Optional[pd.Series]) -> pd.Series:
-    """Commodity-carry proxy from the cached BNP Enhanced Commodity Carry index
-    (CRRY's benchmark, 2008+). It is an EXCESS-return index, so add T-bill
-    collateral for total return, subtract an approximate fund fee, and convert
-    to the reporting currency. Empty if the manual series is unavailable (the
-    caller then leaves the carry sleeve unmodelled rather than mislabel it)."""
+    """Commodity-carry proxy. PREFER the vendored UEQC index (the actual UBS
+    CMCI Commodity Carry 2.5x strategy, total-return, base 100 from 2001) — the
+    correct benchmark for the UEQC ETF, better than the mismatched BNP x3
+    CRRYSIM. It is a leveraged long/short commodity SPREAD (~currency-neutral,
+    no FX conversion, like the FF legs) and gross of the ETF TER (charged by the
+    engine on the modeled base), so nothing is added/subtracted here beyond
+    splicing cash before its inception. Falls back to the manually-ingested BNP
+    CRRYSIM excess-return index (2008+) when the UEQC bundle is absent. Empty if
+    neither is available (the caller then leaves the carry sleeve unmodelled)."""
+    lvl = _clip_cached_to_as_of(_ueqc_bundled())
+    if lvl is not None and not lvl.empty:
+        r = lvl.pct_change().dropna()
+        if fin is not None and not fin.empty:      # carry = cash before 2001
+            r = pd.concat([fin.loc[fin.index < r.index.min()], r]).sort_index()
+        return r
     lvl = _clip_cached_to_as_of(manual_proxies.get_series("CRRYSIM"))
     if lvl is None or lvl.empty:
         return pd.Series(dtype=float)
@@ -440,6 +450,21 @@ _FF_EM_BUNDLED_CACHE: Optional[pd.DataFrame] = None
 _BCOM_BUNDLED = Path(__file__).resolve().parent / "bcom_commodity.csv.gz"
 _BCOM_BUNDLED_CACHE: Optional[pd.Series] = None
 
+# Vendored UEQC (UBS CMCI Commodity Carry, 2.5x) index — daily TOTAL-return
+# LEVELS, base 100 from 2001-08. The ACTUAL fund's strategy index, so it is the
+# PREFERRED commodity-carry source over the mismatched BNP x3 CRRYSIM proxy.
+# Self-contained/offline. Gross of the ETF TER (the engine charges UEQC's TER on
+# the modeled base), so no fee is subtracted here. Verified against the real
+# UEQC.DE NAV (2021+, EUR, net): total return matches (CAGR ~equal in EUR) and
+# the EUR/USD beta is ~-0.2 (not ~1), so the series is already ~EUR/net-
+# equivalent and is NOT FX-converted (like the FF long-short legs). BUT it
+# correlates only ~0.39 with the real fund and shows ~HALF its volatility (7.3%
+# vs 15.4%): the simulation is too smooth, its Sharpe (~1.4) is a mirage, and
+# carry's real model/tail risk is NOT captured — use for long-run total return
+# only and DISCOUNT the carry weight (target caps it near 5%).
+_UEQC_BUNDLED = Path(__file__).resolve().parent / "ueqc_carry.csv.gz"
+_UEQC_BUNDLED_CACHE: Optional[pd.Series] = None
+
 
 def _bcom_bundled() -> Optional[pd.Series]:
     """Vendored BCOM daily index levels (read once)."""
@@ -451,6 +476,19 @@ def _bcom_bundled() -> Optional[pd.Series]:
         df.index = df.index.normalize()
         _BCOM_BUNDLED_CACHE = df["level"].sort_index()
     return _BCOM_BUNDLED_CACHE
+
+
+def _ueqc_bundled() -> Optional[pd.Series]:
+    """Vendored UEQC (UBS CMCI Commodity Carry 2.5x) daily total-return index
+    levels (read once)."""
+    global _UEQC_BUNDLED_CACHE
+    if _UEQC_BUNDLED_CACHE is None:
+        if not _UEQC_BUNDLED.exists():
+            return None
+        df = pd.read_csv(_UEQC_BUNDLED, index_col="date", parse_dates=True)
+        df.index = df.index.normalize()
+        _UEQC_BUNDLED_CACHE = df["level"].sort_index()
+    return _UEQC_BUNDLED_CACHE
 
 
 def _bcom_returns(fin: Optional[pd.Series]) -> pd.Series:
@@ -699,7 +737,9 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
         elif k == "Carry":
             out[k] = _carry_returns(fin)
             if not out[k].empty:
-                USED_PROXY[k] = (f"BNPIF73P carry 2008+/cash{ccy}", out[k].index.min())
+                src = ("UEQC 2.5x carry 2001+/cash" if _ueqc_bundled() is not None
+                       else f"BNPIF73P carry 2008+/cash{ccy}")
+                USED_PROXY[k] = (src, out[k].index.min())
         elif k in CASH_KEYS:
             out[k] = _usd_returns_to_eur(fin) if fin is not None else pd.Series(dtype=float)
             if fin is not None and not fin.empty:
