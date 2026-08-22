@@ -230,24 +230,32 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
             # comparable line; retain the portfolio-only window instead.
             acwi_all = None
 
-    # Measure the trailing window back from the latest observation across the
-    # plotted series (the benchmark carries a live "today" stamp, so this is
-    # effectively the run's today whenever the feed is current — the same end
-    # the return tables use — yet stays data-relative so a fixture or a stale
-    # feed still yields a window instead of collapsing). THEN open the window on
-    # the last close AT OR BEFORE the cutoff — the window_anchor rule every
-    # return-table column obeys. Opening it on the first close *after* the
-    # cutoff let a window whose edge landed on a dip (MSCI ACWI, 22 Jul 2026 =
-    # 104.7) overstate the 30-day line to +1.7% while the 1M table column,
-    # anchored a day later, read +0.4%. Anchoring every line on this shared
-    # start keeps the chart's endpoints consistent with the holdings/watchlist
-    # tables and Yahoo.
-    end_ref = val_all.index[-1]
-    if acwi_all is not None:
-        end_ref = max(end_ref, acwi_all.index[-1])
-    cutoff = end_ref - pd.Timedelta(days=n_days)
-    at_or_before = val_all.index[val_all.index <= cutoff]
-    start = at_or_before[-1] if len(at_or_before) else val_all.index[0]
+    # Open the window on the SAME observation the 1M return-table column anchors
+    # on — window_anchor, which already rolls a weekend "today" back to the last
+    # session — so every plotted line (portfolio + benchmark) shares the tables'
+    # anchor and the chart's endpoints equal the table returns. A raw
+    # n-calendar-day slice instead opened on whatever close fell n days back,
+    # which on 21 Aug 2026 was the 22 Jul MSCI ACWI dip (104.7) and read +1.7%
+    # while the 1M column, anchored a day earlier, read +0.57%. The benchmark is
+    # the reference the digest is scrutinised against (vs Yahoo), so its anchor
+    # governs the shared window; the portfolio falls back when none resolves.
+    # ``n_days`` still bounds the span for the label/axis (~one month).
+    from tarzan.engine.stats import window_anchor
+
+    # Resolve the anchor on the RAW (tz-aware) benchmark — the exact series the
+    # return tables call ``compute_period_return`` on — so the chart's ACWI
+    # endpoint equals the 1M column to the basis point, then normalise only the
+    # DATE to the chart's tz-naive calendar for slicing. (Anchoring on the
+    # normalised series instead shifted the pick by the tz/UTC day boundary and
+    # left a ~0.15pp drift from the table.)
+    start = window_anchor(acwi_raw if acwi_all is not None else val_raw, "1m")
+    if start is None:
+        start = val_all.index[-1] - pd.Timedelta(days=n_days)
+    else:
+        start = pd.Timestamp(start)
+        if start.tz is not None:
+            start = start.tz_convert("UTC").tz_localize(None)
+        start = start.normalize()
     val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
     if len(val) < 2:
         return None
