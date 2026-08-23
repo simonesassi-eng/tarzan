@@ -908,6 +908,22 @@ def _resolve_isin(
         except Exception:  # noqa: BLE001 — cache corruption degrades to miss
             cached_symbol = None
 
+    # A cached entry that maps the ISIN to ITSELF is degenerate poison from a
+    # past throttled run: the raw ISIN quotes on no venue and _sibling_symbols
+    # cannot expand it, so it costs the holding its 1D and renders as the ISIN.
+    # ``instrument_taxonomy_has`` recognises the ISIN (its isin cell), so the
+    # compatibility check below would otherwise trust it. When the taxonomy
+    # knows a real ticker, drop it here so resolution re-runs and self-heals via
+    # the taxonomy + v7 quote fallback — every run, since CI restores the
+    # poisoned cache and never re-saves on a same-day cache hit.
+    if (cached_symbol and taxonomy_ticker
+            and cached_symbol.replace("-", "").casefold() == clean_isin.casefold()):
+        logger.info(
+            "Dropping degenerate cached resolution %s→itself for ISIN with "
+            "curated ticker %s; re-resolving.", clean_isin, taxonomy_ticker,
+        )
+        cached_symbol = None
+
     cached_matches_taxonomy = bool(
         cached_symbol
         and taxonomy_ticker
