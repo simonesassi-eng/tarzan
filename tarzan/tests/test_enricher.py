@@ -1202,3 +1202,51 @@ class TestEnrichHoldingsOrderIsInputOrder:
         # The un-enriched holding is still returned, and still third.
         assert [h.ticker for h in result] == [h.ticker for h in holdings]
         assert len(result) == len(holdings)
+
+
+class TestTaxonomyQuoteFallback:
+    """An ISIN the taxonomy knows must never degrade to its raw form when Yahoo
+    throttles every candidate's metadata away. The raw ISIN quotes on no venue
+    and _sibling_symbols cannot expand it, so the holding loses its 1D and shows
+    the ISIN (LU0328475792 / LU0380865021 on CI, 23 Aug 2026). The v7 quote
+    batch is sturdier than quoteSummary/history under load, so resolution
+    confirms a EUR venue through it."""
+
+    def test_falls_back_to_taxonomy_venue_via_quote(self, monkeypatch):
+        from tarzan.data import enricher, price_cache
+        from tarzan.data import market_quotes as mq
+        from tarzan import runtime
+
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        monkeypatch.setattr(price_cache, "load_resolution", lambda i: None)
+        monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda i: "")
+        monkeypatch.setattr(price_cache, "store_resolution", lambda i, s: None)
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: "")
+        monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: [])
+        # Every candidate's metadata is throttled away.
+        monkeypatch.setattr(enricher, "_collect_candidate_metas", lambda ci, hint: [])
+        # The v7 quote batch still answers for the Milan line.
+        monkeypatch.setattr(
+            mq, "official_quotes",
+            lambda syms: {"XSX6.MI": {"price": 170.36, "prev_close": 169.6}})
+        monkeypatch.setattr(
+            enricher, "_fetch_history",
+            lambda s: pd.DataFrame({"Close": [169.0, 170.36]},
+                                   index=pd.to_datetime(["2026-08-20", "2026-08-21"])))
+
+        result = enricher._resolve_isin("LU0328475792")  # taxonomy → XSX6
+        assert result is not None, "must not surrender to the raw ISIN"
+        assert result[1] == "XSX6.MI"
+
+    def test_no_taxonomy_ticker_still_returns_none(self, monkeypatch):
+        from tarzan.data import enricher, price_cache
+        from tarzan import runtime
+
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        monkeypatch.setattr(price_cache, "load_resolution", lambda i: None)
+        monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda i: "")
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: "")
+        monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: [])
+        monkeypatch.setattr(enricher, "_collect_candidate_metas", lambda ci, hint: [])
+        # An ISIN with no taxonomy row: nothing to fall back to.
+        assert enricher._resolve_isin("XX0000000000") is None

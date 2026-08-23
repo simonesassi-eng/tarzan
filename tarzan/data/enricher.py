@@ -800,6 +800,48 @@ def _history_supports_a_return(history: Optional[pd.DataFrame]) -> bool:
     return len(closes) >= 2
 
 
+def _resolve_via_taxonomy_quote(
+    clean_isin: str, taxonomy_ticker: str
+) -> Optional[tuple[dict, str]]:
+    """Last-resort ISIN resolution from curated identity + the v7 quote batch.
+
+    When Yahoo rate-limits hard (CI), every candidate's ``info``/history call
+    can fail, so :func:`_collect_candidate_metas` returns nothing and the ISIN
+    would otherwise keep its raw form as a "ticker" — which no venue quotes and
+    which :func:`_sibling_symbols` cannot expand, so the holding loses its 1D
+    and renders as the bare ISIN (LU0328475792 / LU0380865021 on 23 Aug 2026).
+    The curated taxonomy is offline authority for the bare ticker, and the v7
+    quote endpoint is far more robust than ``quoteSummary``/history under load,
+    so confirm a EUR venue through it and resolve there. History comes from the
+    local cache when present (the returns series survives a throttled live
+    call), and the confirmed venue is cached so it stops re-resolving.
+    """
+    if not taxonomy_ticker or not _is_expandable_bare_ticker(taxonomy_ticker):
+        return None
+    from tarzan.data.market_quotes import official_quotes
+
+    venues = [f"{taxonomy_ticker}{suffix}" for suffix in _EUR_VENUE_SUFFIXES]
+    quotes = official_quotes(venues)
+    for symbol in venues:
+        quote = (quotes or {}).get(symbol) or {}
+        if not _positive_market_quote(quote.get("price")):
+            continue
+        history = _fetch_history(symbol)
+        price_cache.store_resolution(clean_isin, symbol)
+        logger.info(
+            "Resolved ISIN %s → %s via curated taxonomy + v7 quote after "
+            "candidate metadata was unavailable.", clean_isin, symbol,
+        )
+        return _annotate_ticker_data(
+            {"info": {}, "history": history if history is not None else pd.DataFrame()},
+            symbol,
+            "INSTRUMENT_TAXONOMY_QUOTE",
+            "Curated taxonomy identity confirmed by the v7 quote batch when "
+            "candidate metadata was throttled.",
+        ), symbol
+    return None
+
+
 def _resolve_isin(
     isin: str, hint_ticker: str = "", expected_currency: str = ""
 ) -> Optional[tuple[dict, str]]:
@@ -1043,7 +1085,10 @@ def _resolve_isin(
                 break
     candidates = _collect_candidate_metas(clean_isin, resolution_hint)
     if not candidates:
-        return None
+        # Every candidate's metadata was throttled away. Rather than surrender
+        # the curated identity to the raw ISIN (no quote, no siblings, no 1D),
+        # confirm a EUR venue through the sturdier v7 quote batch.
+        return _resolve_via_taxonomy_quote(clean_isin, taxonomy_ticker)
 
     # Rank all candidates deterministically (best first). The alphabetical
     # symbol is the final tiebreak (smaller symbol wins when keys are equal).
