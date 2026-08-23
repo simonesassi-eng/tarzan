@@ -1250,3 +1250,33 @@ class TestTaxonomyQuoteFallback:
         monkeypatch.setattr(enricher, "_collect_candidate_metas", lambda ci, hint: [])
         # An ISIN with no taxonomy row: nothing to fall back to.
         assert enricher._resolve_isin("XX0000000000") is None
+
+    def test_degenerate_isin_self_mapping_is_rejected(self, monkeypatch):
+        """A poisoned cache entry mapping the ISIN to itself (from a past
+        throttled run) must not be trusted just because instrument_taxonomy_has
+        recognises the ISIN. It re-resolves to the real venue every run, since
+        CI restores the poisoned cache and never re-saves on a same-day hit."""
+        from tarzan.data import enricher, price_cache
+        from tarzan.data import market_quotes as mq
+        from tarzan import runtime
+
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        # The poison: cache says LU0328475792 → LU0328475792.
+        monkeypatch.setattr(price_cache, "load_resolution", lambda i: "LU0328475792")
+        monkeypatch.setattr(price_cache, "load_ticker_isin_reverse", lambda i: "")
+        monkeypatch.setattr(price_cache, "store_resolution", lambda i, s: None)
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: "")
+        monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: [])
+        monkeypatch.setattr(enricher, "_collect_candidate_metas", lambda ci, hint: [])
+        monkeypatch.setattr(
+            mq, "official_quotes",
+            lambda syms: {"XSX6.MI": {"price": 170.36, "prev_close": 169.6}})
+        monkeypatch.setattr(
+            enricher, "_fetch_history",
+            lambda s: pd.DataFrame({"Close": [169.0, 170.36]},
+                                   index=pd.to_datetime(["2026-08-20", "2026-08-21"])))
+
+        result = enricher._resolve_isin("LU0328475792")
+        assert result is not None and result[1] == "XSX6.MI", (
+            "poisoned ISIN→ISIN cache must be rejected and re-resolved"
+        )
