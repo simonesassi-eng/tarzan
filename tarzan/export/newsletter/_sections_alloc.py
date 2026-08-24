@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time
+from html import escape as _esc
 from typing import Any, Optional
 
 import pandas as pd
@@ -191,7 +192,10 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     perf = getattr(m, "performance", None) or {}
 
     def _bar(label, value, tone="flat"):
-        return {"label": label, "value": value, "tone": tone}
+        # Same boundary as _tile: a benchmark name reaches the status bar via
+        # "VS {name}", and names carry ampersands.
+        return {"label": _esc(str(label)), "value": _esc(str(value)),
+                "tone": tone}
 
     def _tone(v):
         if v is None:
@@ -318,8 +322,14 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         if pair and pair[0] is not None:
             session_eur = float(pair[0])
     def _tile(label, value, caption, tone="flat"):
-        return {"label": label, "value": value, "caption": caption,
-                "tone": tone}
+        # Escaped here because the digest template is ``.html.j2``, an extension
+        # select_autoescape() does not match, so nothing escapes on the way out.
+        # Asset-class names carry an ampersand ("Cash & Cash Equivalents") and so
+        # do the P&L labels and any benchmark name, and they are DATA elsewhere
+        # (Excel, the JSON summary) — so they are escaped where they become
+        # markup, not at the source.
+        return {"label": _esc(str(label)), "value": _esc(str(value)),
+                "caption": _esc(str(caption)), "tone": tone}
 
     state_tiles = [
         _tile("Portfolio", _eur(m.total_value, decimals=0),
@@ -751,8 +761,12 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
         isin = normalize_isin(record.get("isin"))
         presence = str(record.get("portfolio_presence") or "")
         _add({
-            "ticker": _display_ticker(canonical) or "",
-            "name": _cfg.name_for(isin, canonical) or str(record.get("name") or ""),
+            "ticker": _esc(_display_ticker(canonical) or ""),
+            # Curated names carry ampersands ("iShares Core S&P 500", the Return
+            # Stacked family); the template does not escape (.html.j2), so the
+            # appendix escapes at its own boundary like every other builder.
+            "name": _esc(_cfg.name_for(isin, canonical)
+                         or str(record.get("name") or "")),
             "isin": isin,
             # The listing the daily bars came from; the selected symbol when the
             # instrument resolved but never returned history.
@@ -776,8 +790,8 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
         quote = quotes.get(hist)
         quote = quote if isinstance(quote, dict) else {}
         _add({
-            "ticker": _display_ticker(requested) or requested,
-            "name": name,
+            "ticker": _esc(_display_ticker(requested) or requested),
+            "name": _esc(name),
             "isin": isin,
             "hist_ric": hist,
             # A benchmark's intraday series can come from a sibling venue, and
@@ -992,7 +1006,8 @@ def _div_label(name: str, color: Optional[str] = None,
     sw = (f'<span style="display:inline-block;width:9px;height:9px;'
           f'border-radius:2px;background:{color};vertical-align:middle;'
           f'margin-right:6px;"></span>') if color else ""
-    return f'{sw}{ticker_span(ticker or "")}<span style="color:{P["ink"]};">{name}</span>'
+    return (f'{sw}{ticker_span(ticker or "")}'
+            f'<span style="color:{P["ink"]};">{_esc(str(name))}</span>')
 
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                show_leverage: bool = False, first_label: str = "Name",
@@ -1667,7 +1682,7 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
         f'<span style="display:inline-block;margin:0 10px 6px 0;'
         f'{TYPE["prose"]}color:{PALETTE["muted"]};"><span style="display:inline-block;width:9px;'
         f'height:9px;border-radius:2px;background:{it["color"]};'
-        f'vertical-align:middle;margin-right:5px;"></span>{it["name"]} '
+        f'vertical-align:middle;margin-right:5px;"></span>{_esc(str(it["name"]))} '
         f'<b style="color:{PALETTE["ink"]};">{it["count"]}</b></span>'
         for it in summary)
     subtitle = ""
