@@ -67,10 +67,18 @@ class TestTrailingWindowAnchor:
         assert window_anchor(s, "3m") == pd.Timestamp("2026-05-18")
         assert window_anchor(s, "5y") == pd.Timestamp("2021-08-18")
 
-    def test_five_days_is_five_sessions(self):
+    def test_five_days_is_five_days_of_change(self):
+        """"5D" is five days of CHANGE, so it anchors five sessions back.
+
+        Confirmed against Yahoo's own pages on 24 Aug 2026: AVWS.DE read -1.56%
+        and RSSY -1.28%, and both are reproducible only from the 17 Aug close —
+        five sessions before the current one. Anchoring four back (18 Aug) gave
+        -1.04% and -1.39%. The 1D was already one step, which is why only the
+        5D disagreed.
+        """
         s = _business_series("2026-07-01", "2026-08-18")
-        # 18 Aug (Tue) back four business days → 12 Aug (Wed): five sessions.
-        assert window_anchor(s, "5d") == pd.Timestamp("2026-08-12")
+        # 18 Aug (Tue) back five sessions → 11 Aug (Tue): six closes, five moves.
+        assert window_anchor(s, "5d") == pd.Timestamp("2026-08-11")
 
     def test_a_stale_feed_shortens_the_window_instead_of_sliding_it(self):
         """NTSG.MI on 18 Aug 2026: no close after the 14th. Counting five
@@ -82,8 +90,8 @@ class TestTrailingWindowAnchor:
             ("2026-08-07", 28.8), ("2026-08-10", 29.0), ("2026-08-11", 29.1),
             ("2026-08-12", 29.2), ("2026-08-13", 29.4), ("2026-08-14", 29.6),
         ])
-        assert window_anchor(stale, "5d") == pd.Timestamp("2026-08-12")
-        assert round(compute_period_return(stale, "5d"), 2) == round((29.6 / 29.2 - 1) * 100, 2)
+        assert window_anchor(stale, "5d") == pd.Timestamp("2026-08-11")
+        assert round(compute_period_return(stale, "5d"), 2) == round((29.6 / 29.1 - 1) * 100, 2)
 
     def test_the_money_and_percent_columns_share_one_window(self):
         """The matrix row said "7 days" and mixed two spans: the euros walked
@@ -97,9 +105,10 @@ class TestTrailingWindowAnchor:
         actual = pd.Series([1000.0] * len(idx), index=idx)
 
         gain, _pct = _window_money_pnl(pnl, actual, "5d")
-        # Tue 18 Aug back four sessions is Wed 12 Aug: six calendar days of P&L,
-        # not the seven a "1 week" window used to bill.
-        assert gain == 6.0
+        # Tue 18 Aug back five sessions is Tue 11 Aug: seven calendar days of
+        # P&L. The point is that the euros and the percentage bill the SAME
+        # window, whatever its length — they used to differ.
+        assert gain == 7.0
 
     def test_one_day_is_unavailable_when_yesterday_is_missing(self):
         """1D names its span exactly, so it may not absorb a missing bar.
@@ -630,5 +639,5 @@ class TestAWindowEdgeIsASessionDateNotATimestamp:
         """The bug made it six: 18..24 Aug instead of 19..24."""
         import datetime as _dt
         _native, converted = self._pair()
-        # Tue 25 Aug back four sessions is Wed 19 Aug: 19, 20, 21, 24, 25.
-        assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 19)
+        # Tue 25 Aug back five sessions is Tue 18 Aug.
+        assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 18)

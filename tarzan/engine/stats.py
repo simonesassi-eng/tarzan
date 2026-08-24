@@ -49,8 +49,15 @@ DAYS_PER_YEAR = 365.25
 # for "5Y") were what drifted — 90 days landed two sessions past three calendar
 # months and read 3M +6.45% for EXUS.MI on 18 Aug 2026 where three months read
 # +7.87%.
+# For a "sessions" bucket the number is how many sessions BACK the window is
+# anchored — i.e. how many days of change it measures. "5D" is five days of
+# change, which needs six closes, and Yahoo's own page agrees: on 24 Aug 2026 it
+# read AVWS.DE 5D as -1.56% and RSSY as -1.28%, both anchored on 17 Aug, five
+# sessions before the current one. Tarzan stepped back span-1 = four, anchoring
+# 18 Aug, so every 5D was one session short: AVWS came out -1.04%. The 1D was
+# already right (one step), which is why only the 5D disagreed.
 PERIOD_WINDOWS: dict[str, tuple[str, int]] = {
-    "1d": ("sessions", 2),
+    "1d": ("sessions", 1),
     "5d": ("sessions", 5),
     "1m": ("months", 1),
     "3m": ("months", 3),
@@ -169,7 +176,7 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
         # and not the other.
         from tarzan.data.exchange_calendar import sessions_back
 
-        cutoff_date = sessions_back(ticker, end_date, span - 1)
+        cutoff_date = sessions_back(ticker, end_date, span)
     elif unit == "months":
         cutoff_date = (pd.Timestamp(end_date) - pd.DateOffset(months=span)).date()
     elif unit == "years":
