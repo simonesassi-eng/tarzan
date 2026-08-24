@@ -94,43 +94,39 @@ def _roll_to_session(timestamp, ticker: str):
 
 
 def _window_end(series_end, ticker: str = ""):
-    """The date a window is measured back FROM: the run's own today, not the
-    instrument's last close.
+    """The session a window is measured back FROM: the one the series' LAST
+    OBSERVATION belongs to.
 
-    A listing whose feed runs a day or two behind must still be measured over
-    the same sessions as everything else. NTSG.MI on 18 Aug 2026 had no close
-    after the 14th; anchoring on its own last row stretched its 5D back to
-    8 Aug and reported +0.79%, where the five sessions the window actually
-    contains give +0.60%. The endpoint stays the last close available — only
-    the window's start moves — so a stale instrument reports the part of the
-    window it has data for, exactly as its published figure does.
+    A window's two edges have to be read off the same clock. This used to take
+    the start from the run's calendar day while the endpoint came from the
+    series, so on a pre-open run the two sat one session apart and every window
+    was a session short of the published figure: AVWS.DE's 5D anchored 18 Aug
+    against Yahoo's 17 Aug and read -1.04% where the page showed -1.56%.
 
-    Reads the run-owned clock (a pinned ``--as_of`` run measures back from its
-    effective date), and falls back to the series' own end if no run context is
-    readable. Never returns a date before the series ends.
+    What makes the last observation the right end in BOTH session states is the
+    stamp (see :mod:`tarzan.data.current_session`), which dates its point by the
+    quote's own ``regularMarketTime``:
+
+    * market open — the quote is today's live price, so the last observation IS
+      the latest intraday point and the window ends on the current session,
+      which is what a broker and Yahoo both show;
+    * market closed — the quote is the completed session's close, so the window
+      ends there, and a weekend or holiday run measures from the last session
+      rather than from a calendar day that never traded.
+
+    A series with no current observation at all (a feed Yahoo does not quote, or
+    a quote the sanity gate rejected) therefore measures the window it has data
+    for and says so, instead of pairing a start counted from today with an
+    endpoint from last week.
+
+    ``series_end`` may be a carried calendar day — the order-derived portfolio
+    NAV runs on ``freq="D"`` with weekends flat — so it is rolled back to the
+    last real session before being used.
     """
     try:
-        from tarzan import runtime
-
-        today = pd.Timestamp(runtime.today())
-        # A window ends on the last SESSION, not the calendar day. On a weekend
-        # (or holiday) 'today' never traded, so measuring back from it slides
-        # every cutoff a day or two past the last close: on Sat 22 Aug 2026 it
-        # put MSCI ACWI's 1M anchor on the 22 Jul dip and read +1.7% where
-        # Yahoo, measuring from Friday's close, showed +0.57%. Roll back to the
-        # last session so a weekend or holiday run measures the same window
-        # Yahoo does; on a trading day this is a no-op, so a lagging single feed
-        # still measures from today via the max() below.
-        today = _roll_to_session(today.normalize(), ticker)
+        return _roll_to_session(series_end, ticker)
     except Exception:  # noqa: BLE001 — a clock must never break a return
         return series_end
-    tz = getattr(series_end, "tzinfo", None)
-    if tz is not None:
-        today = (today.tz_localize(tz) if today.tzinfo is None
-                 else today.tz_convert(tz))
-    elif today.tzinfo is not None:
-        today = today.tz_localize(None)
-    return max(today, series_end)
 
 
 def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
