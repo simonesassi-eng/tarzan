@@ -569,3 +569,66 @@ class TestATzAwareSeriesKeepsItsOwnClock:
         s = _drop_weekends(self._milan_series())
         assert round(compute_period_return(s, "1d"), 4) == round(
             (104.0 / 103.0 - 1) * 100, 4)
+
+
+class TestAWindowEdgeIsASessionDateNotATimestamp:
+    """The same session must anchor identically however its bar is stamped.
+
+    A daily bar carries its venue's midnight, and ``convert_to_eur`` restamps a
+    US series in UTC — so one session is ``00:00-04:00`` natively and
+    ``04:00+00:00`` converted. ``_window_end`` may also come from the run's own
+    clock, at midnight. Comparing those timestamps put the cutoff hours before
+    the session it named, so the anchor slid one session early and only for the
+    converted series: RSSY's 5D then measured six sessions, and WTIP's EUR
+    return reconciled against neither its native return nor its native return
+    times the FX move. Reported from a live digest against WTIP's and RSSY's
+    Yahoo pages.
+
+    Verified on the real cache after the fix: for WTIP, RSSY, RSST, CTAP, GDE
+    and RSSX across 5D/1M/3M/1Y, ``tarzan_eur == native x fx`` to 0.0000pp.
+    """
+
+    def _pair(self):
+        """The same sessions, stamped natively and as converted to UTC.
+
+        Six months of them, so the monthly buckets have real history to anchor
+        in rather than falling into the short-series branch.
+        """
+        idx = pd.bdate_range("2026-03-02", "2026-08-24", tz="America/New_York")
+        native = pd.Series(
+            [100.0 + i * 0.1 for i in range(len(idx))], index=idx)
+        converted = native.copy()
+        converted.index = native.index.tz_convert("UTC")
+        return native, converted
+
+    @pytest.fixture(autouse=True)
+    def _pin(self, monkeypatch):
+        # A Tuesday run: ``_window_end`` comes from the clock at midnight, which
+        # is the case that broke — the series' own last bar is the Monday.
+        import datetime
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 25))
+
+    @pytest.mark.parametrize("bucket", ["5d", "1m", "3m"])
+    def test_both_stampings_anchor_on_the_same_session(self, bucket):
+        native, converted = self._pair()
+        a_native = window_anchor(native, bucket, "RSSY")
+        a_conv = window_anchor(converted, bucket, "RSSY")
+        assert a_native is not None and a_conv is not None
+        assert a_native.date() == a_conv.date(), (
+            f"{bucket}: native anchored {a_native.date()}, "
+            f"converted anchored {a_conv.date()}"
+        )
+
+    @pytest.mark.parametrize("bucket", ["5d", "1m", "3m"])
+    def test_both_stampings_return_the_same_percentage(self, bucket):
+        native, converted = self._pair()
+        assert round(compute_period_return(native, bucket), 9) == round(
+            compute_period_return(converted, bucket), 9)
+
+    def test_a_five_session_window_really_spans_five_sessions(self):
+        """The bug made it six: 18..24 Aug instead of 19..24."""
+        import datetime as _dt
+        _native, converted = self._pair()
+        # Tue 25 Aug back four sessions is Wed 19 Aug: 19, 20, 21, 24, 25.
+        assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 19)

@@ -151,6 +151,15 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
     if ticker is None:
         ticker = _series_ticker(series)
     end = _window_end(series.index[-1], ticker)
+    # A window edge is a SESSION DATE, so the whole comparison is done on dates
+    # and never on timestamps. A daily bar is stamped at its venue's midnight —
+    # the same session reads 00:00-04:00 in New York and 04:00+00:00 once
+    # converted to EUR — while ``end`` may come from the run's own clock at
+    # midnight. Mixing the two put the cutoff hours before the session it named,
+    # so the anchor silently slid one session early: RSSY's 5D measured six
+    # sessions and WTIP's reconciled against neither its native nor its EUR
+    # return. Dates have no time-of-day to disagree about.
+    end_date = end.date()
     if unit == "sessions":
         # "5D" the way Yahoo and the brokers count it: five trading days back on
         # the exchange calendar, not five ROWS of the vendor's series — Milan's
@@ -160,21 +169,17 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
         # and not the other.
         from tarzan.data.exchange_calendar import sessions_back
 
-        # Shift ``end`` by whole days rather than rebuilding the cutoff at
-        # midnight: a daily bar is stamped at the VENUE's midnight, so a US
-        # series carries 04:00+00:00 and a midnight-UTC cutoff sorts BEFORE the
-        # session it names — the anchor then slid one session early and the
-        # guard below dropped the 1D for every US listing. Shifting preserves
-        # both the timezone and the time-of-day, so the comparison is exact.
-        stepped = sessions_back(ticker, end.date(), span - 1)
-        cutoff = end + (pd.Timestamp(stepped) - pd.Timestamp(end.date()))
+        cutoff_date = sessions_back(ticker, end_date, span - 1)
     elif unit == "months":
-        cutoff = end - pd.DateOffset(months=span)
+        cutoff_date = (pd.Timestamp(end_date) - pd.DateOffset(months=span)).date()
     elif unit == "years":
-        cutoff = end - pd.DateOffset(years=span)
+        cutoff_date = (pd.Timestamp(end_date) - pd.DateOffset(years=span)).date()
     else:
         return None
-    at_or_before = series.index[series.index <= cutoff]
+    # ``index.date`` is the venue's own session date for a tz-aware index, which
+    # is exactly the key a window is measured on.
+    index_dates = series.index.date
+    at_or_before = series.index[index_dates <= cutoff_date]
     if len(at_or_before):
         anchor = at_or_before[-1]
         # The whole series sits before the window: there is nothing to measure
@@ -182,7 +187,7 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
         # confident 0.00% (or +€0) for a feed that simply stopped.
         if anchor == series.index[-1]:
             return None
-    elif series.index[0] <= cutoff + pd.Timedelta(days=7):
+    elif series.index[0].date() <= cutoff_date + datetime.timedelta(days=7):
         # Nothing that old: report the bucket only if the series still covers
         # essentially the whole window (a weekend or holiday of slack), so a 2y
         # book cannot print a "5Y" return off its own first close.

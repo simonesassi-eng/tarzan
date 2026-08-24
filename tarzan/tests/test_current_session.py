@@ -148,3 +148,43 @@ class TestNoLiveObservationEntersAReproducibleRun:
 
         assert cs.apply_to_holdings([h]) == ()
         assert h.price_history.index[-1] != pd.Timestamp("2026-08-22")
+
+
+class TestTheStampBelongsToTheObservedSession:
+    """A quote is dated by the session it was observed in, not by the run day.
+
+    Before Xetra opens on a Tuesday, ``regularMarketPrice`` is still Monday's
+    closing quote and ``regularMarketTime`` says so. Dating it Tuesday moved
+    every window one session forward: AVWS.DE's 5D anchored 19 Aug and read
+    −0.55% where its five sessions ending on the observed one anchor 18 Aug.
+    """
+
+    def test_a_dated_quote_lands_on_its_own_session(self, monkeypatch):
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 25))   # Tuesday
+        s = pd.Series(
+            [25.20, 25.36],
+            index=pd.DatetimeIndex([
+                pd.Timestamp("2026-08-20", tz="Europe/Rome"),
+                pd.Timestamp("2026-08-21", tz="Europe/Rome")]))
+        observed = int(datetime.datetime(
+            2026, 8, 24, 17, 35, tzinfo=datetime.timezone.utc).timestamp())
+        out = cs.stamp_today(s, pd.Timestamp("2026-08-25"), 25.30,
+                            {"price": 25.30, "prev_close": 25.36,
+                             "time": observed}, ticker="AVWS.DE")
+        assert out.index[-1].date() == datetime.date(2026, 8, 24), (
+            "Monday's closing quote must not be dated Tuesday"
+        )
+        assert float(out.iloc[-1]) == 25.30
+
+    def test_an_undated_quote_still_falls_back_to_today(self, monkeypatch):
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 25))
+        s = pd.Series(
+            [25.20, 25.36],
+            index=pd.DatetimeIndex([pd.Timestamp("2026-08-20"),
+                                    pd.Timestamp("2026-08-21")]))
+        out = cs.stamp_today(s, pd.Timestamp("2026-08-25"), 25.30,
+                            {"price": 25.30, "prev_close": 25.36},
+                            ticker="AVWS.DE")
+        assert out.index[-1].date() == datetime.date(2026, 8, 25)

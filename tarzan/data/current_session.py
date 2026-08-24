@@ -144,6 +144,25 @@ def stamp_today(series: pd.Series, today, today_value: float,
     one-session label.
     """
     out = series.copy()
+    # The point belongs to the session the quote was OBSERVED in, not to the
+    # run's calendar day. Before Xetra opens on a Tuesday, ``regularMarketPrice``
+    # is still Monday's closing quote (``regularMarketTime`` says so), and dating
+    # it Tuesday moved the whole window one session forward: AVWS.DE's 5D then
+    # anchored on 19 Aug and read -0.55% where its own five sessions ending on
+    # the observed one anchor 18 Aug and read -1.04%. Falls back to ``today``
+    # when the provider dated nothing.
+    observed = quote_observed_at(quote)
+    if observed is not None:
+        venue_day = observed
+        try:
+            from tarzan.data.market_quotes import _exchange_tz
+
+            tz = _exchange_tz(ticker or str(series.name or ""))
+            if tz is not None:
+                venue_day = observed.astimezone(tz)
+        except Exception:  # noqa: BLE001 — a clock must never break a stamp
+            pass
+        today = pd.Timestamp(venue_day.date())
     stamp = today.tz_localize(series.index.tz) if series.index.tz else today
     prev_eur = prev_close_eur(quote, today_value)
     if prev_eur is not None:
