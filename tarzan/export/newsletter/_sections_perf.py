@@ -190,7 +190,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return (
             f'<tr>'
             f'<td style="{td}{TYPE["data"]}color:{P["ink"]};'
-            f'white-space:nowrap;">{name}{_hours_line(d)}</td>'
+            f'white-space:nowrap;">{_esc(name)}{_hours_line(d)}</td>'
             f'<td align="right" style="{td}">{_spark_for(d)}</td>'
             f'<td align="right" style="{td}{TYPE["data"]}color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'

@@ -11,6 +11,8 @@ outcome does not depend on when the suite happens to run.
 
 from __future__ import annotations
 
+import pathlib
+import re
 from unittest import mock
 
 import tarzan.data.market_quotes as mq
@@ -80,7 +82,7 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
     # "S&P 500 (FUT)" gets its own \u224824h line and its own day/status,
     # not the cash index's hours or its day, and the FUT tag is not
     # doubled by the render-time auto-suffix (name already carries it).
-    fut_pos = html.index("S&P 500 (FUT)")
+    fut_pos = html.index("S&amp;P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
     assert "\u224824h" in fut_chunk
     assert "Op. Mon" in fut_chunk
@@ -96,7 +98,7 @@ def test_futures_show_closed_with_day_over_the_weekend():
                                (False, "Fri") if sym == "ES=F"
                                else (False, "Fri"))):
         html = _build_markets(_ctx())["html"]
-    fut_pos = html.index("S&P 500 (FUT)")
+    fut_pos = html.index("S&amp;P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
     assert "Cl. Fri" in fut_chunk
 
@@ -219,3 +221,73 @@ class TestInstrumentNamesAreEscaped:
         assert "&amp;" in ticker_span("A&B")
         tagged = uni_name("Name", "AAA", tags=(("α&β", "#000", "#fff"),))
         assert "α&amp;β" in tagged
+
+
+class TestEveryMarkupBoundaryEscapes:
+    """Each builder that turns text into markup escapes it, fed text with an
+    ampersand directly.
+
+    The whole-document guard in test_newsletter_golden_html only has teeth on
+    what its synthetic fixture happens to contain — it passed while the real
+    digest still carried four raw ampersands, because that fixture has no cash
+    class header and no rebalancing plan label. These probe the boundaries
+    themselves, so coverage does not depend on the fixture's shape.
+
+    "Cash & Cash Equivalents" is the AssetClass enum value and "Buy & sell
+    (full rebalance)" a plan label: both are DATA elsewhere (Excel, the JSON
+    summary), so they are escaped here, where they become HTML, not at source.
+    """
+
+    # Same allowlist as the whole-document guard in test_newsletter_golden_html.
+    _RAW = re.compile(
+        r"&(?!(?:amp|lt|gt|quot|apos|nbsp|middot|rsquo|lsquo|ndash|mdash|"
+        r"minus|times|hellip|bull|deg|euro|copy|#\d+|#x[0-9a-fA-F]+);)"
+    )
+
+    def _clean(self, html: str) -> bool:
+        return not self._RAW.search(html)
+
+    def test_the_instrument_label_escapes(self):
+        from tarzan.export.newsletter._constants import ticker_span, uni_name
+        assert self._clean(uni_name("iShares Core S&P 500", "SXR8"))
+        assert self._clean(ticker_span("A&B"))
+
+    def test_the_table_group_header_escapes(self):
+        """The class/role header carries the asset-class name verbatim."""
+        from tarzan.export.newsletter._constants import (
+            render_unified_table, uni_cell,
+        )
+        html = render_unified_table(
+            "Instrument", [("1D", "right", 60)],
+            [("Cash & Cash Equivalents", "#15803D",
+              [("Cash / Money & Market",
+                [{"name_html": "x", "cells": [uni_cell("1.0%")]}])])])
+        assert self._clean(html), html[:200]
+
+    def test_the_optimizer_plan_label_escapes(self):
+        """Rendered by the template, so it carries an explicit |e filter."""
+        from jinja2 import Environment
+        tmpl = (pathlib.Path("tarzan/export/templates/portfolio_digest.html.j2")
+                .read_text(encoding="utf-8"))
+        assert "{{ plan.label|e }}" in tmpl, (
+            "the plan label must stay escaped: autoescape is off for .html.j2"
+        )
+        assert self._clean(Environment(autoescape=False)
+                           .from_string("{{ v|e }}")
+                           .render(v="Buy & sell (full rebalance)"))
+
+    def test_the_allocation_row_label_escapes(self):
+        from tarzan.export.newsletter._sections_alloc import _div_label
+        assert self._clean(_div_label("Cash & Cash Eq.", color="#15803D"))
+
+    def test_the_hero_tile_and_status_bar_escape(self):
+        """Both go through the template, which does not escape."""
+        from tarzan.export.newsletter._constants import _NewsletterContext
+        from tarzan.export.newsletter._sections_alloc import _build_hero
+        hero = _build_hero(_NewsletterContext(
+            metrics=PortfolioMetrics(total_value=1000.0, invested_value=1000.0,
+                                     cash_value=0.0),
+            config=InvestorConfig(), benchmark_geo="MSCI ACWI & Friends"))
+        for tile in hero["tiles"]:
+            for field in ("label", "value", "caption"):
+                assert self._clean(str(tile[field])), tile

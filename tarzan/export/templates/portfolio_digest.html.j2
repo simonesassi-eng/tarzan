@@ -342,7 +342,10 @@
               {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;{{ type.title }}color:{{ palette.accent }};">
-                {{ plan.label }}
+                {# |e explicitly: this template is .html.j2, an extension
+                   select_autoescape() does not match, so nothing is escaped by
+                   default and the plan label carries an ampersand
+                   ("Buy & sell (full rebalance)"). #}{{ plan.label|e }}
                 {# Which plan the configuration runs, then whether it can be
                    executed. Both plans are computed every run and both can be
                    executable, so the status alone left the reader with two trade

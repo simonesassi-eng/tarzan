@@ -153,7 +153,11 @@ class TestBothPnlMeasuresAreDrawn:
         # two return panels (bare names).
         assert html.count("Total P&amp;L (%, right)") == 1
         assert html.count("Unreal. P&amp;L (%, right)") == 1
-        assert html.count(">Total P&amp;L<") == 2
+        # Three now, not two: the two chart keys plus the hero STATE tile,
+        # whose label is escaped at its own markup boundary (it used to reach
+        # the document as a bare "&", which mail clients tolerate and no test
+        # noticed).
+        assert html.count(">Total P&amp;L<") == 3
         assert html.count(">Unreal. P&amp;L<") == 2
 
 
@@ -171,15 +175,17 @@ class TestRender:
         # footer that used to be the anchor is gone: it repeated the captions of
         # the TWROR and MWR tiles in STATE.
         assert ">Window<" in html
-        # The matrix is built in Python, which writes the entity itself; the
-        # tiles go through the template, where autoescape is off because the
-        # filename ends in .j2, so their ampersand stays raw.
+        # Every ampersand reaches the document as an entity. The matrix writes
+        # it itself; the tiles go through the template, where autoescape is off
+        # because the filename ends in .j2 — so they are escaped at their own
+        # markup boundary in _build_hero._tile. Before that they arrived raw,
+        # which is invalid HTML that mail clients happen to tolerate.
         assert "P&amp;L \u20ac" in html      # matrix column head
         assert "Unrealized" in html
         assert "TWROR" in html
         assert "Since inception" in html     # matrix row label
-        assert "Total P&L" in html           # state tile
-        assert "Unrealized P&L" in html      # state tile
+        assert "Total P&amp;L" in html       # state tile
+        assert "Unrealized P&amp;L" in html  # state tile
         # The Portfolio value series follows the Markets contract: green above
         # the start baseline, red below it. Both P&L measures are dashed
         # secondary series on the right axis, each in the colour it also

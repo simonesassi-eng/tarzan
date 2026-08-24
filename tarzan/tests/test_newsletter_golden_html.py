@@ -398,3 +398,41 @@ class TestNoRaggedTables:
                    '<tr><td colspan="2">group</td></tr>'
                    '<tr><td>c</td><td>d</td></tr></table>')
         assert not self._ragged(grouped)
+
+
+class TestTheDocumentIsWellFormed:
+    """No ampersand reaches the document unescaped, anywhere.
+
+    The digest template is ``.html.j2``, an extension ``select_autoescape()``
+    does not match, so Jinja escapes nothing on the way out and every builder
+    has to escape at its own markup boundary. Fixing them one at a time is
+    whack-a-mole — this asserts the property over the WHOLE rendered document,
+    so a new unescaped interpolation fails here wherever it is added.
+
+    It has teeth on the synthetic fixture: asset-class names ("Cash & Cash
+    Equivalents") and the P&L tile labels both carry an ampersand, and four
+    separate builders were emitting them raw.
+    """
+
+    _ENTITY = re.compile(
+        r"&(?!(?:amp|lt|gt|quot|apos|nbsp|middot|rsquo|lsquo|ndash|mdash|"
+        r"minus|times|hellip|bull|deg|euro|copy|#\d+|#x[0-9a-fA-F]+);)"
+    )
+
+    def test_no_unescaped_ampersand_anywhere(self, rendered):
+        html, _metrics, _config = rendered
+        offenders = [
+            html[max(0, m.start() - 60):m.start() + 30]
+            for m in self._ENTITY.finditer(html)
+        ]
+        assert not offenders, (
+            f"{len(offenders)} unescaped ampersand(s) in the rendered digest; "
+            "escape at the builder that interpolates the text:\n  "
+            + "\n  ".join(repr(o) for o in offenders[:8])
+        )
+
+    def test_the_guard_would_catch_a_raw_ampersand(self):
+        """The regex must not be so permissive that it never fires."""
+        assert self._ENTITY.search('<td>Cash & Cash Equivalents</td>')
+        assert not self._ENTITY.search('<td>Cash &amp; Cash Equivalents</td>')
+        assert not self._ENTITY.search('<td>&nbsp;&#8364;&minus;1</td>')

@@ -375,7 +375,8 @@ def render_unified_table(first_col_label, columns, groups, *,
         for role, rows in role_list:
             has_role = bool(role and role != "—")
             role_html = (f'&nbsp;&middot;&nbsp;<span style="color:{P["muted"]};'
-                         f'font-weight:700;">{role}</span>' if has_role else "")
+                         f'font-weight:700;">{escape(str(role))}</span>'
+                         if has_role else "")
             if not cls:
                 # Flat block: no class name, so no header row to carry it.
                 fw = f'width:{first_col_width}px;' if first_col_width else ""
@@ -402,7 +403,8 @@ def render_unified_table(first_col_label, columns, groups, *,
                 f'background:{P["group_bg"]};'
                 f'border-bottom:1px solid {P["border"]};'
                 f'{TYPE["label"]}">'
-                f'<span style="color:{col};font-weight:700;">{cls}</span>{role_html}</td></tr>')
+                f'<span style="color:{col};font-weight:700;">'
+                f'{escape(str(cls))}</span>{role_html}</td></tr>')
             fw = f'width:{first_col_width}px;' if first_col_width else ""
             for row in rows:
                 rbg = row.get("row_bg") or (
