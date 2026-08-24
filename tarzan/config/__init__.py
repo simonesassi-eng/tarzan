@@ -21,13 +21,10 @@ from tarzan.models.holding import Geography
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "constants.yaml")
 _STATIC_PATH = os.path.join(os.path.dirname(__file__), "static.yaml")
-# Primary taxonomy location is CWD-relative (the CLI is run from the repo
-# root, like its --input_orders default). We also derive a repo-root-anchored
-# fallback so a run from another directory still finds the shipped taxonomy
-# instead of silently degrading benchmarks / beta reference / notional splits.
-_INDEXES_CSV_PATH = os.path.join("input", "instrument_taxonomy.csv")
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_INDEXES_CSV_FALLBACK = os.path.join(_REPO_ROOT, "input", "instrument_taxonomy.csv")
+# The taxonomy is located by _load_indexes_csv, which walks up from the cwd and
+# from this module (and honours TARZAN_TAXONOMY_PATH). No fixed path constants:
+# the two that used to live here described a cwd-relative + repo-root scheme
+# that the ancestor walk replaced, and nothing read them.
 
 
 @lru_cache(maxsize=1)
@@ -454,8 +451,15 @@ def ter_lookup() -> dict:
 def name_lookup() -> dict:
     """Curated instrument display name from the ``name`` column of
     instrument_taxonomy.csv, keyed by ISIN (uppercased) and bare ticker
-    (suffix stripped, uppercased). Used as a resilient fallback for
-    ``holding.name`` when yfinance is unreachable / carries no name."""
+    (suffix stripped, uppercased).
+
+    Two consumers, one lookup: a resilient fallback for ``holding.name`` when
+    yfinance is unreachable / carries no name (via :func:`name_for`), and the
+    presentation layer's preferred display name over whatever the broker's order
+    export called the instrument ("WS GL EFF C USD", "XTR W VAL USD-1C-AC").
+    Those strings cannot be cleaned into a readable name because the information
+    is not in them — it is in the taxonomy, which already names every instrument
+    the portfolio can hold."""
     df = _load_indexes_csv()
     if df.empty or "name" not in df.columns:
         return {}
@@ -676,22 +680,3 @@ def figi_mic_map() -> dict[str, str]:
 def portfolio_backtest_period() -> str:
     """Default backtest period (5 years, hardcoded)."""
     return "5y"
-
-
-def instrument_display_names() -> dict:
-    """Curated ISIN/ticker → display name from ``instrument_taxonomy.csv``.
-
-    The holdings frame carries whatever the broker's order export called the
-    instrument ("WS GL EFF C USD", "XTR W VAL USD-1C-AC"). Those strings cannot
-    be cleaned into a readable name, because the information is not in them —
-    it is in the taxonomy, which already names every instrument the portfolio
-    can hold. This is the lookup that lets presentation prefer the curated name
-    and fall back to the broker's string only for something the taxonomy has
-    never seen.
-    """
-
-    def extract(row):
-        name = str(row.get("name", "")).strip()
-        return name if name and name.lower() != "nan" else None
-
-    return _by_isin_and_ticker(_load_indexes_csv(), extract)

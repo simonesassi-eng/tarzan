@@ -88,8 +88,6 @@ def _stub_benchmarks(monkeypatch):
     empty = pd.Series(dtype=float)
     monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history",
                         lambda *a, **k: empty)
-    monkeypatch.setattr("tarzan.engine.metrics._build_benchmark_series",
-                        lambda *a, **k: empty)
 
 
 def test_order_only_derives_snapshot(tmp_path, monkeypatch):

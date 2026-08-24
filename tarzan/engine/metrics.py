@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-import numpy as np
 import pandas as pd
 
 from tarzan.models.holding import AssetClass, Holding
@@ -51,7 +50,6 @@ from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
     BENCHMARKS,
     ResolvedBenchmark,
     _add_mix_to_histories,
-    _build_benchmark_series,
     _clip_to_window,
     _compute_single_benchmark_metrics,
     _fetch_benchmark_history,
@@ -1203,179 +1201,58 @@ class MetricsEngine:
     # Broker-style (live) 1D
     # ------------------------------------------------------------------
     def _current_prices(self, ctx: dict) -> None:
-        """Stamp ONE current point onto every holding's price series.
+        """Stamp the current session onto every TRACKED BENCHMARK's series.
 
-        Every "today" figure in Tarzan reads a price series: the hero chart and
-        the value/P&L series through ``PriceResolver``, the window matrix and
-        the Returns tables through ``compute_period_return``. The portfolio's
-        own valuation, though, is selected by the capability policy from the
-        published quote — so "today" existed twice, and the two disagreed
-        whenever the daily feed's snapshot lagged the quote's (the 19 Aug 2026
-        digest showed a flat +€11 Session tile beside a chart that dropped).
-
-        This stamps ONE market-consistent current point onto the series, so
-        there is one number and everything downstream derives from it:
-
-        * the current session's point is the clean market QUOTE, validated
-          against the series' OWN last real close — NOT the policy valuation.
-          The valuation can fall back to an order price when the daily feed
-          lags (MONEY.MI ran on real ~10.18 closes while its valuation dropped
-          to the 10.09 order price), and stamping that put a 10.09 endpoint
-          against a 10.18 anchor — a spurious -0.92% 5D. Anchoring the stamp to
-          the series' own scale keeps every window market-consistent;
-        * the previous session's close is the published ``prev_close``, scaled
-          onto that same ruler (see ``_prev_close_eur``), so FX and any
-          split/venue mismatch between the two feeds drop out. This repairs a
-          vendor gap (every Milan ETF came back with a null close for 17 Aug
-          2026, leaving the 1D to measure two sessions) for every listing.
-
-        The sanity gate (``_pick_quote``) rejects a corrupt or foreign-currency
-        quote whose level does not match the series, so that instrument simply
-        keeps its feed close. Pinned runs (``--as_of`` / ``--deterministic``)
-        stamp nothing: no live observation may enter a reproducible run.
+        Holdings are stamped in the data layer, before the valuation policy —
+        see :mod:`tarzan.data.current_session`, which owns the one rule and
+        explains why the ordering matters. Benchmarks are not holdings: they
+        carry no valuation and feed only windows and charts, so their stamp
+        belongs to the run that builds their catalog, which is this engine.
         """
-        from tarzan import runtime
+        from tarzan.data import current_session
 
-        if not runtime.allows_live_transport():
-            return
-
-        today = pd.Timestamp(runtime.today())
-        # A weekend/holiday run has no live session to stamp: the last real
-        # close IS the current value (Yahoo shows exactly that on its
-        # closed-market quote). Stamping a non-trading "today" both trusts a
-        # throttled weekend quote and appends a weekend-dated point that slides
-        # window_anchor onto the day a month before the WEEKEND rather than the
-        # last session — reading MSCI ACWI 1M at +1.7% where Yahoo, measuring
-        # from Friday's 106.47 close, showed +0.57% on 23 Aug 2026.
-        # ponytail: weekends only, holidays not modelled (see stats._window_end).
-        if today.weekday() >= 5:
+        allowed, today = current_session.stamping_allowed()
+        if not allowed:
             return
 
         from dataclasses import replace
 
-        from tarzan.data.market_quotes import official_quotes, _sibling_symbols
-        # Resolve the quote the same way the intraday feed does: the canonical
-        # listing PLUS its sibling venues. A ``.MI`` quote can be corrupt while
-        # the fund's ``.DE`` line is clean (NTSG.MI returned 25.5 against a real
-        # ~29.4 on 20 Aug 2026), so we fetch all of them and let the sanity gate
-        # in _pick_quote choose the one whose level matches this instrument.
+        from tarzan.data.market_quotes import official_quotes
+
         catalog = ctx.get("_benchmark_catalog") or {}
-        tickers = ({str(h.ticker) for h in self.holdings if h.ticker}
-                   | {r.ticker for r in catalog.values() if r.ticker})
-        if not tickers:
+        candidates = current_session._candidates(
+            {r.ticker for r in catalog.values() if r.ticker}
+        )
+        if not candidates:
             return
-        candidates = {tk: [tk, *_sibling_symbols(tk)] for tk in tickers}
-        quotes = official_quotes(sorted({s for c in candidates.values() for s in c}))
+        quotes = official_quotes(
+            sorted({s for group in candidates.values() for s in group})
+        )
 
         stamped: list[str] = []
-        # ONE rule for held and tracked alike: today's point is the clean market
-        # quote, validated against the series' OWN last real close — never the
-        # valuation. The valuation can fall back to an order price when the
-        # daily feed lags (MONEY.MI's series ran on real closes ~10.18 while its
-        # valuation dropped to the 10.09 order price, so a valuation stamp put a
-        # 10.09 endpoint against a 10.18 anchor and printed a spurious -0.92% 5D
-        # — the same scale mismatch NTSG's corrupt quote caused). Anchoring the
-        # stamp to the series' own scale keeps every window market-consistent.
-        # The sanity gate rejects a corrupt or foreign-currency quote (its level
-        # fails the tolerance), so that instrument simply keeps its feed close.
-        def _series_of(holding):
-            return getattr(holding, "price_history", None)
-
-        for holding in self.holdings:
-            series = _series_of(holding)
-            usable = None if series is None else series.dropna()
-            if usable is None or len(usable) == 0:
-                continue
-            quote = self._pick_quote(
-                candidates.get(holding.ticker, []), quotes, float(usable.iloc[-1]))
-            price = quote.get("price")
-            if not price:
-                continue
-            holding.price_history = self._stamp_today(series, today, float(price), quote)
-            stamped.append(holding.ticker)
-
         for name, record in list(catalog.items()):
             series = record.history
             usable = None if series is None else series.dropna()
             if usable is None or len(usable) == 0:
                 continue
-            quote = self._pick_quote(
-                candidates.get(record.ticker, []), quotes, float(usable.iloc[-1]))
+            quote = current_session.pick_quote(
+                candidates.get(record.ticker, []), quotes,
+                float(usable.iloc[-1]),
+            )
             price = quote.get("price")
             if not price:
                 continue
             ctx["_benchmark_catalog"][name] = replace(
-                record, history=self._stamp_today(series, today, float(price), quote))
+                record,
+                history=current_session.stamp_today(
+                    series, today, float(price), quote,
+                    ticker=record.ticker),
+            )
             stamped.append(record.ticker)
 
         if stamped:
-            logger.info("Stamped a current point onto %d price series", len(stamped))
-        ctx["current_price_stamped"] = tuple(stamped)
-
-    def _stamp_today(self, series, today, today_value: float, quote: dict):
-        """Return ``series`` with today's point set to ``today_value`` and the
-        prior session's close reconciled onto the same ruler via ``quote``.
-
-        Preserves the series' ``name`` and ``attrs`` (the benchmark identity the
-        semantic gate checks), and appends today after the last close so no
-        re-sort is needed."""
-        out = series.copy()
-        stamp = today.tz_localize(series.index.tz) if series.index.tz else today
-        prev_eur = self._prev_close_eur(quote, today_value)
-        if prev_eur is not None:
-            previous = out.index[out.index < stamp]
-            if len(previous):
-                out.loc[previous[-1]] = prev_eur
-        out.loc[stamp] = float(today_value)
-        out = out.sort_index()
-        out.name = series.name
-        out.attrs = dict(getattr(series, "attrs", {}) or {})
-        return out
-
-    @staticmethod
-    def _pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
-        """The first candidate quote whose price agrees with ``reference_price``
-        (the instrument's own EUR valuation) within the sibling tolerance.
-
-        This is the sanity gate that rejects a corrupt feed: NTSG.MI's quote
-        priced the fund at 25.5 while its valuation and its .DE sibling sat at
-        ~29.4, so the canonical is skipped and the clean sibling supplies the
-        previous close instead. Returns {} when nothing agrees, so the caller
-        keeps the feed's own close rather than stamp from bad data.
-        """
-        from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
-
-        for symbol in symbols:
-            quote = quotes.get(symbol) or {}
-            native = quote.get("price")
-            if not native:
-                continue
-            if abs(float(native) / float(reference_price) - 1.0) <= _SIBLING_PRICE_TOLERANCE:
-                return quote
-        return {}
-
-    @staticmethod
-    def _prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:
-        """The published previous close, on the SAME ruler as the valuation
-        being stamped as today's point.
-
-        Scale it by this instrument's own valuation-vs-native ratio
-        (``price_eur / quote_price``): ~1 for a EUR listing, the FX for a
-        USD/ZAR one, so the 1D equals the venue's own published move
-        (EUR_now/EUR_prev == native_now/native_prev). Crucially the ratio also
-        absorbs a scale mismatch between the two feeds: NTSG.MI's history ran at
-        ~29.9 while its quote pair sat at ~25.5 (a split reflected in one feed
-        and not the other), and pairing 29.9 (today) with a raw 25.8 prev_close
-        printed a +16% one-day move. Scaling keeps both points on one ruler.
-
-        Returns None when the quote carries no price or previous close (bonds
-        Yahoo does not quote) so the caller keeps the feed's own close.
-        """
-        prev_close = quote.get("prev_close")
-        native_price = quote.get("price")
-        if not prev_close or not native_price:
-            return None
-        return float(prev_close) * (float(price_eur) / float(native_price))
+            logger.info(
+                "Stamped a current point onto %d benchmark series", len(stamped))
 
     def _live_1d(self, ctx: dict) -> None:
         """Resolve each run's intraday feed once and project broker-style 1D.
@@ -1444,9 +1321,9 @@ class MetricsEngine:
             logger.debug("market-open check failed: %s", e)
 
         try:
-            from tarzan.data.market_quotes import broker_1d, _sibling_symbols
+            from tarzan.data.market_quotes import intraday_feeds, _sibling_symbols
 
-            res = broker_1d(keys, allow_sibling_fallback=True)
+            res = intraday_feeds(keys, allow_sibling_fallback=True)
             identity_errors: list[str] = []
             resolved: dict[str, dict] = {}
             intraday_quotes: dict[str, dict] = {}
@@ -1492,11 +1369,6 @@ class MetricsEngine:
                 ctx.setdefault("_degraded", []).append("_live_1d")
 
             ctx["intraday_quotes"] = intraday_quotes
-            live = {
-                ticker: selected["pct"]
-                for ticker, selected in resolved.items()
-                if selected.get("pct") is not None
-            }
             live_flag = {
                 ticker: bool(selected.get("live"))
                 for ticker, selected in resolved.items()
@@ -1538,22 +1410,26 @@ class MetricsEngine:
             logger.debug("live 1D preprocessing failed: %s", e)
             return
 
-        # The percentages are NOT projected onto hp["1d"] or performance["1d"]
-        # any more: those come from each instrument's price series, whose
-        # current point _current_prices already stamped from this same quote
-        # pair (see that computer). Recomputing the move here gave the digest
-        # two answers for one KPI — a Session tile from the quote and a chart,
-        # a 1D row and a window matrix from the series, drifting apart by
-        # whatever the two feeds' snapshots disagreed on (0.18pp on 19 Aug
-        # 2026). What this computer still owns is the evidence the series
-        # cannot carry: the intraday path for the sparklines, and whether the
-        # figures are intraday at all.
+        # No percentage is projected onto hp["1d"] or performance["1d"]: those
+        # come from each instrument's price series, whose current point and
+        # previous-session close are both written from this same published quote
+        # pair by ``current_session``. The pair is therefore still the 1D
+        # authority — it just reaches the reader once, through the series,
+        # instead of being recomputed here into a second answer that drifted by
+        # whatever the two feeds disagreed on (0.18pp on 19 Aug 2026).
+        #
+        # What this computer owns is the evidence the daily series cannot carry:
+        # the intraday path for the sparklines, and whether the figures are
+        # intraday at all.
         hp["live_1d"] = [
             bool(live_flag.get(str(ticker), False)) for ticker in hp["ticker"]
         ]
         ctx["holding_performance"] = hp
-        ctx["live_1d"] = live
-        if not live:
+        if not resolved:
+            # Nothing resolved, so nothing can be said about the session basis.
+            # This used to test a dict of percentages whose values were then
+            # discarded — the presence of a pct was standing in for "some feed
+            # answered", which is what this says directly.
             return
         any_live = any(bool(flag) for flag in live_flag.values())
         for key in ("performance", "performance_full"):

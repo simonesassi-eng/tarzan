@@ -196,24 +196,6 @@ def preprocess_benchmarks(
     return catalog, tuple(errors)
 
 
-def _build_benchmark_series(
-    name: str,
-    ticker: str,
-    initial_value: float,
-    catalog: Mapping[str, ResolvedBenchmark] | None = None,
-) -> pd.Series:
-    """Compatibility projection from the already-preprocessed catalog.
-
-    No resolution or provider access is permitted here.  ``ticker`` must equal
-    the catalog's full ticker; otherwise an empty series makes the contract
-    violation visible instead of silently selecting another listing.
-    """
-    record = (catalog or {}).get(name)
-    if record is None or record.ticker != ticker:
-        return pd.Series(dtype=float)
-    return record.history
-
-
 def _compute_single_benchmark_metrics(
     bench: pd.Series,
     ab_benchmark: "pd.Series | None" = None,

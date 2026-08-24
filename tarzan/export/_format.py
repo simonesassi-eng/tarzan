@@ -287,7 +287,7 @@ def _taxonomy_names() -> dict:
     if _NAME_CACHE is None:
         try:
             from tarzan import config as _cfg
-            _NAME_CACHE = _cfg.instrument_display_names() or {}
+            _NAME_CACHE = _cfg.name_lookup() or {}
         except Exception:  # noqa: BLE001 — never break a render over a name
             _NAME_CACHE = {}
     return _NAME_CACHE

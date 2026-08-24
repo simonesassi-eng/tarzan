@@ -574,6 +574,22 @@ def _run_once(
     # can quietly distort allocations. Surface it in the data-quality report.
     _check_taxonomy_coverage(holdings)
 
+    # Write today's market point ONCE, before anything judges or consumes a
+    # price. Every "today" figure reads a price series while the portfolio's own
+    # valuation is selected separately, so "today" used to exist twice: the
+    # stamp lived in MetricsEngine and therefore ran AFTER this policy and after
+    # _valuation, which is why total_value and the series terminal could not
+    # agree by construction. Measured live on 24 Aug 2026 they sat €115 apart on
+    # a €242k book, entirely from two holdings whose valuation had fallen back
+    # (MONEY.MI to its 10.0920 order price against a market 10.1840).
+    from tarzan.data import current_session
+    stamped_tickers = current_session.apply_to_holdings(holdings)
+    if stamped_tickers:
+        session.ledger.append(LedgerEntryType.STAGE, {
+            "stage": "current_session_stamp",
+            "stamped": list(stamped_tickers),
+        })
+
     # Apply the explicit instrument/data-class valuation policy before any
     # optimizer call. A material or indeterminate gap keeps a labeled known
     # subtotal for evidence but suppresses planning and normal publication.

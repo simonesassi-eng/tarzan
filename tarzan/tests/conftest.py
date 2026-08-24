@@ -45,7 +45,7 @@ def _isolate_run_context():
 def _no_official_quote_batch(monkeypatch):
     """Stub the batched Yahoo quote pair network-free for the whole suite.
 
-    ``broker_1d`` measures the 1D against ``regularMarketPrice`` /
+    ``intraday_feeds`` measures the 1D against ``regularMarketPrice`` /
     ``regularMarketPreviousClose`` — the pair the instrument's own page shows.
     Left unstubbed, every fixture-driven quote test would reach the live
     endpoint and assert against whatever the market did today. Tests that

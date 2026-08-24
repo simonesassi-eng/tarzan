@@ -109,6 +109,17 @@ class TestEveryReachableVenueHasASession:
                    if s.lstrip(".").upper() not in mq._SUFFIX_EXCHANGE]
         assert missing == []
 
+    def test_every_eur_venue_the_resolver_probes_maps_to_a_session(self):
+        """``_resolve_via_taxonomy_quote`` probes ``_EUR_VENUE_SUFFIXES``, which
+        is a WIDER list than ``isin_exchange_suffixes`` (it carries .AS/.VI/.BR/
+        .LS/.MC/.HE/.IR on top of it). Only the narrower list was asserted here,
+        so .HE and .IR reached production with no modelled session — the exact
+        gap the sibling above describes, via a different resolver."""
+        from tarzan.data.enricher import _EUR_VENUE_SUFFIXES
+        missing = [s for s in _EUR_VENUE_SUFFIXES
+                   if s.lstrip(".").upper() not in mq._SUFFIX_EXCHANGE]
+        assert missing == []
+
     def test_every_sibling_fallback_suffix_maps_to_a_session(self):
         reachable = set(mq._SIBLING_SUFFIXES)
         for sibs in mq._SIBLING_SUFFIXES.values():
@@ -366,7 +377,7 @@ class TestMarketOpenCaption:
         def _boom(*a, **kw):
             raise RuntimeError("provider down")
 
-        monkeypatch.setattr(mq, "broker_1d", _boom)
+        monkeypatch.setattr(mq, "intraday_feeds", _boom)
         engine = MetricsEngine.__new__(MetricsEngine)
         engine.holdings = []
         hp = pd.DataFrame({"ticker": ["SGLD.MI"], "1d": [0.78]})
@@ -398,7 +409,7 @@ class TestMarketOpenSpeaksForThePortfolio:
         def _boom(*a, **kw):
             raise RuntimeError("provider down")
 
-        monkeypatch.setattr(mq, "broker_1d", _boom)
+        monkeypatch.setattr(mq, "intraday_feeds", _boom)
         engine = MetricsEngine.__new__(MetricsEngine)
         engine.holdings = holdings
         ctx = {"holding_performance": pd.DataFrame({"ticker": tickers}),

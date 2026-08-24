@@ -128,7 +128,7 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
     calls: list[object] = []
     violations: dict[str, object] = {}
 
-    def fake_broker_1d(tickers, *, allow_sibling_fallback):
+    def fake_intraday_feeds(tickers, *, allow_sibling_fallback):
         assert allow_sibling_fallback is True
         calls.append(("market", tuple(tickers)))
         return {str(t): {"pct": 1.25, "live": True} for t in tickers}
@@ -144,7 +144,7 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
                 lambda *a, **k: calls.append("gemini") or "Market context complete.",
             )
             mp.setattr(price_cache, "load_resolution", lambda ticker: ticker)
-            mp.setattr(market_quotes, "broker_1d", fake_broker_1d)
+            mp.setattr(market_quotes, "intraday_feeds", fake_intraday_feeds)
 
             runtime.configure(deterministic=False, as_of=effective_date)
             artifact_stamp = runtime.now_stamp("%Y-%m-%d %H:%M")

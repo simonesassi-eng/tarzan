@@ -16,7 +16,7 @@ import pandas as pd
 from tarzan.export._perf_series import (
     _perf_window,
     _perf_full_series,
-    _rebase_benchmark,
+    _rebase_to_window,
 )
 from tarzan.models.portfolio import PortfolioMetrics
 
@@ -35,7 +35,7 @@ def test_rebase_anchors_on_first_in_window_observation():
     # price; the fix must anchor on the first benchmark point >= the window
     # start instead.
     idx = pd.date_range("2026-06-13", "2026-07-13", freq="D")
-    out = _rebase_benchmark(b, idx)
+    out = _rebase_to_window(b, idx)
     assert out is not None
     # First value is exactly 0% (anchored, not a stale pre-window level).
     assert abs(out[0]) < 1e-9
@@ -181,7 +181,6 @@ def _contract_metrics(tmp_path, monkeypatch):
 
     monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", _stub_enrich)
     monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history", lambda *a, **k: bench)
-    monkeypatch.setattr("tarzan.engine.metrics._build_benchmark_series", lambda *a, **k: bench)
     # Route the geo benchmark name to our stub so benchmark_histories has it.
     monkeypatch.setattr("tarzan.engine.metrics.BENCHMARKS", {"MSCI ACWI": "ACWI"}, raising=False)
     monkeypatch.setattr("tarzan.engine.metrics.MetricsEngine._live_1d", lambda self, ctx: None)

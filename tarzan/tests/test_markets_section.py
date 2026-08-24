@@ -139,3 +139,83 @@ def test_real_intraday_chart_is_not_labelled_no_intraday():
          mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
         html = _build_markets(_ctx())["html"]
     assert "no intraday" not in html
+
+
+class TestMoversIgnoreInstrumentsWithoutAWeek:
+    """The best/worst cards must rank only instruments that HAVE a 5D.
+
+    ``sort_values(..., na_position="last")`` puts the missing rows at the end,
+    and "worst" is read off the end — so a holding with no 5D (a position opened
+    this week, a feed with under two closes) became the worst performer. The
+    figure then went through ``float(row.get("5d") or 0.0)``, and NaN is truthy,
+    so the card rendered an em dash in red while the real worst performer was
+    never shown.
+    """
+
+    def _movers(self, rows):
+        import pandas as pd
+        from tarzan.export.newsletter._sections_perf import _build_movers
+
+        metrics = PortfolioMetrics(
+            total_value=300.0, invested_value=300.0, cash_value=0.0,
+            holdings_df=pd.DataFrame([
+                {"ticker": r["ticker"], "asset_class": "Equities",
+                 "current_value": 100.0} for r in rows]),
+        )
+        metrics.holding_performance = pd.DataFrame(rows)
+        return _build_movers(_NewsletterContext(
+            metrics=metrics, config=InvestorConfig()))
+
+    def test_a_holding_with_no_five_day_is_not_the_worst_performer(self):
+        out = self._movers([
+            {"ticker": "AAA", "name": "Up", "type": "In portfolio", "5d": 3.0},
+            {"ticker": "BBB", "name": "Down", "type": "In portfolio", "5d": -7.5},
+            {"ticker": "CCC", "name": "New", "type": "In portfolio",
+             "5d": float("nan")},
+        ])
+        assert out["available"] is True
+        assert out["best"]["ticker"] == "AAA"
+        assert out["worst"]["ticker"] == "BBB", "the real worst, not the NaN row"
+        assert "7.5" in out["worst"]["pct"]
+        assert out["worst"]["is_positive"] is False
+
+    def test_no_holding_has_a_five_day_means_unavailable(self):
+        out = self._movers([
+            {"ticker": "AAA", "name": "New", "type": "In portfolio",
+             "5d": float("nan")},
+        ])
+        assert out["available"] is False
+
+
+class TestInstrumentNamesAreEscaped:
+    """Provider/broker text becomes markup in ``uni_name``, so it escapes there.
+
+    Ten curated names carry an ampersand — "iShares Core S&P 500", "L&G
+    Multi-Strategy", the whole Return Stacked family — and they reached the
+    document as a bare "&". Mail clients tolerate that, so it rendered fine and
+    the invalid markup went unnoticed; a name with an angle bracket would not
+    have. The digest template is ``.html.j2``, an extension
+    ``select_autoescape()`` does not match, so Jinja escapes nothing either:
+    this is the only place it can be done once for every table.
+    """
+
+    def test_an_ampersand_in_a_name_is_escaped(self):
+        from tarzan.export.newsletter._constants import uni_name
+
+        html = uni_name("iShares Core S&P 500 UCITS ETF", "SXR8")
+        assert "S&amp;P" in html
+        assert "S&P" not in html.replace("&amp;", "&amp;")
+
+    def test_markup_in_a_name_cannot_break_out(self):
+        from tarzan.export.newsletter._constants import uni_name
+
+        html = uni_name("<script>x</script>", "AAA")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_the_ticker_and_tags_are_escaped_too(self):
+        from tarzan.export.newsletter._constants import ticker_span, uni_name
+
+        assert "&amp;" in ticker_span("A&B")
+        tagged = uni_name("Name", "AAA", tags=(("α&β", "#000", "#fff"),))
+        assert "α&amp;β" in tagged

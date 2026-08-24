@@ -58,6 +58,14 @@ _SESSIONS: dict[str, tuple[str, tuple[int, int], tuple[int, int]]] = {
     # whose only Yahoo listing is one of these prints hours before and after
     # Xetra, and calling that "the previous session" would discard most of it.
     "DE_REG": ("Europe/Berlin", (8, 0), (22, 0)),
+    # Helsinki and Dublin trade the same instants as the "EU" group above but in
+    # their own local zones, so they need their own rows to caption real local
+    # hours. Both are reachable via enricher._EUR_VENUE_SUFFIXES (the venue list
+    # _resolve_via_taxonomy_quote probes), and without a session here
+    # session_day() returns None and the instrument silently reverts to the
+    # "whatever day the data ends on" convention this module exists to replace.
+    "HE": ("Europe/Helsinki", (10, 0), (18, 30)),  # Nasdaq Helsinki
+    "IR": ("Europe/Dublin", (8, 0), (16, 30)),     # Euronext Dublin
 }
 
 # Index / bare symbols → exchange group (symbols without a Yahoo suffix).
@@ -83,6 +91,7 @@ _SUFFIX_EXCHANGE: dict[str, str] = {
     "ETLX": "EU", "BR": "EU", "LS": "EU", "MC": "EU", "VI": "EU", "SW": "EU",
     "MU": "DE_REG", "SG": "DE_REG", "BE": "DE_REG", "DU": "DE_REG",
     "HM": "DE_REG", "HA": "DE_REG", "TG": "DE_REG",
+    "HE": "HE", "IR": "IR",
     "L": "L",
     "SS": "CN", "SZ": "CN", "HK": "HK", "T": "JP",
     "AX": "AU", "KS": "KR",
@@ -162,6 +171,7 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
 _SESSION_LABEL: dict[str, str] = {
     "EU": "CET", "L": "GMT", "US": "ET", "JP": "JST",
     "HK": "HKT", "CN": "CST", "AU": "AEST", "KR": "KST",
+    "HE": "EET", "IR": "IST",
 }
 
 
@@ -768,25 +778,22 @@ def _has_intraday(ser, ticker: Optional[str] = None) -> bool:
     return age_seconds <= _INTRADAY_STALE_AFTER_SECONDS
 
 
-def _official_and_prev(fetch_history, ticker: str, iday):
-    """From a ticker's daily history, return ``(official_close_on_iday,
-    previous_close_before_iday)`` as floats (or ``None`` each when missing).
+def _previous_close_before(fetch_history, ticker: str, iday):
+    """The last daily close STRICTLY BEFORE the session dated ``iday``, or None.
 
-    ``official_close_on_iday`` is the exchange's settled daily close for the
-    session dated ``iday`` (it incorporates the closing auction). Best-effort:
-    returns ``(None, None)`` on any error."""
+    This is the baseline an intraday sparkline is drawn against — the 0% line —
+    pulled from the same feed that produced the bars so the two are
+    currency-consistent. Best-effort: ``None`` on any error.
+    """
     try:
         hist = fetch_history(ticker)
         if hist is None or not len(hist) or "Close" not in getattr(hist, "columns", []):
-            return None, None
+            return None
         dclose = hist["Close"].dropna()
-        same = dclose[[ts.date() == iday for ts in dclose.index]]
         prior = dclose[[ts.date() < iday for ts in dclose.index]]
-        oc = float(same.iloc[-1]) if len(same) else None
-        pv = float(prior.iloc[-1]) if len(prior) else None
-        return oc, pv
+        return float(prior.iloc[-1]) if len(prior) else None
     except Exception:  # noqa: BLE001
-        return None, None
+        return None
 
 
 def _sibling_symbols(ticker: str) -> list[str]:
@@ -1059,7 +1066,18 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
                         fields[key] = float(value)
                 except (TypeError, ValueError):
                     continue
-            if fields:
+            # The instant the quote was observed. Carried because a stamped
+            # price becomes the holding's current price, and the valuation
+            # policy dates freshness on the OBSERVATION, not on when the
+            # request ran — without it a live quote would have to be booked
+            # as undated (i.e. fallback) evidence.
+            try:
+                observed = q.get("regularMarketTime")
+                if observed is not None:
+                    fields["time"] = int(observed)
+            except (TypeError, ValueError):
+                pass
+            if fields.get("price") or fields.get("prev_close"):
                 out[sym] = fields
         missing = [s for s in symbols if s not in out]
         if missing:
@@ -1146,30 +1164,44 @@ def _quote(dclose, intra, spark_points: int = 40,
             "observed_day": observed_day, "stale_session": stale_session}
 
 
-def broker_1d(
+def intraday_feeds(
     tickers: list[str],
     *,
     allow_sibling_fallback: bool = True,
 ) -> dict:
-    """Broker-style 1D return per ticker: the latest intraday price vs the
-    previous official close, in the instrument's listing currency.
+    """Resolve, per ticker, the intraday series to draw and its 0% baseline.
 
-    The portfolio pipeline enables sibling fallback here, once, and retains
-    the selected series plus provenance in its run-scoped metrics result.
-    ``allow_sibling_fallback=False`` remains available to exact-feed callers.
-    This is the "since previous close" figure a broker shows live during the
-    session (and the last completed session's change once closed). Returns
-    ``{ticker: {"pct": float, "live": bool}}`` only for tickers with a usable
-    intraday series (>=2 points); callers fall back to the end-of-day close
-    return for the rest. ``live`` is True only when the market is trading
-    *now* — i.e. the latest intraday bar is recent. A same-day bar from a
-    session that has already closed (e.g. viewed in the evening) is NOT live.
-    Best-effort and currency-consistent: both the live price and the previous
-    close come from the same native yfinance feed, so for a EUR-listed ETF
-    the % is the EUR daily move. Never raises."""
+    NOT a 1D return. This used to compute one — through three branches picking
+    between the published quote pair, the official daily close (with a sibling
+    fallback) and the last intraday tick — and the value was discarded: nothing
+    downstream read it. The 1D every table and chart shows comes from the
+    instrument's own price series via ``stats.compute_period_return``, whose
+    current point and previous-session close are both written from that same
+    published quote pair by :mod:`tarzan.data.current_session`. So the pair IS
+    still the authority for the 1D; it just reaches the reader through the
+    series, once, instead of being recomputed here into a second answer that
+    drifted from the first by whatever the two feeds disagreed on (0.18pp on
+    19 Aug 2026).
+
+    What only this resolver can establish is the evidence a daily series cannot
+    carry, and that is all it returns now:
+
+    * ``intraday_series`` — the bars to draw, from the canonical listing or,
+      when it has none, a guarded price-coherent EUR sibling;
+    * ``intraday_baseline`` — the previous close those bars are measured
+      against, from the SAME feed that produced them so the two are
+      currency-consistent;
+    * ``live`` — whether the venue that produced the bars is in its regular
+      session right now, judged by exchange hours rather than bar recency;
+    * the provenance (``intraday_source_ticker``, ``source_reason``) the
+      appendix's feed audit prints.
+
+    A row appears for a ticker with usable intraday bars, or with a published
+    quote pair that at least supplies a baseline. Never raises.
+    """
     import pandas as pd
     uniq = [t for t in {t for t in tickers if t}]
-    policy = {"policy_id": "broker_1d-v1", "requested_tickers": len(uniq)}
+    policy = {"policy_id": "intraday_feeds-v1", "requested_tickers": len(uniq)}
     if not uniq:
         return ProviderResult(
             {}, availability=Availability.AVAILABLE, attempts=(), policy=policy
@@ -1182,7 +1214,7 @@ def broker_1d(
             availability=Availability.UNAVAILABLE,
             attempts=(ProviderAttempt(
                 source="yfinance",
-                operation="broker_1d",
+                operation="intraday_feeds",
                 ordinal=1,
                 outcome=f"FAILED:{type(exc).__name__}",
                 fallback_rung=0,
@@ -1192,32 +1224,26 @@ def broker_1d(
     # Resolve intraday canonical-first with guarded EUR venue fallback. A
     # ``.MI`` holding can use a price-coherent same-root candidate only after
     # its canonical close is available for the collision guard. ``src`` is the
-    # listing the series came from, so the previous close is pulled from that
-    # SAME feed — keeping ``cur`` and ``prev`` currency-consistent.
+    # listing the series came from, so the baseline is pulled from that SAME
+    # feed.
     resolved = _resolve_intraday(
         uniq,
         allow_sibling_fallback=allow_sibling_fallback,
     )
-    # Yahoo's own headline pair for every requested ticker, batched once. It is
-    # the authority for the 1D: same two numbers the instrument's page shows,
-    # and sourced from the quote pipeline rather than the daily chart, which can
-    # be missing the very session being measured.
     official = _fetch_official_quotes(uniq)
     out: dict = {}
     for tk in uniq:
         intra, src = resolved.get(tk, (None, tk))
-        quote = official.get(tk) or {}
-        q_price, q_prev = quote.get("price"), quote.get("prev_close")
+        q_prev = (official.get(tk) or {}).get("prev_close")
+        now_ref = _intraday_reference_now()
+
         if intra is None or len(intra) < 2:
-            # No usable intraday series: the quote pair alone still yields the
-            # published 1D (live during the session, the last completed
-            # session's move outside it), where before the row fell back to a
-            # close-to-close read of a chart that may have a hole in it.
-            if q_price and q_prev:
-                is_open = market_open_now(tk, now=_intraday_reference_now())
+            # No bars to draw. The published previous close is still worth
+            # carrying: it is the baseline for the row's pill, and its presence
+            # is what tells the caller a live quote exists for this instrument.
+            if q_prev:
                 out[tk] = {
-                    "pct": (q_price / q_prev - 1.0) * 100.0,
-                    "live": bool(is_open),
+                    "live": bool(market_open_now(tk, now=now_ref)),
                     "source_ticker": tk,
                     "intraday_source_ticker": tk,
                     "intraday_series": None,
@@ -1226,132 +1252,59 @@ def broker_1d(
                     "source_reason": "yahoo official quote (no intraday feed)",
                 }
             continue
-        cur = float(intra.iloc[-1])
+
         last_ts = intra.index[-1]
         try:
-            intraday_observation = pd.Timestamp(last_ts)
-            if intraday_observation.tzinfo is None:
-                intraday_observation = intraday_observation.tz_localize("UTC")
-            else:
-                intraday_observation = intraday_observation.tz_convert("UTC")
-            intraday_observation_timestamp = (
-                intraday_observation.to_pydatetime()
-            )
+            observation = pd.Timestamp(last_ts)
+            observation = (observation.tz_localize("UTC")
+                           if observation.tzinfo is None
+                           else observation.tz_convert("UTC"))
+            observed_at = observation.to_pydatetime()
         except (TypeError, ValueError, OverflowError):
-            intraday_observation_timestamp = None
-        # Dated in the SOURCE VENUE's timezone: the daily history this indexes
-        # into is keyed by exchange-local dates, so a UTC read would look up
-        # the wrong session's official close for any venue east of UTC.
-        iday = _observed_day(last_ts, _exchange_tz(src))
-        # "live" = the source listing's exchange is in its regular session
-        # right now, judged by EXCHANGE HOURS (not bar recency). Uses ``src``
-        # so a Milan holding served by its Xetra twin is judged by the venue
-        # that actually produced the bars. FX/futures/crypto have no fixed
-        # session → market_open_now returns None and we fall back to recency.
-        # "now" goes through _intraday_reference_now — the same pinnable seam
-        # _has_intraday uses — instead of a bare market_open_now(src) (no
-        # now=) or Timestamp.now(): those read the REAL wall clock, so
-        # is_live silently depended on what moment this happened to run,
-        # not on the series' own reference time. A test built around a
-        # fixed historical "now" only gets a deterministic result once this
-        # reads through the same pinnable seam.
-        now_ref = _intraday_reference_now()
+            observed_at = None
+
+        # "live" = the SOURCE listing's exchange is in its regular session right
+        # now, judged by EXCHANGE HOURS (not bar recency). Uses ``src`` so a
+        # Milan holding served by its Xetra twin is judged by the venue that
+        # actually produced the bars. FX/futures/crypto have no fixed session →
+        # market_open_now returns None and we fall back to recency. "now" goes
+        # through _intraday_reference_now, the same pinnable seam _has_intraday
+        # uses, so liveness never depends on the real wall clock.
         mkt_open = market_open_now(src, now=now_ref)
         if mkt_open is None:
             try:
-                lt = (last_ts.tz_convert("UTC") if getattr(last_ts, "tzinfo", None)
+                lt = (last_ts.tz_convert("UTC")
+                      if getattr(last_ts, "tzinfo", None)
                       else last_ts.tz_localize("UTC"))
-                age_min = (now_ref - lt).total_seconds() / 60.0
-                is_live = age_min <= _MARKET_OPEN_MAX_LAG_MIN
+                is_live = ((now_ref - lt).total_seconds() / 60.0
+                           <= _MARKET_OPEN_MAX_LAG_MIN)
             except Exception:  # noqa: BLE001
                 is_live = False
         else:
             is_live = bool(mkt_open)
 
-        # Preserve the exact series and its own previous-close baseline. The
-        # renderer consumes these values directly, so it never has to fetch or
-        # re-resolve a venue and cannot drift from the 1D calculation.
-        source_official, source_previous_close = _official_and_prev(
-            _fetch_history, src, iday
-        )
-        intraday_baseline = (
-            source_previous_close
-            if source_previous_close
-            else float(intra.iloc[0])
-        )
+        # The bars' own previous close. Dated in the SOURCE VENUE's timezone:
+        # the daily history this indexes into is keyed by exchange-local dates,
+        # so a UTC read would look up the wrong session for any venue east of
+        # UTC. The canonical listing's published pair wins when the bars are its
+        # own, so the pill and the line share one reference.
+        iday = _observed_day(last_ts, _exchange_tz(src))
+        feed_prev = _previous_close_before(_fetch_history, src, iday)
+        baseline = (q_prev if (src == tk and q_prev)
+                    else (feed_prev or float(intra.iloc[0])))
 
-        # Yahoo's published pair wins for the percentage: for the canonical
-        # listing it IS the figure on the instrument's page, in both session
-        # states, and it survives a daily chart that lost the session being
-        # measured (17 Aug 2026 on every Milan ETF). The intraday series stays
-        # as resolved so the sparkline still comes from the venue that produced
-        # the bars; its baseline follows the same close as the percentage
-        # whenever the bars are the canonical listing's own.
-        if q_price and q_prev:
-            out[tk] = {
-                "pct": (q_price / q_prev - 1.0) * 100.0,
-                "live": bool(is_live),
-                "source_ticker": tk,
-                "intraday_source_ticker": src,
-                "intraday_series": intra,
-                "intraday_baseline": q_prev if src == tk else intraday_baseline,
-                "intraday_observation_timestamp": intraday_observation_timestamp,
-                "source_reason": "yahoo official quote (price vs previous close)",
-            }
-            continue
-
-        # --- Closed session: the authoritative 1D move is the instrument's
-        # OWN primary-listing official daily close (which includes the closing
-        # auction) vs its previous close — exactly what a broker shows for the
-        # held position. The sibling series remains the sparkline source. ---
-        if not is_live:
-            for cand in dict.fromkeys((tk, src)):
-                if cand == src:
-                    oc, pv = source_official, source_previous_close
-                else:
-                    oc, pv = _official_and_prev(_fetch_history, cand, iday)
-                if oc is not None and pv:
-                    out[tk] = {
-                        "pct": (oc / pv - 1.0) * 100.0,
-                        "live": False,
-                        "source_ticker": cand,
-                        "intraday_source_ticker": src,
-                        "intraday_series": intra,
-                        "intraday_baseline": intraday_baseline,
-                        "intraday_observation_timestamp": (
-                            intraday_observation_timestamp
-                        ),
-                        "source_reason": (
-                            "canonical official close"
-                            if cand == tk
-                            else "price-coherent EUR venue official-close fallback"
-                        ),
-                    }
-                    break
-            if tk in out:
-                continue
-
-        # --- Live session (or no official close available yet): the latest
-        # intraday tick vs the previous close from the SAME feed, so ``cur``
-        # and ``prev`` are currency-consistent. ---
-        prev = source_previous_close or float(intra.iloc[0])
-        if prev:
-            out[tk] = {
-                "pct": (cur / prev - 1.0) * 100.0,
-                "live": bool(is_live),
-                "source_ticker": src,
-                "intraday_source_ticker": src,
-                "intraday_series": intra,
-                "intraday_baseline": prev,
-                "intraday_observation_timestamp": (
-                    intraday_observation_timestamp
-                ),
-                "source_reason": (
-                    "canonical intraday feed"
-                    if src == tk
-                    else "price-coherent EUR venue intraday fallback"
-                ),
-            }
+        out[tk] = {
+            "live": bool(is_live),
+            "source_ticker": tk,
+            "intraday_source_ticker": src,
+            "intraday_series": intra,
+            "intraday_baseline": baseline,
+            "intraday_observation_timestamp": observed_at,
+            "source_reason": (
+                "canonical intraday feed" if src == tk
+                else "price-coherent EUR venue intraday fallback"
+            ),
+        }
     coverage = len(out) / len(uniq) * 100.0 if uniq else 100.0
     availability = (
         Availability.AVAILABLE if len(out) == len(uniq)
@@ -1363,7 +1316,7 @@ def broker_1d(
         availability=availability,
         attempts=(ProviderAttempt(
             source="yfinance",
-            operation="broker_1d",
+            operation="intraday_feeds",
             ordinal=1,
             outcome="SUCCEEDED" if out else "UNAVAILABLE",
             fallback_rung=0,
@@ -1404,7 +1357,7 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             # dressed up as today's. At (or just after) the open the 15m feed
             # has no today bars yet, so _fetch_intraday collapses to yesterday's
             # full session — which would render full-width next to a live "Op."
-            # badge. The same freshness gate the holdings path uses (broker_1d /
+            # badge. The same freshness gate the holdings path uses (intraday_feeds /
             # _resolve_intraday) rejects a session that's stale while the market
             # is open, so _quote falls back to the daily-close chart ("no
             # intraday"). Fresh intraday (mid-session) and a genuinely completed

@@ -1539,15 +1539,14 @@ def _is_previous_trading_day(symbol: str, own_last_date, today) -> bool:
     ``today`` for ``symbol``'s exchange — i.e. exactly one session is
     missing, not several.
 
-    Weekends are skipped (holidays are not modelled anywhere in Tarzan, so a
-    holiday simply makes this False and the fill declines — the conservative
-    direction).
+    Reads the vendored exchange calendar, so the day after a holiday correctly
+    treats the session before it as adjacent. Before that this skipped weekends
+    only, and a holiday made it decline: the tail fill simply did not happen on
+    ~6-17 days a year depending on the venue.
     """
-    from datetime import timedelta
-    probe = today - timedelta(days=1)
-    while probe.weekday() >= 5:
-        probe -= timedelta(days=1)
-    return own_last_date == probe
+    from tarzan.data.exchange_calendar import previous_session
+
+    return own_last_date == previous_session(symbol, today)
 
 
 def _fetch_history(symbol: str) -> pd.DataFrame:
@@ -3122,6 +3121,10 @@ def _set_price_data(
         prices = prices[prices > 0]
         prices = _clip_to_as_of(prices)
         if len(prices) > 0:
+            # Name the series after the listing it came from: that is how every
+            # window resolves which exchange calendar governs it (see
+            # stats._series_ticker). The benchmark path already does the same.
+            prices.name = holding.ticker or prices.name
             holding.price_history = prices
             selected_index = prices.index[-1]
             selected_key = _history_timestamp_key(selected_index)
