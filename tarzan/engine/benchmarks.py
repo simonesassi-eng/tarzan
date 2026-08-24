@@ -82,15 +82,21 @@ def _drop_weekends(series: pd.Series) -> pd.Series:
     anchor: ``window_anchor`` takes the last row on-or-before the cutoff, so a
     weekend row nearer the cutoff than the real close is picked instead. That
     drove MSCI ACWI (ISAC.MI) to a reported +1.7% against a real +0.08% on
-    22 Aug 2026. Weekday is read on the tz-collapsed UTC date, matching the
-    rest of the return math (see :func:`normalize_index`).
+    22 Aug 2026.
+
+    The weekday is the VENUE's, read off the tz-aware index directly. Collapsing
+    to UTC first — which this used to do — moves a venue east of UTC back a day,
+    because a daily bar is stamped at local midnight: Milan's Monday
+    ``00:00+02:00`` becomes Sunday ``22:00`` in UTC. That silently deleted EVERY
+    MONDAY from every Milan/Xetra benchmark series, 118 of 576 rows on ISAC.MI —
+    a fifth of the history — and with the last row a Friday, the Monday 1D
+    collapsed onto the series end and reported as unavailable. A genuine
+    FX-artifact weekend row is still dropped: its local weekday is the weekend
+    too, which is what this exists to remove.
     """
     if series is None or series.empty or not isinstance(series.index, pd.DatetimeIndex):
         return series
-    idx = series.index
-    if idx.tz is not None:
-        idx = idx.tz_convert("UTC").tz_localize(None)
-    return series[idx.weekday < 5]
+    return series[series.index.weekday < 5]
 
 
 def _fetch_benchmark_history(ticker: str) -> pd.Series:

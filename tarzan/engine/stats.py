@@ -160,10 +160,14 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
         # and not the other.
         from tarzan.data.exchange_calendar import sessions_back
 
+        # Shift ``end`` by whole days rather than rebuilding the cutoff at
+        # midnight: a daily bar is stamped at the VENUE's midnight, so a US
+        # series carries 04:00+00:00 and a midnight-UTC cutoff sorts BEFORE the
+        # session it names — the anchor then slid one session early and the
+        # guard below dropped the 1D for every US listing. Shifting preserves
+        # both the timezone and the time-of-day, so the comparison is exact.
         stepped = sessions_back(ticker, end.date(), span - 1)
-        cutoff = pd.Timestamp(stepped)
-        if end.tz is not None:
-            cutoff = cutoff.tz_localize(end.tz)
+        cutoff = end + (pd.Timestamp(stepped) - pd.Timestamp(end.date()))
     elif unit == "months":
         cutoff = end - pd.DateOffset(months=span)
     elif unit == "years":
