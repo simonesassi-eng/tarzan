@@ -88,13 +88,15 @@ class TestPerfSeriesExtraction:
         idx = pd.date_range("2025-01-01", periods=40, freq="D")
         pnl = pd.Series(range(40), index=idx, dtype=float)     # +1/day
         actual = pd.Series([1000.0] * 40, index=idx)
-        # Windows are measured back from the run's today; here that is the
-        # fixture's own last day.
+        # Windows end on the last SESSION the series observed. This fixture is
+        # calendar-daily and ends Sunday 9 Feb, so the window ends on Friday
+        # 7 Feb — the same roll a real portfolio NAV gets, since it also carries
+        # weekends flat.
         monkeypatch.setattr("tarzan.runtime.today", lambda: datetime.date(2025, 2, 9))
         gain, pct = _window_money_pnl(pnl, actual, "1m")
-        # 1M is a calendar month: 9 Feb back to 9 Jan (index 8), so 39 - 8.
-        assert gain == 31.0
-        assert pct == 3.1                    # 31 / 1000 * 100
+        # 1M is a calendar month: 7 Feb back to 7 Jan (index 6), so 39 - 6.
+        assert gain == 33.0
+        assert round(pct, 6) == 3.3           # 33 / 1000 * 100
 
     def test_window_twror_none_on_short_series(self):
         from tarzan.export._perf_series import _window_twror

@@ -80,18 +80,28 @@ class TestTrailingWindowAnchor:
         # 18 Aug (Tue) back five sessions → 11 Aug (Tue): six closes, five moves.
         assert window_anchor(s, "5d") == pd.Timestamp("2026-08-11")
 
-    def test_a_stale_feed_shortens_the_window_instead_of_sliding_it(self):
-        """NTSG.MI on 18 Aug 2026: no close after the 14th. Counting five
-        sessions back from its OWN last row reached 8 Aug and reported +0.79%;
-        counting back from today gives the +0.60% its page shows over the
-        sessions the window really contains.
+    def test_a_feed_with_no_current_price_measures_the_window_it_has(self):
+        """NTSG.MI on 18 Aug 2026: no close after the 14th, and no quote the
+        sanity gate would accept either.
+
+        Both edges of a window must be read off the same clock. This used to
+        count the START from the run's calendar day while the ENDPOINT came from
+        the series, which paired 18 Aug with a 14 Aug close and reported a
+        five-session move over three. The window now ends on the last session
+        the series actually observed, so it spans five real sessions (7->14 Aug)
+        and says what it measured.
+
+        When Yahoo DOES quote the instrument the stamp writes that quote, dated
+        by its own ``regularMarketTime`` — the live intraday point while the
+        venue trades, the completed close once it shuts — so this branch is
+        reached only when there is genuinely no current price.
         """
         stale = _closes([
             ("2026-08-07", 28.8), ("2026-08-10", 29.0), ("2026-08-11", 29.1),
             ("2026-08-12", 29.2), ("2026-08-13", 29.4), ("2026-08-14", 29.6),
         ])
-        assert window_anchor(stale, "5d") == pd.Timestamp("2026-08-11")
-        assert round(compute_period_return(stale, "5d"), 2) == round((29.6 / 29.1 - 1) * 100, 2)
+        assert window_anchor(stale, "5d") == pd.Timestamp("2026-08-07")
+        assert round(compute_period_return(stale, "5d"), 2) == round((29.6 / 28.8 - 1) * 100, 2)
 
     def test_the_money_and_percent_columns_share_one_window(self):
         """The matrix row said "7 days" and mixed two spans: the euros walked
@@ -500,12 +510,24 @@ class TestWeekendWindowEnd:
         series_end = pd.Timestamp("2026-08-21")
         assert _window_end(series_end) == pd.Timestamp("2026-08-21")  # Friday, not Sunday
 
-    def test_window_end_is_a_noop_on_a_trading_day(self, monkeypatch):
+    def test_the_window_ends_where_the_data_ends(self, monkeypatch):
         import tarzan.runtime as rt
         from tarzan.engine.stats import _window_end
-        # Friday 2026-08-21; a lagging feed ends Wednesday — still measure from today.
+        # Friday 2026-08-21, but this feed's last observation is Wednesday. The
+        # window ends there: pairing a start counted from Friday with a Wednesday
+        # endpoint is what made every window a session short of the published
+        # figure. A quote for Friday would have been stamped and BE the last
+        # observation, so this is the no-current-price case.
         monkeypatch.setattr(rt, "today", lambda: __import__("datetime").date(2026, 8, 21))
-        assert _window_end(pd.Timestamp("2026-08-19")) == pd.Timestamp("2026-08-21")
+        assert _window_end(pd.Timestamp("2026-08-19")) == pd.Timestamp("2026-08-19")
+
+    def test_a_carried_weekend_row_still_rolls_to_the_last_session(self, monkeypatch):
+        """The order-derived portfolio NAV is calendar-daily, so its last row is
+        routinely a Sunday carrying Friday's value."""
+        import tarzan.runtime as rt
+        from tarzan.engine.stats import _window_end
+        monkeypatch.setattr(rt, "today", lambda: __import__("datetime").date(2026, 8, 23))
+        assert _window_end(pd.Timestamp("2026-08-23")) == pd.Timestamp("2026-08-21")
 
 
 class TestATzAwareSeriesKeepsItsOwnClock:
@@ -639,5 +661,6 @@ class TestAWindowEdgeIsASessionDateNotATimestamp:
         """The bug made it six: 18..24 Aug instead of 19..24."""
         import datetime as _dt
         _native, converted = self._pair()
-        # Tue 25 Aug back five sessions is Tue 18 Aug.
-        assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 18)
+        # The series' last observation is Mon 24 Aug, and five sessions back
+        # from it is Mon 17 Aug — the anchor Yahoo's own page uses.
+        assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 17)
