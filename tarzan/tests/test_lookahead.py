@@ -84,8 +84,6 @@ def _run(monkeypatch, tmp_path, *, post_asof_multiplier, extra_future_days):
     empty = pd.Series(dtype=float)
     monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history",
                         lambda *a, **k: empty)
-    monkeypatch.setattr("tarzan.engine.metrics._build_benchmark_series",
-                        lambda *a, **k: empty)
     orders = tmp_path / "order_list.csv"
     orders.write_text(_ORDERS_CSV)
     metrics, _ = orchestrator.run(
@@ -746,9 +744,6 @@ def _run_c1_orders(monkeypatch, tmp_path, orders_csv: str):
     empty = pd.Series(dtype=float)
     monkeypatch.setattr(
         "tarzan.engine.metrics._fetch_benchmark_history", lambda *a, **k: empty
-    )
-    monkeypatch.setattr(
-        "tarzan.engine.metrics._build_benchmark_series", lambda *a, **k: empty
     )
     orders = tmp_path / "c1_order_list.csv"
     config = tmp_path / "c1_targets.csv"

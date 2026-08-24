@@ -6,6 +6,7 @@ Leaf module: depends only on external packages. Everything above sits on top.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 from typing import Optional
 
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
@@ -173,12 +174,21 @@ def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=None):
         f'<span style="display:inline-block;margin-left:4px;padding:1px 6px;'
         f'background:{t[2]};color:{t[1]};border-radius:4px;'
         f'font-size:{TYPE_PX["label"]}px;font-weight:700;'
-        f'vertical-align:middle;">{t[0]}</span>' for t in (tags or ()))
+        f'vertical-align:middle;">{escape(str(t[0]))}</span>'
+        for t in (tags or ()))
     span_html = (f'<span style="margin-left:6px;'
                  f'font-size:{TYPE_PX["label"]}px;'
-                 f'font-weight:600;color:{P["subtle"]};">{span}</span>'
+                 f'font-weight:600;color:{P["subtle"]};">{escape(str(span))}</span>'
                  if span else "")
-    name_html = (f'<span style="color:{P["muted"]};">{name}</span>'
+    # Instrument names are provider/broker text, so this is the boundary where
+    # untrusted text becomes markup and the only place it can be escaped once
+    # for every table. Ten curated names carry an ampersand ("iShares Core S&P
+    # 500", "L&G Multi-Strategy", the Return Stacked family), which reached the
+    # document as a bare & — invalid HTML that mail clients happen to tolerate,
+    # so it rendered fine and was never caught. The digest template is
+    # ``.html.j2``, an extension select_autoescape() does not match, so Jinja
+    # escapes nothing on the way out either.
+    name_html = (f'<span style="color:{P["muted"]};">{escape(str(name))}</span>'
                  if name else "")
     inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'
     # The row takes the DATA role's leading unless a caller sets its own. The
@@ -202,7 +212,7 @@ def ticker_span(ticker: str) -> str:
     if not ticker:
         return ""
     return (f'<span style="font-family:{FONT_STACK};{TYPE["data"]}'
-            f'color:{PALETTE["accent"]};">{ticker}</span>'
+            f'color:{PALETTE["accent"]};">{escape(str(ticker))}</span>'
             f'<span style="padding-left:7px;"></span>')
 
 

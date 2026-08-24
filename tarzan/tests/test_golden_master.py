@@ -75,8 +75,6 @@ def _golden_run(tmp_path, monkeypatch):
     empty = pd.Series(dtype=float)
     monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history",
                         lambda *a, **k: empty)
-    monkeypatch.setattr("tarzan.engine.metrics._build_benchmark_series",
-                        lambda *a, **k: empty)
     orders = tmp_path / "order_list.csv"
     orders.write_text(_ORDERS_CSV)
     metrics, _ = orchestrator.run(

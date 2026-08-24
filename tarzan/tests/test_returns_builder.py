@@ -1814,7 +1814,7 @@ class TestUnavailableOrderHistory:
         )
         live_requests = []
 
-        def _broker_1d(symbols, *, allow_sibling_fallback):
+        def _intraday_feeds(symbols, *, allow_sibling_fallback):
             assert allow_sibling_fallback is True
             live_requests.extend(symbols)
             return {
@@ -1822,7 +1822,7 @@ class TestUnavailableOrderHistory:
                 for symbol in symbols
             }
 
-        monkeypatch.setattr("tarzan.data.market_quotes.broker_1d", _broker_1d)
+        monkeypatch.setattr("tarzan.data.market_quotes.intraday_feeds", _intraday_feeds)
         runtime.configure(
             deterministic=True,
             as_of=datetime.date(2025, 1, 3),

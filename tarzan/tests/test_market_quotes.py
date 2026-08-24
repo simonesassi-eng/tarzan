@@ -334,8 +334,8 @@ def test_resolve_intraday_logs_reason_when_all_candidates_exhausted(monkeypatch,
     assert "exhausted for NTSG.MI" in text
 
 
-def test_broker_1d_closed_stale_primary_anchors_wrong_day(monkeypatch):
-    # Reproduces a second symptom of the same bug: broker_1d derives `iday`
+def test_intraday_feeds_closed_stale_primary_anchors_wrong_day(monkeypatch):
+    # Reproduces a second symptom of the same bug: intraday_feeds derives `iday`
     # (which calendar day's official close to look up) from the primary
     # intraday series' *last timestamp*. If that primary is stale from a
     # PRIOR calendar day — not just old-within-today — the old length-only
@@ -371,12 +371,16 @@ def test_broker_1d_closed_stale_primary_anchors_wrong_day(monkeypatch):
     # trading day - both needed for _no_trading_day_skipped to correctly
     # see this as "skipped a session", not "just closed".
     _pin_now(monkeypatch, "2026-07-10 20:00")
-    res = mq.broker_1d(["NTSG.MI"])
+    res = mq.intraday_feeds(["NTSG.MI"])
     assert "NTSG.MI" in res
-    # Correct: anchored to 2026-07-10 (95 vs prior close 100) = -5.00%.
-    # The pre-fix bug anchored to the stale primary's day, 2026-07-08
-    # (100 vs prior close 90) = +11.11% — wrong sign, wrong magnitude.
-    assert round(res["NTSG.MI"]["pct"], 2) == -5.00
+    selected = res["NTSG.MI"]
+    # The stale primary must not supply the bars, because its last timestamp is
+    # what dates them: accepting 2026-07-08 made the row describe a session two
+    # days old. The fresh sibling does, so the baseline is the close before
+    # ITS day (2026-07-09 = 100.0), not the one before the stale primary's.
+    assert selected["intraday_source_ticker"] == "NTSG.DE"
+    assert selected["intraday_baseline"] == 100.0
+    assert selected["intraday_observation_timestamp"].date().isoformat() == "2026-07-10"
 
 
 def test_stale_day_detection_probes_in_exchange_time_not_series_time(monkeypatch):
@@ -416,9 +420,9 @@ def test_stale_day_detection_probes_in_exchange_time_not_series_time(monkeypatch
         "Thursday was a real US trading day — the skip must be detected"
     assert mq._has_intraday(stale_primary, "^GSPC") is False, \
         "a primary two days stale must not pass as the last session"
-    # With the stale primary rejected and no sibling for an index, broker_1d
+    # With the stale primary rejected and no sibling for an index, intraday_feeds
     # reports nothing rather than the stale-day anchored +11.11% (100 vs 90).
-    assert "^GSPC" not in mq.broker_1d(["^GSPC"])
+    assert "^GSPC" not in mq.intraday_feeds(["^GSPC"])
 
 
 def test_resolve_intraday_rejects_price_collision(monkeypatch):
@@ -431,10 +435,10 @@ def test_resolve_intraday_rejects_price_collision(monkeypatch):
     assert mq._resolve_intraday(["NTSG.MI"]) == {}
 
 
-def test_broker_1d_uses_sibling_prev_close(monkeypatch):
-    # cur (Xetra last) and prev (Xetra previous close) must both come from the
-    # sibling feed, so the % is the coherent Xetra EUR move (not a Milan/Xetra
-    # cross), and the row is keyed under the requested .MI ticker.
+def test_intraday_feeds_uses_sibling_prev_close(monkeypatch):
+    # The bars and the baseline they are measured against must come from the
+    # SAME feed, so the drawn line is a coherent Xetra move and not a
+    # Milan/Xetra cross. The row stays keyed under the requested .MI ticker.
     sib = _intra([29.2, 29.66])
     monkeypatch.setattr(mq, "_fetch_intraday",
                         lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
@@ -447,95 +451,30 @@ def test_broker_1d_uses_sibling_prev_close(monkeypatch):
     monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
     monkeypatch.setattr(mq, "market_open_now", lambda s, now=None: True)
     _pin_now(monkeypatch, "2026-07-10 09:05")
-    res = mq.broker_1d(["NTSG.MI"])
+    res = mq.intraday_feeds(["NTSG.MI"])
     assert "NTSG.MI" in res
     selected = res["NTSG.MI"]
-    # 29.66 / 29.18 - 1 = +1.645% (Xetra-consistent), not 29.66/29.19.
-    assert round(selected["pct"], 3) == round((29.66 / 29.18 - 1) * 100, 3)
     assert selected["live"] is True
-    assert selected["source_ticker"] == "NTSG.DE"
     assert selected["intraday_source_ticker"] == "NTSG.DE"
     assert selected["intraday_series"].equals(sib)
-    assert selected["intraday_baseline"] == 29.18
+    assert selected["intraday_baseline"] == 29.18   # Xetra's, not Milan's 29.19
 
 
-# ---------------------------------------------------------------------------
-# Closed-session % uses the official daily close, not the last intraday tick
-# ---------------------------------------------------------------------------
 def _daily(dates_values):
     idx = pd.to_datetime([d for d, _ in dates_values])
     return pd.DataFrame({"Close": [v for _, v in dates_values]}, index=idx)
 
 
-def test_broker_1d_closed_uses_official_close(monkeypatch):
-    # Intraday last tick is a lone high print (29.66 @ 17:19); the official
-    # 17:30 auction close is 29.415. With the session CLOSED, the % must use
-    # the official close → +0.81%, not the +1.64% the last tick would give.
-    intra = _intra([29.30, 29.66], day="2026-07-10", start="17:14")
-    monkeypatch.setattr(mq, "_fetch_intraday",
-                        lambda symbols: {"NTSG.DE": intra} if "NTSG.DE" in symbols else {})
-    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
-                        lambda s: _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)]))
-    monkeypatch.setattr(mq, "market_open_now", lambda s, now=None: False)  # session closed
-    _pin_now(monkeypatch, "2026-07-10 17:19")
-    res = mq.broker_1d(["NTSG.MI"])
-    assert res["NTSG.MI"]["live"] is False
-    assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
-
-
-def test_broker_1d_live_uses_last_tick(monkeypatch):
-    # While the session is LIVE there is no official close yet, so the latest
-    # intraday tick is the correct "current" price → +1.64%.
-    intra = _intra([29.30, 29.66], day="2026-07-10", start="11:00")
-    monkeypatch.setattr(mq, "_fetch_intraday",
-                        lambda symbols: {"NTSG.DE": intra} if "NTSG.DE" in symbols else {})
-    # No same-day daily bar yet (market still open); only the prior close.
-    monkeypatch.setattr("tarzan.data.enricher._fetch_history",
-                        lambda s: _daily([("2026-07-09", 29.18)]))
-    monkeypatch.setattr(mq, "market_open_now", lambda s, now=None: True)  # session live
-    _pin_now(monkeypatch, "2026-07-10 11:05")
-    res = mq.broker_1d(["NTSG.MI"])
-    assert res["NTSG.MI"]["live"] is True
-    assert round(res["NTSG.MI"]["pct"], 2) == round((29.66 / 29.18 - 1) * 100, 2)  # +1.64%
-
-
-def test_broker_1d_closed_prefers_primary_listing_over_sibling(monkeypatch):
-    # .MI intraday empty → sparkline borrows Xetra; but once CLOSED the % must
-    # come from the PRIMARY (Milan) official close, not the Xetra twin.
-    # Milan closes 29.19 → 29.385 (+0.67%); Xetra closes 29.18 → 29.415 (+0.81%).
-    sib = _intra([29.30, 29.66])
-    monkeypatch.setattr(mq, "_fetch_intraday",
-                        lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
-
-    def fake_hist(symbol):
-        return {"NTSG.MI": _daily([("2026-07-09", 29.19), ("2026-07-10", 29.385)]),
-                "NTSG.DE": _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)])}.get(symbol)
-
-    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
-    monkeypatch.setattr(mq, "market_open_now", lambda s, now=None: False)  # closed
-    _pin_now(monkeypatch, "2026-07-10 09:05")
-    res = mq.broker_1d(["NTSG.MI"])
-    assert res["NTSG.MI"]["live"] is False
-    assert round(res["NTSG.MI"]["pct"], 2) == round((29.385 / 29.19 - 1) * 100, 2)  # +0.67%
-
-
-def test_broker_1d_closed_falls_back_to_sibling_close(monkeypatch):
-    # Primary listing has no official close for the day (e.g. Milan daily not
-    # yet updated) → use the sibling's official close rather than nothing.
-    sib = _intra([29.30, 29.66])
-    monkeypatch.setattr(mq, "_fetch_intraday",
-                        lambda symbols: {"NTSG.DE": sib} if "NTSG.DE" in symbols else {})
-
-    def fake_hist(symbol):
-        # NTSG.MI: only the prior day (no 07-10 close). NTSG.DE: full.
-        return {"NTSG.MI": _daily([("2026-07-09", 29.19)]),
-                "NTSG.DE": _daily([("2026-07-09", 29.18), ("2026-07-10", 29.415)])}.get(symbol)
-
-    monkeypatch.setattr("tarzan.data.enricher._fetch_history", fake_hist)
-    monkeypatch.setattr(mq, "market_open_now", lambda s, now=None: False)
-    _pin_now(monkeypatch, "2026-07-10 09:05")
-    res = mq.broker_1d(["NTSG.MI"])
-    assert round(res["NTSG.MI"]["pct"], 2) == round((29.415 / 29.18 - 1) * 100, 2)  # +0.81%
+# Four tests stood here, pinning WHICH price the resolver's own 1D percentage
+# was computed from in each session state: the official daily close once closed
+# (so a lone 17:19 high print could not stand in for the 17:30 auction), the
+# primary listing's close in preference to a sibling's, a sibling's when the
+# primary had none, and the last intraday tick while live. That percentage was
+# discarded — nothing downstream read it — and the concern it guarded now lives
+# on the one path that IS read: the stamp writes both endpoints of the 1D window
+# from the published quote pair, which incorporates the closing auction and is
+# the canonical listing's own. See ``current_session`` and
+# ``TestOneDayIsTheQuotePairThroughTheSeries``.
 
 
 # ---------------------------------------------------------------------------

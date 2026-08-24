@@ -101,6 +101,44 @@ class TestTrailingWindowAnchor:
         # not the seven a "1 week" window used to bill.
         assert gain == 6.0
 
+    def test_one_day_is_unavailable_when_yesterday_is_missing(self):
+        """1D names its span exactly, so it may not absorb a missing bar.
+
+        The 18 Aug 2026 shape: the series HAS today, but Monday 17 Aug never
+        printed. The anchor then slides back to Friday and a two-session move
+        (+1.03% here) used to print under a "1D" label with nothing marking it.
+        Longer buckets are unaffected — a month with a hole in it is still a
+        month — so 1M still resolves on the same series.
+        """
+        gapped = _closes([
+            ("2026-07-16", 78.0), ("2026-07-17", 78.2),
+            ("2026-08-13", 77.5), ("2026-08-14", 77.8),   # Fri; Mon 17 absent
+            ("2026-08-18", 78.6),                          # today
+        ])
+        assert window_anchor(gapped, "1d") is None
+        assert compute_period_return(gapped, "1d") is None
+        # The same series still reports 1M, measured from 17 Jul.
+        assert window_anchor(gapped, "1m") == pd.Timestamp("2026-07-17")
+
+    def test_one_day_is_the_previous_session_across_a_weekend(self, monkeypatch):
+        """Friday→Monday is one session apart, so 1D stays available.
+
+        The guard above must not fire on a Monday run: a weekend is not a
+        missing session. Pins today to the Monday (overriding the class fixture,
+        whose 18 Aug would make Monday the series end and collapse the anchor).
+        """
+        import datetime
+        monkeypatch.setattr(
+            "tarzan.runtime.today", lambda: datetime.date(2026, 8, 17))
+        s = _closes([
+            ("2026-08-12", 100.0), ("2026-08-13", 100.5),
+            ("2026-08-14", 101.0),                          # Friday
+            ("2026-08-17", 102.0),                          # Monday = today
+        ])
+        assert window_anchor(s, "1d") == pd.Timestamp("2026-08-14")
+        assert round(compute_period_return(s, "1d"), 4) == round(
+            (102.0 / 101.0 - 1) * 100, 4)
+
     def test_a_bucket_the_series_cannot_cover_is_unavailable(self):
         """Yahoo silently shows MAX for a range longer than the history (EXUS.MI
         reported the same +38.04% under 3y and 5y over 2.3 years of data).
@@ -184,8 +222,8 @@ class TestPrevCloseEUR:
     out of the percentage."""
 
     def _prev(self, quote, price_eur):
-        from tarzan.engine.metrics import MetricsEngine
-        return MetricsEngine._prev_close_eur(quote, price_eur)
+        from tarzan.data.current_session import prev_close_eur
+        return prev_close_eur(quote, price_eur)
 
     def test_eur_listing_reproduces_the_quote_move(self):
         # EXUS.MI: valuation 40.82, quote 40.815/40.81. The stamped 1D
@@ -215,14 +253,78 @@ class TestPrevCloseEUR:
         assert self._prev({"prev_close": 99.0}, 100.0) is None  # no price
 
 
+class TestStampTodayWritesOnlyTheRealPreviousSession:
+    """The published prev_close may only land on the session before today.
+
+    ``regularMarketPreviousClose`` is, by definition, the close before the
+    CURRENT session. The stamp used to write it onto whatever the last row
+    before today happened to be — so when a venue's daily feed ran several
+    sessions behind, a settled close was overwritten with a figure from a
+    different day. That corrupts the series every window, the risk block and
+    every chart reads, and the price-level gate in ``_pick_quote`` cannot see
+    it because the levels are within tolerance.
+    """
+
+    def _stamp(self, series, today, value, quote):
+        from tarzan.data.current_session import stamp_today
+        return stamp_today(series, pd.Timestamp(today), value, quote)
+
+    def test_an_adjacent_previous_session_is_repaired(self):
+        # Mon 17 present, run on Tue 18: the vendor's null-close repair this
+        # exists for. Monday's row takes the published close, scaled.
+        s = _closes([("2026-08-14", 40.96), ("2026-08-17", 40.70)])
+        out = self._stamp(s, "2026-08-18", 40.82,
+                          {"price": 40.815, "prev_close": 40.81})
+        assert round(float(out.loc[pd.Timestamp("2026-08-17")]), 4) == 40.8150
+        assert float(out.loc[pd.Timestamp("2026-08-18")]) == 40.82
+        # Friday, two sessions back, is untouched.
+        assert float(out.loc[pd.Timestamp("2026-08-14")]) == 40.96
+
+    def test_a_lagging_feed_keeps_its_own_settled_closes(self, monkeypatch):
+        # This venue last printed Wed 19; the run is Fri 21. Thursday's
+        # published close belongs to Thursday, so it is inserted there and
+        # Wednesday's settled 102.00 is left alone (it used to be overwritten
+        # with the 99.00, corrupting the series every window reads).
+        #
+        # window_anchor measures back from the run's own clock, so it is pinned
+        # to the same Friday — without that this asserts against whatever day
+        # the suite happens to run on (see TestTrailingWindowAnchor._pin_today).
+        import datetime
+        monkeypatch.setattr(
+            "tarzan.runtime.today", lambda: datetime.date(2026, 8, 21))
+        s = _closes([("2026-08-17", 100.0), ("2026-08-18", 101.0),
+                     ("2026-08-19", 102.0)])
+        out = self._stamp(s, "2026-08-21", 103.0,
+                          {"price": 103.0, "prev_close": 99.0})
+        assert float(out.loc[pd.Timestamp("2026-08-19")]) == 102.0, (
+            "a settled close from another session must survive the stamp"
+        )
+        assert float(out.loc[pd.Timestamp("2026-08-20")]) == 99.0, (
+            "the published previous close belongs on the previous session"
+        )
+        assert float(out.loc[pd.Timestamp("2026-08-21")]) == 103.0
+        # Correctly dated, the repair also makes the 1D available and right.
+        assert window_anchor(out, "1d") == pd.Timestamp("2026-08-20")
+        assert round(compute_period_return(out, "1d"), 4) == round(
+            (103.0 / 99.0 - 1) * 100, 4)
+
+    def test_a_monday_run_repairs_the_friday_close(self):
+        # The previous session across a weekend is Friday, not "yesterday".
+        s = _closes([("2026-08-13", 50.0), ("2026-08-14", 51.0)])
+        out = self._stamp(s, "2026-08-17", 52.0,
+                          {"price": 52.0, "prev_close": 51.5})
+        assert float(out.loc[pd.Timestamp("2026-08-14")]) == 51.5
+        assert float(out.loc[pd.Timestamp("2026-08-13")]) == 50.0
+
+
 class TestPickQuoteSanityGate:
     """_current_prices picks the quote whose level matches the instrument, the
     same sibling-aware resolution the intraday feed uses — so a corrupt canonical
     quote is skipped for a clean sibling instead of poisoning the baseline."""
 
     def _pick(self, symbols, quotes, ref):
-        from tarzan.engine.metrics import MetricsEngine
-        return MetricsEngine._pick_quote(symbols, quotes, ref)
+        from tarzan.data.current_session import pick_quote
+        return pick_quote(symbols, quotes, ref)
 
     def test_clean_canonical_is_used(self):
         q = self._pick(["EXUS.MI", "EXUS.DE"],
@@ -248,7 +350,18 @@ class TestPickQuoteSanityGate:
         assert q == {}
 
 
-class TestOneDayIsTheQuotePair:
+class TestOneDayIsTheQuotePairThroughTheSeries:
+    """The 1D is still the published pair — it reaches the reader once, through
+    the stamped price series, instead of being recomputed as a second answer.
+
+    ``intraday_feeds`` used to also compute the percentage itself, and the value
+    was discarded: every table and chart reads
+    ``compute_period_return(price_series, "1d")``. Since the stamp writes BOTH
+    endpoints of that window from the same quote pair, the series now yields the
+    published move by construction — which is what these assert, on the series
+    the reader actually sees.
+    """
+
     def _intraday(self, values, day, start, tz="Europe/Rome", freq="15min"):
         idx = pd.date_range(f"{day} {start}", periods=len(values), freq=freq, tz=tz)
         return pd.Series([float(v) for v in values], index=idx)
@@ -259,11 +372,30 @@ class TestOneDayIsTheQuotePair:
         pinned = pd.Timestamp("2026-08-18 08:58", tz="Europe/Rome")
         monkeypatch.setattr(mq, "_intraday_reference_now", lambda tzinfo=None: pinned)
         monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+        monkeypatch.setattr(
+            "tarzan.runtime.today",
+            lambda: __import__("datetime").date(2026, 8, 18))
 
-    def test_a_null_close_in_the_chart_does_not_move_the_baseline(self, monkeypatch):
-        """The 18 Aug 2026 shape: Monday absent from the daily feed, so the
-        chart's own prior close is FRIDAY's. The quote pair still measures
-        Monday against Friday, which is what the page showed."""
+    def test_a_null_close_in_the_chart_still_yields_the_published_move(self):
+        """The 18 Aug 2026 shape: Monday 17 absent from the daily feed, so the
+        chart's own prior close is FRIDAY's and a close-to-close read could only
+        measure two sessions. The published pair carries Monday's official
+        40.81, which the stamp writes on Monday's own date — so the 1D is the
+        +0.0123% the instrument's page showed, not a two-session move."""
+        from tarzan.data.current_session import stamp_today
+
+        chart = _closes([("2026-08-13", 40.96), ("2026-08-14", 40.81)])
+        stamped = stamp_today(chart, pd.Timestamp("2026-08-18"), 40.815,
+                              {"price": 40.815, "prev_close": 40.81})
+
+        assert float(stamped.loc[pd.Timestamp("2026-08-17")]) == 40.81
+        assert window_anchor(stamped, "1d") == pd.Timestamp("2026-08-17")
+        assert round(compute_period_return(stamped, "1d"), 4) == round(
+            (40.815 / 40.81 - 1) * 100, 4)
+
+    def test_the_feed_resolver_carries_the_baseline_and_liveness(self, monkeypatch):
+        """What the resolver still owns: the bars to draw, their 0% baseline and
+        whether the venue is trading — never a percentage."""
         monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {
             "EXUS.MI": self._intraday([40.79, 40.825], "2026-08-17", "16:45")})
         monkeypatch.setattr("tarzan.data.enricher._fetch_history", lambda s: pd.DataFrame(
@@ -272,26 +404,26 @@ class TestOneDayIsTheQuotePair:
         monkeypatch.setattr(mq, "_fetch_official_quotes", lambda symbols: {
             "EXUS.MI": {"price": 40.815, "prev_close": 40.81}})
 
-        selected = mq.broker_1d(["EXUS.MI"])["EXUS.MI"]
+        selected = mq.intraday_feeds(["EXUS.MI"])["EXUS.MI"]
 
-        assert round(selected["pct"], 4) == round((40.815 / 40.81 - 1) * 100, 4)
+        assert "pct" not in selected, "the resolver no longer answers the 1D"
         assert selected["intraday_baseline"] == 40.81
         assert selected["live"] is False          # Milan is not trading at 08:58
-        assert selected["source_ticker"] == "EXUS.MI"
+        assert selected["intraday_source_ticker"] == "EXUS.MI"
 
-    def test_an_instrument_with_no_intraday_feed_still_gets_the_published_move(
+    def test_an_instrument_with_no_intraday_feed_still_carries_a_baseline(
             self, monkeypatch):
-        """Before, such a row fell back to a close-to-close read of the same
-        holed chart; now it carries the quote pair with no sparkline."""
+        """No bars to draw, but the published previous close is still the pill's
+        reference — and its presence is what says a live quote exists."""
         monkeypatch.setattr(mq, "_fetch_intraday", lambda symbols: {})
         monkeypatch.setattr("tarzan.data.enricher._fetch_history", lambda s: None)
         monkeypatch.setattr(mq, "_fetch_official_quotes", lambda symbols: {
             "X710.MI": {"price": 100.5, "prev_close": 100.0}})
 
-        selected = mq.broker_1d(["X710.MI"])["X710.MI"]
+        selected = mq.intraday_feeds(["X710.MI"])["X710.MI"]
 
-        assert round(selected["pct"], 4) == 0.5
         assert selected["intraday_series"] is None
+        assert selected["intraday_baseline"] == 100.0
         assert selected["live"] is False
 
 

@@ -176,10 +176,6 @@ def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | Non
     return list(((aligned / anchor - 1.0) * 100.0).values.astype(float))
 
 
-# Back-compat alias: benchmark rebasing is just the general case.
-_rebase_benchmark = _rebase_to_window
-
-
 def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.Series | None":
     """Price history of the geographic benchmark (the taxonomy row flagged
     ``is_benchmark_geo=TRUE``, e.g. iShares MSCI ACWI) from
@@ -266,7 +262,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         if m.portfolio_history is not None else None
     )
     acwi = (
-        _rebase_benchmark(acwi_all[acwi_all.index <= common_end], idx)
+        _rebase_to_window(acwi_all[acwi_all.index <= common_end], idx)
         if acwi_all is not None else None
     )
 
@@ -359,7 +355,7 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
     acwi_si = None
     acwi_raw = _geo_benchmark_series(m, geo_name)
     if acwi_raw is not None and len(nav_full):
-        acwi_si = _rebase_benchmark(acwi_raw, idx)
+        acwi_si = _rebase_to_window(acwi_raw, idx)
     return twror_si, total_pct, unreal_pct, acwi_si
 
 

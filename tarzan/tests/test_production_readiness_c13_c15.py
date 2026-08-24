@@ -15,7 +15,7 @@ from tarzan.models.portfolio import PortfolioMetrics
 # **Validates: Requirements 2.13**
 def test_c13_provider_boundary_returns_structured_attempt_and_policy_evidence():
     """Even an empty request needs a typed result, not an unclassified dict."""
-    result = market_quotes.broker_1d([])
+    result = market_quotes.intraday_feeds([])
     assert hasattr(result, "attempts") and hasattr(result, "availability"), (
         "provider boundary returned a raw mapping with no source, observation/fetch "
         f"time, attempts, fallback rung, coverage, latency, or policy: {result!r}"

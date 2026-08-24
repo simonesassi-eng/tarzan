@@ -61,7 +61,32 @@ PERIOD_WINDOWS: dict[str, tuple[str, int]] = {
 }
 
 
-def _window_end(series_end):
+def _series_ticker(series) -> str:
+    """The provider symbol a series belongs to, for its exchange calendar.
+
+    Both producers name their series after the resolved listing: the enricher
+    stamps ``holding.ticker`` onto ``price_history`` and
+    ``_fetch_benchmark_history`` sets the selected symbol as the name and in
+    ``attrs``. An unnamed or differently-named series resolves to no venue,
+    which makes every calendar lookup fall back to the Mon-Fri rule.
+    """
+    if series is None:
+        return ""
+    attrs = getattr(series, "attrs", None) or {}
+    return str(attrs.get("resolved_ticker") or getattr(series, "name", "") or "")
+
+
+def _roll_to_session(timestamp, ticker: str):
+    """Roll a timestamp back to the last SESSION on-or-before it, on
+    ``ticker``'s exchange calendar. Falls back to the Mon-Fri rule."""
+    from tarzan.data.exchange_calendar import last_session_on_or_before
+
+    rolled = last_session_on_or_before(ticker, timestamp.date())
+    out = pd.Timestamp(rolled)
+    return out.tz_localize(timestamp.tz) if timestamp.tz is not None else out
+
+
+def _window_end(series_end, ticker: str = ""):
     """The date a window is measured back FROM: the run's own today, not the
     instrument's last close.
 
@@ -86,12 +111,10 @@ def _window_end(series_end):
         # every cutoff a day or two past the last close: on Sat 22 Aug 2026 it
         # put MSCI ACWI's 1M anchor on the 22 Jul dip and read +1.7% where
         # Yahoo, measuring from Friday's close, showed +0.57%. Roll back to the
-        # last business day so a weekend run measures the same window Yahoo
-        # does; on a trading day this is a no-op, so a lagging single feed still
-        # measures from today via the max() below.
-        # ponytail: business days only, holidays not modelled — same ceiling as
-        # window_anchor's BDay cutoff; an exchange calendar would be exact.
-        today = pd.tseries.offsets.BDay().rollback(today.normalize())
+        # last session so a weekend or holiday run measures the same window
+        # Yahoo does; on a trading day this is a no-op, so a lagging single feed
+        # still measures from today via the max() below.
+        today = _roll_to_session(today.normalize(), ticker)
     except Exception:  # noqa: BLE001 — a clock must never break a return
         return series_end
     tz = getattr(series_end, "tzinfo", None)
@@ -103,7 +126,7 @@ def _window_end(series_end):
     return max(today, series_end)
 
 
-def window_anchor(series: pd.Series, bucket: str):
+def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
     """The observation a bucket is measured FROM, or None when the series does
     not reach back that far.
 
@@ -125,16 +148,22 @@ def window_anchor(series: pd.Series, bucket: str):
     if series is None or len(series) < 2:
         return None
     unit, span = PERIOD_WINDOWS.get(bucket, ("days", 0))
-    end = _window_end(series.index[-1])
+    if ticker is None:
+        ticker = _series_ticker(series)
+    end = _window_end(series.index[-1], ticker)
     if unit == "sessions":
         # "5D" the way Yahoo and the brokers count it: five trading days back on
         # the exchange calendar, not five ROWS of the vendor's series — Milan's
         # 17 Aug 2026 is missing a close, and counting rows would then reach a
-        # session further back than the site's own 5D range.
-        # ponytail: business days, holidays not modelled; a holiday inside the
-        # window makes it span one session more. Needs an exchange calendar to
-        # be exact, which is a dependency for ~6 days a year.
-        cutoff = end - pd.tseries.offsets.BDay(span - 1)
+        # session further back than the site's own 5D range. The calendar is the
+        # venue's own, so the Assumption (Milan shut, Xetra open) shortens one
+        # and not the other.
+        from tarzan.data.exchange_calendar import sessions_back
+
+        stepped = sessions_back(ticker, end.date(), span - 1)
+        cutoff = pd.Timestamp(stepped)
+        if end.tz is not None:
+            cutoff = cutoff.tz_localize(end.tz)
     elif unit == "months":
         cutoff = end - pd.DateOffset(months=span)
     elif unit == "years":
@@ -147,13 +176,39 @@ def window_anchor(series: pd.Series, bucket: str):
         # The whole series sits before the window: there is nothing to measure
         # across, and reporting the last close against itself would print a
         # confident 0.00% (or +€0) for a feed that simply stopped.
-        return None if anchor == series.index[-1] else anchor
-    # Nothing that old: report the bucket only if the series still covers
-    # essentially the whole window (a weekend or holiday of slack), so a 2y book
-    # cannot print a "5Y" return off its own first close.
-    if series.index[0] <= cutoff + pd.Timedelta(days=7):
-        return series.index[0]
-    return None
+        if anchor == series.index[-1]:
+            return None
+    elif series.index[0] <= cutoff + pd.Timedelta(days=7):
+        # Nothing that old: report the bucket only if the series still covers
+        # essentially the whole window (a weekend or holiday of slack), so a 2y
+        # book cannot print a "5Y" return off its own first close.
+        anchor = series.index[0]
+    else:
+        return None
+
+    # "1D" names its span exactly, so unlike every longer bucket it may not
+    # absorb a missing bar: a month is still a month if a close inside it is
+    # absent, but if YESTERDAY's bar is missing (the documented Milan null-close
+    # case) the anchor slides one session further back and a TWO-session move
+    # gets printed under a "1D" label with nothing marking it. Report nothing
+    # instead — the same rule this function already applies above when the
+    # anchor collapses onto the series end. Measured on the venue's own
+    # calendar, so the session after a holiday is correctly adjacent.
+    if bucket == "1d":
+        from tarzan.data.exchange_calendar import (
+            last_session_on_or_before, previous_session,
+        )
+
+        # Compare against the session the series effectively ENDS on, not its
+        # last row. The order-derived portfolio NAV is calendar-daily (weekends
+        # carried flat), so its last row is routinely a Saturday or Sunday whose
+        # value IS Friday's close; demanding an anchor adjacent to the ROW would
+        # blank the 1D on every weekend run.
+        end_session = last_session_on_or_before(
+            ticker, series.index[-1].date())
+        if anchor.date() < previous_session(ticker, end_session):
+            return None
+    return anchor
 
 
 # ======================================================================

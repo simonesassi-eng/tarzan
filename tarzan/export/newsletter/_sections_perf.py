@@ -988,20 +988,12 @@ def _intraday_column(flags) -> bool:
     return bool(flags) and all(flags)
 
 
-def _perf_name_html(name: str, ticker: str, tags: list, *,
-                    name_chars: Optional[int] = None) -> str:
+def _perf_name_html(name: str, ticker: str, tags: list) -> str:
     """Instrument label used in the returns tables. Delegates to the shared
     :func:`uni_name`, so the ticker leads the name here exactly as it does in
     the book, the risk table and the optimizer, and the role stays in the group
     header rather than stacking a caption under every name."""
     from tarzan.export.newsletter._constants import uni_name
-    if name_chars == 0:
-        # Ticker only (unused by the returns tables now, kept for callers that
-        # want the bare symbol).
-        return uni_name("", ticker or "", tags=tuple(tags or ()),
-                        line_height=1.05)
-    if name_chars:
-        name = name[:name_chars]
     # Tight line-height: the curated name (already abbreviated in _format so
     # it fits ~2 lines in the 148px column) wraps with an almost-zero gap
     # between line one and two, so a two-line name barely adds row height.
@@ -1207,7 +1199,16 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
     if hp.empty or "5d" not in hp.columns:
         return {"available": False}
 
-    sorted_hp = hp.sort_values("5d", ascending=False, na_position="last")
+    # Drop rows with no 5D before ranking. With na_position="last" the LAST row
+    # is the missing one whenever any holding lacks a 5D (a new position, a feed
+    # with under two closes), so "worst" named an instrument with no return at
+    # all: `float(nan or 0.0)` is NaN (NaN is truthy), which rendered the card as
+    # "—" in red while the real worst performer was never shown.
+    hp = hp.dropna(subset=["5d"])
+    if hp.empty:
+        return {"available": False}
+
+    sorted_hp = hp.sort_values("5d", ascending=False)
     best = sorted_hp.iloc[0]
     worst = sorted_hp.iloc[-1]
 
