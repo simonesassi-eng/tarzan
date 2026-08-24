@@ -497,3 +497,75 @@ class TestWeekendWindowEnd:
         # Friday 2026-08-21; a lagging feed ends Wednesday — still measure from today.
         monkeypatch.setattr(rt, "today", lambda: __import__("datetime").date(2026, 8, 21))
         assert _window_end(pd.Timestamp("2026-08-19")) == pd.Timestamp("2026-08-21")
+
+
+class TestATzAwareSeriesKeepsItsOwnClock:
+    """A daily bar is stamped at the VENUE's midnight, and both the weekend
+    filter and the window cutoff have to respect that.
+
+    Two bugs met here and both blanked a 1D in a live digest (24 Aug 2026):
+
+    * ``_drop_weekends`` collapsed the index to UTC before reading the weekday,
+      so a venue east of UTC moved back a day — Milan's Monday ``00:00+02:00``
+      is Sunday ``22:00`` in UTC. It deleted EVERY MONDAY from every EU-listed
+      benchmark series (256 of 1294 rows on XDEQ.MI, and 100% of the dropped
+      rows were Mondays), which also left the series ending on a Friday so the
+      Monday 1D collapsed onto the series end;
+    * the session cutoff was rebuilt at midnight UTC while a US bar sits at
+      ``04:00+00:00``, so the cutoff sorted BEFORE the session it named and the
+      anchor slid one session early — the 1D then failed its own adjacency
+      guard for every US listing.
+    """
+
+    def _us_series(self):
+        """Daily closes as yfinance returns them for a US listing: local
+        midnight, which is 04:00 in UTC."""
+        idx = pd.DatetimeIndex([
+            pd.Timestamp(f"2026-08-{d} 00:00", tz="America/New_York")
+            for d in (18, 19, 20, 21, 24)
+        ]).tz_convert("UTC")
+        return pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
+
+    def _milan_series(self):
+        idx = pd.DatetimeIndex([
+            pd.Timestamp(f"2026-08-{d} 00:00", tz="Europe/Rome")
+            for d in (18, 19, 20, 21, 24)
+        ])
+        return pd.Series([100.0, 101.0, 102.0, 103.0, 104.0], index=idx)
+
+    def test_a_us_listing_reports_its_one_day(self, monkeypatch):
+        import datetime
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 24))
+        s = self._us_series()
+        assert window_anchor(s, "1d", "RSST") is not None, (
+            "a midnight-UTC cutoff sorts before a 04:00+00:00 session bar"
+        )
+        assert round(compute_period_return(s, "1d"), 4) == round(
+            (104.0 / 103.0 - 1) * 100, 4)
+
+    def test_the_weekend_filter_keeps_a_monday_east_of_utc(self):
+        from tarzan.engine.benchmarks import _drop_weekends
+
+        kept = _drop_weekends(self._milan_series())
+        assert len(kept) == 5, "no real session may be dropped"
+        assert pd.Timestamp("2026-08-24 00:00", tz="Europe/Rome") in kept.index
+
+    def test_the_weekend_filter_still_drops_a_real_weekend_row(self):
+        """The FX-conversion artifact it exists for: a Saturday-dated close."""
+        from tarzan.engine.benchmarks import _drop_weekends
+
+        s = self._milan_series()
+        s.loc[pd.Timestamp("2026-08-22 00:00", tz="Europe/Rome")] = 99.0
+        kept = _drop_weekends(s.sort_index())
+        assert len(kept) == 5
+        assert all(ts.weekday() < 5 for ts in kept.index)
+
+    def test_a_milan_listing_reports_its_monday_one_day(self, monkeypatch):
+        import datetime
+        from tarzan.engine.benchmarks import _drop_weekends
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 24))
+        s = _drop_weekends(self._milan_series())
+        assert round(compute_period_return(s, "1d"), 4) == round(
+            (104.0 / 103.0 - 1) * 100, 4)
