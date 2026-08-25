@@ -218,3 +218,58 @@ class TestRender:
         # labelled with one word.
         assert "Unreal. P&amp;L (%, right)" in html
         assert "Total P&amp;L (%, right)" in html
+
+
+class TestTheSplitIsAgainstTheWindowOpen:
+    """The green/red boundary is where Total P&L stood when the window opened —
+    the same reference the value line used to be coloured against, moved to the
+    series that now carries the colour. NOT zero: a P&L that opens the window at
+    +8% and dips to +6% is down over the window and must read red, even though it
+    never went under break-even.
+    """
+
+    def test_the_boundary_is_the_series_own_opening_level(self):
+        import re
+
+        from tarzan.export.newsletter._charts import _hero_value_chart
+        from tarzan.export.newsletter import PALETTE
+
+        total = [8.0, 11.0, 6.0, 9.5]          # opens +8%, dips BELOW it, recovers
+        svg = _hero_value_chart(
+            [240000.0, 241000.0, 239500.0, 242000.0], [1.0, 2.0, 0.5, 1.8],
+            ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"], [],
+            total_pct=total,
+        )
+        ML, MT, MB, w, h = 52, 12, 26, 580, 196
+        ph = h - MT - MB
+        ticks = [float(t.replace("−", "-"))
+                 for t in re.findall(r'text-anchor="start"[^>]*>(−?[\d.]+)%<', svg)]
+        plo, phi = min(ticks), max(ticks)
+
+        def y_of(v):
+            return MT + (1 - (v - plo) / ((phi - plo) or 1)) * ph
+
+        dashed = float(re.search(
+            r'<line x1="52" y1="([\d.]+)"[^>]*stroke-dasharray="3,3"', svg).group(1))
+        assert abs(dashed - y_of(total[0])) < 0.15, (
+            f"boundary at y={dashed}, window open is y={y_of(total[0]):.1f}, "
+            f"zero is y={y_of(0.0):.1f}"
+        )
+        assert abs(dashed - y_of(0.0)) > 1.0, "the boundary must not be zero"
+        # Both halves exist, so the dip below the opening really reads red.
+        assert PALETTE["green"] in svg and PALETTE["red"] in svg
+
+    def test_one_dashed_reference_only(self):
+        """There was one dashed line before this change and there is one after:
+        the colour boundary. A second one for the value's own opening would say
+        nothing, since the value is no longer coloured against it."""
+        import re
+
+        from tarzan.export.newsletter._charts import _hero_value_chart
+
+        svg = _hero_value_chart(
+            [240000.0, 241000.0, 242000.0], [1.0, 2.0, 1.8],
+            ["2026-08-10", "2026-08-17", "2026-08-24"], [],
+            total_pct=[8.0, 9.0, 9.5],
+        )
+        assert len(re.findall(r'stroke-dasharray="3,3"', svg)) == 1
