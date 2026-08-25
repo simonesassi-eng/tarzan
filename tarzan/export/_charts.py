@@ -11,6 +11,7 @@ chip callouts, legends) carries the same story.
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import pandas as pd
 
@@ -19,7 +20,6 @@ import pandas as pd
 # local copies existed to avoid an import cycle (the newsletter package imports
 # this module), but they meant chart axes could drift from the tables beside
 # them whenever the palette changed in only one place.
-from tarzan.export._format import eur_smart as _eur_smart
 from tarzan.export._palette import FONT_STACK, PALETTE as _P, TYPE_PX
 
 MUTED = _P["muted"]
@@ -56,10 +56,20 @@ def nice_ticks(lo: float, hi: float, n: int = 4) -> tuple[float, float, list[flo
     return lo_n, hi_n, ticks
 
 
-def fmt_eur_tick(v: float) -> str:
+def fmt_eur_tick(v: float, step: Optional[float] = None) -> str:
+    """Axis tick in euros, with the minus SIGN like every other figure.
+
+    ``step`` is the axis' own tick spacing. Pass it on a fine axis: whole
+    thousands are unreadable below a €1k step, where 238,000 and 238,500 both
+    print "€238k" and the axis looks like it repeated a label.
+    """
     a = abs(v)
     s = "−" if v < 0 else ""
-    return f"{s}€{a / 1000:.0f}k" if a >= 1000 else f"{s}€{a:.0f}"
+    if a < 1000:
+        return f"{s}€{a:.0f}"
+    if step is not None and abs(step) < 1000:
+        return f"{s}€{a / 1000:.1f}k"
+    return f"{s}€{a / 1000:.0f}k"
 
 
 def fmt_pct_tick(v: float) -> str:

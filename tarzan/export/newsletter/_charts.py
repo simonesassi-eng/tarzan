@@ -151,16 +151,21 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
 
 def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
                       total_pct=None) -> str:
-    """Dual-axis hero chart with the same baseline semantics as Markets.
+    """Dual-axis hero chart: portfolio value in €, both P&L measures in %.
 
-    Portfolio value is green above the window-start baseline and red below it.
-    Both P&L measures ride the right axis as dashed secondary series —
-    Unrealized in violet and Total in cyan, the same two colours they carry on
-    the return charts, so one key holds across the issue. Cash-flow triangles
-    stay attached to the value line.
+    The green/red split is on TOTAL P&L, not on the value. Value above or below
+    where the window happened to open is an arbitrary reference — a deposit
+    moves it — while the sign of the lifetime P&L is the thing worth colouring:
+    green above break-even, red below. So Total P&L is drawn green/red about its
+    own zero line, and the value line is neutral ink, which also frees the
+    accent colour for the cash-flow triangles that sit on it.
 
-    ``total_pct`` is optional: when the caller cannot build it the chart draws
-    exactly as before rather than dropping the panel.
+    Unrealized P&L keeps the violet it carries on the return charts. Total P&L
+    gives up its cyan HERE only, and the colour key says so with a two-tone
+    swatch, so nothing else in the issue changes meaning.
+
+    ``total_pct`` is optional: with no lifetime P&L (the holdings-only path) no
+    series is split and the value simply draws neutral.
     """
     global _dual_uid
     _dual_uid += 1
@@ -175,13 +180,22 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     PW, PH = w - ML - MR, h - MT - MB
     base = values[0]
     from tarzan.export import _charts as _ch
+    # Seven target ticks, not four: on a 30-day window the value axis spans a
+    # few thousand euros and four gridlines put the whole line between two of
+    # them, so a reader could not tell €239k from €241k without the end label.
+    _TICKS = 7
     vlo, vhi, vticks = _ch.nice_ticks(
-        min(min(values), base), max(max(values), base), 4
+        min(min(values), base), max(max(values), base), _TICKS
     )
+    vstep = (vticks[1] - vticks[0]) if len(vticks) > 1 else None
     # The right axis must span BOTH P&L series, or the second line is drawn
-    # against a scale that was fitted to the first and rides off the plot.
+    # against a scale that was fitted to the first and rides off the plot. Zero
+    # is always included: it is the line the green/red split is measured about,
+    # so it has to be on the axis even when the window never crosses it.
     pct_all = list(pct) + list(total_pct or ())
-    plo, phi, pticks = _ch.nice_ticks(min(pct_all), max(pct_all), 4)
+    plo, phi, pticks = _ch.nice_ticks(
+        min(min(pct_all), 0.0), max(max(pct_all), 0.0), _TICKS
+    )
 
     def X(i):
         return ML + (i / (n - 1) * PW if n > 1 else 0)
@@ -201,7 +215,8 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
             f'<line x1="{ML}" y1="{y:.1f}" x2="{ML + PW}" y2="{y:.1f}" '
             f'stroke="{P["border"]}" stroke-width="1"/>'
             f'<text x="{ML - 6}" y="{y + 3:.1f}" text-anchor="end" '
-            f'font-size="{TYPE_PX["label"]}" fill="{P["subtle"]}">{_ch.fmt_eur_tick(t)}</text>'
+            f'font-size="{TYPE_PX["label"]}" fill="{P["subtle"]}">'
+            f'{_ch.fmt_eur_tick(t, vstep)}</text>'
         )
     for t in pticks:
         if t < plo - 1e-9 or t > phi + 1e-9:
@@ -222,14 +237,13 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
 
     vline = " ".join(f"{X(i):.1f},{Yv(v):.1f}" for i, v in enumerate(values))
     baseline_y = Yv(base)
-    value_poly = (
-        f"{vline} {X(n - 1):.1f},{baseline_y:.1f} "
-        f"{X(0):.1f},{baseline_y:.1f}"
-    )
     pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
     tline = (" ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(total_pct))
              if total_pct is not None else "")
-    baseline_clip_y = max(MT, min(baseline_y, MT + PH))
+    # The split is about P&L = 0, on the RIGHT axis. Clamped into the plot band
+    # so a window entirely in profit clips all-green and one entirely under water
+    # clips all-red, rather than drawing a boundary off the canvas.
+    zero_y = max(MT, min(Yp(0.0), MT + PH))
 
     marks = ""
     if flows:
@@ -258,49 +272,59 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
                     f'fill="{col}"/>'
                 )
     # A dot on the last value, so the series has a stated end rather than
-    # running off the plot.
+    # running off the plot. Neutral: it sits on the value line, and the value no
+    # longer carries a sign.
     endpoint = (
         f'<circle cx="{X(n - 1):.1f}" cy="{Yv(values[-1]):.1f}" r="3.4" '
-        f'fill="{P["green"] if values[-1] >= base else P["red"]}" '
-        f'stroke="{P["card_alt"]}" stroke-width="1.8"/>'
+        f'fill="{P["ink"]}" stroke="{P["card_alt"]}" stroke-width="1.8"/>'
     )
-    # The baseline is named where it is drawn, so the reader learns the €
-    # reference in the place they are already looking. The right axis is NOT
-    # named here any more: it now carries two series, and one word ("unreal.")
-    # beside the axis could only name one of them. Naming both is the colour
-    # key's job, drawn below the plot by the caller.
-    labels = (
-        f'<text x="{ML + 5}" y="{max(9.0, baseline_y - 5):.1f}" '
-        f'text-anchor="start" font-size="{TYPE_PX["label"]}" font-weight="700" '
-        f'fill="{P["muted"]}">window open {_eur_smart(base)}</text>'
-    )
+    # Total P&L, split green above break-even and red below it. Drawn as a
+    # filled band to its own zero rather than a hairline, because it is the
+    # series the reader is meant to read the sign off; the value line stays a
+    # line. Falls back to the plain cyan dash when there is no lifetime P&L.
+    if tline:
+        tband = (
+            f"{tline} {X(n - 1):.1f},{zero_y:.1f} {X(0):.1f},{zero_y:.1f}"
+        )
+        pnl_layer = (
+            f'<polygon points="{tband}" fill="{P["green"]}" fill-opacity="0.16" '
+            f'clip-path="url(#pg{u})"/>'
+            f'<polygon points="{tband}" fill="{P["red"]}" fill-opacity="0.16" '
+            f'clip-path="url(#pr{u})"/>'
+            f'<polyline points="{tline}" fill="none" stroke="{P["green"]}" '
+            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#pg{u})"/>'
+            f'<polyline points="{tline}" fill="none" stroke="{P["red"]}" '
+            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#pr{u})"/>'
+        )
+    else:
+        pnl_layer = ""
 
     return (
         f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;'
         f'font-family:{FONT_STACK};">'
-        f'<defs><clipPath id="dg{u}"><rect x="0" y="0" width="{w}" '
-        f'height="{baseline_clip_y:.1f}"/></clipPath>'
-        f'<clipPath id="dr{u}"><rect x="0" y="{baseline_clip_y:.1f}" width="{w}" '
-        f'height="{h - baseline_clip_y:.1f}"/></clipPath></defs>'
+        f'<defs><clipPath id="pg{u}"><rect x="0" y="0" width="{w}" '
+        f'height="{zero_y:.1f}"/></clipPath>'
+        f'<clipPath id="pr{u}"><rect x="0" y="{zero_y:.1f}" width="{w}" '
+        f'height="{h - zero_y:.1f}"/></clipPath></defs>'
         + grid
+        # The window-open level, still drawn as the value's reference but no
+        # longer labelled: the caption named a number the reader can read off
+        # the axis, and it sat on top of the line often enough to be noise.
         + f'<line x1="{ML}" y1="{baseline_y:.1f}" x2="{ML + PW}" '
-        f'y2="{baseline_y:.1f}" stroke="{P["subtle"]}" stroke-width="0.8" '
+        f'y2="{baseline_y:.1f}" stroke="{P["border"]}" stroke-width="0.8" '
         f'stroke-dasharray="3,3"/>'
-        + f'<polygon points="{value_poly}" fill="{P["green"]}" fill-opacity="0.16" '
-        f'clip-path="url(#dg{u})"/>'
-        + f'<polygon points="{value_poly}" fill="{P["red"]}" fill-opacity="0.16" '
-        f'clip-path="url(#dr{u})"/>'
-        + f'<polyline points="{vline}" fill="none" stroke="{P["green"]}" '
-        f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dg{u})"/>'
-        + f'<polyline points="{vline}" fill="none" stroke="{P["red"]}" '
-        f'stroke-width="2.6" stroke-linejoin="round" clip-path="url(#dr{u})"/>'
+        # Break-even on the right axis: the line the P&L colours are measured
+        # about, so it is drawn wherever it falls inside the plot.
+        + (f'<line x1="{ML}" y1="{zero_y:.1f}" x2="{ML + PW}" y2="{zero_y:.1f}" '
+           f'stroke="{P["subtle"]}" stroke-width="0.8" stroke-dasharray="2,3"/>'
+           if tline and MT < zero_y < MT + PH else "")
+        + pnl_layer
         + f'<polyline points="{pline}" fill="none" stroke="{P["unreal"]}" '
         f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
-        + (f'<polyline points="{tline}" fill="none" stroke="{P["pnl"]}" '
-           f'stroke-width="1.8" stroke-dasharray="1,2.5" '
-           f'stroke-linejoin="round"/>' if tline else "")
-        + marks + endpoint + labels + xlab + "</svg>"
+        + f'<polyline points="{vline}" fill="none" stroke="{P["ink"]}" '
+        f'stroke-width="2.6" stroke-linejoin="round"/>'
+        + marks + endpoint + xlab + "</svg>"
     )
 
 
@@ -313,17 +337,32 @@ def _hero_chart_legend(*, has_total: bool) -> str:
     the mapping the reader needs three sections later.
     """
     P = PALETTE
-    items = [(P["green"], "Value (€, left)"),
-             (P["unreal"], "Unreal. P&amp;L (%, right)")]
+
+    def _swatch(color: str) -> str:
+        return (f'<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:2px;background:{color};vertical-align:baseline;'
+                f'margin-right:4px;"></span>')
+
+    def _split_swatch() -> str:
+        """Two half squares, green then red — the key for a series whose colour
+        states its sign. A CSS gradient would say it in one square, but Outlook's
+        Word engine drops gradients and the key would vanish."""
+        return (f'<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:2px 0 0 2px;background:{P["green"]};'
+                f'vertical-align:baseline;"></span>'
+                f'<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:0 2px 2px 0;background:{P["red"]};'
+                f'vertical-align:baseline;margin-right:4px;"></span>')
+
+    items = [(_swatch(P["ink"]), "Value (€, left)")]
     if has_total:
-        items.append((P["pnl"], "Total P&amp;L (%, right)"))
-    parts = [
-        (f'<span style="display:inline-block;width:7px;height:7px;'
-         f'border-radius:2px;background:{color};vertical-align:baseline;'
-         f'margin-right:4px;"></span>'
-         f'<span style="color:{P["muted"]};">{label}</span>')
-        for color, label in items
-    ]
+        # Named for what the colour MEANS, since it is the one series here whose
+        # colour carries information rather than identity.
+        items.append((_split_swatch(),
+                      "Total P&amp;L (%, right): green in profit, red under"))
+    items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (%, right)"))
+    parts = [f'{swatch}<span style="color:{P["muted"]};">{label}</span>'
+             for swatch, label in items]
     return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
             + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
