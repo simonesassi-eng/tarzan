@@ -350,10 +350,11 @@ def _hero_chart_legend(*, has_total: bool) -> str:
     items = [(_swatch(P["ink"]), "Value (€, left)")]
     if has_total:
         # Named for what the colour MEANS, since it is the one series here whose
-        # colour carries information rather than identity: above or below where
-        # the P&L stood when the window opened.
+        # colour carries information rather than identity: up or down over the
+        # window. Deliberately does not repeat the "window open" caption this
+        # change removed from the plot.
         items.append((_split_swatch(),
-                      "Total P&amp;L (%, right): green above the window open, red below"))
+                      "Total P&amp;L (%, right): green up, red down"))
     items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (%, right)"))
     parts = [f'{swatch}<span style="color:{P["muted"]};">{label}</span>'
              for swatch, label in items]
