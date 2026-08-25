@@ -133,7 +133,16 @@ class TestBothPnlMeasuresAreDrawn:
             (color, points) for points, color in
             re.findall(r'<polyline points="([^"]+)" fill="none" stroke="(#[0-9A-Fa-f]{6})"', svg)
         )
-        assert PALETTE["unreal"] in drawn and PALETTE["pnl"] in drawn, sorted(drawn)
+        # Unrealized keeps its violet identity. Total P&L is drawn TWICE, green
+        # and red, clipped about its own zero: the conditional colour moved off
+        # the value line onto the P&L, so cyan is not on this chart any more.
+        assert PALETTE["unreal"] in drawn, sorted(drawn)
+        assert PALETTE["green"] in drawn and PALETTE["red"] in drawn, sorted(drawn)
+        assert drawn[PALETTE["green"]] == drawn[PALETTE["red"]], (
+            "the two halves must be the same Total P&L line, differing only in clip"
+        )
+        assert PALETTE["ink"] in drawn, "the value line is neutral now"
+        assert PALETTE["pnl"] not in drawn
         ticks = [float(t) for t in re.findall(r'>(−?[\d.]+)%<', svg)]
         assert max(ticks) >= max(total), (
             f"right axis tops out at {max(ticks)}% and clips Total P&L at "
@@ -188,23 +197,23 @@ class TestRender:
         assert "Since inception" in html     # matrix row label
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile
-        # The Portfolio value series follows the Markets contract: green above
-        # the start baseline, red below it. Both P&L measures are dashed
-        # secondary series on the right axis, each in the colour it also
-        # carries on the return charts -- violet Unrealized, cyan Total -- so
-        # the mapping holds across the issue.
+        # The green/red split is on TOTAL P&L about its own break-even, not on
+        # the value: value above or below where the window opened is an
+        # arbitrary reference that a deposit moves, while the sign of the
+        # lifetime P&L is worth colouring. The value line is neutral ink, which
+        # also keeps the accent colour free for the cash-flow triangles sitting
+        # on it. Unrealized keeps the violet it carries on the return charts.
         from tarzan.export.newsletter import PALETTE
-        assert 'clip-path="url(#dg' in html
-        assert f'stroke="{PALETTE["green"]}" stroke-width="2.6"' in html
-        assert f'stroke="{PALETTE["red"]}" stroke-width="2.6"' in html
+        # The clip ids are the P&L split now (pg/pr), not the value's (dg/dr).
+        assert 'clip-path="url(#pg' in html
+        assert f'stroke="{PALETTE["green"]}" stroke-width="2.4"' in html
+        assert f'stroke="{PALETTE["red"]}" stroke-width="2.4"' in html
+        assert f'stroke="{PALETTE["ink"]}" stroke-width="2.6"' in html
         assert (
             f'stroke="{PALETTE["unreal"]}" stroke-width="1.8" '
             'stroke-dasharray="4,3"' in html
         )
-        assert (
-            f'stroke="{PALETTE["pnl"]}" stroke-width="1.8" '
-            'stroke-dasharray="1,2.5"' in html
-        )
+        assert f'stroke="{PALETTE["pnl"]}" stroke-width="1.8"' not in html
         # ...and the key names both, since the right axis can no longer be
         # labelled with one word.
         assert "Unreal. P&amp;L (%, right)" in html
