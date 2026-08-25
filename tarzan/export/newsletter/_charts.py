@@ -153,12 +153,11 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
                       total_pct=None) -> str:
     """Dual-axis hero chart: portfolio value in €, both P&L measures in %.
 
-    The green/red split is on TOTAL P&L, not on the value. Value above or below
-    where the window happened to open is an arbitrary reference — a deposit
-    moves it — while the sign of the lifetime P&L is the thing worth colouring:
-    green above break-even, red below. So Total P&L is drawn green/red about its
-    own zero line, and the value line is neutral ink, which also frees the
-    accent colour for the cash-flow triangles that sit on it.
+    The green/red split is on TOTAL P&L, with the same baseline semantics the
+    value line used to carry: green above where the P&L stood when the window
+    opened, red below it, about a dashed line at that level. The value line is
+    neutral ink, which also frees the accent colour for the cash-flow triangles
+    that sit on it.
 
     Unrealized P&L keeps the violet it carries on the return charts. Total P&L
     gives up its cyan HERE only, and the colour key says so with a two-tone
@@ -189,13 +188,9 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     )
     vstep = (vticks[1] - vticks[0]) if len(vticks) > 1 else None
     # The right axis must span BOTH P&L series, or the second line is drawn
-    # against a scale that was fitted to the first and rides off the plot. Zero
-    # is always included: it is the line the green/red split is measured about,
-    # so it has to be on the axis even when the window never crosses it.
+    # against a scale that was fitted to the first and rides off the plot.
     pct_all = list(pct) + list(total_pct or ())
-    plo, phi, pticks = _ch.nice_ticks(
-        min(min(pct_all), 0.0), max(max(pct_all), 0.0), _TICKS
-    )
+    plo, phi, pticks = _ch.nice_ticks(min(pct_all), max(pct_all), _TICKS)
 
     def X(i):
         return ML + (i / (n - 1) * PW if n > 1 else 0)
@@ -240,10 +235,11 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
     tline = (" ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(total_pct))
              if total_pct is not None else "")
-    # The split is about P&L = 0, on the RIGHT axis. Clamped into the plot band
-    # so a window entirely in profit clips all-green and one entirely under water
-    # clips all-red, rather than drawing a boundary off the canvas.
-    zero_y = max(MT, min(Yp(0.0), MT + PH))
+    # The split boundary: where Total P&L stood when the window opened, on the
+    # RIGHT axis — the same "versus the window open" reference the value line
+    # used to be coloured against. Clamped into the plot band so the clip can
+    # never be drawn off the canvas.
+    split_y = max(MT, min(Yp(total_pct[0]), MT + PH)) if total_pct else baseline_y
 
     marks = ""
     if flows:
@@ -278,13 +274,13 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         f'<circle cx="{X(n - 1):.1f}" cy="{Yv(values[-1]):.1f}" r="3.4" '
         f'fill="{P["ink"]}" stroke="{P["card_alt"]}" stroke-width="1.8"/>'
     )
-    # Total P&L, split green above break-even and red below it. Drawn as a
-    # filled band to its own zero rather than a hairline, because it is the
-    # series the reader is meant to read the sign off; the value line stays a
-    # line. Falls back to the plain cyan dash when there is no lifetime P&L.
+    # Total P&L, split green above its window-open level and red below it —
+    # the same reference the value line used to be coloured against. Drawn as a
+    # filled band rather than a hairline, because it is now the series carrying
+    # the colour; the value line stays a plain line.
     if tline:
         tband = (
-            f"{tline} {X(n - 1):.1f},{zero_y:.1f} {X(0):.1f},{zero_y:.1f}"
+            f"{tline} {X(n - 1):.1f},{split_y:.1f} {X(0):.1f},{split_y:.1f}"
         )
         pnl_layer = (
             f'<polygon points="{tband}" fill="{P["green"]}" fill-opacity="0.16" '
@@ -304,21 +300,18 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;'
         f'font-family:{FONT_STACK};">'
         f'<defs><clipPath id="pg{u}"><rect x="0" y="0" width="{w}" '
-        f'height="{zero_y:.1f}"/></clipPath>'
-        f'<clipPath id="pr{u}"><rect x="0" y="{zero_y:.1f}" width="{w}" '
-        f'height="{h - zero_y:.1f}"/></clipPath></defs>'
+        f'height="{split_y:.1f}"/></clipPath>'
+        f'<clipPath id="pr{u}"><rect x="0" y="{split_y:.1f}" width="{w}" '
+        f'height="{h - split_y:.1f}"/></clipPath></defs>'
         + grid
-        # The window-open level, still drawn as the value's reference but no
-        # longer labelled: the caption named a number the reader can read off
-        # the axis, and it sat on top of the line often enough to be noise.
-        + f'<line x1="{ML}" y1="{baseline_y:.1f}" x2="{ML + PW}" '
-        f'y2="{baseline_y:.1f}" stroke="{P["border"]}" stroke-width="0.8" '
+        # One dashed reference, as before: the level the colours are measured
+        # against. It used to be the value's window open and is now the P&L's,
+        # because that is the series carrying the colour. Unlabelled — the
+        # caption named a number the reader can read off the axis, and it sat on
+        # top of the line often enough to be noise.
+        + f'<line x1="{ML}" y1="{split_y:.1f}" x2="{ML + PW}" '
+        f'y2="{split_y:.1f}" stroke="{P["subtle"]}" stroke-width="0.8" '
         f'stroke-dasharray="3,3"/>'
-        # Break-even on the right axis: the line the P&L colours are measured
-        # about, so it is drawn wherever it falls inside the plot.
-        + (f'<line x1="{ML}" y1="{zero_y:.1f}" x2="{ML + PW}" y2="{zero_y:.1f}" '
-           f'stroke="{P["subtle"]}" stroke-width="0.8" stroke-dasharray="2,3"/>'
-           if tline and MT < zero_y < MT + PH else "")
         + pnl_layer
         + f'<polyline points="{pline}" fill="none" stroke="{P["unreal"]}" '
         f'stroke-width="1.8" stroke-dasharray="4,3" stroke-linejoin="round"/>'
@@ -357,9 +350,10 @@ def _hero_chart_legend(*, has_total: bool) -> str:
     items = [(_swatch(P["ink"]), "Value (€, left)")]
     if has_total:
         # Named for what the colour MEANS, since it is the one series here whose
-        # colour carries information rather than identity.
+        # colour carries information rather than identity: above or below where
+        # the P&L stood when the window opened.
         items.append((_split_swatch(),
-                      "Total P&amp;L (%, right): green in profit, red under"))
+                      "Total P&amp;L (%, right): green above the window open, red below"))
     items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (%, right)"))
     parts = [f'{swatch}<span style="color:{P["muted"]};">{label}</span>'
              for swatch, label in items]
