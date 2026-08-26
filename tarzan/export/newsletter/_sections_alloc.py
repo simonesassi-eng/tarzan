@@ -331,15 +331,33 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         return {"label": _esc(str(label)), "value": _esc(str(value)),
                 "caption": _esc(str(caption)), "tone": tone}
 
+    def _pnl_tile(label, eur, pct, denominator):
+        """A P&L tile with the PERCENTAGE as the headline and the euros beneath.
+
+        These two led with the euro amount, which is the figure that grows with
+        the book rather than the one that says how the book is doing: +€20,940
+        answers nothing without the capital behind it, while +8.62% is the answer
+        and is comparable to every other percentage in the issue. The euro amount
+        keeps its place, first on the caption line.
+
+        The tone follows the headline, so the colour belongs to the number it is
+        drawn on. If the percentage is unavailable the tile falls back to leading
+        with the euros rather than headlining a "—".
+        """
+        if is_missing(pct):
+            return _tile(label, _eur_smart(eur, signed=True), denominator,
+                         _tone(eur))
+        caption = denominator if is_missing(eur) else (
+            f"{_eur_smart(eur, signed=True)} · {denominator}")
+        return _tile(label, _pct(pct, signed=True), caption, _tone(pct))
+
     state_tiles = [
         _tile("Portfolio", _eur(m.total_value, decimals=0),
               f"invested {_eur_smart(m.invested_value)}"),
-        _tile("Total P&L", _eur_smart(total_pnl_eur, signed=True),
-              f"{_pct(total_pnl_pct, signed=True)} on contributed capital",
-              _tone(total_pnl_eur)),
-        _tile("Unrealized P&L", _eur_smart(unrealized_eur, signed=True),
-              f"{_pct(unrealized_pct, signed=True)} on open positions",
-              _tone(unrealized_eur)),
+        _pnl_tile("Total P&L", total_pnl_eur, total_pnl_pct,
+                  "on contributed capital"),
+        _pnl_tile("Unrealized P&L", unrealized_eur, unrealized_pct,
+                  "on open positions"),
     ]
     if twror_pct is not None:
         ann = m.twror_annualized_pct
