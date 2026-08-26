@@ -84,12 +84,11 @@ Gemini receives only typed portfolio/analysis domain content and explicit instru
 
 Each normal or critical-failure intent has a purpose-specific stable logical identity. The final publication step must create a durable transactional claim before SMTP, checkpoint local evidence, and mark `SMTP_INVOCATION_STARTED` immediately before `send_message`. Duplicate claims suppress SMTP. A post-invocation interruption becomes `UNCERTAIN` and is never retried automatically. A human-authorized resend requires a new audited token and therefore a new identity.
 
-GitHub validation is credential-free and must pass before the final publication step receives Drive, Gemini, claim-service, recipient, or SMTP secrets. Workflow actions use full commit SHAs; Python installation uses `--require-hashes`. Pins are refreshed for a reason — an applicable advisory or a dependency need — never on a clock that can expire between two digests. Declaration audits (release manifest, pins, positive scope, documentation claims) run in the `Checks` workflow on every push, deliberately outside the delivery path: they can fail a commit, never an already-committed digest. What gates publication is behaviour — compile, `pip check`, and the full test suite.
+GitHub validation is credential-free and must pass before the final publication step receives Drive, Gemini, claim-service, recipient, or SMTP secrets. Workflow actions use full commit SHAs; Python installation uses `--require-hashes`. Pins are refreshed for a reason — an applicable advisory or a dependency need — never on a clock that can expire between two digests. There is no release manifest and no declaration audit: the properties that mattered (credentials confined to the final publication step, action SHA pinning, dependency hash locking, one version authority) are assertions in the test suite, so they hold wherever the suite runs. What gates publication is behaviour — compile, `pip check`, and the full test suite. The `Checks` workflow runs the same behavioural gate on every push so a broken commit costs a red tick immediately; it is not a precondition for delivery.
 
 ## Development and evidence
 
 ```bash
-python scripts/validate_release.py --manifest tarzan/release_manifest.json
 python -m compileall -q tarzan scripts
 python -m pytest tarzan/tests -q
 ```

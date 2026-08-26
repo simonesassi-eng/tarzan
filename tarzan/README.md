@@ -304,11 +304,14 @@ python scripts/observe_workload.py
 ## Validation
 
 ```bash
-python scripts/validate_release.py --manifest tarzan/release_manifest.json
 python -m compileall -q tarzan scripts
 python -m pytest tarzan/tests -q
 ```
 
-The release validator checks exact dependency hashes, immutable workflow pins,
-credential placement, version authorities, provider/model pins, documentation,
-pin-review dates, and explicit positive scope declarations.
+Exact dependency hashes, immutable workflow pins, credential placement, version
+authorities and provider/model pins are asserted in
+`tarzan/tests/test_delivery_gates.py`, so the test suite above covers them. The
+standalone release validator and its manifest are gone: the manifest restated
+constants that live in the code, and its positive-scope check validated the shape
+of each declared path but never its existence — which is how `tarzan/backtest.py`
+stayed declared long after the module became the `tarzan/backtest/` package.
