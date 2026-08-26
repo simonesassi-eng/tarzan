@@ -43,18 +43,7 @@ _C = {
     "border": "CBD5E1",
 }
 
-# High-contrast, colour-blind-friendlier series palette for charts (indigo,
-# red, green, amber, cyan, pink, violet, slate). Distinct hues + brightness so
-# adjacent portfolio lines/bars are easy to tell apart.
-# Categorical palette in the validated fixed order (dataviz skill): worst
-# adjacent CVD ΔE 9.1 (the previous green↔red pair failed deutan at 5.0).
-# Assigned in order, never cycled for identity.
-_CHART_COLORS = ["2A78D6", "EB6834", "1BAF7A", "EDA100",
-                 "E87BA4", "008300", "4A3AA7", "E34948"]
-
-
 from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
-from tarzan.engine.robustness import HORIZON_YEARS as _HORIZON_YEARS
 
 _ASSET_ORDER = list(_ORDER_WHATIF)
 # The what-if workbook also renders an explicit "Other" geo bucket at the end.
@@ -111,6 +100,12 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "target_fac": "TARGET #1 (return-forward): no X25E, gold/trend capped 15, freed capital to the FACTORS (AVWC 10 / AVWS 9 / AVEM 4). Highest CAGR (8.1%, EUR335k/15y), Sharpe 0.50, drawdown -30.6%.",
     "target_mix": "TARGET #2 (balanced): no X25E, gold/trend capped 15, freed to NTSG+factors (NTSG 35, AVWC 9/AVWS 8/AVEM 3). CAGR 8.06%, Sharpe 0.49, drawdown -30.2%.",
     "nodur_ntsg": "no X25E, gold/trend 15, freed capital to NTSG (37). More core: good return but worse Sharpe/drawdown than the factor route.",
+    "mom_light": "target_fac + a SMALL momentum sleeve (XDEM 4) funded by trimming the mildest value leg (AVWC 10 to 6); momentum is 17% of the factor sleeve. Tests the marginal effect of pairing momentum with value at low conviction.",
+    "mom_6040": "target_fac rebuilt at the classic 60/40 VALUE/MOMENTUM split of the factor sleeve (value 14 = AVWC 5 / AVWS 6 / AVEM 3, momentum 9 = XDEM). Rationale is diversification, not return: a value tilt implicitly shorts momentum, and the pairing is worth holding even at zero momentum premium. Return-neutral to slightly negative, best drawdown of the momentum set.",
+    "mom_trend": "target_fac + momentum (XDEM 7) funded by HALVING trend (DBMFE 15 to 8), value sleeve untouched. Tests cross-sectional equity momentum against cross-asset time-series momentum: higher return in-sample, but clearly worse drawdown - trend was doing the drawdown work.",
+    "target_fac_cl2": "target_fac with the levered sleeve SWAPPED from SC2X to CL2. Motivation: SC2X launched in July 2026 (19 days of real history, TER 1.40%), CL2 has ~5 years and costs 0.50%. The trade-off is geographic, not statistical: CL2 is 2x MSCI USA (100% US) where SC2X is 2x ACWI, so the whole leveraged sleeve concentrates in the US.",
+    "target_mix_cl2": "target_mix (NTSG 35) with the same SC2X to CL2 swap: cheaper and far less synthetic, at the cost of a US-only leveraged sleeve.",
+    "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
     "bench_eq100": "Benchmark: 100% world equity (MSCI World). Equity-risk reference: low Sharpe, drawdown -52%.",
     "bench_6040": "Benchmark 60/40: 60% MSCI World + 40% aggregate bond (EUR hedged).",
     "bench_golden_butterfly": "Benchmark Golden Butterfly (global adaptation): 20 world / 20 small-value / 20 long-govt / 20 cash / 20 gold.",
@@ -425,6 +420,10 @@ def _risk_matrix(ws, row, portfolios) -> int:
     return row + 1
 
 
+# The portfolios under active consideration: pinned to the top of the Summary
+# and given a Monte-Carlo fan chart. Everything else is ranked below them.
+_TARGETS = {"target_fac", "target_mix", "mom_6040"}
+
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
                     ("2020-26", "2020-01-01"), ("2026 YTD", "2026-01-01"))
@@ -515,7 +514,7 @@ def _growth_windows_png(portfolios, *, anchor=100.0):
     names = list(navs)
     pal = list(plt.cm.tab20(range(20))) + list(plt.cm.tab20b(range(20)))
     colors = {n: pal[i % len(pal)] for i, n in enumerate(names)}
-    targets = {"target_fac", "target_mix"}
+    targets = _TARGETS
     wins = (("2000-08-31", "FULL 2000-26"), ("2011-01-01", "2011-26"),
             ("2020-01-01", "2020-26"), ("2026-01-01", "2026 YTD"))
     fig, axes = plt.subplots(4, 1, figsize=(9.6, 13.4), dpi=120)
@@ -561,16 +560,24 @@ def _growth_windows_png(portfolios, *, anchor=100.0):
 
 
 def _summary_sheet(wb, portfolios) -> None:
-    """First sheet: one ROW per portfolio. The FULL KPI set (CAGR/Vol/Sharpe/
-    Sortino/MaxDD/Calmar/β/α) is computed PER WINDOW — the full 2000-26 window
-    first, then the restricted 2011-26 and 2020-26 windows — followed by the 15y
-    Monte-Carlo projection, the asset-class split, the equity geography, and a
-    compact instrument recap."""
+    """First sheet: one ROW per portfolio, ordered as a decision table.
+
+    Columns lead with what an allocation decision actually turns on — the 15y
+    Monte-Carlo projection (median / bad case / dispersion), the €100k outcome
+    and its multiplier, the rolling 5/10/15y holds, then the notional asset split
+    and equity geography — followed by leverage and only THEN the per-window KPI
+    detail (CAGR/Vol/Sharpe/Sortino/MaxDD/Calmar/β/α × 4 windows, each window
+    boxed by vertical rules). The instrument recap stays last: it is a wide text
+    column and would push the numbers off-screen anywhere else.
+
+    Rows put the TARGETS on top, then rank the rest by MC 15y median descending
+    (best expected outcome first), tie-broken by MC band ascending (tighter
+    dispersion first — for the band, lower is better)."""
     from tarzan.engine import robustness as _rob
     ws = wb.create_sheet("Summary", 0)
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = _C["band"]
-    targets = {"target_fac", "target_mix"}
+    targets = _TARGETS
 
     # Global equity benchmark for beta/alpha = MSCI ACWI, built as an ACWI-weighted
     # blend of the geo proxies (all span ~2000-2026, unlike the single VTWSX/ACWI
@@ -614,16 +621,18 @@ def _summary_sheet(wb, portfolios) -> None:
         b = bench_nav.loc[start:] if bench_nav is not None else None
         return _rob.full_metrics(s, b, risk_free=rf_ann, rf_daily=rfd)
 
-    # Columns: Portfolio, Lev, [8 KPIs × 3 windows], MC15y, €100k, 5 asset, 5 geo, recap.
-    fixed_pre = [("Portfolio", 19), ("Lev", 5)]
-    fixed_post = [("MC15y med", 8), ("MC15y p5", 7), ("MC15y band", 9), ("€100k→15y", 9),
-                  ("×mult", 6),
-                  ("R5y med", 7), ("R5y p5", 7), ("R10y med", 8), ("R10y p5", 7),
-                  ("R15y med", 8), ("R15y p5", 7),
-                  ("Eq", 5), ("Bond", 5), ("Gold", 5), ("Trend", 5), ("Comm", 5),
-                  ("USA", 5), ("DevexUS", 7), ("EMU", 5), ("JP", 5), ("EM", 5),
-                  ("Instruments (ticker weight)", 56)]
-    widths = ([w for _, w in fixed_pre]
+    # Column order, left to right: name, the decision block (MC → geography),
+    # leverage, the per-window KPI detail, and the wide instrument recap last.
+    fixed_pre = [("Portfolio", 19)]
+    decision = [("MC15y med", 8), ("MC15y p5", 7), ("MC15y band", 9), ("€100k→15y", 9),
+                ("×mult", 6),
+                ("R5y med", 7), ("R5y p5", 7), ("R10y med", 8), ("R10y p5", 7),
+                ("R15y med", 8), ("R15y p5", 7),
+                ("Eq", 5), ("Bond", 5), ("Gold", 5), ("Trend", 5), ("Comm", 5),
+                ("USA", 5), ("DevexUS", 7), ("EMU", 5), ("JP", 5), ("EM", 5),
+                ("Lev", 5)]
+    fixed_post = [("Instruments (ticker weight)", 56)]
+    widths = ([w for _, w in fixed_pre] + [w for _, w in decision]
               + [6] * (len(_WIN_METRICS) * len(_SUMMARY_WINDOWS))
               + [w for _, w in fixed_post])
     for j, w in enumerate(widths):
@@ -644,7 +653,9 @@ def _summary_sheet(wb, portfolios) -> None:
         "= €100k compounded 15y at the MC median (your horizon). R5y/R10y/R15y med & p5 = median "
         "and 5th-pct annualised return over all historical rolling 5/10/15y holds (15y windows "
         "few & overlapping → thin, prefer MC15y). Eq/Bond/Gold/Trend/Comm = notional %% of "
-        "capital; USA/DevexUS/EMU/JP/EM = %% of the equity sleeve."
+        "capital; USA/DevexUS/EMU/JP/EM = %% of the equity sleeve. "
+        "ROWS: targets (★) first, then ranked by MC15y median descending, ties broken by "
+        "the narrower MC band."
     )).font = _font(8, italic=True, color=_C["muted"])
 
     gr, hr = 3, 4                                   # group-header row, metric-label row
@@ -660,9 +671,12 @@ def _summary_sheet(wb, portfolios) -> None:
             lo.fill = _fill(_C["header"]); lo.border = _border()
 
     _fixed_hdr(1, fixed_pre)
-    wcol = 1 + len(fixed_pre)
+    _fixed_hdr(1 + len(fixed_pre), decision)
+    wcol = 1 + len(fixed_pre) + len(decision)      # first per-window column
+    win_starts = [wcol + gi * len(_WIN_METRICS) for gi in range(len(_SUMMARY_WINDOWS))]
+    win_end = wcol + len(_WIN_METRICS) * len(_SUMMARY_WINDOWS) - 1
     for gi, (glabel, _start) in enumerate(_SUMMARY_WINDOWS):
-        c0 = wcol + gi * len(_WIN_METRICS)
+        c0 = win_starts[gi]
         ws.merge_cells(start_row=gr, start_column=c0, end_row=gr,
                        end_column=c0 + len(_WIN_METRICS) - 1)
         gc = ws.cell(row=gr, column=c0, value=glabel)
@@ -672,38 +686,48 @@ def _summary_sheet(wb, portfolios) -> None:
             mc = ws.cell(row=hr, column=c0 + mi, value=mlbl)
             mc.font = _font(8, bold=True, color=_C["white"]); mc.fill = _fill(_C["header"])
             mc.alignment = _align("center"); mc.border = _border()
-    _fixed_hdr(wcol + len(_WIN_METRICS) * len(_SUMMARY_WINDOWS), fixed_post)
+    _fixed_hdr(win_end + 1, fixed_post)
     ws.row_dimensions[gr].height = 15
     ws.row_dimensions[hr].height = 20
     ws.freeze_panes = ws.cell(row=hr + 1, column=2)
 
     CLS = ["Equities", "Fixed Income", "Gold", "Alternative", "Commodities"]
     GEO = ["USA", "Dev ex-USA ex-EMU ex-JP", "Eurozone EMU", "Japan", "Emerging Markets"]
+
+    def _mc_cagr(p) -> dict:
+        return ((((p.rob or {}).get("horizons", {}) or {}).get(15, {}) or {})
+                .get("mc", {}).get("cagr", {}) or {})
+
+    def _rank_key(p):
+        """Targets first, then everything else; within each group MC median
+        descending, ties broken by the narrower MC band."""
+        mc = _mc_cagr(p)
+        med = _clean_num(mc.get("median"))
+        p5, p95 = _clean_num(mc.get("p05")), _clean_num(mc.get("p95"))
+        band = (p95 - p5) if (p5 is not None and p95 is not None) else None
+        # -med sorts descending; +band sorts ascending (tighter dispersion wins a
+        # tie). Missing values sink to the bottom rather than poisoning the sort.
+        return (0 if p.name in targets else 1,
+                -(med if med is not None else -1e9),
+                band if band is not None else 1e9)
+
+    ordered = sorted(portfolios, key=_rank_key)
     r = hr + 1
-    for i, p in enumerate(portfolios):
+    for i, p in enumerate(ordered):
         is_t = p.name in targets
         # No dark row-fill: the per-column colour scale below owns the data cells,
         # so text stays dark/readable; targets are marked by the ★ + bold name.
         bg = _C["alt"] if i % 2 else _C["white"]
         namecolor = _C["band"] if is_t else _C["text"]
-        mccg = ((((p.rob or {}).get("horizons", {}) or {}).get(15, {}) or {})
-                .get("mc", {}).get("cagr", {}) or {})
+        mccg = _mc_cagr(p)
         mc_med = _clean_num(mccg.get("median"))
         mc_p5 = _clean_num(mccg.get("p05")); mc_p95 = _clean_num(mccg.get("p95"))
         mc_band = (mc_p95 - mc_p5) if (mc_p5 is not None and mc_p95 is not None) else None
         fv = 100_000 * (1.0 + mc_med / 100.0) ** 15 if mc_med is not None else None
         comp = " · ".join(f"{tk} {w:.0f}" for tk, w in
                           sorted(p.weights().items(), key=lambda kv: -kv[1]))
-        vals = [("★ " if is_t else "") + p.name.replace("_", " "), (p.leverage, "0.00\"x\"")]
-        for _glabel, start in _SUMMARY_WINDOWS:       # 8 KPIs per window
-            wm = _wm(p.synth_nav, start)
-            cg = _clean_num(wm.get("cagr")); dd = _clean_num(wm.get("max_drawdown"))
-            rowm = {"cagr": cg, "volatility": _clean_num(wm.get("volatility")),
-                    "sharpe": _clean_num(wm.get("sharpe")), "sortino": _clean_num(wm.get("sortino")),
-                    "max_drawdown": dd, "calmar": (cg / abs(dd)) if (cg is not None and dd) else None,
-                    "beta": _clean_num(wm.get("beta")), "alpha": _clean_num(wm.get("alpha"))}
-            for _lbl, key, fmt in _WIN_METRICS:
-                vals.append((rowm.get(key), fmt))
+        vals = [("★ " if is_t else "") + p.name.replace("_", " ")]
+        # Decision block: MC projection, €100k outcome, rolling holds, allocation.
         vals.append((mc_med, "0.0")); vals.append((mc_p5, "0.0"))
         vals.append((mc_band, "0.0")); vals.append((fv, "eur"))
         vals.append(((fv / 100_000) if fv is not None else None, "0.00\"x\""))  # multiplier
@@ -716,6 +740,16 @@ def _summary_sheet(wb, portfolios) -> None:
             vals.append((p.notl_gross.get(key, 0.0), "0"))
         for key in GEO:
             vals.append((p.geo_notl.get(key, 0.0), "0"))
+        vals.append((p.leverage, "0.00\"x\""))
+        for _glabel, start in _SUMMARY_WINDOWS:       # 8 KPIs per window
+            wm = _wm(p.synth_nav, start)
+            cg = _clean_num(wm.get("cagr")); dd = _clean_num(wm.get("max_drawdown"))
+            rowm = {"cagr": cg, "volatility": _clean_num(wm.get("volatility")),
+                    "sharpe": _clean_num(wm.get("sharpe")), "sortino": _clean_num(wm.get("sortino")),
+                    "max_drawdown": dd, "calmar": (cg / abs(dd)) if (cg is not None and dd) else None,
+                    "beta": _clean_num(wm.get("beta")), "alpha": _clean_num(wm.get("alpha"))}
+            for _lbl, key, fmt in _WIN_METRICS:
+                vals.append((rowm.get(key), fmt))
         vals.append((comp, "s"))
         for j, item in enumerate(vals):
             if j == 0:
@@ -752,29 +786,48 @@ def _summary_sheet(wb, portfolios) -> None:
                               end_type="max", end_color="1D4ED8")
 
     per_win = ["hi", "lo", "hi", "hi", "hi", "hi", "lo", "hi"]  # CAGR Vol Shrp Sort MaxDD Calmr β α
-    dirs = {}
-    for wi in range(len(_SUMMARY_WINDOWS)):
-        for mi, d in enumerate(per_win):
-            dirs[3 + wi * len(_WIN_METRICS) + mi] = d
-    base = 3 + len(_WIN_METRICS) * len(_SUMMARY_WINDOWS)   # MC15y med col
-    dirs[base] = "hi"; dirs[base + 1] = "hi"; dirs[base + 2] = "lo"   # MC med, p5, band
+    base = 1 + len(fixed_pre)                              # MC15y med column
+    dirs = {base: "hi", base + 1: "hi", base + 2: "lo"}     # MC med, p5, band
     dirs[base + 4] = "hi"                                  # ×mult (base+3 = €100k text, skip)
     for k in range(5, 11):                                 # R5/R10/R15 med & p5
         dirs[base + k] = "hi"
+    for wi in range(len(_SUMMARY_WINDOWS)):                # the per-window KPI blocks
+        for mi, d in enumerate(per_win):
+            dirs[win_starts[wi] + mi] = d
     for col, d in dirs.items():
         L = get_column_letter(col)
         ws.conditional_formatting.add(f"{L}{hr + 1}:{L}{last_data}", _cs(d == "hi"))
-    # Magnitude heatmap (white→dark blue) on leverage + asset split + geography.
-    for col in [2] + list(range(base + 11, base + 21)):    # Lev + Eq..EM
+    # Magnitude heatmap (white→dark blue) on asset split + geography + leverage.
+    lev_col = base + len(decision) - 1
+    for col in list(range(base + 11, base + 21)) + [lev_col]:   # Eq..EM + Lev
         L = get_column_letter(col)
         ws.conditional_formatting.add(f"{L}{hr + 1}:{L}{last_data}", _blue())
+
+    # Vertical rules boxing each time window, so the four KPI blocks read as four
+    # tables instead of 32 undifferentiated columns. Applied over the header rows
+    # and every data row, preserving the existing thin grid on the other sides.
+    def _vrule(col, side):
+        thick = Side(style="medium", color=_C["header"])
+        thin = Side(style="thin", color=_C["border"])
+        for rr in range(gr, last_data + 1):
+            c = ws.cell(row=rr, column=col)
+            c.border = Border(left=thick if side == "left" else thin,
+                              right=thick if side == "right" else thin,
+                              top=thin, bottom=thin)
+
+    for c0 in win_starts:                                  # left edge of each window
+        _vrule(c0, "left")
+    # Close the last window on the LEFT edge of the next column rather than the
+    # right edge of its own: that column's header is a vertical merge whose style
+    # lives on the anchor cell, so the rule renders on the header row too.
+    _vrule(win_end + 1, "left")
 
     # Charts, stacked below the table: (1) 3-window growth (log), all portfolios;
     # (2) Monte-Carlo 15y fan for each target.
     try:
         from openpyxl.drawing.image import Image as XLImage
         r += 1
-        gh = ws.cell(row=r, column=1, value="Cumulative return — 3 windows (log), all portfolios")
+        gh = ws.cell(row=r, column=1, value="Cumulative return — 4 windows (log), all portfolios")
         gh.font = _font(11, bold=True, color=_C["white"]); gh.fill = _fill(_C["band"])
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=min(ncol, 12))
         r += 1
@@ -788,7 +841,7 @@ def _summary_sheet(wb, portfolios) -> None:
         h.font = _font(11, bold=True, color=_C["white"]); h.fill = _fill(_C["band"])
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=min(ncol, 12))
         r += 1
-        for p in portfolios:
+        for p in ordered:                              # same order as the table
             if p.name not in targets:
                 continue
             buf = _mc_fan_png(getattr(p, "synth_nav", None), p.name.replace("_", " "))
@@ -833,11 +886,13 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
         f"generated {datetime.now():%Y-%m-%d %H:%M}"))
     st.font = _font(9, italic=True, color=_C["muted"])
 
-    # The workbook mirrors the newsletter "Backtesting" section — same
-    # components, no more, no less (plus the testfol tab): (1) instruments ×
-    # portfolios, (2) diversification (notional asset class + gross/leverage +
-    # leverage-by-class + geography), (3) portfolio risk metrics EUR/USD,
-    # (4) robustness sheet, (5) simulation sheet.
+    # Four sheets, no more: Summary (one row per portfolio, the decision table),
+    # What-If (this one: instruments × portfolios, diversification by asset class
+    # and geography, gross/leverage, risk metrics EUR/USD), Simulation (how each
+    # instrument's pre-inception history was backfilled) and Testfolio. The former
+    # Robustness and Horizons sheets are gone: everything an allocation decision
+    # needs from them (MC 15y median/p5/band, rolling 5/10/15y) is a column in
+    # Summary, so a whole sheet per view was duplication.
     row = 4
     row = _lineage_block(ws, row, portfolios, ncol)
     row = _instrument_matrix_block(ws, row, portfolios)
@@ -900,8 +955,6 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
 
     row = _risk_matrix(ws, row, portfolios)
 
-    _robustness_sheet(wb, portfolios)
-    _horizons_sheet(wb, portfolios)
     if sim_rows:
         _simulation_sheet(wb, sim_rows)
     if testfol:
@@ -913,357 +966,6 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     wb.save(path)
     logger.info("What-if workbook saved to %s", path)
     return path
-
-
-def _robustness_sheet(wb, portfolios) -> None:
-    """Second sheet: rolling / stress / Monte-Carlo robustness, portfolios as
-    columns, for both the actual ~5y history and the synthetic long history."""
-    ws = wb.create_sheet("Robustness")
-    ws.sheet_view.showGridLines = False
-    ws.sheet_properties.tabColor = _C["amber"]
-    ws.column_dimensions["A"].width = 24
-    ws.column_dimensions["B"].width = 26
-    for j in range(len(portfolios)):
-        ws.column_dimensions[get_column_letter(_PCOL0 + j)].width = 16
-    ncol = _PCOL0 + len(portfolios) - 1
-
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    t = ws.cell(row=1, column=1, value="BACKTEST ROBUSTNESS")
-    t.font = _font(15, bold=True, color=_C["white"])
-    t.fill = _fill(_C["header"])
-    ws.row_dimensions[1].height = 24
-
-    def _roll(p, sub, key):
-        v = p.rob.get(sub, {}).get(key)
-        return "—" if v is None else f"{v * 100:.1f}%"
-
-    def _stress(p, scen, field):
-        d = p.rob.get("stress", {}).get(scen, {})
-        return "—" if not d.get("covered") else f"{d[field]:.1f}%"
-
-    def _ci(p, metric, dec=0):
-        d = p.rob.get("bootstrap", {}).get(metric, {})
-        return "—" if not d else f"{d['p05']:.{dec}f} / {d['p95']:.{dec}f}%"
-
-    def block(row, title, rows):
-        row = _section_header(ws, row, title, ncol)
-        _col_headers(ws, row, portfolios, "Metric", with_target=False)
-        row += 1
-        for i, (label, fn) in enumerate(rows):
-            bg = _C["alt"] if i % 2 else _C["white"]
-            _merge_label(ws, row, label, bold=True, bg=bg)
-            for j, p in enumerate(portfolios):
-                c = ws.cell(row=row, column=_PCOL0 + j, value=fn(p))
-                c.alignment = _align("center")
-                c.fill = _fill(bg)
-                c.border = _border()
-                c.font = _font(9)
-            row += 1
-        return row + 1
-
-    rolling_rows = [
-        ("Roll 1Y ret p05", lambda p: _roll(p, "rolling1y", "p05")),
-        ("Roll 1Y ret median", lambda p: _roll(p, "rolling1y", "median")),
-        ("Roll 1Y ret p95", lambda p: _roll(p, "rolling1y", "p95")),
-        ("1Y windows positive", lambda p: (lambda d: "—" if not d else f"{d['pct_positive']:.0f}%")(p.rob.get("rolling1y", {}))),
-        ("Roll 3Y ret p05", lambda p: _roll(p, "rolling3y", "p05")),
-        ("Roll 3Y ret median", lambda p: _roll(p, "rolling3y", "median")),
-        ("Roll 1Y Sharpe min–max", lambda p: (lambda d: "—" if not d else f"{d['min']:.2f}–{d['max']:.2f}")(p.rob.get("sharpe", {}))),
-        ("MC CAGR 1Y [p05/p95]", lambda p: _ci(p, "cagr")),
-        ("MC MaxDD p05 (worst)", lambda p: (lambda d: "—" if not d else f"{d['p05']:.1f}%")(p.rob.get("bootstrap", {}).get("max_drawdown", {}))),
-    ]
-    stress_rows = [
-        ("Dot-com maxDD", lambda p: _stress(p, "Dot-com 2000-02", "max_drawdown")),
-        ("GFC'08 return", lambda p: _stress(p, "GFC 2008", "return")),
-        ("GFC'08 maxDD", lambda p: _stress(p, "GFC 2008", "max_drawdown")),
-        ("COVID'20 maxDD", lambda p: _stress(p, "COVID 2020", "max_drawdown")),
-        ("2022 maxDD", lambda p: _stress(p, "2022 rate shock", "max_drawdown")),
-    ]
-
-    row = 3
-    row = block(row, "Rolling & Monte-Carlo (aligned history)", rolling_rows)
-    row = block(row, "Historical stress scenarios", stress_rows)
-
-    # Plain-language legend so the metrics are self-explanatory.
-    row = _section_header(ws, row, "How to read these metrics", ncol)
-    legend = [
-        ("Rolling 1Y / 3Y return (p05 · median · p95)",
-         "Annualised return over EVERY rolling 1- or 3-year window in the history. "
-         "p05 = unlucky start (5th percentile), median = typical, p95 = lucky start. "
-         "A wide spread means the outcome depends a lot on WHEN you start."),
-        ("1Y windows positive",
-         "Share of all rolling 1-year windows that ended in positive territory."),
-        ("Rolling 1Y Sharpe min–max",
-         "Worst-to-best annualised Sharpe over any rolling 1-year window (risk-adjusted consistency)."),
-        ("MC CAGR 1Y [p05 / p95]",
-         "Monte-Carlo (block bootstrap, 2000 paths): 90% confidence band for next-year CAGR. "
-         "Blocks keep momentum / volatility-clustering, unlike a naive random resample."),
-        ("MC MaxDD p05 (worst)",
-         "Bad-case (5th-percentile) max drawdown across the Monte-Carlo paths — a plausible worst year."),
-        ("Historical stress maxDD / return",
-         "Actual peak-to-trough drawdown (and total return) the portfolio WOULD have suffered in each "
-         "real crisis window, using the reconstructed history."),
-    ]
-    for i, (term, desc) in enumerate(legend):
-        bg = _C["alt"] if i % 2 else _C["white"]
-        a = ws.cell(row=row, column=1, value=term)
-        a.font = _font(9, bold=True); a.fill = _fill(bg); a.border = _border()
-        a.alignment = _align("left", "top")
-        b = ws.cell(row=row, column=2, value=desc)
-        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
-        b.font = _font(9, color=_C["muted"]); b.fill = _fill(bg); b.border = _border()
-        b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        ws.row_dimensions[row].height = 42
-        row += 1
-    row += 1
-
-    row = _robustness_charts(ws, portfolios, row, ncol)
-
-    try:
-        from tarzan.data import proxy_data as _pd
-        _ccy = getattr(_pd, "_TARGET_CCY", "EUR")
-    except Exception:  # noqa: BLE001
-        _ccy = "EUR"
-    note = ws.cell(row=row, column=1, value=(
-        "Single aligned history = per-instrument splice: real fund returns where available, "
-        f"proxy-reconstructed (geo + leverage financing) before inception. Modeled, {_ccy}-based; "
-        "equity proxies are total-return (^SP500TR), commodities collateralised, "
-        "managed futures = RYMFX/AQMNX or custom SG-CTA CSV. Net of each fund's TER on "
-        "the modeled base (real returns already net); periodic rebalancing (CLI "
-        "--rebalance, default quarterly), costless. Sharpe/Sortino use a currency-matched, "
-        "TIME-VARYING daily risk-free (USD = ^IRX T-bill; EUR = ECB AAA-govt 3M spot via "
-        "SDMX); the header % is the window average of that path."))
-    note.font = _font(8, italic=True, color=_C["muted"])
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncol)
-
-
-def _horizons_sheet(wb, portfolios) -> None:
-    """Multi-horizon sheet: rolling + Monte-Carlo outcome distributions for the
-    1/3/5/10/15-year horizons an investor plans around. Renders ``p.rob['horizons']``
-    (:func:`tarzan.engine.robustness.multi_horizon`) — same source as the CLI
-    ``scripts.horizon_analysis`` report, so the two never diverge."""
-    if not any(p.rob.get("horizons") for p in portfolios):
-        return
-    ws = wb.create_sheet("Horizons")
-    ws.sheet_view.showGridLines = False
-    ws.sheet_properties.tabColor = _C["header"]
-    ws.column_dimensions["A"].width = 24
-    ws.column_dimensions["B"].width = 26
-    for j in range(len(portfolios)):
-        ws.column_dimensions[get_column_letter(_PCOL0 + j)].width = 16
-    ncol = _PCOL0 + len(portfolios) - 1
-
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    t = ws.cell(row=1, column=1, value="OUTCOMES BY INVESTMENT HORIZON")
-    t.font = _font(15, bold=True, color=_C["white"])
-    t.fill = _fill(_C["header"])
-    ws.row_dimensions[1].height = 24
-
-    def _cell(row, col, value, bg):
-        c = ws.cell(row=row, column=col, value=value)
-        c.alignment = _align("center"); c.fill = _fill(bg)
-        c.border = _border(); c.font = _font(9)
-        return c
-
-    def block(row, title, rows):
-        row = _section_header(ws, row, title, ncol)
-        _col_headers(ws, row, portfolios, "Metric", with_target=False)
-        row += 1
-        for i, (label, fn) in enumerate(rows):
-            bg = _C["alt"] if i % 2 else _C["white"]
-            _merge_label(ws, row, label, bold=True, bg=bg)
-            for j, p in enumerate(portfolios):
-                _cell(row, _PCOL0 + j, fn(p), bg)
-            row += 1
-        return row + 1
-
-    def _pct(v, dec=1):
-        return "—" if v is None else f"{v * 100:.{dec}f}%"
-
-    def _pctp(v, dec=1):   # already in percent units (MC dicts)
-        return "—" if v is None else f"{v:.{dec}f}%"
-
-    for yrs in _HORIZON_YEARS:
-        rows = [
-            (f"Rolling {yrs}Y p05", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p05"))),
-            (f"Rolling {yrs}Y p25", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p25"))),
-            (f"Rolling {yrs}Y median", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "median"))),
-            (f"Rolling {yrs}Y p75", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p75"))),
-            (f"Rolling {yrs}Y p95", lambda p, y=yrs: _pct(_hz(p, y, "rolling", "p95"))),
-            ("  % windows positive", lambda p, y=yrs: _pctp(_hz(p, y, "rolling", "pct_positive"))),
-            ("  MC CAGR p05", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "p05"))),
-            ("  MC CAGR median", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "median"))),
-            ("  MC CAGR p95", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "cagr", "p95"))),
-            ("  MC MaxDD median", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "max_drawdown", "median"))),
-            ("  MC MaxDD p05 (worst)", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "max_drawdown", "p05"))),
-            ("  P(loss at horizon)", lambda p, y=yrs: _pctp(_hz(p, y, "mc", "prob_loss"))),
-        ]
-        block(3 if yrs == _HORIZON_YEARS[0] else ws.max_row + 2,
-              f"{yrs}-year horizon", rows)
-
-    row = _section_header(ws, ws.max_row + 2, "How to read this sheet", ncol)
-    legend = [
-        ("Rolling NY (p05 · median · p95)",
-         "Annualised return over EVERY overlapping N-year window in the reconstructed history. "
-         "p05 = unlucky start, median = typical, p95 = lucky start. The gap between p05 and median "
-         "is sequence risk — how much your outcome depends on WHEN you start."),
-        ("% windows positive",
-         "Share of overlapping N-year windows that ended above water. Approaches 100% as N grows."),
-        ("MC CAGR (p05 / median / p95)",
-         "Block-bootstrap Monte-Carlo (2000 paths, 21-day blocks): the CAGR distribution over the "
-         "next N years if history's return blocks recur in a reshuffled order. Fat tails preserved."),
-        ("MC MaxDD (median / p05)",
-         "Worst peak-to-trough drop experienced ALONG each simulated N-year path — median and "
-         "bad-case (p05). The path hurts even when the endpoint is fine."),
-        ("P(loss at horizon)",
-         "Share of Monte-Carlo paths whose total return is negative at N years — the honest "
-         "probability of ending underwater after holding for that long."),
-    ]
-    for i, (term, desc) in enumerate(legend):
-        bg = _C["alt"] if i % 2 else _C["white"]
-        a = ws.cell(row=row, column=1, value=term)
-        a.font = _font(9, bold=True); a.fill = _fill(bg); a.border = _border()
-        a.alignment = _align("left", "top")
-        b = ws.cell(row=row, column=2, value=desc)
-        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncol)
-        b.font = _font(9, color=_C["muted"]); b.fill = _fill(bg); b.border = _border()
-        b.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-        ws.row_dimensions[row].height = 42
-        row += 1
-
-
-def _hz(p, yrs, kind, *keys):
-    """Safe getter into p.rob['horizons'][yrs][kind][key...] → None if absent."""
-    d = (p.rob.get("horizons", {}) or {}).get(yrs, {}).get(kind, {})
-    for k in keys:
-        if not isinstance(d, dict):
-            return None
-        d = d.get(k)
-    return d
-
-
-def _robustness_charts(ws, portfolios, start_row, ncol) -> int:
-    """Testfol.io-style charts from the aligned monthly NAV — growth (log),
-    drawdown, rolling 5Y / 10Y annualised return — rendered with matplotlib and
-    embedded as images. Native Excel line charts can't direct-label lines or
-    anti-alias, so near-identical portfolios overlapped illegibly and the legend
-    sat on top of the plot; images fix both. No baseline portfolio: every series
-    is shown on its own absolute scale, log for growth so equal % moves are
-    equal distances (the reason testfol growth charts read cleanly)."""
-    try:
-        import pandas as pd
-        from io import BytesIO
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
-        import numpy as np
-        from openpyxl.drawing.image import Image as XLImage
-    except Exception:  # noqa: BLE001 — chart deps optional; skip silently
-        return start_row
-    navs = {p.name: p.nav[p.nav > 0] for p in portfolios
-            if getattr(p, "nav", None) is not None and len(p.nav) >= 30}
-    if not navs:
-        return start_row
-    daily = pd.DataFrame(navs).dropna(how="all").ffill()
-    if daily.empty or daily.shape[0] < 30:
-        return start_row
-    cols = list(daily.columns)
-
-    def _roll_ann(df, win):
-        return ((df / df.shift(win)) ** (252.0 / win) - 1.0) * 100.0
-
-    growth = (daily / daily.iloc[0] * 100.0).iloc[::21]
-    dd = ((daily / daily.cummax() - 1.0) * 100.0).iloc[::21]
-    r5 = _roll_ann(daily, 5 * 252).iloc[::21].dropna(how="all")
-    r10 = _roll_ann(daily, 10 * 252).iloc[::21].dropna(how="all")
-
-    palette = {name: "#" + _CHART_COLORS[i % len(_CHART_COLORS)]
-               for i, name in enumerate(cols)}
-    ink, muted, grid = "#1F2937", "#6B7280", "#E5E7EB"
-
-    def _short(name):
-        return name.replace("LAYNE_", "")
-
-    def _declutter(ys, gap):
-        """Push end-label y-positions apart by at least ``gap`` (data units),
-        preserving order — so labels of near-identical lines don't overprint."""
-        order = np.argsort(ys)
-        adj = np.array(ys, dtype=float)
-        for i in range(1, len(order)):
-            a, b = order[i - 1], order[i]
-            if adj[b] - adj[a] < gap:
-                adj[b] = adj[a] + gap
-        return adj
-
-    def _png(frame, title, ylabel, *, log=False, pct=False):
-        fig, ax = plt.subplots(figsize=(9.2, 3.9), dpi=130)
-        fig.subplots_adjust(left=0.07, right=0.80, top=0.88, bottom=0.12)
-        ends = []
-        for name in frame.columns:
-            s = frame[name].dropna()
-            if s.empty:
-                continue
-            ax.plot(s.index, s.values, color=palette[name], lw=1.5,
-                    solid_capstyle="round", zorder=3)
-            ends.append((s.index[-1], float(s.values[-1]), name))
-        if log:
-            ax.set_yscale("log")
-        # direct end-labels in the reserved right margin, decluttered. The gap is
-        # a fraction of the FULL axis height (not of the tiny spread between the
-        # near-identical endpoints), else the labels overprint each other.
-        if ends:
-            space = "log" if log else "lin"
-            def _t(v):
-                return np.log10(v) if space == "log" else v
-            def _inv(v):
-                return 10 ** v if space == "log" else v
-            y0, y1 = ax.get_ylim()
-            full = _t(y1) - _t(y0)
-            gap = full * 0.062
-            yvals = [_t(y) for _, y, _ in ends]
-            placed = _declutter(yvals, gap)
-            overflow = max(placed) - _t(y1)          # keep the stack inside the axis
-            if overflow > 0:
-                placed = [p - overflow for p in placed]
-            xr = ends[0][0]
-            for (x, y, name), yp in zip(ends, placed):
-                ax.annotate(f" {_short(name)}", xy=(xr, _inv(yp)),
-                            xytext=(6, 0), textcoords="offset points",
-                            va="center", ha="left", fontsize=8.5,
-                            color=palette[name], fontweight="bold",
-                            annotation_clip=False)
-        ax.set_title(title, fontsize=11, fontweight="bold", color=ink, loc="left")
-        ax.set_ylabel(ylabel, fontsize=8.5, color=muted)
-        ax.grid(axis="y", color=grid, lw=0.7, zorder=0)
-        ax.xaxis.set_major_locator(mdates.YearLocator(base=5))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(grid)
-        ax.tick_params(colors=muted, labelsize=8, length=0)
-        if pct:
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
-        buf = BytesIO()
-        fig.savefig(buf, format="png"); plt.close(fig); buf.seek(0)
-        return buf
-
-    specs = [
-        (growth, "Growth of 100 — aligned history (log scale)", "Index (start=100)",
-         dict(log=True)),
-        (dd, "Drawdown (underwater)", "Drawdown", dict(pct=True)),
-        (r5, "Rolling 5-year return (annualised)", "Ann. return", dict(pct=True)),
-        (r10, "Rolling 10-year return (annualised)", "Ann. return", dict(pct=True)),
-    ]
-    row = start_row
-    for frame, title, ylab, kw in specs:
-        if frame.empty:
-            continue
-        img = XLImage(_png(frame, title, ylab, **kw))
-        ws.add_image(img, f"A{row}")
-        row += 21
-    return row + 1
 
 
 def _simulation_sheet(wb, sim_rows) -> None:
