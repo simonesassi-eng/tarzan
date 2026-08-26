@@ -1,10 +1,18 @@
-# Repository hygiene, deliberately OUTSIDE the delivery path.
+# Ordinary CI, deliberately OUTSIDE the delivery path.
 #
-# Everything that audits declarations rather than behaviour lives here: the
-# release manifest, the pins, the positive scope, the documentation claims. A
-# drifting declaration is a real problem, but the honest place to surface it is
-# the commit that caused it — not tomorrow morning's digest. Nothing in this
-# workflow can stop a newsletter from going out.
+# This exists so a broken commit costs a red tick now, instead of surfacing in
+# tomorrow morning's digest. Nothing here can stop a newsletter from going out,
+# and nothing here is required for one to go out: the delivery workflow runs its
+# own copy of the same behavioural gate, so a dispatch on a commit whose CI has
+# not finished (or never ran) still validates itself before sending.
+#
+# It used to also audit declarations — a release manifest, its pins, a positive
+# scope, documentation claims — via scripts/validate_release.py. Both are gone:
+# the manifest restated constants that live in the code, so the audit mostly
+# checked a copy against its original, and one of its assertions was that this
+# workflow runs the audit. What was load bearing (credential placement, action
+# SHA pinning, dependency hash locking, one version authority) is asserted in
+# tarzan/tests/test_delivery_gates.py, which runs in BOTH workflows.
 name: Checks
 
 on:
@@ -32,9 +40,6 @@ jobs:
 
       - name: Install immutable dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-
-      - name: Validate release declarations
-        run: python scripts/validate_release.py --manifest tarzan/release_manifest.json
 
       - name: Compile positive Tarzan scopes
         run: python -m compileall -q tarzan scripts
