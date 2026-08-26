@@ -92,20 +92,38 @@ def now_local() -> datetime:
 def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     """Build the newsletter subject line.
 
-    Example: "Portfolio Digest - 19:35 - uP&L +6.68%"
+    Example: "Portfolio Digest - 19:35 - 1D +0.42%"
 
-    The percentage is the unrealized P&L on current holdings
-    ((total value − cost basis) / cost basis), the same figure the Hero shows
-    as "Unrealized PnL".
+    The percentage is the portfolio's 1D move, read from
+    ``metrics.performance["1d"]`` — the SAME expression the STATE "Session" tile
+    prints, so the subject and the body cannot disagree about the day.
+
+    It is LIVE whenever a venue the book trades on is open, and the previous
+    close when none is, with no branch here. Both follow from the series:
+    ``current_session`` stamps today's market point onto every price history
+    before anything reads a price, so the NAV's terminal point IS the current
+    valuation while a market is open; and ``window_anchor`` opens the 1D window on
+    the previous SESSION from the vendored exchange calendar, so with every venue
+    closed the same expression measures the last completed session.
+
+    Falls back to the lifetime unrealized figure — relabelled, so the subject
+    never mislabels what it shows — when there is no 1D at all: a holdings-only
+    run has no order-derived NAV, and a book younger than two sessions has no
+    previous session to anchor on.
     """
-    gain_pct = metrics.unrealized_pnl_pct or 0.0
+    perf = getattr(metrics, "performance", None) or {}
+    gain_pct, label = perf.get("1d"), "1D"
+    if gain_pct is None or gain_pct != gain_pct:      # None or NaN
+        gain_pct, label = (metrics.unrealized_pnl_pct or 0.0), "uP&L"
+    gain_pct = float(gain_pct)
     generated_at = now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 
-    # Subject is exactly "<prefix> - HH:MM - uP&L ±X.XX%". The trigger label is
+    # Subject is exactly "<prefix> - HH:MM - 1D ±X.XX%". The trigger label is
     # intentionally NOT appended: the scheduler's slot label already carries the
     # time, which duplicated the HH:MM in the subject.
-    parts = [prefix or "Portfolio Digest", generated_at, f"uP&L {sign}{abs(gain_pct):.2f}%"]
+    parts = [prefix or "Portfolio Digest", generated_at,
+             f"{label} {sign}{abs(gain_pct):.2f}%"]
     return " - ".join(parts)
 
 
