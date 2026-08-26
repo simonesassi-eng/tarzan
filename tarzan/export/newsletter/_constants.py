@@ -429,8 +429,14 @@ class _NewsletterContext:
     metrics: PortfolioMetrics
     config: InvestorConfig
     issue_number: int = 1
-    benchmark_alpha_beta: str = "S&P 500"
-    benchmark_geo: str = "MSCI ACWI"
+    # No literal index name as a default. Both are looked up in
+    # ``metrics.benchmark_histories`` BY this name, so a default that does not
+    # match the curated taxonomy row is not a harmless label — it silently
+    # removes the benchmark from every chart that reads it. ``build_context``
+    # always resolves them (see ``newsletter._benchmark_names``); a directly
+    # constructed context draws no benchmark rather than the wrong one.
+    benchmark_alpha_beta: Optional[str] = None
+    benchmark_geo: Optional[str] = None
     # One run-scoped preprocessed intraday catalog is shared by every
     # performance table. The renderer performs no provider request or venue
     # resolution; the semantic gate checks this projection against metrics.

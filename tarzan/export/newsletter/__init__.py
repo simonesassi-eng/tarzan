@@ -74,12 +74,41 @@ from tarzan.export._perf_series import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
+def _benchmark_names(alpha_beta: Optional[str],
+                     geo: Optional[str]) -> tuple[str, str]:
+    """Resolve the two benchmark display names from the curated taxonomy.
+
+    ``instrument_taxonomy.csv`` is the authority: the rows flagged
+    ``is_benchmark_alpha_beta`` / ``is_benchmark_geo``, with one shipped default
+    behind them (see ``config.default_benchmarks``). An explicit argument wins.
+
+    One resolver, called by ``build_context``, so no entry point can hold a
+    different opinion. ``build_context`` used to DEFAULT to the literals
+    "S&P 500" / "MSCI ACWI" and resolve nothing, while the real geo benchmark on
+    this book is "iShares MSCI ACWI" — and since the charts look their series up
+    in ``benchmark_histories`` BY that name, a caller reaching build_context
+    directly silently lost the benchmark line from all three panels.
+    """
+    from tarzan import config as _cfg
+    if alpha_beta is None:
+        try:
+            alpha_beta = _cfg.benchmark_beta_name()
+        except Exception:  # noqa: BLE001 — a label must never block a render
+            alpha_beta = _cfg._default_benchmark_name()
+    if geo is None:
+        try:
+            geo = _cfg.benchmark_geo_allocation()
+        except Exception:  # noqa: BLE001
+            geo = _cfg._default_benchmark_name()
+    return alpha_beta, geo
+
+
 def build_context(
     metrics: PortfolioMetrics,
     config: InvestorConfig,
     issue_number: int = 1,
-    benchmark_alpha_beta: str = "S&P 500",
-    benchmark_geo: str = "MSCI ACWI",
+    benchmark_alpha_beta: Optional[str] = None,
+    benchmark_geo: Optional[str] = None,
     ai_summary: Optional[str] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -89,8 +118,10 @@ def build_context(
         metrics: Computed portfolio metrics.
         config: Investor configuration.
         issue_number: Sequential issue number for branding.
-        benchmark_alpha_beta: Display name of α/β benchmark (from constants.yaml).
-        benchmark_geo: Display name of geographic allocation benchmark.
+        benchmark_alpha_beta: Display name of α/β benchmark. None (the default)
+            resolves it from the curated taxonomy — see ``_benchmark_names``.
+        benchmark_geo: Display name of geographic allocation benchmark. None
+            resolves it from the taxonomy's ``is_benchmark_geo`` row.
         ai_summary: Optional precomputed market-context narrative.
         semantic_audit: Optional mutable mapping populated with the exact raw
             intraday request and rendered chart-label sources.
@@ -98,6 +129,8 @@ def build_context(
     Returns:
         A dict with all keys consumed by ``portfolio_digest.html.j2``.
     """
+    benchmark_alpha_beta, benchmark_geo = _benchmark_names(
+        benchmark_alpha_beta, benchmark_geo)
     # Reset the per-render SVG clipPath id counters so a render's element ids
     # depend only on how many charts it draws, not on how many newsletters the
     # process rendered before it. Without this, two renders in one process
@@ -178,21 +211,8 @@ def render_newsletter(
     Returns:
         The full HTML newsletter as a single string.
     """
-    # Resolve benchmark display names from config when not explicitly passed.
-    # This closes a mismatch where the α/β footnote/tag could name a different
-    # index than the β=1.00 row the engine produced.
-    from tarzan import config as _cfg
-    if benchmark_alpha_beta is None:
-        try:
-            benchmark_alpha_beta = _cfg.benchmark_beta_name()
-        except Exception:
-            benchmark_alpha_beta = "S&P 500"
-    if benchmark_geo is None:
-        try:
-            benchmark_geo = _cfg.benchmark_geo_allocation()
-        except Exception:
-            benchmark_geo = "MSCI ACWI"
-
+    # Benchmark display names are resolved in build_context (one resolver, so no
+    # entry point can name a different index than the engine computed against).
     # Resolve the optional AI market-context summary when not explicitly passed,
     # so every caller (CLI + email) renders the SAME newsletter. generate_summary
     # is fully self-guarding: it returns None when no GEMINI_API_KEY is set, in a
