@@ -43,6 +43,20 @@ _C = {
     "border": "CBD5E1",
 }
 
+# Categorical series palette in a FIXED order, never cycled for identity, and
+# the dash patterns that pair with it. Validated in OKLab (ΔE ×100) with
+# protan/deutan/tritan simulation: adjacent pairs in this order score 19.6 for
+# normal vision (pass, floor 15) and 6.1 at worst under CVD (tritan, in the 6-8
+# band) — which is legal ONLY alongside a secondary encoding, hence the dashes.
+# Across ALL pairs, not just adjacent ones, the worst separation collapses to 7.1
+# normal / 3.9 CVD: eight hues cannot give 30+ series individual identity, so
+# above ~8 series colour is a grouping cue and the ranked legend is what carries
+# lookup. Identity is assigned from a portfolio's fixed position, never from its
+# rank in a panel, so a chart with fewer series never repaints the survivors.
+_SERIES_HUES = ["2A78D6", "EB6834", "1BAF7A", "EDA100",
+                "E87BA4", "008300", "4A3AA7", "E34948"]
+_SERIES_DASHES = ["-", (0, (5, 1.5)), (0, (1.5, 1.5)), (0, (6, 1.5, 1.5, 1.5))]
+
 from tarzan.models.taxonomy import ORDER_WHATIF as _ORDER_WHATIF, GEO_ORDER as _GEO_REG
 
 _ASSET_ORDER = list(_ORDER_WHATIF)
@@ -102,7 +116,6 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "nodur_ntsg": "no X25E, gold/trend 15, freed capital to NTSG (37). More core: good return but worse Sharpe/drawdown than the factor route.",
     "mom_light": "target_fac + a SMALL momentum sleeve (XDEM 4) funded by trimming the mildest value leg (AVWC 10 to 6); momentum is 17% of the factor sleeve. Tests the marginal effect of pairing momentum with value at low conviction.",
     "mom_6040": "target_fac rebuilt at the classic 60/40 VALUE/MOMENTUM split of the factor sleeve (value 14 = AVWC 5 / AVWS 6 / AVEM 3, momentum 9 = XDEM). Rationale is diversification, not return: a value tilt implicitly shorts momentum, and the pairing is worth holding even at zero momentum premium. Return-neutral to slightly negative, best drawdown of the momentum set.",
-    "mom_trend": "target_fac + momentum (XDEM 7) funded by HALVING trend (DBMFE 15 to 8), value sleeve untouched. Tests cross-sectional equity momentum against cross-asset time-series momentum: higher return in-sample, but clearly worse drawdown - trend was doing the drawdown work.",
     "target_fac_cl2": "target_fac with the levered sleeve SWAPPED from SC2X to CL2. Motivation: SC2X launched in July 2026 (19 days of real history, TER 1.40%), CL2 has ~5 years and costs 0.50%. The trade-off is geographic, not statistical: CL2 is 2x MSCI USA (100% US) where SC2X is 2x ACWI, so the whole leveraged sleeve concentrates in the US.",
     "target_mix_cl2": "target_mix (NTSG 35) with the same SC2X to CL2 swap: cheaper and far less synthetic, at the cost of a US-only leveraged sleeve.",
     "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
@@ -420,9 +433,12 @@ def _risk_matrix(ws, row, portfolios) -> int:
     return row + 1
 
 
-# The portfolios under active consideration: pinned to the top of the Summary
-# and given a Monte-Carlo fan chart. Everything else is ranked below them.
-_TARGETS = {"target_fac", "target_mix", "mom_6040"}
+# The portfolios under active consideration: pinned to the top of the Summary,
+# given a Monte-Carlo fan chart and drawn heavy on the growth chart. Everything
+# else is ranked below them. target_fac_cl2 is the one currently written into
+# input/targets_per_holding.csv (the live rebalancing target); the others stay
+# starred because they remain in the running.
+_TARGETS = {"target_fac_cl2", "target_fac", "target_mix", "mom_6040"}
 
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
@@ -494,10 +510,20 @@ def _mc_fan_png(nav, name, *, years=15, n_sims=1000, block=21, anchor=100_000):
     return buf
 
 
-def _growth_windows_png(portfolios, *, anchor=100.0):
-    """Growth-of-100 (log) for ALL portfolios over the three windows (full 2000-26,
-    2011-26, 2020-26), one panel each. Targets bold, benchmarks dashed. Returns a
-    PNG BytesIO (or None)."""
+def _growth_windows_png(portfolios, *, anchor=100.0, metrics_of=None):
+    """Growth-of-100 (log) for ALL portfolios, one panel per window.
+
+    Each panel carries its OWN legend, ranked by that window's cumulative return
+    (best first) and annotated with the window's ``(CAGR, Vol, Sharpe)`` — with
+    30+ series a line cannot be traced back to a name by colour alone, so the
+    ranked legend is what makes the chart answerable ("who is on top, at what
+    risk"). Series identity is hue × dash from a portfolio's FIXED position (see
+    :data:`_SERIES_HUES`), never from its rank, so it is stable across panels.
+    Targets are black and heavy; benchmarks are lightened as context.
+
+    ``metrics_of(nav, start) -> dict`` supplies the per-window metrics; passing
+    the Summary's own accessor keeps legend and table on one source of truth.
+    Returns a PNG BytesIO (or None)."""
     try:
         import numpy as np
         import matplotlib
@@ -512,18 +538,26 @@ def _growth_windows_png(portfolios, *, anchor=100.0):
     if not navs:
         return None
     names = list(navs)
-    pal = list(plt.cm.tab20(range(20))) + list(plt.cm.tab20b(range(20)))
-    colors = {n: pal[i % len(pal)] for i, n in enumerate(names)}
     targets = _TARGETS
+    # Stable identity: hue varies fastest so neighbours in the fixed order get the
+    # validated adjacent-pair separation; the dash changes every 8 series.
+    plain = [n for n in names if n not in targets]
+    style = {n: (f"#{_SERIES_HUES[i % len(_SERIES_HUES)]}",
+                 _SERIES_DASHES[(i // len(_SERIES_HUES)) % len(_SERIES_DASHES)])
+             for i, n in enumerate(plain)}
+    for i, n in enumerate(n for n in names if n in targets):   # targets: black, distinct dash
+        style[n] = ("#000000", _SERIES_DASHES[i % len(_SERIES_DASHES)])
     wins = (("2000-08-31", "FULL 2000-26"), ("2011-01-01", "2011-26"),
             ("2020-01-01", "2020-26"), ("2026-01-01", "2026 YTD"))
-    fig, axes = plt.subplots(4, 1, figsize=(9.6, 13.4), dpi=120)
+    fig, axes = plt.subplots(4, 1, figsize=(9.6, 21.0), dpi=120,
+                             gridspec_kw={"hspace": 0.62})
     for ax, (start, title) in zip(axes, wins):
         sub = {n: navs[n].loc[start:] for n in names if not navs[n].loc[start:].empty}
         if not sub:
             continue
         cs = max(s.index.min() for s in sub.values())
         lo_v, hi_v = 1e18, -1e18
+        entries = []                                  # (final growth, handle, label)
         for n, s in sub.items():
             s = s.loc[cs:]
             if s.empty or s.iloc[0] <= 0:
@@ -531,11 +565,27 @@ def _growth_windows_png(portfolios, *, anchor=100.0):
             g = s / s.iloc[0] * anchor
             lo_v = min(lo_v, float(g.min())); hi_v = max(hi_v, float(g.max()))
             is_t, is_b = n in targets, n.startswith("bench_")
-            ax.plot(g.index, g.values, color=("#000000" if is_t else colors[n]),
-                    lw=(2.6 if is_t else 1.0), ls=("--" if is_b else "-"),
-                    alpha=(1.0 if not is_b else 0.8), label=n.replace("_", " "), zorder=(4 if is_t else 2))
+            col, dash = style[n]
+            ln, = ax.plot(g.index, g.values, color=col, ls=dash,
+                          lw=(2.6 if is_t else 1.0),
+                          alpha=(1.0 if is_t else 0.55 if is_b else 0.9),
+                          zorder=(4 if is_t else 2))
+            m = metrics_of(navs[n], start) if metrics_of is not None else {}
+            cg, vol, shp = m.get("cagr"), m.get("volatility"), m.get("sharpe")
+            stats = (f" ({cg:.1f}%, {vol:.1f}%, {shp:.2f})"
+                     if None not in (cg, vol, shp) else "")
+            label = ("★ " if is_t else "") + n.replace("_", " ") + stats
+            entries.append((float(g.iloc[-1]), ln, label))
+        # Legend ranked by this window's cumulative return, best first.
+        entries.sort(key=lambda e: -e[0])
+        ax.legend([e[1] for e in entries], [e[2] for e in entries],
+                  fontsize=5.0, ncol=3, loc="upper left", bbox_to_anchor=(0, -0.09),
+                  frameon=False, borderaxespad=0, handlelength=3.2, columnspacing=1.2,
+                  labelspacing=0.28,
+                  title="ranked by return · (CAGR, Vol, Sharpe) · ★ target",
+                  title_fontsize=6.5, alignment="left")
         ax.set_yscale("log")
-        ax.set_title(f"Cumulative return — {title} (log)  ·  bold=target, dashed=benchmark",
+        ax.set_title(f"Cumulative return — {title} (log)  ·  heavy black = target, faded = benchmark",
                      fontsize=10, fontweight="bold", color=f"#{_C['text']}", loc="left")
         ax.set_ylabel("cumulative return", fontsize=8, color=f"#{_C['muted']}")
         ax.grid(alpha=0.3, which="both")
@@ -551,11 +601,11 @@ def _growth_windows_png(portfolios, *, anchor=100.0):
         ax.yaxis.set_major_locator(FixedLocator(lv))
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v - anchor:+.0f}%"))
         ax.yaxis.set_minor_locator(NullLocator())
-    axes[0].legend(fontsize=5.5, ncol=5, loc="upper left", frameon=False)
     axes[-1].set_xlabel("year", fontsize=8, color=f"#{_C['muted']}")
-    fig.tight_layout()
     buf = BytesIO()
-    fig.savefig(buf, format="png"); plt.close(fig); buf.seek(0)
+    # bbox_inches="tight" so the per-panel legends are never clipped; the caller
+    # derives the Excel row span from the resulting image height.
+    fig.savefig(buf, format="png", bbox_inches="tight"); plt.close(fig); buf.seek(0)
     return buf
 
 
@@ -822,19 +872,31 @@ def _summary_sheet(wb, portfolios) -> None:
     # lives on the anchor cell, so the rule renders on the header row too.
     _vrule(win_end + 1, "left")
 
-    # Charts, stacked below the table: (1) 3-window growth (log), all portfolios;
+    # Charts, stacked below the table: (1) 4-window growth (log), all portfolios;
     # (2) Monte-Carlo 15y fan for each target.
     try:
         from openpyxl.drawing.image import Image as XLImage
+
+        def _place(buf, at_row):
+            """Anchor an image and return the first free row BELOW it.
+
+            The row span is derived from the image's own pixel height (a default
+            Excel row is 20px) instead of a hand-tuned constant, so a chart that
+            grows — a taller legend, another panel — can never overlap the next
+            one.
+            """
+            img = XLImage(buf)
+            ws.add_image(img, f"A{at_row}")
+            return at_row + int(img.height / 20) + 2
+
         r += 1
         gh = ws.cell(row=r, column=1, value="Cumulative return — 4 windows (log), all portfolios")
         gh.font = _font(11, bold=True, color=_C["white"]); gh.fill = _fill(_C["band"])
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=min(ncol, 12))
         r += 1
-        gbuf = _growth_windows_png(portfolios)
+        gbuf = _growth_windows_png(portfolios, metrics_of=_wm)
         if gbuf is not None:
-            ws.add_image(XLImage(gbuf), f"A{r}")
-            r += 86                                    # 4 panels ~1608px / ~20px per row
+            r = _place(gbuf, r)
         r += 2
         h = ws.cell(row=r, column=1,
                     value="Monte-Carlo 15-year projection (block-bootstrap of the history, €100k)")
@@ -846,8 +908,7 @@ def _summary_sheet(wb, portfolios) -> None:
                 continue
             buf = _mc_fan_png(getattr(p, "synth_nav", None), p.name.replace("_", " "))
             if buf is not None:
-                ws.add_image(XLImage(buf), f"A{r}")
-                r += 26                                # ~455px tall / ~20px per row + margin
+                r = _place(buf, r)
     except Exception:  # noqa: BLE001
         pass
 
