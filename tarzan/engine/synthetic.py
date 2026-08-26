@@ -85,7 +85,8 @@ def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
 
 def factor_loadings(long_ret: pd.Series, short_ret: pd.Series,
                     factors: pd.DataFrame, *, min_overlap_months: int = 24,
-                    load_bound: float = 1.5) -> dict:
+                    load_bound: float = 1.5, min_t: float = 2.0,
+                    min_half_ratio: float = 0.25) -> dict:
     """Clipped factor loadings for a fund, estimated on MONTHLY returns.
 
     Regresses the fund's monthly EXCESS return on ``[MKT-RF, tilt legs]`` (a
@@ -96,9 +97,21 @@ def factor_loadings(long_ret: pd.Series, short_ret: pd.Series,
     priced global fund vs US-dated factors carries large daily cross-exchange
     timing noise — both wash out the daily loading (momentum came out ~0). At
     monthly frequency the timing noise cancels and the factor exposure is
-    recovered cleanly (R² typically ~0.8). Returns ``{factor: loading}`` (empty
-    when the overlap is too short). Shared by :func:`factor_splice` and the
-    report's simulation map so both describe the SAME discovered tilt."""
+    recovered cleanly (R² typically ~0.8).
+
+    A fitted loading drives 20+ years of SYNTHETIC history, so a coefficient
+    that the sample cannot actually support would manufacture that history out
+    of noise. Two gates limit that: a leg survives only when it is
+    distinguishable from zero (``|t| >= min_t``) AND reproducible — same sign in
+    both halves of the sample, with the weaker half at least ``min_half_ratio``
+    of the stronger. A leg that fails either test is DROPPED (treated as zero
+    exposure) rather than extrapolated; when every leg fails, the caller falls
+    back to a curated tilt or the calibrated splice. The half-sample test needs
+    ``2 * min_overlap_months`` of data; below that only the t-gate applies.
+
+    Returns ``{factor: loading}`` (empty when the overlap is too short or no leg
+    survives). Shared by :func:`factor_splice` and the report's simulation map
+    so both describe the SAME discovered tilt."""
     if (short_ret is None or short_ret.empty
             or factors is None or getattr(factors, "empty", True)):
         return {}
@@ -116,17 +129,51 @@ def factor_loadings(long_ret: pd.Series, short_ret: pd.Series,
     ov = pd.DataFrame(cols).dropna()
     if len(ov) < min_overlap_months:
         return {}
-    rf = ov["RF"].values if "RF" in ov else np.zeros(len(ov))
-    Y = ov["y"].values - rf
     reg = (["MKT"] if "MKT" in ov else []) + tilt
-    X = np.column_stack([np.ones(len(ov))] + [ov[c].values for c in reg])
-    try:
-        beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
-    except np.linalg.LinAlgError:
-        return {}
     off = 1 + (1 if "MKT" in ov else 0)          # skip intercept (+ market beta)
-    clipped = np.clip(beta[off:off + len(tilt)], -load_bound, load_bound)
-    return {c: float(clipped[i]) for i, c in enumerate(tilt)}
+
+    def _ols(d):
+        """(betas, standard errors) of the tilt legs; SEs are None if unavailable."""
+        rf = d["RF"].values if "RF" in d else np.zeros(len(d))
+        Y = d["y"].values - rf
+        X = np.column_stack([np.ones(len(d))] + [d[c].values for c in reg])
+        try:
+            beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
+        except np.linalg.LinAlgError:
+            return None, None
+        n, k = X.shape
+        if n <= k:
+            return beta[off:off + len(tilt)], None
+        resid = Y - X @ beta
+        s2 = float(resid @ resid) / (n - k)
+        try:
+            se = np.sqrt(np.diag(np.linalg.inv(X.T @ X)) * s2)
+        except np.linalg.LinAlgError:
+            return beta[off:off + len(tilt)], None
+        return beta[off:off + len(tilt)], se[off:off + len(tilt)]
+
+    beta, se = _ols(ov)
+    if beta is None:
+        return {}
+    halves = None
+    if len(ov) >= 2 * min_overlap_months:
+        mid = len(ov) // 2
+        b1, _ = _ols(ov.iloc[:mid])
+        b2, _ = _ols(ov.iloc[mid:])
+        if b1 is not None and b2 is not None:
+            halves = (b1, b2)
+
+    out: dict[str, float] = {}
+    for i, c in enumerate(tilt):
+        if se is None or se[i] <= 0 or abs(beta[i] / se[i]) < min_t:
+            continue                              # not distinguishable from zero
+        if halves is not None:
+            a, b = float(halves[0][i]), float(halves[1][i])
+            lo, hi = min(abs(a), abs(b)), max(abs(a), abs(b))
+            if a * b <= 0 or hi <= 0 or lo < min_half_ratio * hi:
+                continue                          # not reproducible across halves
+        out[c] = float(np.clip(beta[i], -load_bound, load_bound))
+    return out
 
 
 def factor_splice(long_ret: pd.Series, short_ret: pd.Series, factors: pd.DataFrame,
