@@ -58,6 +58,17 @@ CURATED_FACTOR_LOADINGS: dict[str, dict[str, float]] = {
     # AVEM (100% EM value+profitability) intentionally absent: the Developed FF
     # legs are the wrong regressors for emerging markets, so a curated tilt on
     # them would misstate it. AVEM stays modelled as broad EM (no factor tilt).
+    # MSCI-index momentum (long-only, semi-annual, mega-cap skewed). Anchored on
+    # the published RR-community regressions of MSCI World Momentum rather than
+    # on this fund's own short EUR history: blends of 50-60% World Momentum came
+    # out at MOM 0.14-0.15, which backs out to ~0.30-0.35 for the pure index once
+    # the negative-momentum value legs in those blends are removed. Kept at the
+    # low end of that range as a data-mining haircut. Negative SMB is the index's
+    # documented mega-cap skew; negative HML is momentum's growth phase. RMW is
+    # deliberately ZERO: the positive RMW people fit on this index traces to
+    # MSCI's 3-year-volatility adjustment (a low-vol artifact), so it is not an
+    # exposure worth projecting forward.
+    "XDEM": {"SMB": -0.10, "HML": -0.15, "RMW": 0.00, "MOM": 0.30},
 }
 
 

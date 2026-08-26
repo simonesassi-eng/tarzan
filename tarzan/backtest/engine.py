@@ -14,6 +14,7 @@ aligns them to one common window, and drives the dual-currency comparison.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,18 @@ _CARRY_TICKERS = {"UEQC", "CRRY", "CRRE"}
 # bare ticker → {factor: loading}. Populated during the aligned backtest so the
 # simulation map can describe the SAME reconstruction the metrics use.
 _FACTOR_TILT: dict[str, dict] = {}
+
+
+def _tilt_mode() -> str:
+    """``fit`` (default) or ``curated`` — where a factor fund's tilt comes from.
+
+    ``fit`` regresses each fund's own history (gated for significance and
+    half-sample stability) and only falls back to the curated table when no leg
+    survives. ``curated`` forces the literature-anchored table wherever one
+    exists, so the same portfolio can be re-run under an independent tilt model:
+    a conclusion that flips between the two modes is a model artifact, not a
+    result. Read per call so a single process can compare both."""
+    return os.environ.get("TARZAN_TILT_MODE", "fit").strip().lower()
 
 # Name/description keywords that identify a FACTOR equity ETF. Only these get
 # the factor-aware backfill; plain market / leveraged-market equity funds keep
@@ -145,17 +158,20 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
         # A curated loading entry IS an explicit "this is a factor fund" flag, so
         # honour it even when the keyword sniff (is_factor_fund) misses the name
         # (e.g. "Avantis Global Equity" carries no value/quality keyword).
+        prefer_curated = _tilt_mode() == "curated"
         if backfill == "factor" and eq_dominant and curated_em is not None:
             # EMERGING-markets factor fund: regress on the EM legs (monthly) if it
             # has enough real history, else drive the pre-inception tail with the
             # curated EM tilt. The Developed legs are the wrong regressors here.
-            loads = syn.factor_loadings(base, real, em_factors) if em_factors is not None else {}
+            loads = ({} if prefer_curated or em_factors is None
+                     else syn.factor_loadings(base, real, em_factors))
             _FACTOR_TILT[it.bare] = ({**loads, "_em": True} if loads
                                      else {**curated_em, "_curated": True, "_em": True})
             spliced = syn.factor_splice_monthly(base, real, em_factors,
                                                 loadings=(loads or curated_em))
         elif backfill == "factor" and eq_dominant and (is_factor_fund(it) or curated_avail):
-            loads = syn.factor_loadings(base, real, factors)
+            loads = ({} if prefer_curated and curated_avail
+                     else syn.factor_loadings(base, real, factors))
             # Too little real history to regress (e.g. a just-launched Avantis
             # fund) → drive the pre-inception tail with the fund's curated target
             # tilt on the real FF factor legs.
@@ -246,7 +262,7 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                     "bootstrap": rob.block_bootstrap(nav, rf_annual=rf),
                     # Rolling + MC outcome distributions across investor
                     # horizons (1/3/5/10/15y) — one source for the CLI report
-                    # and the Excel "Horizons" sheet.
+                    # and the Excel Summary's MC / rolling columns.
                     "horizons": rob.multi_horizon(nav, rf_annual=rf),
                 }
 
