@@ -29,6 +29,7 @@ GREEN = _P["green"]
 BENCH = _P["bench"]
 PNL = _P["pnl"]
 UNREAL = _P["unreal"]
+TARGET = _P["target"]
 
 
 # ── axis helpers ─────────────────────────────────────────────────────────────
