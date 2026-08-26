@@ -98,6 +98,7 @@ class MetricsEngine:
             self._live_1d,
             self._geo_benchmark,
             self._holding_histories,
+            self._target_history,
             self._historical_risk,
         ]
         # Option Y: when an order list is supplied it becomes the single
@@ -1466,6 +1467,65 @@ class MetricsEngine:
         ctx["holding_histories"] = hh
 
     # ------------------------------------------------------------------
+    # Target-portfolio NAV (the allocation the book is steering toward)
+    # ------------------------------------------------------------------
+    def _target_history(self, ctx: dict) -> None:
+        """NAV of the TARGET portfolio: the per-instrument ``target_portfolio``
+        weights held over their whole common window, rebalanced quarterly.
+
+        Built here because this is the only scope holding BOTH the real book and
+        the rebalance seeds. Nearly a quarter of the current target sits in
+        instruments not owned yet (AVWC/AVWS/AVEM on 25 Aug 2026), so the held
+        book alone would draw a different portfolio and label it "target".
+
+        The weights are held CONSTANT, every day, on every window. That is what a
+        target allocation is: 32% NTSG is 32% at every point on the line, not a
+        weight that drifts with performance and snaps back four times a year. A
+        periodic policy would make the line depend on where the rebalance dates
+        happen to fall relative to the window the reader is looking at.
+
+        Prices are aligned BEFORE differencing — taking each sleeve's returns
+        first and inner-joining after would silently delete the return of any day
+        a single venue was shut.
+        """
+        from tarzan.engine.synthetic import combine_returns
+
+        unavailable = set(ctx.get("_order_history_unavailable", []))
+        weights, prices, missing = {}, {}, []
+        for h in list(self.holdings) + list(self.rebalance_seeds):
+            weight = float(getattr(h, "target_portfolio", 0.0) or 0.0)
+            if weight <= 0:
+                continue
+            key = h.ticker or h.isin
+            ph = h.price_history
+            if h.isin in unavailable or ph is None or len(ph) < 2:
+                missing.append(str(key))
+                continue
+            weights[key] = weight
+            prices[key] = normalize_index(ph, drop_duplicates=True)
+        if not weights:
+            return
+        if missing:
+            # Dropping a sleeve renormalizes the rest, which draws a DIFFERENT
+            # portfolio under the target's name. Withhold the line instead.
+            logger.warning(
+                "Target-portfolio series withheld: no usable price history for %s",
+                ", ".join(sorted(missing)),
+            )
+            return
+        px = pd.concat(prices, axis=1).sort_index().ffill().dropna(how="any")
+        rets = px.pct_change().dropna(how="any")
+        if len(rets) < 2:
+            return
+        w = pd.Series(weights).reindex(px.columns).astype(float)
+        nav = (1.0 + combine_returns(rets, w, "daily")).cumprod() * 100.0
+        # Prepend the window-start baseline so the NAV opens at 100 on the last
+        # day before the first measured return, exactly like _historical_risk.
+        ctx["target_history"] = pd.concat(
+            [pd.Series([100.0], index=[rets.index[0] - pd.Timedelta(days=1)]), nav]
+        )
+
+    # ------------------------------------------------------------------
     # Historical risk profile (uncapped, per-instrument full history)
     # ------------------------------------------------------------------
     def _historical_risk(self, ctx: dict) -> None:
@@ -1696,6 +1756,7 @@ class MetricsEngine:
             ),
             intraday_quotes=ctx.get("intraday_quotes", {}),
             holding_histories=ctx.get("holding_histories", {}),
+            target_history=ctx.get("target_history"),
             ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),
             acwi_geo=ctx.get("acwi_geo", {}),

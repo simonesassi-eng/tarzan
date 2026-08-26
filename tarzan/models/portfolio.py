@@ -89,6 +89,7 @@ class PortfolioMetrics:
         acwi_geo: MSCI ACWI geographic breakdown for benchmark reference.
         holding_performance: Per-holding period returns table.
         holding_histories: Dict of ticker → {name, history: pd.Series}.
+        target_history: NAV (base 100) of the target allocation, or None.
     """
 
     # Field-contract version (see PORTFOLIO_METRICS_SCHEMA_VERSION). First
@@ -141,6 +142,11 @@ class PortfolioMetrics:
     intraday_requested_tickers: tuple[str, ...] = ()
     intraday_quotes: dict[str, dict] = field(default_factory=dict)
     holding_histories: dict = field(default_factory=dict)
+    # NAV (base 100) of the TARGET allocation — the per-instrument
+    # ``target_portfolio`` weights held CONSTANT, over the window where every
+    # sleeve has a price. None when any sleeve lacks history, since a
+    # renormalized subset would be a different portfolio under the same name.
+    target_history: Optional[pd.Series] = None
     # Canonical ticker decision audit, one record per ISIN (or exact ticker
     # when no ISIN exists). Rendered as the compact data-sources section at the
     # bottom of the newsletter and excluded from the narrow summary contract.

@@ -413,7 +413,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
     GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
-    UNREAL = _charts.UNREAL
+    UNREAL, TARGET = _charts.UNREAL, _charts.TARGET
+    # Every legend label on this section is pre-escaped markup ("Total P&amp;L"),
+    # and the benchmark's name is configured text, so it escapes once here rather
+    # than at each of the three legends and the heading that reuse it.
+    bench_label = _esc(str(ctx.benchmark_geo or ""))
 
     def _colcap(t: str) -> str:
         """Panel caption, in the concept's form: the label tier in subtle, not
@@ -451,16 +455,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     legend_values: dict[str, float] = {}
     legend_labels: dict[str, str] = {}
 
-    def _window_label(key: str, _prefix: str) -> str:
+    def _window_label(key: str) -> str:
         """The visible end label for a 30-day line: the signed percentage, and
         nothing else.
 
         It carried the series name too, but at half width the gutter that would
-        hold "Total P&L % -0.97%" leaves the plot 148px wide. The three colours
-        are named in full on the since-inception chart directly above, so the
-        mapping is established once for the section. The audited string is this
-        same string -- the gate checks that what is drawn agrees with the
-        endpoint, and it still does.
+        hold "Total P&L % -0.97%" leaves the plot 148px wide. The colours are
+        named in full in the key under each chart, so the mapping is established
+        once for the section. The audited string is this same string -- the gate
+        checks that what is drawn agrees with the endpoint, and it still does.
+
+        The name used to be passed in and then ignored, which left a literal
+        "MSCI ACWI" at the call site for a line whose name comes from the
+        taxonomy. Dropped rather than wired up: nothing renders it.
         """
         value = float(endpoints[key])
         label = _pct(value, signed=True)
@@ -476,20 +483,26 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     ret_leg = []
     if win["twror"] is not None and endpoints.get("twror") is not None:
         s30.append({"values": win["twror"], "color": GREEN,
-                    "end_label": _window_label("twror", "TWROR")})
+                    "end_label": _window_label("twror")})
         ret_leg.append((GREEN, "TWROR"))
     if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL,
-                    "end_label": _window_label("pnl_pct", "Total P&L %")})
+                    "end_label": _window_label("pnl_pct")})
         ret_leg.append((PNL, "Total P&amp;L"))
     if win.get("unreal_pct") is not None and endpoints.get("unreal_pct") is not None:
         s30.append({"values": win["unreal_pct"], "color": UNREAL,
-                    "end_label": _window_label("unreal_pct", "Unrealized P&L %")})
+                    "end_label": _window_label("unreal_pct")})
         ret_leg.append((UNREAL, "Unreal. P&amp;L"))
+    # The two references last and together — the section asks how the book did
+    # against the allocation it is steering toward AND against the market.
+    if win.get("target") is not None and endpoints.get("target") is not None:
+        s30.append({"values": win["target"], "color": TARGET,
+                    "end_label": _window_label("target")})
+        ret_leg.append((TARGET, "Target"))
     if win["acwi"] is not None and endpoints.get("acwi") is not None:
         s30.append({"values": win["acwi"], "color": BENCH,
-                    "end_label": _window_label("acwi", "MSCI ACWI")})
-        ret_leg.append((BENCH, ctx.benchmark_geo))
+                    "end_label": _window_label("acwi")})
+        ret_leg.append((BENCH, bench_label))
 
     if ctx.semantic_audit is not None:
         ctx.semantic_audit["performance_30d"] = {
@@ -534,10 +547,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi.append({"values": full["unreal_pct"], "color": UNREAL,
                         "end_label": _pct(full["unreal_pct"][-1], signed=True)})
             si_leg.append((UNREAL, "Unreal. P&amp;L"))
+        if full.get("target") is not None:
+            ssi.append({"values": full["target"], "color": TARGET,
+                        "end_label": _pct(full["target"][-1], signed=True)})
+            si_leg.append((TARGET, "Target"))
         if full["acwi"] is not None:
             ssi.append({"values": full["acwi"], "color": BENCH,
                         "end_label": _pct(full["acwi"][-1], signed=True)})
-            si_leg.append((BENCH, ctx.benchmark_geo))
+            si_leg.append((BENCH, bench_label))
 
     # ── Volatility row (You vs the market, second row): annualized volatility
     #    on a rolling 21-day window, plotted over the last 30 days -- the same
@@ -547,6 +564,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    run calmer or bumpier.
     VOL = "#B45309"  # amber-brown, distinct from the return lines
     vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
+    # ...and the same measure over the whole life, under the return chart it
+    # pairs with. 30 days of volatility says whether this month was calm; it
+    # cannot say whether the book has been calmer than its target and its
+    # benchmark all along, which is the section's question.
+    vol_si = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
 
     # Panel sizes. The card's content box is 580px wide; with the 8px gutter
     # between the two half cells each of them gets 282px. These are passed
@@ -559,11 +581,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # wide chart used to reserve 132px for "MSCI ACWI +14.16%").
     G_WIDE, G_HALF = 54, 52
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
-                   w=W_HALF, h=H_HALF) -> str:
+                   w=W_HALF, h=H_HALF, gutter=G_HALF) -> str:
         series = []
         if vs and vs.get("port"):
             series.append({"values": vs["port"], "color": VOL,
                            "end_label": _pct(vs["port"][-1], signed=False)})
+        if vs and vs.get("target"):
+            series.append({"values": vs["target"], "color": TARGET,
+                           "end_label": _pct(vs["target"][-1], signed=False)})
         if vs and vs.get("acwi"):
             series.append({"values": vs["acwi"], "color": BENCH,
                            "end_label": _pct(vs["acwi"][-1], signed=False)})
@@ -572,7 +597,36 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return _charts.chart_pct_compact(series, dates_, include_zero=False,
                                          w=w, h=h, month_ticks=month_ticks,
                                          min_day_ticks=min_day_ticks,
-                                         end_gutter=G_HALF)
+                                         end_gutter=gutter)
+
+    def _vol_legend(vs, *, with_span=False) -> list:
+        """The colour key, optionally carrying each line's σ over the book's own
+        life.
+
+        ``with_span`` states the like-for-like figure beside each name. Every
+        series' OWN full history is not comparable — the benchmark holds two
+        years where the book holds eight months, so its unclipped σ reads 14.76%
+        against the book's 10.51% and looks like a risk gap when a third of it is
+        just a longer, rougher period. Clipped to the shared span it is 11.79%,
+        and the ranking (book 10.51 < target 11.11 < market 11.79) is then a
+        statement about the same months.
+
+        Not the same number as the RISK section's volatility (10.77% live on
+        26 Aug 2026): that table measures a current-weight static backtest over a
+        longer common window, by design. Two questions, two answers.
+        """
+        span = (vs or {}).get("span") or {}
+        out = []
+        for colour, name, key in ((VOL, "Portfolio", "port"),
+                                  (TARGET, "Target", "target"),
+                                  (BENCH, bench_label, "acwi")):
+            if not (vs and vs.get(key)):
+                continue
+            label = name
+            if with_span and span.get(key) is not None:
+                label = f"{name} {_pct(span[key], signed=False)}"
+            out.append((colour, label))
+        return out
 
     parts = []
     if s30 or ssi:
@@ -603,13 +657,27 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         vol_panel = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
                                month_ticks=False, min_day_ticks=5)
         if vol_panel:
-            vol_leg = []
-            if vol_30 and vol_30.get("port"):
-                vol_leg.append((VOL, "Portfolio"))
-            if vol_30 and vol_30.get("acwi"):
-                vol_leg.append((BENCH, ctx.benchmark_geo))
             vol_panel = (_colcap("Volatility \u00b7 last 30 days")
-                         + vol_panel + _mini_legend(vol_leg))
+                         + vol_panel + _mini_legend(vol_30 and _vol_legend(vol_30)))
+        # The same measure over the whole life, full width and on month ticks, so
+        # it reads on the same x-axis as the return chart directly above it. Its
+        # own caption states the estimator's lookback: the line is a ROLLING
+        # 21-session figure plotted since inception, not one volatility measured
+        # over the whole history (that number is the RISK section's tile).
+        vol_si_panel = _vol_panel(
+            vol_si, vol_si["dates"] if vol_si else si_dates,
+            month_ticks=True, min_day_ticks=0,
+            w=W_WIDE, h=H_WIDE, gutter=G_WIDE)
+        if vol_si_panel:
+            # The legend states each line's \u03c3 over the book's whole life, so the
+            # three are compared over one period. The figure beside each name is
+            # NOT the line's endpoint (that is one 21-session window, drawn at the
+            # line's end) \u2014 the caption says which is which.
+            vol_si_panel = (_colcap("Volatility \u00b7 since inception "
+                                    "(line: rolling 21 sessions \u00b7 "
+                                    "key: whole span, annualized)")
+                            + vol_si_panel
+                            + _mini_legend(_vol_legend(vol_si, with_span=True)))
 
         def _row(l, r):
             return (f'<tr>'
@@ -627,6 +695,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         rule = (f'<tr><td colspan="2" style="padding-top:12px;'
                 f'border-top:1px solid {P["border"]};"></td></tr>')
         rows = _wide(left_ret) if left_ret else ""
+        if vol_si_panel:
+            rows += (rule if rows else "") + _wide(vol_si_panel)
         if right_ret or vol_panel:
             rows += (rule if rows else "") + _row(right_ret, vol_panel)
         charts_tbl = (
@@ -659,9 +729,17 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # and benchmark lines on the since-inception chart directly below, both now
     # named in its colour key and labelled with their value, so a sentence
     # restating it in points was a third copy of the same fact.
+    # The heading names what the charts actually draw. Only claim "target" when
+    # the target line is on them — on a run with no per-instrument targets (or a
+    # sleeve without price history) it is withheld, and a heading promising a
+    # comparison the reader cannot find is worse than the generic one.
+    drawn = {name for _c, name in si_leg + ret_leg}
+    title = (f"Vs target &amp; {bench_label}"
+             if "Target" in drawn else "Vs the market")
     return {"available": True,
             "matrix_html": matrix_card,
             "vs_market_html": "".join(parts),
+            "vs_market_title": title,
             "vs_market_sub": None}
 
 def _intraday_quote_parts(quote) -> tuple[object, object]:

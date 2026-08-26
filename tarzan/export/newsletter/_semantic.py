@@ -386,7 +386,7 @@ def validate_newsletter_semantics(
             # Every line the 30-day chart can draw is audited here. A line
             # absent from this tuple renders unverified, which is the one
             # failure mode the gate exists to prevent.
-            for key in ("twror", "pnl_pct", "unreal_pct", "acwi"):
+            for key in ("twror", "pnl_pct", "unreal_pct", "target", "acwi"):
                 expected_value = expected_endpoints.get(key)
                 if expected_value is None:
                     continue

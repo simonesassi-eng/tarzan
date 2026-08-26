@@ -64,6 +64,12 @@ PALETTE = {
     # against the cyan of ``pnl``, and far from green/red (which mean sign, not
     # series) and from the grey of ``bench``.
     "unreal": "#A78BFA",
+    # The target allocation's reference line. It has to stay legible against the
+    # other four return lines (green / cyan / violet / grey) AND against the
+    # volatility panel's amber-brown, and pink is the only hue free on both. Not
+    # dashed: the reader is comparing this line's wobble against the portfolio's,
+    # which is exactly what a dash hides.
+    "target": "#F472B6",
 }
 
 # The one type stack. Declared at EVERY text-bearing element, not inherited from

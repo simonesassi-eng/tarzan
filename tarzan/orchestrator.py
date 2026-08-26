@@ -582,8 +582,17 @@ def _run_once(
     # agree by construction. Measured live on 24 Aug 2026 they sat €115 apart on
     # a €242k book, entirely from two holdings whose valuation had fallen back
     # (MONEY.MI to its 10.0920 order price against a market 10.1840).
+    #
+    # The seeds are stamped alongside the book. They are excluded from every
+    # table, but their price series is read — the target-allocation line on the
+    # "Vs target &" charts is built from held sleeves AND seeds, and the tracked
+    # benchmarks (which include the same instruments) are stamped in the engine.
+    # Leaving the seeds out ended that line 77% on today's live prices and 23% on
+    # yesterday's closes: measured live on 26 Aug 2026 its since-inception figure
+    # read +13.87% where the all-closes computation gives +13.64%. It also priced
+    # a buy-new action at the previous close.
     from tarzan.data import current_session
-    stamped_tickers = current_session.apply_to_holdings(holdings)
+    stamped_tickers = current_session.apply_to_holdings(holdings + seeds)
     if stamped_tickers:
         session.ledger.append(LedgerEntryType.STAGE, {
             "stage": "current_session_stamp",

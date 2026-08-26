@@ -229,9 +229,14 @@ def test_perf_vol_series_full_and_window():
 
     full = _perf_vol_series(m, "ACWI", n_days=None)
     assert full and full["port"] and full["acwi"]
-    assert full["dates"][0].date() == idx[0].date()   # spans inception
+    # Opens on the first FULL 21-session window, not on inception: the 21 days
+    # before it have no estimate, and back-filling them drew the opening of the
+    # line with a figure measured three weeks later.
+    assert full["dates"][0].date() == idx[21].date()
+    assert full["dates"][-1].date() == idx[-1].date()
     assert len(full["dates"]) <= 180                   # downsampled
     assert all(v >= 0 for v in full["port"])           # vol is non-negative
+    assert not any(v != v for v in full["port"]), "no NaN reaches the chart"
 
     w30 = _perf_vol_series(m, "ACWI", n_days=30)
     assert w30 and w30["port"]

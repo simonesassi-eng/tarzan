@@ -153,14 +153,16 @@
             </td>
           </tr>
 
-          {# ─── [03] VS THE MARKET ──────────────────────────
+          {# ─── [03] VS TARGET & BENCHMARK ──────────────────
              Its own section rather than a card inside performance: whether the
              portfolio beat the alternative is a different question from what it
-             returned, and the subtitle states the answer before the charts. #}
+             returned, and the subtitle states the answer before the charts. The
+             heading is built in _sections_perf so it can name the benchmark in
+             use, and only claim "target" when the target line is drawn. #}
           {% if performance30.available and performance30.vs_market_html %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Vs the market", performance30.vs_market_sub) }}
+              {{ sec(secn, performance30.vs_market_title or "Vs the market", performance30.vs_market_sub) }}
               <div style="margin-top:12px;">{{ performance30.vs_market_html|safe }}</div>
             </td>
           </tr>

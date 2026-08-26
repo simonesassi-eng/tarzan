@@ -187,6 +187,25 @@ def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.S
     return (m.benchmark_histories or {}).get(geo_name)
 
 
+def _target_line(m: PortfolioMetrics, idx) -> "list | None":
+    """The target allocation's cumulative return over ``idx``, or None.
+
+    None when the target's own common window opens after the chart does: a
+    shorter series would be drawn flat at 0% across the lead-in by
+    ``_rebase_to_window``, which reads as "the target went nowhere" for a
+    stretch it simply does not cover.
+    """
+    raw = getattr(m, "target_history", None)
+    if raw is None or len(raw) < 2 or len(idx) < 2:
+        return None
+    s = _norm_series(raw).replace(
+        [float("inf"), float("-inf")], float("nan")
+    ).dropna()
+    if len(s) < 2 or s.index[0] > pd.Timestamp(idx[0]):
+        return None
+    return _rebase_to_window(s, pd.DatetimeIndex(idx))
+
+
 def _perf_window(m: PortfolioMetrics, n_days: int = 30,
                  geo_name: Optional[str] = None) -> Optional[dict]:
     """Comparable trailing performance window on one shared close boundary.
@@ -288,11 +307,13 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 
     pnl_pct = _window_pct(m.pnl_series)
     unreal_pct = _window_pct(m.unrealized_series)
+    target = _target_line(m, idx)
 
     dates = list(idx)
     endpoints = {
         "twror": float(twror[-1]) if twror else None,
         "acwi": float(acwi[-1]) if acwi else None,
+        "target": float(target[-1]) if target else None,
         "pnl_pct": float(pnl_pct[-1]) if pnl_pct else None,
         "unreal_pct": float(unreal_pct[-1]) if unreal_pct else None,
     }
@@ -301,6 +322,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         "value": list(val.values.astype(float)),
         "twror": twror,
         "acwi": acwi,
+        "target": target,
         "pnl_pct": pnl_pct,
         "unreal_pct": unreal_pct,
         "flows": _flow_list(m.external_flows, dates[0], dates[-1]),
@@ -392,16 +414,30 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         "pnl_pct": total_pct,
         "unreal_pct": unreal_pct,
         "acwi": acwi_si,
+        # Read through the same helper as the 30-day window rather than through
+        # _perf_level_series' fixed 4-tuple, whose shape other callers depend on.
+        "target": _target_line(m, list(idx)),
     }
 
 
 def _rolling_ann_vol(level: "pd.Series", window: int) -> "pd.Series":
-    """Rolling annualized volatility (%) of a price/level series: stdev of
-    daily returns over ``window`` trading days × √(trading days/year) × 100.
-    NaN for the leading days that lack a full window."""
+    """Rolling annualized volatility (%) of a price/level series.
+
+    Sample standard deviation (ddof=1, mean removed) of the daily simple returns
+    over ``window`` observations, scaled by √``TRADING_DAYS``. The same estimator
+    ``stats.risk_metric_row`` reports in the RISK section, so the chart and the
+    tile are the same number measured over different spans rather than two
+    definitions of "volatility".
+
+    NaN until a FULL window exists. It used to emit an estimate from half a
+    window (``min_periods=window // 2``), which on a 21-day window is a σ off ten
+    observations — a ±24% standard error — labelled as a 21-day figure. Invisible
+    on the trailing panel, whose lead-in comes from earlier history; on a
+    since-inception panel those are the opening points of the line.
+    """
     from tarzan.engine.stats import TRADING_DAYS
     ret = level.pct_change()
-    return ret.rolling(window, min_periods=max(2, window // 2)).std() * (TRADING_DAYS ** 0.5) * 100.0
+    return ret.rolling(window).std() * (TRADING_DAYS ** 0.5) * 100.0
 
 
 def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
@@ -411,37 +447,95 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     on a common daily index. The twin of ``_perf_window`` / ``_perf_full_series``
     for the "You vs the market" box's second (risk) row.
 
-    ``n_days=None`` → the whole inception→today span (downsampled to
-    ``max_points``); ``n_days=30`` → the trailing window (with ``vol_window``
-    days of lead-in so the first plotted point already has a full window).
-    Returns ``{dates, port, acwi}`` (% lists; either line may be None), or None
-    when unavailable."""
+    ``n_days=None`` → the whole span from the first full-window estimate to today
+    (downsampled to ``max_points``); ``n_days=30`` → the trailing window, whose
+    lead-in already has a full window from earlier history.
+
+    Every series here is sampled on TRADING days (the order-derived NAV, the
+    benchmark's own closes and the target's common window all are), so
+    ``vol_window`` rows mean the same 21 sessions on each line and the √252
+    scaling matches the sampling. A calendar-daily input would put ~29 calendar
+    days in one line's window against 21 sessions in another's.
+
+    Returns ``{dates, port, acwi, target}`` (% lists; either reference may be
+    None), or None when unavailable."""
+    from tarzan.engine.stats import TRADING_DAYS
+
     nav_full = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
     if nav_full is None or len(nav_full) < vol_window + 1:
         return None
     acwi_raw = _geo_benchmark_series(m, geo_name)
     acwi_full = _norm_series(acwi_raw) if acwi_raw is not None else None
+    target_raw = getattr(m, "target_history", None)
+    target_full = _norm_series(target_raw) if target_raw is not None else None
 
     port_vol_full = _rolling_ann_vol(nav_full, vol_window)
+    # The line cannot open before its first real estimate. Back-filling the
+    # leading NaNs (what this did) paints the first ``vol_window`` points with a
+    # figure measured later — a flat opening run the data never supported, which
+    # on the since-inception panel is the part of the line a reader reads first.
+    first = port_vol_full.first_valid_index()
+    if first is None:
+        return None
     # Choose the display index (same convention as the return charts).
     if n_days is None:
-        idx = nav_full.index
+        idx = nav_full.index[nav_full.index >= first]
         if len(idx) > max_points:
             pos = sorted({int(round(i * (len(idx) - 1) / (max_points - 1)))
                           for i in range(max_points)})
             idx = idx[pos]
     else:
         cutoff = nav_full.index[-1] - pd.Timedelta(days=n_days)
-        idx = nav_full.index[nav_full.index >= cutoff]
-        if len(idx) < 2:
-            return None
+        idx = nav_full.index[(nav_full.index >= cutoff) & (nav_full.index >= first)]
+    if len(idx) < 2:
+        return None
 
-    port = list(port_vol_full.reindex(idx, method="ffill").bfill().values.astype(float))
-    acwi = None
-    if acwi_full is not None and len(acwi_full) >= vol_window + 1:
-        acwi_vol_full = _rolling_ann_vol(acwi_full, vol_window)
-        acwi = list(acwi_vol_full.reindex(idx, method="ffill").bfill().values.astype(float))
-    return {"dates": list(idx), "port": port, "acwi": acwi}
+    port = list(port_vol_full.reindex(idx, method="ffill").values.astype(float))
+
+    # One σ per line over the PORTFOLIO's own life, so the three are comparable.
+    # Each series' own full history is not: the benchmark holds two years where
+    # the book holds eight months, and reporting 14.76% beside the book's 10.51%
+    # compares two different periods and reads as a risk gap. Clipped to the
+    # shared span it is 11.79%.
+    #
+    # The book's own figure is its whole life already, so it equals
+    # ``stats.risk_metric_row`` on the flow-adjusted NAV — which is NOT the figure
+    # the RISK section prints. That table renders ``historical_risk``, whose
+    # portfolio row is a current-weight static backtest over the common window of
+    # holdings with ≥1Y of history (10.77% live on 26 Aug 2026 against this
+    # 10.51%): a different construction over a different span, by explicit design
+    # there. Two honest answers to two questions, not one number twice.
+    def _span_vol(full):
+        if full is None or len(full) < 3:
+            return None
+        w = full[(full.index >= nav_full.index[0]) & (full.index <= nav_full.index[-1])]
+        rr = w.pct_change().dropna()
+        if len(rr) < vol_window:
+            return None
+        return float(rr.std(ddof=1) * (TRADING_DAYS ** 0.5) * 100.0)
+
+    span = {"port": _span_vol(nav_full), "acwi": _span_vol(acwi_full),
+            "target": _span_vol(target_full),
+            "from": nav_full.index[0], "to": nav_full.index[-1]}
+
+    def _bench_vol(full):
+        """A reference line's rolling vol over ``idx``, or None.
+
+        Demands a real full-window estimate at the chart's LEFT EDGE, not merely
+        a series that starts before it: a reference whose own history opens
+        inside the window would otherwise be back-filled with its first
+        computable figure across a stretch it says nothing about.
+        """
+        if full is None or len(full) < vol_window + 1:
+            return None
+        v = _rolling_ann_vol(full, vol_window)
+        opens = v.first_valid_index()
+        if opens is None or opens > pd.Timestamp(idx[0]):
+            return None
+        return list(v.reindex(idx, method="ffill").values.astype(float))
+
+    return {"dates": list(idx), "port": port, "acwi": _bench_vol(acwi_full),
+            "target": _bench_vol(target_full), "span": span}
 
 
 def benchmark_gap_pp(m: PortfolioMetrics,
