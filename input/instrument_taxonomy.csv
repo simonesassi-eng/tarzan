@@ -51,7 +51,7 @@ Amundi MSCI World (2x) Leveraged,LVWC,,etf,Equities,Equity Leveraged,True,,,72.5
 Amundi MSCI USA (2x) Leveraged,CL2,,etf,Equities,Equity Leveraged,True,,,100.0,0.0,0.0,0.0,0.0,200.0,,,,,,0.005,"2x daily leveraged exposure to large and mid-cap US equities (MSCI USA). ter = TER 0.35 + small swap drag (real cost ≈ TER per RR), financing modeled separately.",7/27/26
 Invesco Physical Gold,SGLD,IE00B579F325,etc,Gold,Gold,,,,,,,,,,,,,,,0.0012,Physical gold ETC.,7/8/26
 Xtrackers Global Inflation-Linked EUR Hedged,XGIN,LU0290357929,etf,Fixed Income,Govt Linkers,,,,,,,,,,,,,,,0.0025,Global inflation-linked government bonds - EUR hedged.,7/9/26
-Xtrackers II Eurozone Government Bond 7-10,X710,,etf,Fixed Income,Govt Nominal,True,,,,,,,,,,,,,,0.0015,Eurozone government bonds 7-10y.,7/8/26
+Xtrackers II Eurozone Government Bond 7-10,X710,,etf,Fixed Income,Govt Nominal,False,,,,,,,,,,,,,,0.0015,Eurozone government bonds 7-10y.,7/8/26
 Xtrackers Eurozone Govt Bond 15-30,X15E,LU0290357507,etf,Fixed Income,Long Duration,,,,,,,,,,,,,,,0.0015,Eurozone government bonds 15-30y (long duration).,7/9/26
 Amundi Euro Government Bond 25+ (LMTH),LMTH,LU1686832194,etf,Fixed Income,Long Duration,,,,,,,,,,,,,,,0.0014,Long EUR government bonds 25+ (long duration).,7/8/26
 Xtrackers II Eurozone Government Bond 25+,X25E,,etf,Fixed Income,Long Duration,True,,,,,,,,,,,,,,,Eurozone government bonds 25+ (long duration).,7/8/26
