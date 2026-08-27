@@ -21,23 +21,36 @@ import pandas as pd
 # the palette once here as bare 6-hex codes; use css()/css_map() for the
 # "#RRGGBB" form the email needs.
 
+# Both sets are validated against the DARK card surface (#0C131B) in the
+# canonical display order of taxonomy.CANONICAL_ORDER / GEO_ORDER, adjacent
+# pairs: OKLCH lightness band, chroma floor, CVD separation (deutan/protan/
+# tritan ΔE), normal-vision ΔE >= 15, and >= 3:1 contrast. They were originally
+# picked for a light surface and never re-derived when the palette flipped to
+# dark, which left three defects: Fixed Income (A16207) and Gold (CA8A04) sat
+# ΔE 13 apart in normal vision -- two adjacent table rows a reader could not
+# separate -- and Equities (1D4ED8) / Alternative (475569) drew at 2.8:1 and
+# 2.5:1 against the card. Same story in the geography set, where USA (1D4ED8)
+# and Japan (7C3AED) collapsed to ΔE 3.4 under protanopia.
+#
+# Re-picking any hue here means re-running the six checks in display order, not
+# eyeballing the swatch.
 ASSET_CLASS_COLORS: dict[str, str] = {
-    "Equities": "1D4ED8",
-    "Fixed Income": "A16207",
+    "Equities": "2563EB",
+    "Fixed Income": "0D9488",
     "Cash & Cash Equivalents": "15803D",
     "Gold": "CA8A04",
     "Commodities": "C2410C",
     "Crypto": "7C3AED",
-    "Alternative": "475569",
+    "Alternative": "64748B",
 }
 
 # Soft background tints for asset-class chips/rows in the newsletter.
 GEO_COLORS: dict[str, str] = {
-    "USA": "1D4ED8",
+    "USA": "2563EB",
     "Eurozone EMU": "A16207",
-    "Dev ex-USA ex-EMU ex-JP": "15803D",
+    "Dev ex-USA ex-EMU ex-JP": "0D9488",
     "Emerging Markets": "C2410C",
-    "Japan": "7C3AED",
+    "Japan": "DB2777",
 }
 
 # Display/iteration order for asset classes across both surfaces. A class not

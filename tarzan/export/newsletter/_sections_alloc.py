@@ -945,24 +945,8 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "cash_delta_eur": delta_eur,
         })
 
-    # Stacked bar segments (invested only)
-    stacked = []
-    for klass in ASSET_CLASS_ORDER:
-        if alloc_df.empty:
-            continue
-        match = alloc_df[alloc_df["category"] == klass]
-        if match.empty:
-            continue
-        w = float(match["weight_pct"].iloc[0])
-        if w > 0:
-            stacked.append({
-                "color": ASSET_COLORS.get(klass, PALETTE["accent"]),
-                "width": w,
-            })
-
     return {
         "rows": rows,
-        "stacked": stacked,
         "tolerance": _pct(tol, decimals=1).rstrip("%") + "%",
         "has_timeline": any(r.get("spark") for r in rows),
     }
@@ -1017,12 +1001,8 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
             "spark": _spark(spark_vals, target, color) if spark_vals else None,
         })
 
-    # Stacked equity bar
-    stacked = [{"color": r["color"], "width": r["bar_width"]} for r in rows if r["bar_width"] > 0]
-
     return {
         "rows": rows,
-        "stacked": stacked,
         "benchmark_name": ctx.benchmark_geo,
         "has_timeline": any(r.get("spark") for r in rows),
     }

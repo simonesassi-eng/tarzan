@@ -56,14 +56,39 @@ PALETTE = {
     "amber_bg": "#2A1F0C",
     "red_bg": "#2C1210",
     "accent_bg": "#132038",
-    # Chart-only roles, kept distinguishable from axis furniture.
-    "bench": "#8FA3BC",
+    # ── Chart series roles ───────────────────────────────────────────────────
+    # These five (``port``, ``pnl``, ``unreal``, ``target``, ``bench``) are ONE
+    # categorical set: all five are drawn in the same plot on the Performance
+    # charts, so they are validated against each other over ALL pairs, not just
+    # adjacent ones, on the card_alt surface a chart sits on:
+    #
+    #   node validate_palette.js "#E6EDF6,#38BDF8,#A855F7,#F472B6,#64748B" \
+    #        --mode dark --surface "#111A24" --pairs all
+    #
+    # Two of them had to move to make that pass. ``bench`` was #8FA3BC, which is
+    # ``muted`` — one lightness step from ``target``'s pink, so under deuteranopia
+    # the two were ΔE 3.7 apart and the volatility panel drew its target and its
+    # benchmark in what is effectively the same colour. ``unreal`` was #A78BFA,
+    # ΔE 5.2 from ``pnl``'s cyan under the same simulation. Both are below the
+    # floor that direct labels are allowed to rescue.
+    #
+    # ``bench`` stays deliberately the least chromatic of the five: it is the
+    # reference the eye should find last.
+    "bench": "#64748B",
     "pnl": "#38BDF8",
     # Unrealized P&L sits beside Total P&L on every return chart, so it needs a
-    # hue that reads as its sibling without being confusable with it: violet
+    # hue that reads as its sibling without being confusable with it: purple
     # against the cyan of ``pnl``, and far from green/red (which mean sign, not
     # series) and from the grey of ``bench``.
-    "unreal": "#A78BFA",
+    "unreal": "#A855F7",
+    # The portfolio's own line. Ink, not green: green, red and amber MEAN
+    # something in this document — the sign of a figure, a semaphore state, a
+    # bar's direction in the waterfall — and TWROR spending the positive colour
+    # on mere identity is what made "green" ambiguous across the issue. Ink also
+    # matches the hero, where the portfolio's value line is already neutral, so
+    # one colour means "you" on every chart. Drawn a hair thicker than the
+    # references it is compared against, which is the emphasis the hue used to do.
+    "port": "#E6EDF6",
     # The target allocation's reference line. It has to stay legible against the
     # other four return lines (green / cyan / violet / grey) AND against the
     # volatility panel's amber-brown, and pink is the only hue free on both. Not
