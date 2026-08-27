@@ -58,9 +58,9 @@ class TestProperty1Identity:
         # order path to feed the newsletter Diversification sparklines.
         assert names[-1] == "_allocation_timeline"
         # Benchmark preprocessing is the first base computer. The order path
-        # keeps that 17-computer base, swaps the history provider in place,
+        # keeps that 18-computer base, swaps the history provider in place,
         # then appends _returns and _allocation_timeline.
-        assert len(names) == 19
+        assert len(names) == 20
         # One current point is stamped onto every price series before anything
         # reads a price, so "today" has a single source.
         assert "_current_prices" in names
@@ -72,6 +72,10 @@ class TestProperty1Identity:
         # in the engine because this is the only scope holding both the book and
         # the rebalance seeds (not-held target instruments).
         assert "_target_history" in names
+        # How much of the book the 1D figure covers. Its own stage because
+        # _live_1d returns early on a provider error, and a partial 1D is exactly
+        # what a degraded run produces.
+        assert "_session_coverage" in names
 
 
 class TestProperty6SingleSeries:

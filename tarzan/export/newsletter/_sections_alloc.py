@@ -90,6 +90,30 @@ def _session_basis(perf: Optional[dict], m) -> str:
     return f"close-to-close vs {close_label}" if close_label else "close-to-close"
 
 
+def _priced_today_note(perf: Optional[dict]) -> str:
+    """How much of the book the live figure actually covers, when not all of it.
+
+    A holding the vendor has not priced today is carried forward at its previous
+    close, so it contributes zero to the day's move while its full value stays in
+    the denominator. On 27 Aug 2026 at 09:12 that made two early ticks — CL2
+    (7.7%) and UEQC (4.6%), up 0.74% and 0.15% — render as a portfolio "1D
+    +0.06%"; by 10:11, with 91% priced, the same book read +0.18%.
+
+    Stated rather than corrected: the figure is the NAV's real move and every
+    table in the issue uses the same one, so silently substituting a different
+    number would split the document. Absent at full coverage, where it would be
+    noise, and absent when the basis is a completed session, which
+    ``_session_basis`` already names.
+    """
+    p = perf or {}
+    coverage = p.get("1d_coverage_pct")
+    if coverage is None or not bool(p.get("1d_live")):
+        return ""
+    if coverage >= 99.5:
+        return ""
+    return f"{coverage:.0f}% of the book priced today"
+
+
 def _funding_verification(verifications) -> Optional[dict[str, Any]]:
     """Return the final serialized-action funding proof, when available."""
     return next(
@@ -397,12 +421,17 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     if session_pct is not None:
         # What the session was worth and which session it was: a percentage
         # alone does not say either.
-        basis = _session_basis(perf, m)
-        caption = (f'{_eur_smart(session_eur, signed=True)} \u00b7 {basis}'
-                   if session_eur is not None else basis)
+        parts = []
+        if session_eur is not None:
+            parts.append(_eur_smart(session_eur, signed=True))
+        parts.append(_session_basis(perf, m))
+        # How much of the book that figure covers, when it is not all of it.
+        note = _priced_today_note(perf)
+        if note:
+            parts.append(note)
         state_tiles.append(_tile(
             "Session", _pct(session_pct, signed=True),
-            caption, _tone(session_pct)))
+            " \u00b7 ".join(parts), _tone(session_pct)))
     if m.avg_ter is not None:
         # avg_ter arrives already in percent (metrics.py multiplies the stored
         # fractions by 100), so it must not be scaled again here. The synthetic

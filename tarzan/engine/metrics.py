@@ -96,6 +96,7 @@ class MetricsEngine:
             self._benchmarks,
             self._holding_performance,
             self._live_1d,
+            self._session_coverage,
             self._geo_benchmark,
             self._holding_histories,
             self._target_history,
@@ -1437,6 +1438,70 @@ class MetricsEngine:
             projection = ctx.get(key)
             if isinstance(projection, dict):
                 projection["1d_live"] = any_live
+
+    def _session_coverage(self, ctx: dict) -> None:
+        """Publish how much of the book the 1D figure covers.
+
+        A stage of its own rather than a line inside ``_live_1d``: that computer
+        returns early on a provider exception and when no intraday feed resolves,
+        so the coverage would go missing exactly when the run is degraded — which
+        is when a reader most needs to know the figure is partial.
+        """
+        coverage = self._today_priced_share()
+        for key in ("performance", "performance_full"):
+            projection = ctx.get(key)
+            if isinstance(projection, dict):
+                projection["1d_coverage_pct"] = coverage
+
+    def _today_priced_share(self) -> Optional[float]:
+        """Share of the book BY VALUE whose price series carries a today point.
+
+        The 1D is the NAV's own move, and the series resolver carries a holding
+        the vendor has not priced today forward at its previous close — so that
+        holding contributes exactly ZERO to the numerator while its whole value
+        stays in the denominator. Minutes after an open that pulls the figure
+        toward zero, and nothing in the digest said so.
+
+        Measured on 27 Aug 2026: at 09:12 only CL2 (7.7% of the book) and UEQC
+        (4.6%) had a 27 Aug tick. Their real +0.74% and +0.15% moves rendered as a
+        portfolio "1D +0.06%" — reconstructed to +0.0637%, i.e. the whole figure
+        was two instruments spread over sixteen. By 10:11, with 91% priced, the
+        same book read +0.18%. The market had not tripled; the book had opened.
+
+        The distortion is not even neutral: CL2 is a 2x leveraged ETF and one of
+        the first to trade, so the early figure is weighted toward the most
+        volatile sleeve.
+
+        Returns None when there is nothing to measure, so a caller can tell "not
+        computed" from "nothing priced".
+        """
+        from tarzan import runtime
+
+        try:
+            today = runtime.today()
+        except Exception:  # noqa: BLE001 — a caption must never break a render
+            return None
+        priced = total = 0.0
+        for holding in self._current_valuation_holdings():
+            value = float(
+                holding.current_value
+                if holding.current_value is not None
+                else (holding.market_value_eur or 0.0)
+            )
+            if value <= 0:
+                continue
+            total += value
+            series = holding.price_history
+            if series is None or not len(series):
+                continue
+            observed = series.dropna()
+            if not len(observed):
+                continue
+            # The last stamp's own date. On a tz-aware series that is the VENUE's
+            # calendar day, which is the day the reader means by "today".
+            if pd.Timestamp(observed.index[-1]).date() == today:
+                priced += value
+        return (priced / total * 100.0) if total > 0 else None
 
     # ------------------------------------------------------------------
     # Geo benchmark (MSCI ACWI reference)
