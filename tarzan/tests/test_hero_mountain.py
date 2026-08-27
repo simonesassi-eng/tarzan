@@ -205,7 +205,7 @@ class TestRender:
         # on it. Unrealized keeps the violet it carries on the return charts.
         from tarzan.export.newsletter import PALETTE
         # The clip ids are the P&L split now (pg/pr), not the value's (dg/dr).
-        assert 'clip-path="url(#pg' in html
+        assert 'clip-path="url(#hg' in html
         assert f'stroke="{PALETTE["green"]}" stroke-width="2.4"' in html
         assert f'stroke="{PALETTE["red"]}" stroke-width="2.4"' in html
         assert f'stroke="{PALETTE["ink"]}" stroke-width="2.6"' in html
@@ -218,6 +218,36 @@ class TestRender:
         # labelled with one word.
         assert "Unreal. P&amp;L (%, right)" in html
         assert "Total P&amp;L (%, right)" in html
+
+
+class TestClipIdsAreUniqueAcrossCharts:
+    """Two charts must never mint the same SVG element id.
+
+    The hero and the intraday sparklines both clip a green/red split, and both
+    used a "pg<n>"/"pr<n>" prefix off their OWN counter — so the hero's "pg1" and
+    the first sparkline's "pg1" were one id on two elements, and every reference
+    resolved to whichever the document happened to put first. The deterministic
+    render has no intraday series, which is why no golden ever caught it.
+    """
+
+    def test_hero_and_intraday_spark_share_no_ids(self):
+        import re
+
+        import pandas as pd
+
+        from tarzan.export.newsletter._charts import (
+            _hero_value_chart, _intraday_spark, reset_spark_uids)
+
+        reset_spark_uids()
+        ids = lambda svg: set(re.findall(r'id="([^"]+)"', svg))  # noqa: E731
+        hero = ids(_hero_value_chart(
+            [100.0, 104.0], [0.0, 2.0], ["2026-07-01", "2026-07-02"], [],
+            total_pct=[1.0, 3.0]))
+        intra = pd.Series(
+            [10.0, 10.4], index=pd.date_range("2026-07-02 09:00", periods=2, freq="h"))
+        spark = ids(_intraday_spark(intra, 10.2))
+        assert hero and spark, (hero, spark)
+        assert not hero & spark, f"shared ids: {sorted(hero & spark)}"
 
 
 class TestTheSplitIsAgainstTheWindowOpen:

@@ -28,6 +28,128 @@ class TestColorTaxonomySingleSource:
         assert _format.ASSET_CLASS_COLORS["Crypto"] != _format.ASSET_CLASS_COLORS["Alternative"]
 
 
+# ── perceptual separation ────────────────────────────────────────────────────
+# ``!=`` above is the only thing that used to guard these two palettes, and two
+# different hexes can still be the same colour to a reader: Fixed Income
+# (A16207) and Gold (CA8A04) were 13 OKLab units apart on adjacent rows of every
+# allocation table, and Equities (1D4ED8) drew at 2.8:1 against the dark card.
+# Both sets were picked for a light surface and never re-derived when the
+# palette flipped to dark.
+#
+# Checked here: normal-vision separation of the pairs that land side by side in
+# display order, and contrast against the surface they are drawn on. Colour-
+# vision-deficiency simulation is NOT reimplemented in Python -- run the
+# dataviz validator for that:
+#
+#   node validate_palette.js "#2563EB,#0D9488,..." --mode dark --surface "#0C131B"
+
+_CARD = "#0C131B"      # PALETTE["card"], the surface a chip/row sits on
+_MIN_DELTA_E = 15.0    # below this a pair is hard to tell apart in full colour
+_MIN_CONTRAST = 3.0    # non-text graphical object, WCAG 1.4.11
+
+
+def _lin(hex_color: str) -> tuple[float, float, float]:
+    h = hex_color.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return tuple(out)
+
+
+def _oklab(hex_color: str) -> tuple[float, float, float]:
+    r, g, b = _lin(hex_color)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+
+def _delta_e(a: str, b: str) -> float:
+    """Euclidean OKLab distance ×100 — the same metric the validator reports."""
+    pa, pb = _oklab(a), _oklab(b)
+    return 100 * sum((x - y) ** 2 for x, y in zip(pa, pb)) ** 0.5
+
+
+def _contrast(a: str, b: str) -> float:
+    def lum(c):
+        r, g, bb = _lin(c)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * bb
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+class TestColorSeparation:
+    def _ordered(self, colors: dict, order) -> list[tuple[str, str]]:
+        """(name, css hex) for the keys present, in display order."""
+        return [(k, _format.css(colors[k])) for k in order if k in colors]
+
+    def test_adjacent_asset_classes_are_distinguishable(self):
+        from tarzan.models.taxonomy import CANONICAL_ORDER
+
+        seq = self._ordered(_format.ASSET_CLASS_COLORS, CANONICAL_ORDER)
+        assert len(seq) == len(_format.ASSET_CLASS_COLORS), "a class is unordered"
+        for (n1, c1), (n2, c2) in zip(seq, seq[1:]):
+            d = _delta_e(c1, c2)
+            assert d >= _MIN_DELTA_E, f"{n1} {c1} vs {n2} {c2}: ΔE {d:.1f}"
+
+    def test_adjacent_regions_are_distinguishable(self):
+        from tarzan.models.taxonomy import GEO_ORDER
+
+        seq = self._ordered(_format.GEO_COLORS, GEO_ORDER)
+        assert len(seq) == len(_format.GEO_COLORS), "a region is unordered"
+        for (n1, c1), (n2, c2) in zip(seq, seq[1:]):
+            d = _delta_e(c1, c2)
+            assert d >= _MIN_DELTA_E, f"{n1} {c1} vs {n2} {c2}: ΔE {d:.1f}"
+
+    def test_every_swatch_clears_the_card_surface(self):
+        for name, bare in {**_format.ASSET_CLASS_COLORS, **_format.GEO_COLORS}.items():
+            css = _format.css(bare)
+            ratio = _contrast(css, _CARD)
+            assert ratio >= _MIN_CONTRAST, f"{name} {css} on {_CARD}: {ratio:.2f}:1"
+
+
+class TestChartSeriesRoles:
+    """The five lines the Performance charts draw in ONE plot.
+
+    They are a categorical set, so every pair matters, not just neighbours: the
+    lines cross. And none of them may borrow a colour that MEANS something
+    elsewhere in the issue -- TWROR used to be drawn in the same green the
+    waterfall bars, heat cells, sparklines and bullet bars use for "positive",
+    so the reader had to know which chart they were on to know whether green was
+    identity or sign.
+    """
+
+    SERIES = ("port", "pnl", "unreal", "target", "bench")
+    STATUS = ("green", "red", "amber")
+
+    def _palette(self):
+        from tarzan.export._palette import PALETTE
+        return PALETTE
+
+    def test_all_pairs_are_distinguishable(self):
+        P = self._palette()
+        roles = list(self.SERIES)
+        for i, a in enumerate(roles):
+            for b in roles[i + 1:]:
+                d = _delta_e(P[a], P[b])
+                assert d >= _MIN_DELTA_E, f"{a} {P[a]} vs {b} {P[b]}: ΔE {d:.1f}"
+
+    def test_no_series_reuses_a_status_colour(self):
+        P = self._palette()
+        status = {P[s] for s in self.STATUS}
+        for role in self.SERIES:
+            assert P[role] not in status, f"{role} is a status colour ({P[role]})"
+
+    def test_every_series_clears_the_chart_surface(self):
+        P = self._palette()
+        for role in self.SERIES:
+            ratio = _contrast(P[role], P["card_alt"])
+            assert ratio >= _MIN_CONTRAST, f"{role} {P[role]}: {ratio:.2f}:1"
+
+
 class TestCssHelper:
     def test_prefixes_bare_hex(self):
         assert _format.css("1D4ED8") == "#1D4ED8"

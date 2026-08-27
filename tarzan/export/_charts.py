@@ -26,6 +26,10 @@ MUTED = _P["muted"]
 SUBTLE = _P["subtle"]
 BORDER = _P["border"]
 GREEN = _P["green"]
+# The portfolio's own series. Was GREEN, which also means "positive" in the
+# waterfall bars below, the heat cells, the session sparklines and the bullet
+# bars — one colour doing sign in four places and identity in a fifth.
+PORT = _P["port"]
 BENCH = _P["bench"]
 PNL = _P["pnl"]
 UNREAL = _P["unreal"]
@@ -224,7 +228,11 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
         # wobble the reader is trying to compare); ``dash`` is still honoured if
         # a caller explicitly asks for it.
         dash = ' stroke-dasharray="5,4"' if s.get("dash") else ""
-        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="1.5"{dash} stroke-linejoin="round"/>')
+        # ``width`` lets one series read as the subject and the rest as its
+        # references — the emphasis the portfolio line used to get from being the
+        # only saturated colour among greys.
+        sw = float(s.get("width", 1.5))
+        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{dash} stroke-linejoin="round"/>')
         lx, ly = pts[-1]
         out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" '
                    f'fill="{s["color"]}" stroke="{_P["card_alt"]}" '

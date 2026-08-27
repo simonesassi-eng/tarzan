@@ -412,7 +412,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    window: last-30-days rebased vs since-inception cumulative. The
     #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
-    GREEN, PNL, BENCH = _charts.GREEN, _charts.PNL, _charts.BENCH
+    PORT, PNL, BENCH = _charts.PORT, _charts.PNL, _charts.BENCH
     UNREAL, TARGET = _charts.UNREAL, _charts.TARGET
     # Every legend label on this section is pre-escaped markup ("Total P&amp;L"),
     # and the benchmark's name is configured text, so it escapes once here rather
@@ -482,9 +482,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     s30 = []
     ret_leg = []
     if win["twror"] is not None and endpoints.get("twror") is not None:
-        s30.append({"values": win["twror"], "color": GREEN,
+        s30.append({"values": win["twror"], "color": PORT, "width": 2.2,
                     "end_label": _window_label("twror")})
-        ret_leg.append((GREEN, "TWROR"))
+        ret_leg.append((PORT, "TWROR"))
     if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
         s30.append({"values": win["pnl_pct"], "color": PNL,
                     "end_label": _window_label("pnl_pct")})
@@ -530,9 +530,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # which repeated the key for no gain and forced a 132px right gutter
         # that ate a fifth of the plot.
         if full["twror"] is not None:
-            ssi.append({"values": full["twror"], "color": GREEN,
+            ssi.append({"values": full["twror"], "color": PORT, "width": 2.2,
                         "end_label": _pct(m.twror_pct, signed=True)})
-            si_leg.append((GREEN, "TWROR"))
+            si_leg.append((PORT, "TWROR"))
         if full["pnl_pct"] is not None:
             ssi.append({"values": full["pnl_pct"], "color": PNL,
                         "end_label": _pct(m.pnl_pct, signed=True)})
@@ -584,7 +584,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                    w=W_HALF, h=H_HALF, gutter=G_HALF) -> str:
         series = []
         if vs and vs.get("port"):
-            series.append({"values": vs["port"], "color": VOL,
+            series.append({"values": vs["port"], "color": VOL, "width": 2.2,
                            "end_label": _pct(vs["port"][-1], signed=False)})
         if vs and vs.get("target"):
             series.append({"values": vs["target"], "color": TARGET,

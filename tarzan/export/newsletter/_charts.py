@@ -78,8 +78,11 @@ def _spark(vals: list[float], target: Optional[float], color: str,
     )
     lx, ly = pts[-1]
     parts.append(
+        # Surface-coloured ring, not white: the ring exists to separate the dot
+        # from the line it sits on, and #fff printed a bright halo on the dark
+        # card -- the same leftover the flow chips had.
         f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="{color}" '
-        f'stroke="#fff" stroke-width="1.5"/>'
+        f'stroke="{PALETTE["card"]}" stroke-width="1.5"/>'
     )
     parts.append("</svg>")
     return "".join(parts)
@@ -168,6 +171,13 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     """
     global _dual_uid
     _dual_uid += 1
+    # The hero's clip ids are "hg<n>"/"hr<n>", NOT "pg<n>"/"pr<n>":
+    # _intraday_spark mints ids with that same prefix off a DIFFERENT counter,
+    # so in a live issue the hero's "pg1" and the first sparkline's "pg1" were
+    # two elements sharing one id -- and every url(#pg1) then resolved to
+    # whichever came first in the document, clipping one chart's green/red split
+    # by the other chart's rectangle. Deterministic runs hid it: they have no
+    # intraday series, so nothing else minted a "pg1".
     u = _dual_uid
     P = PALETTE
     n = len(values)
@@ -284,13 +294,13 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         )
         pnl_layer = (
             f'<polygon points="{tband}" fill="{P["green"]}" fill-opacity="0.16" '
-            f'clip-path="url(#pg{u})"/>'
+            f'clip-path="url(#hg{u})"/>'
             f'<polygon points="{tband}" fill="{P["red"]}" fill-opacity="0.16" '
-            f'clip-path="url(#pr{u})"/>'
+            f'clip-path="url(#hr{u})"/>'
             f'<polyline points="{tline}" fill="none" stroke="{P["green"]}" '
-            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#pg{u})"/>'
+            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#hg{u})"/>'
             f'<polyline points="{tline}" fill="none" stroke="{P["red"]}" '
-            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#pr{u})"/>'
+            f'stroke-width="2.4" stroke-linejoin="round" clip-path="url(#hr{u})"/>'
         )
     else:
         pnl_layer = ""
@@ -299,9 +309,9 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         f'<svg width="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
         f'xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;'
         f'font-family:{FONT_STACK};">'
-        f'<defs><clipPath id="pg{u}"><rect x="0" y="0" width="{w}" '
+        f'<defs><clipPath id="hg{u}"><rect x="0" y="0" width="{w}" '
         f'height="{split_y:.1f}"/></clipPath>'
-        f'<clipPath id="pr{u}"><rect x="0" y="{split_y:.1f}" width="{w}" '
+        f'<clipPath id="hr{u}"><rect x="0" y="{split_y:.1f}" width="{w}" '
         f'height="{h - split_y:.1f}"/></clipPath></defs>'
         + grid
         # One dashed reference, as before: the level the colours are measured
