@@ -202,16 +202,12 @@ def resolve_inputs() -> dict[str, str | None]:
                 str(files["targets_per_holding.csv"])
                 if "targets_per_holding.csv" in files else None
             ),
-            "strategy": (
-                str(files["strategy.txt"]) if "strategy.txt" in files else None
-            ),
         }
 
     # Local mode.
     targets_path = _env("TARGETS_PATH", ".private/targets.csv")
     orders_path = _env("ORDERS_PATH", ".private/order_list.csv")
     tph_path = _env("TARGETS_PER_HOLDING_PATH", ".private/targets_per_holding.csv")
-    strategy_path = _env("STRATEGY_PATH", "input/strategy.txt")
 
     if not Path(orders_path).exists():
         raise FileNotFoundError(
@@ -230,7 +226,6 @@ def resolve_inputs() -> dict[str, str | None]:
         "config": targets_path,
         "orders": orders_path,
         "targets_per_holding": tph_path if Path(tph_path).exists() else None,
-        "strategy": strategy_path if Path(strategy_path).exists() else None,
     }
 
 
@@ -408,14 +403,9 @@ def run_and_send() -> int:
     inputs = resolve_inputs()
     logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
     logger.info(
-        "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s | strategy=%s",
+        "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s",
         inputs["orders"], inputs["config"], inputs["targets_per_holding"] or "(none)",
-        inputs.get("strategy") or "(none)",
     )
-    # The Strategy section reads its note through STRATEGY_PATH (the Drive copy
-    # lands in a tempdir, not in the repo's input/).
-    if inputs.get("strategy"):
-        os.environ["STRATEGY_PATH"] = inputs["strategy"]
 
     previous_result = last_run_result()
     metrics, config = run(
