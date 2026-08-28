@@ -28,7 +28,10 @@ class TestTheBenchmarkIsNamedByTheTaxonomy:
         _ab, geo = _benchmark_names(None, None)
 
         assert geo == cfg.benchmark_geo_allocation()
-        assert geo in cfg.chart_benchmarks() or geo == cfg._default_benchmark_name()
+        # Unconditional, not "or the shipped default": the geo row is in the
+        # tracked set BECAUSE it is the geo row, so its series is always fetched
+        # and always published for the charts that draw it.
+        assert geo in cfg.benchmarks()
 
     def test_an_explicit_name_still_wins(self):
         from tarzan.export.newsletter import _benchmark_names
