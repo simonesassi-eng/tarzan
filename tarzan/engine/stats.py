@@ -624,11 +624,23 @@ def normalize_index(series: pd.Series, *, drop_duplicates: bool = False) -> pd.S
     additionally drops the duplicate days that the tz collapse can create
     (last observation wins) — needed when several intraday timestamps fold onto
     the same date.
+
+    The day is the venue's OWN session date — the same key ``window_anchor``
+    measures on (``index.date``) — so the tz is dropped at local wall time
+    rather than converted to UTC first. A daily bar is stamped at midnight in
+    its venue's tz, so converting Milan's 27 Aug 00:00+02:00 to UTC lands on
+    26 Aug 22:00 and normalized to the 26th: every European series slid one
+    day into the past, misaligned by a day against the tz-naive order-derived
+    NAV and against any US series (whose midnight-04:00 stamp survives the UTC
+    trip on the right date). That is what left the 30-day chart measuring
+    26 Jul → 26 Aug while its own P&L matrix measured 27 Jul → 27 Aug, and on
+    a day with a rebalance in the gap the Unrealized line read +0.00% beside a
+    +1.79% table cell.
     """
     s = series.copy()
     idx = s.index
     if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_convert("UTC").tz_localize(None)
+        idx = idx.tz_localize(None)
     s.index = idx.normalize()
     if drop_duplicates:
         s = s[~s.index.duplicated(keep="last")]

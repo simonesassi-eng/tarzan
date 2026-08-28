@@ -259,17 +259,18 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 
     # Resolve the anchor on the RAW (tz-aware) benchmark — the exact series the
     # return tables call ``compute_period_return`` on — so the chart's ACWI
-    # endpoint equals the 1M column to the basis point, then normalise only the
-    # DATE to the chart's tz-naive calendar for slicing. (Anchoring on the
-    # normalised series instead shifted the pick by the tz/UTC day boundary and
-    # left a ~0.15pp drift from the table.)
+    # endpoint equals the 1M column to the basis point, then take its SESSION
+    # DATE for slicing the chart's tz-naive calendar. Local wall time, not UTC:
+    # the anchor bar is stamped at its venue's midnight, so a UTC trip moved a
+    # European anchor to the previous calendar day and opened the window one
+    # session early (see ``stats.normalize_index``).
     start = window_anchor(acwi_raw if acwi_all is not None else val_raw, "1m")
     if start is None:
         start = val_all.index[-1] - pd.Timedelta(days=n_days)
     else:
         start = pd.Timestamp(start)
         if start.tz is not None:
-            start = start.tz_convert("UTC").tz_localize(None)
+            start = start.tz_localize(None)
         start = start.normalize()
     val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
     if len(val) < 2:
