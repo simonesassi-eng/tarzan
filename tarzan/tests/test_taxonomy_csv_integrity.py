@@ -44,7 +44,13 @@ def test_every_row_matches_header_field_count():
 
 def test_required_columns_present():
     header = _rows()[0]
-    required = {"name", "ticker", "isin", "kind", "asset_class"}
+    # ``watchlist`` is in here because its absence degrades SILENTLY and
+    # expensively: ``benchmarks()`` substitutes the one shipped default when no
+    # row is flagged, so a renamed or misspelled column does not raise — it
+    # quietly drops every tracked instrument, and the digest renders a watchlist
+    # of one with alpha/beta still computed against it.
+    required = {"name", "ticker", "isin", "kind", "asset_class",
+                cfg.WATCHLIST_FLAG}
     missing = required.difference(c.strip().lower() for c in header)
     assert not missing, f"instrument_taxonomy.csv is missing columns: {missing}"
 

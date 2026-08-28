@@ -158,7 +158,7 @@ default_equity_geo_targets_pctg:
   Emerging Markets: 12.0
 
 # Fallback benchmark universe, used only when instrument_taxonomy.csv marks no
-# row is_benchmark=true — a first run by a new user who has not curated one yet.
+# row watchlist=true — a first run by a new user who has not curated one yet.
 # Without it alpha/beta are None and the α/β footnote names an index the report
 # never computed. One broad global equity ETF is the least opinionated reference
 # available; a curated taxonomy row always wins over this.

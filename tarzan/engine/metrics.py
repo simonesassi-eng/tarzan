@@ -1119,7 +1119,11 @@ class MetricsEngine:
         initial_value = float(ph.iloc[0])
         comp_rows = []
         key_histories: dict[str, pd.Series] = {}
-        chart_benchmarks = set(cfg.chart_benchmarks())
+        # Publish a history for every TRACKED instrument, which is the same set
+        # the catalog fetched — including a row flagged only as the alpha/beta or
+        # geo reference. Reading a narrower set here withheld the geo benchmark's
+        # own series from the charts that exist to draw it.
+        chart_benchmarks = set(cfg.benchmarks())
         catalog: dict[str, ResolvedBenchmark] = ctx.get("_benchmark_catalog", {})
 
         # Every metric below consumes the exact history attached to the one
@@ -1182,6 +1186,35 @@ class MetricsEngine:
                 "type": "In portfolio",
             }
             _populate_perf_row(row, s, bench_history, self._rf_daily(ctx))
+            rows.append(row)
+
+        # Target instruments the book does not hold yet. The orchestrator seeds
+        # one zero-value position per positive per-holding target and enriches
+        # them in the SAME ``enrich_holdings`` call as the real holdings, so their
+        # price history is a holding's history and their period returns come off
+        # the same ``_populate_perf_row`` as every other row in this table.
+        #
+        # Emitted here rather than being recovered downstream, because the two
+        # things a reader's target list must not depend on are exactly what a
+        # downstream reconstruction would depend on: whether the instrument also
+        # carries ``watchlist=true`` in the taxonomy (the tracked catalog is the
+        # only other place a not-held instrument gets returns), and whether the
+        # rebalancer produced a plan this run (the target set is configuration; a
+        # suppressed plan must not empty it).
+        for h in self.rebalance_seeds:
+            if h.price_history is None or len(h.price_history) < 2:
+                continue
+            row = {
+                "ticker": h.ticker,
+                "name": h.name or h.ticker,
+                # Neither "portfolio" nor "benchmark" as a substring: every
+                # consumer of this frame selects on one of those two words, so a
+                # third kind of row must match neither to stay out of the book's
+                # tables and out of the benchmark projections.
+                "type": "Target not held",
+            }
+            _populate_perf_row(row, _cap_to_years(h.price_history, 5),
+                               bench_history, self._rf_daily(ctx))
             rows.append(row)
 
         # Benchmark rows receive the exact same full ticker whose attached

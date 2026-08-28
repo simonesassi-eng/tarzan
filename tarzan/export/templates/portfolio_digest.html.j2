@@ -110,19 +110,21 @@
             </td>
           </tr>
           {# ═══ BODY ORDER ═══════════════════════════════════════════
-             Twelve sections, each with one question:
+             Fourteen sections, each with one question:
                01 state        what the portfolio is
                02 portfolio    what it did, over time and by window
                03 vs the market whether that beat the alternative
                04 markets      what the market did, and why
                05 allocation   where the money sits vs where it should
                06 returns      how each position performed
-               07 watchlist    how the instruments not held performed
-               08 the book     the positions themselves
-               09 attribution  which positions moved the number
-               10 risk         what the shape of the ride was
-               11 optimizer    what to do about it
-               12 appendix      tax, method, feeds
+               07 target instr how the plan's not-yet-held names performed
+               08 watchlist    how the instruments not held performed
+               09 the book     the positions themselves
+               10 attribution  which positions moved the number
+               11 risk         what the shape of the ride was
+               12 optimizer    what to do about it
+               13 strategy     the investor's own thesis
+               14 appendix     tax, method, feeds
              The ordinals come from the shared counter in sec(), so a section
              the engine cannot fill leaves no hole in the sequence. #}
 
@@ -223,7 +225,21 @@
           </tr>
           {% endif %}
 
-          {# ─── [07] WATCHLIST ──────────────────────────────
+          {# ─── [07] TARGET INSTRUMENTS ─────────────────────
+             The instruments the target portfolio names and the book does not
+             hold yet, in the same columns. Above the watchlist because they are
+             the plan rather than something merely tracked; the ones already held
+             are in Returns above and appear in neither table. #}
+          {% if performance.target_table_html %}
+          <tr>
+            <td class="px-32" style="padding:20px 20px 0 20px;">
+              {{ sec(secn, "Target instruments", "In the target portfolio, not held yet. Same columns, scaled on this table's own columns.") }}
+              {{ performance.target_table_html|safe }}
+            </td>
+          </tr>
+          {% endif %}
+
+          {# ─── [08] WATCHLIST ──────────────────────────────
              The same columns over the instruments tracked but not held, scaled
              on this table's own columns so it never borrows the book's range. #}
           <tr>
@@ -233,12 +249,12 @@
             </td>
           </tr>
 
-          {# ─── [08] THE BOOK ───────────────────────────────
+          {# ─── [09] THE BOOK ───────────────────────────────
              The positions themselves, closing out the per-holding tables after
              Returns and Watchlist. #}
           {% include "partials/holdings.html.j2" %}
 
-          {# ─── [09] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
+          {# ─── [10] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
           {% if return_contrib.winners or return_contrib.laggards %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
@@ -271,7 +287,7 @@
             </td>
           </tr>
           {% endif %}
-          {# ─── [10] RISK — after attribution and immediately before the
+          {# ─── [11] RISK — after attribution and immediately before the
              optimizer, so the evidence precedes the action. #}
           {% if risk_profile.available %}
           <tr>
@@ -337,7 +353,7 @@
           </tr>
           {% endif %}
 
-          {# ─── [11] OPTIMIZER (two plans: buy-only vs buy & sell) ─── #}
+          {# ─── [12] OPTIMIZER (two plans: buy-only vs buy & sell) ─── #}
           {% if optimizer.available %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
@@ -394,7 +410,7 @@
              where a reader who wants to compare candidates is already looking.
              ── #}
 
-          {# ─── [12] STRATEGY — the investor's own thesis ──────
+          {# ─── [13] STRATEGY — the investor's own thesis ──────
              Read verbatim from input/strategy.txt (not generated): what the
              portfolio is, why it is built this way, and what to expect. Placed
              after the numbers and before the appendix, so the reader meets the
@@ -407,7 +423,7 @@
             </td>
           </tr>
           {% endif %}
-          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
+          {# ─── [14] APPENDIX — tax, method, feeds ─────────────
              Three reference blocks under one heading. They were three unnumbered
              blocks trailing off the end of the document, which read as an
              afterthought rather than as the place to look things up. #}

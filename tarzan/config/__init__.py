@@ -4,8 +4,9 @@ Two-layer config:
 - constants.yaml: investment parameters (classification, metric thresholds, risk-free rate)
 - static.yaml: rarely-changed infrastructure mappings (exchanges, FIGI)
 
-Benchmarks and geo references come from instrument_taxonomy.csv (is_benchmark,
-is_benchmark_alpha_beta, is_benchmark_geo columns).
+The tracked instrument universe and the two reference roles come from
+instrument_taxonomy.csv (``watchlist``, ``is_benchmark_alpha_beta``,
+``is_benchmark_geo`` columns).
 """
 
 from __future__ import annotations
@@ -136,6 +137,17 @@ def _lookup_by_identity(lut: dict, isin: Optional[str], ticker: Optional[str]):
         if key and key in lut:
             return lut[key]
     return None
+
+
+# The taxonomy column that says "track this instrument". It names the WATCHLIST,
+# not a benchmark role: the two reference roles have their own columns
+# (``is_benchmark_alpha_beta``, ``is_benchmark_geo``), and a tracked instrument is
+# usually neither — it is something the investor watches, or a target the book
+# does not hold yet. The digest decides where a tracked row is PRINTED from
+# whether it is held (Returns) or targeted (Target instruments); this flag only
+# says the series is worth fetching, so removing an instrument from the target
+# leaves it tracked and it falls back into the watchlist on its own.
+WATCHLIST_FLAG = "watchlist"
 
 
 def _flagged_rows(col: str) -> pd.DataFrame:
@@ -537,7 +549,7 @@ def trading_days() -> int:
 def default_benchmarks() -> dict[str, str]:
     """Fallback benchmark universe for an uncurated taxonomy.
 
-    A new user's ``instrument_taxonomy.csv`` flags no ``is_benchmark`` row, so
+    A new user's ``instrument_taxonomy.csv`` flags no ``watchlist`` row, so
     every benchmark accessor below used to return nothing and alpha/beta came
     out ``None`` while the α/β footnote still named a hardcoded index the run
     never computed. Falling back to one shipped default keeps the three
@@ -559,10 +571,12 @@ def benchmark_beta_name() -> str:
         return str(match.iloc[0]["name"]).strip()
     return _default_benchmark_name()
 
-def chart_benchmarks() -> list[str]:
-    """Get index names marked as is_benchmark=true for chart overlay."""
-    match = _flagged_rows("is_benchmark")
-    return match["name"].tolist() if not match.empty else list(default_benchmarks())
+# No separate ``chart_benchmarks()``. It answered "whose history is published for
+# the charts" off the watchlist flag alone while ``benchmarks()`` answered "whose
+# history is fetched", and the moment the two sets stopped being identical the
+# geo benchmark was fetched and then withheld from ``benchmark_histories`` — the
+# ACWI line vanished from three panels and the gap tile with it. One set, one
+# accessor: if it is fetched, the charts can draw it.
 
 def benchmark_geo_allocation() -> str:
     """Get the index name for geo benchmark reference (is_benchmark_geo=true)."""
@@ -595,42 +609,87 @@ def geography_map() -> dict[str, Geography]:
     }
 
 
-# --- Benchmarks (from instrument_taxonomy.csv) ---
+# --- Tracked instruments (from instrument_taxonomy.csv) ---
+
+# Every flag that earns an instrument a fetched price series. ``watchlist`` is
+# the investor's own tracking list; the other two are the reference ROLES, and a
+# role needs its history whether or not the investor also wants the row printed
+# in the watchlist table — alpha/beta, the geo comparison, the benchmark gap
+# tile, the vs-market charts and the risk table all read that series. Keeping
+# the roles out of the fetch set unless separately watchlisted made two
+# independent flags silently interdependent: ``watchlist=FALSE`` on the geo row
+# dropped the ACWI line off three charts and the gap tile.
+_TRACKED_FLAGS = (WATCHLIST_FLAG, "is_benchmark_alpha_beta", "is_benchmark_geo")
+
+
+def _named_rows(flag: str) -> "list[tuple[str, pd.Series]]":
+    """``(name, row)`` for each taxonomy row whose ``flag`` is true and which
+    carries a name."""
+    return [
+        (name, row) for _, row in _flagged_rows(flag).iterrows()
+        if (name := str(row.get("name", "")).strip())
+    ]
+
+
+def watchlist_names() -> frozenset[str]:
+    """Lowercased curated names the investor tracks (``watchlist=true``).
+
+    What the WATCHLIST table prints, which is NOT the same question as what gets
+    a price series (:func:`benchmarks`): a reference role is fetched regardless,
+    and a tracked instrument that is held or targeted is printed by Returns or
+    Target instruments instead.
+
+    Falls back to the shipped default alongside :func:`benchmarks`, so an
+    uncurated taxonomy still shows the one instrument it computes alpha/beta
+    against rather than an empty table under a populated benchmark gap.
+    """
+    named = {name.lower() for name, _ in _named_rows(WATCHLIST_FLAG)}
+    return frozenset(named or {n.lower() for n in default_benchmarks()})
+
 
 def benchmarks() -> dict[str, str]:
-    """Get benchmark dict {index_name: ticker} from instrument_taxonomy.csv where is_benchmark=true.
+    """``{name: ticker}`` for every instrument that needs a fetched series.
+
+    The union of ``_TRACKED_FLAGS``: the watchlist plus the two reference roles.
+    Kept under the ``benchmarks`` name because that is what the engine catalog
+    and the semantic gate call it.
 
     Falls back to :func:`default_benchmarks` when the taxonomy flags none, so a
     first run still computes alpha/beta instead of reporting ``None`` under a
     footnote naming an index it never used.
     """
-    match = _flagged_rows("is_benchmark")
     result = {}
-    for _, row in match.iterrows():
-        name = str(row.get("name", "")).strip()
-        ticker = str(row.get("ticker", "")).strip()
-        if name and ticker:
-            result[name] = ticker
+    for flag in _TRACKED_FLAGS:
+        for name, row in _named_rows(flag):
+            ticker = str(row.get("ticker", "")).strip()
+            if ticker:
+                result.setdefault(name, ticker)
     return result or dict(default_benchmarks())
 
 
 def benchmark_identities() -> tuple[tuple[str, str, str], ...]:
-    """``(name, requested ticker, ISIN)`` per is_benchmark taxonomy row.
+    """``(name, requested ticker, ISIN)`` per tracked taxonomy row.
 
     :func:`benchmarks` drops the ISIN because alpha/beta only ever needs a
     symbol. The appendix's feed audit prints the ISIN of every instrument it
-    lists, and a watchlist instrument is not a holding — its taxonomy row is
-    the only place that ISIN exists. Empty when the taxonomy flags none: there
-    is then no watchlist to list, unlike ``benchmarks``, which substitutes
-    defaults so alpha/beta still computes.
+    lists, and a tracked instrument is not a holding — its taxonomy row is the
+    only place that ISIN exists. It lists whatever is FETCHED, so a reference
+    role appears here even when it is not watchlisted; the run pulled its feed
+    and the audit says so. Empty when the taxonomy flags none: there is then
+    nothing to list, unlike ``benchmarks``, which substitutes defaults so
+    alpha/beta still computes.
     """
     from tarzan.models.instrument_key import normalize_isin
 
-    return tuple(
-        (name, str(row.get("ticker", "")).strip(), normalize_isin(row.get("isin")))
-        for _, row in _flagged_rows("is_benchmark").iterrows()
-        if (name := str(row.get("name", "")).strip())
-    )
+    seen: dict[str, tuple[str, str, str]] = {}
+    for flag in _TRACKED_FLAGS:
+        for name, row in _named_rows(flag):
+            seen.setdefault(name, (
+                name,
+                str(row.get("ticker", "")).strip(),
+                normalize_isin(row.get("isin")),
+            ))
+    return tuple(seen.values())
 
 
 # --- Allocation defaults ---

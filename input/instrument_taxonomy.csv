@@ -1,4 +1,4 @@
-name,ticker,isin,kind,asset_class,role,is_benchmark,is_benchmark_alpha_beta,is_benchmark_geo,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,exp_equities,exp_fixed_income,exp_gold,exp_commodities,exp_alternative,exp_crypto,ter,description,updated
+name,ticker,isin,kind,asset_class,role,watchlist,is_benchmark_alpha_beta,is_benchmark_geo,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,exp_equities,exp_fixed_income,exp_gold,exp_commodities,exp_alternative,exp_crypto,ter,description,updated
 iShares Core EUR Aggregate Bond,IEAG,,etf,Fixed Income,Aggregate/Credit,,,,,0.0,100.0,0.0,0.0,,,,,,,,Tracks EUR-denominated investment grade bonds.,2/22/26
 iShares Core Global Aggregate Bond EUR Hedged,AGGH,IE00BDBRDM35,etf,Fixed Income,Aggregate/Credit,True,,,,,,,,,,,,,,0.001,Global aggregate investment grade bonds - EUR hedged.,7/9/26
 L&G Multi-Strategy Enhanced Commodities,ENCO,,etc,Commodities,Broad Basket,True,,,,,,,,,,,,,,,Broad commodities long-only with enhanced roll (multi-strategy) to reduce contango drag.,7/8/26

@@ -314,19 +314,6 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     bt = f"1px solid {P['border']}"
 
-    def _money_cell(pair) -> str:
-        eur, pct = pair
-        c = _sgn(eur)
-        eur_s = _eur_smart(eur, signed=True) if eur is not None else "—"
-        pct_s = _pct(pct, decimals=2, signed=True) if pct is not None else ""
-        return (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};">'
-                f'<div style="{TYPE["figure"]}color:{c};'
-                f'font-variant-numeric:tabular-nums;">{eur_s}</div>'
-                + (f'<div style="{TYPE["data"]}color:{c};'
-                   f'font-variant-numeric:tabular-nums;">{pct_s}</div>'
-                   if pct_s else "")
-                + '</td>')
-
     # ── The matrix, windows as ROWS ──────────────────────────────────────
     # Transposed from measures-as-rows. A reader asks "how did the last week
     # go", which is one row here instead of one cell picked out of three rows,
@@ -337,7 +324,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return (f'<td style="padding:7px 0;border-top:{bt};{TYPE["figure"]}'
                 f'color:{P["ink"]};white-space:nowrap;">{txt}</td>')
 
-    def _money_pair(pair, *, eur_only=False, pct_only=False) -> str:
+    def _money_pair(pair, *, pct_only=False) -> str:
         """One measure split across its own two columns, € then %."""
         eur, pct = pair
         c = _sgn(eur if not pct_only else pct)
@@ -357,19 +344,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 f'font-variant-numeric:tabular-nums;">'
                 f'{_pct(v, signed=True) if v is not None else "\u2014"}</td>')
 
-    def _same(total, unreal, twror) -> bool:
-        """True when the three measures are the same number for a window.
-
-        With no external flow inside it, the P&L change, the unrealized change
-        and the time-weighted return coincide. Printing the same figure three
-        times invites the reader to look for a difference that is not there.
-        """
-        vals = [total[1], unreal[1], twror]
-        if any(v is None for v in vals):
-            return False
-        return max(vals) - min(vals) < 0.005
-
-    heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unrealized", "TWROR")
+    # Unrealized carries its own money column beside its percent, exactly like
+    # Total P&L, and every cell prints its own figure. The three measures used to
+    # collapse to a subtle "=" whenever they agreed to within half a basis point,
+    # which on a window with no sale inside it is most windows: the P&L change,
+    # the unrealized change and the time-weighted return are then the same
+    # number. It read as "we could not compute this", and it hid the one case
+    # that matters, a window containing a sale, where the unrealized change is
+    # smaller than the P&L change by exactly the gain that got realized.
+    heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unr. \u20ac", "Unr. %", "TWROR")
     head_html = '<tr>' + "".join(
         f'<td align="{"left" if i == 0 else "right"}" style="padding:0 0 5px'
         f'{"" if i == 0 else " 10px"};{TYPE["label"]}'
@@ -386,14 +369,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     ]
     body = ""
     for label, total, unreal, twror in windows:
-        coincide = _same(total, unreal, twror)
-        eq = (f'<td align="right" style="padding:7px 0 7px 10px;border-top:{bt};'
-              f'{TYPE["figure"]}color:{P["subtle"]};">=</td>')
         body += ('<tr>' + _label(label)
                  + _money_pair(total)
                  + _money_pair(total, pct_only=True)
-                 + (eq if coincide else _money_pair(unreal, pct_only=True))
-                 + (eq if coincide else _pct_cell(twror))
+                 + _money_pair(unreal)
+                 + _money_pair(unreal, pct_only=True)
+                 + _pct_cell(twror)
                  + '</tr>')
     matrix = (f'<table role="presentation" width="100%" cellpadding="0" '
               f'cellspacing="0" border="0" style="border-collapse:collapse;">'
@@ -1270,10 +1251,13 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
         return {"available": False}
 
     hp = m.holding_performance
-    # Filter to actual portfolio holdings (not benchmarks)
+    # Held positions only, named positively. "portfolio OR not benchmark" let
+    # every OTHER kind of row through on the second clause, so the day a third
+    # kind arrived (the not-held target instruments) an instrument the book does
+    # not own could be ranked its best or worst performer.
     if "type" in hp.columns:
-        hp = hp[hp["type"].astype(str).str.lower().str.contains("portfolio") |
-                ~hp["type"].astype(str).str.lower().str.contains("benchmark")]
+        hp = hp[hp["type"].astype(str).str.contains("portfolio", case=False,
+                                                    na=False)]
     if hp.empty or "5d" not in hp.columns:
         return {"available": False}
 
@@ -1431,11 +1415,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # instrument taxonomy so the section can be grouped and ordered.
     taxonomy = cfg.instrument_taxonomy()
 
-    # A taxonomy row can be BOTH held and flagged is_benchmark=true (a fund we
-    # own that is also the reference for its role). Such an instrument already
-    # has a row in the returns snapshot above, so listing it again here
-    # duplicated it — and invited comparing the portfolio against something it
-    # owns. The held row wins; the watchlist copy is dropped.
+    # A taxonomy row can be BOTH held and flagged watchlist=true (a fund we own
+    # and keep tracking). Such an instrument already has a row in the returns
+    # snapshot above, so listing it again here duplicated it — and invited
+    # comparing the portfolio against something it owns. The held row wins; the
+    # watchlist copy is dropped.
     #
     # Matched on the curated taxonomy name, which is the same identity the α/β
     # and GEO tags below match on: a benchmark row's ``name`` comes straight
@@ -1448,7 +1432,55 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             if curated:
                 held_bench_names.add(curated.strip().lower())
 
-    benchmark_rows = []
+    # Instruments the TARGET portfolio names but the book does not hold yet, from
+    # the engine's own ``Target not held`` rows (one per seeded target, priced and
+    # measured like a holding — see MetricsEngine._holding_performance). They are
+    # not watched, they are the plan, so they get their own table above the
+    # watchlist. A target already held needs no row here: it is in RETURNS, and
+    # the held-name drop above has already taken it out of this table.
+    target_rows: list[dict] = []
+    if not hp.empty and "type" in hp.columns:
+        target_df = hp[hp["type"].astype(str).str.contains(
+            "target", case=False, na=False)]
+        for _, r in target_df.iterrows():
+            raw_ticker = str(r.get("ticker") or "").strip()
+            bare = normalize_ticker(raw_ticker)
+            asset_class, role = taxonomy.get(bare, (None, None))
+            target_rows.append({
+                "name": display_instrument_name(
+                    r.get("isin"), raw_ticker,
+                    str(r.get("name") or raw_ticker)),
+                "ticker": _display_ticker(raw_ticker),
+                "raw_ticker": raw_ticker,
+                "asset_class": asset_class,
+                "role": role,
+                "d1": r.get("1d"),
+                "live": bool(r.get("live_1d", False)),
+                "tags": [],
+                "tag": None,
+                "is_portfolio": False,
+                "returns": _build_bench_returns_dict(r.to_dict()),
+            })
+
+    # A target instrument that is ALSO a curated benchmark (most of them are)
+    # has a row in the catalog too, so drop that copy the same way a held
+    # benchmark's is dropped. Bare ticker is the key, not the name: the seed
+    # carries the operational symbol the enricher resolved (AVWC.DE) and the
+    # broker's own description, the catalog row carries the curated name and
+    # whichever listing it priced (AVWC), so the two only meet on the stripped
+    # symbol — which is what ``normalize_ticker`` produces on both sides.
+    target_bares = {
+        normalize_ticker(str(r.get("raw_ticker") or "")) for r in target_rows
+    } - {""}
+
+    # The catalog is the FETCH set, which is wider than the watchlist: a row
+    # flagged only as the alpha/beta or geo reference has its series pulled for
+    # the charts, the gap tile and the risk table, and printing it here would put
+    # an instrument in the watchlist table that the taxonomy says is not on the
+    # watchlist. ``watchlist=true`` is what this table lists.
+    watchlisted = cfg.watchlist_names()
+
+    benchmark_rows: list[dict] = []
     if not hp.empty and "type" in hp.columns:
         ab_name = (ctx.benchmark_alpha_beta or "").strip().lower()
         geo_name = (ctx.benchmark_geo or "").strip().lower()
@@ -1456,7 +1488,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         for _, r in bench_df.iterrows():
             name = str(r.get("name") or r.get("ticker", ""))
             name_norm = name.strip().lower()
-            if name_norm in held_bench_names:
+            if name_norm in held_bench_names or name_norm not in watchlisted:
                 continue
             # Tag the configured benchmarks. The same index can be both
             # the α/β and the geo reference (e.g. MSCI ACWI), so we may
@@ -1468,6 +1500,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             raw_ticker = str(r.get("ticker") or "").strip()
             bare = normalize_ticker(raw_ticker)
+            if bare in target_bares:
+                continue
             asset_class, role = taxonomy.get(bare, (None, None))
             benchmark_rows.append({
                 # Display name goes through the SAME shortener as the holding
@@ -1543,42 +1577,50 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     period_cols = ("5d", "1m", "3m", "ytd", "1y", "3y", "5y")
     intraday_map = _shared_performance_intraday(ctx)
 
-    # Group benchmark rows by asset class → role, in the configured order,
-    # then hand off to the shared table renderer.
-    raw_groups = group_by_class_role(
-        benchmark_rows, asset_class=lambda r: r.get("asset_class") or "Other",
-        role=lambda r: r.get("role"), ticker=lambda r: r.get("ticker"))
-    groups = []
-    for ac, col, role_list in raw_groups:
-        rendered_roles = []
-        for role, rows in role_list:
-            insts = []
-            for r in rows:
-                _, inner = _perf_spark_cell(
-                    r.get("d1"), r.get("raw_ticker"), intraday_map,
-                    live=bool(r.get("live")))
-                insts.append({
-                    # A short name here, not just the ticker: these instruments
-                    # are tracked and NOT held, so no other section in the issue
-                    # says what they are. No hard cut — the curated name is
-                    # already abbreviated to ~2 tight lines in _format.
-                    "name_html": _perf_name_html(r["name"], r.get("ticker"),
-                                                 r.get("tags")),
-                    "spark_inner": inner,
-                    "day_raw": r.get("d1"),
-                    "returns": r["returns"],
-                })
-            rendered_roles.append((role, insts))
-        groups.append((ac, col, rendered_roles))
+    # Group rows by asset class → role, in the configured order, then hand off to
+    # the shared table renderer. Two tables come out of the same rows here — the
+    # target instruments and the rest of the watchlist — so each scales its own
+    # conditional formatting on its own columns, which is the rule _heat states
+    # for every returns grid in the issue.
+    #
+    # No portfolio row in either. Both list instruments that are NOT held; the
+    # portfolio's own returns are the whole of RETURNS one section up, and
+    # repeating them here invited a comparison between the portfolio and a list
+    # of things it does not own.
+    def _table_for(rows: list) -> str:
+        raw_groups = group_by_class_role(
+            rows, asset_class=lambda r: r.get("asset_class") or "Other",
+            role=lambda r: r.get("role"), ticker=lambda r: r.get("ticker"))
+        groups = []
+        for ac, col, role_list in raw_groups:
+            rendered_roles = []
+            for role, grp_rows in role_list:
+                insts = []
+                for r in grp_rows:
+                    _, inner = _perf_spark_cell(
+                        r.get("d1"), r.get("raw_ticker"), intraday_map,
+                        live=bool(r.get("live")))
+                    insts.append({
+                        # A short name here, not just the ticker: these
+                        # instruments are tracked and NOT held, so no other
+                        # section in the issue says what they are. No hard cut —
+                        # the curated name is already abbreviated to ~2 tight
+                        # lines in _format.
+                        "name_html": _perf_name_html(r["name"], r.get("ticker"),
+                                                     r.get("tags")),
+                        "spark_inner": inner,
+                        "day_raw": r.get("d1"),
+                        "returns": r["returns"],
+                    })
+                rendered_roles.append((role, insts))
+            groups.append((ac, col, rendered_roles))
+        return _returns_table_html(
+            period_cols, None, groups,
+            day_label=day_column_label(
+                m, live=_intraday_column(r.get("live") for r in rows)))
 
-    # No portfolio row in the watchlist. The table lists instruments that are
-    # NOT held; the portfolio's own returns are the whole of RETURNS one section
-    # up, and repeating them here invited a comparison between the portfolio and
-    # a list of things it does not own.
-    table_html = _returns_table_html(
-        period_cols, None, groups,
-        day_label=day_column_label(
-            m, live=_intraday_column(r.get("live") for r in benchmark_rows)))
+    table_html = _table_for(benchmark_rows)
+    target_table_html = _table_for(target_rows) if target_rows else ""
 
     subtitle_html = (
         f'Portfolio vs {ctx.benchmark_alpha_beta or "S&amp;P 500"}: '
@@ -1594,6 +1636,10 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         "kicker": "Returns by asset class",
         "subtitle_html": subtitle_html,
         "table_html": table_html,
+        # The target instruments get their own section above the watchlist; empty
+        # when the target names nothing the book does not already hold.
+        "target_table_html": target_table_html,
+        "target_rows": target_rows,
         "portfolio_row": portfolio_row,
         "benchmark_rows": benchmark_rows,  # show all configured benchmarks
         "periods": list(periods),
