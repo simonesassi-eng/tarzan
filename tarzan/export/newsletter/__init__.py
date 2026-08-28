@@ -46,7 +46,6 @@ from tarzan.export.newsletter._sections_alloc import (
     _build_preheader,
     _build_ticker_sources,
 )
-from tarzan.export.newsletter._sections_strategy import _build_strategy
 from tarzan.export.newsletter._sections_perf import (
     _build_performance30,
     _build_movers,
@@ -171,7 +170,6 @@ def build_context(
         "risk_profile": _build_risk_profile(nctx),
         "optimizer": _build_optimizer(nctx),
         "return_contrib": _build_return_contrib(nctx),
-        "strategy": _build_strategy(nctx),
         "tax_note": _build_tax_note(nctx),
         "methodology": _build_methodology(nctx),
         "ticker_sources": _build_ticker_sources(nctx),

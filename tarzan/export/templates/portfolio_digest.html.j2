@@ -110,7 +110,7 @@
             </td>
           </tr>
           {# ═══ BODY ORDER ═══════════════════════════════════════════
-             Fourteen sections, each with one question:
+             Thirteen sections, each with one question:
                01 state        what the portfolio is
                02 portfolio    what it did, over time and by window
                03 vs the market whether that beat the alternative
@@ -123,8 +123,7 @@
                10 attribution  which positions moved the number
                11 risk         what the shape of the ride was
                12 optimizer    what to do about it
-               13 strategy     the investor's own thesis
-               14 appendix     tax, method, feeds
+               13 appendix     tax, method, feeds
              The ordinals come from the shared counter in sec(), so a section
              the engine cannot fill leaves no hole in the sequence. #}
 
@@ -410,20 +409,13 @@
              where a reader who wants to compare candidates is already looking.
              ── #}
 
-          {# ─── [13] STRATEGY — the investor's own thesis ──────
-             Read verbatim from input/strategy.txt (not generated): what the
-             portfolio is, why it is built this way, and what to expect. Placed
-             after the numbers and before the appendix, so the reader meets the
-             evidence first and the rationale second. #}
-          {% if strategy.available %}
-          <tr>
-            <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Strategy", strategy.sub) }}
-              {{ strategy.html|safe }}
-            </td>
-          </tr>
-          {% endif %}
-          {# ─── [14] APPENDIX — tax, method, feeds ─────────────
+          {# No STRATEGY section. It read a hand-written thesis verbatim out of
+             input/strategy.txt and printed it after the numbers. The digest is
+             the evidence; the rationale did not need a machine to restate it
+             every morning, and the file was the one input the pipeline carried
+             for presentation alone. ── #}
+
+          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
              Three reference blocks under one heading. They were three unnumbered
              blocks trailing off the end of the document, which read as an
              afterthought rather than as the place to look things up. #}
