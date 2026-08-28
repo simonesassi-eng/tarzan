@@ -347,3 +347,58 @@ def test_nan_tail_does_not_poison_the_shifted_series():
     shifted = ur + (5000.0 - float(observed.iloc[-1]))
     assert shifted.notna().any(), "the shift must not poison every day"
     assert abs(float(shifted.dropna().iloc[-1]) - 5000.0) < 1e-9
+
+
+def test_chart_window_matches_the_table_across_a_tz_aware_benchmark():
+    """The 30-day chart must measure the SAME window as the P&L matrix beside it.
+
+    A daily bar is stamped at midnight in its venue's tz, so Milan's 27 Aug close
+    is ``2026-08-27 00:00+02:00``. Collapsing that to a naive day through UTC
+    (22:00 on the 26th) slid every European series one day into the past, which
+    moved BOTH edges of the shared window: the chart opened on the 26 Jul close
+    and stopped on the 26 Aug one while the matrix measured 27 Jul to 27 Aug.
+
+    That is invisible on a quiet day and glaring on a day with a rebalance in the
+    gap. Here 27 Jul realizes 4,000 of gain: unrealized steps down by it while
+    cumulative P&L does not, so a window that opens one day early swallows the
+    step and the Unrealized line reads ~0% next to a table cell of +2%.
+    """
+    from tarzan.export._perf_series import _window_money_pnl
+
+    idx = pd.date_range("2026-06-01", "2026-08-27", freq="D")  # naive, like the NAV
+    val = pd.Series(np.linspace(200_000.0, 210_000.0, len(idx)), index=idx)
+    pnl = pd.Series(np.linspace(10_000.0, 20_000.0, len(idx)), index=idx)
+    # Unrealized tracks P&L except for the 27 Jul sale, which converts 4,000 of
+    # it into realized gain.
+    unreal = pnl.copy()
+    unreal[unreal.index >= "2026-07-27"] -= 4_000.0
+
+    # The benchmark trades on business days only and is stamped at Milan midnight.
+    b_idx = pd.date_range("2026-06-01", "2026-08-27", freq="B", tz="Europe/Rome")
+    bench = pd.Series(np.linspace(100.0, 106.0, len(b_idx)), index=b_idx)
+
+    m = PortfolioMetrics(total_value=210_000.0, invested_value=210_000.0,
+                         cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 190_000.0}]))
+    m.actual_value_series = val
+    m.portfolio_history = val
+    m.pnl_series = pnl
+    m.unrealized_series = unreal
+    m.benchmark_histories = {"ACWI": bench}
+
+    win = _perf_window(m, 30, "ACWI")
+    assert win is not None
+    # Both edges are the tables' own edges, on the venue's session date.
+    assert str(win["window_start"].date()) == "2026-07-27"
+    assert str(win["window_end"].date()) == "2026-08-27"
+
+    for key, series in (("pnl_pct", pnl), ("unreal_pct", unreal)):
+        _eur, table_pct = _window_money_pnl(series, val, "1m")
+        assert table_pct is not None
+        assert abs(win["endpoints"][key] - table_pct) < 1e-9, (
+            f"{key}: chart {win['endpoints'][key]:.4f}% vs table {table_pct:.4f}%"
+        )
+    # The realized step is OUTSIDE the window, so the two lines coincide here —
+    # which is the point: they must coincide for the same reason the table's two
+    # columns do, not because one of them was measured over a different month.
+    assert abs(win["endpoints"]["unreal_pct"] - win["endpoints"]["pnl_pct"]) < 1e-9
