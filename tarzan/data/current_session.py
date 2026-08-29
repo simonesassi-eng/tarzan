@@ -10,8 +10,8 @@ Measured on a live run (24 Aug 2026, 16 holdings): fourteen agreed to four
 decimals, and the two that did not were both fallbacks. MONEY.MI's valuation had
 dropped to its 10.0920 order price while the market quoted 10.1840 (+0.91%,
 €88); NTSG.MI's valuation sat at 29.2843 against a validated 29.0950 (−0.65%,
-€203). Net effect: the hero printed a €242,224.03 portfolio beside P&L tiles
-that implied €242,108.85 — €115 apart, from a silent stale order price.
+€203). Net effect: the hero printed a portfolio total beside P&L tiles that
+implied one €115 lower, from a silent stale order price.
 
 So there is one rule, applied once, here:
 

@@ -339,7 +339,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # percentage shown beside it, so the two can never describe different
     # windows. (_window_money_pnl below walks a CALENDAR-day window, while
     # session_pct is the last-TRADING-day change — across a weekend those are
-    # different spans, which is how a -0.18% session came to print -€1.2k.)
+    # different spans, which is how a -0.18% session came to print a
+    # four-figure euro loss.)
     #
     # The base is invested_value, not total_value: session_pct is a price-only
     # return over the priced holdings (see metrics._portfolio_history, which
@@ -373,7 +374,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         """A P&L tile with the PERCENTAGE as the headline and the euros beneath.
 
         These two led with the euro amount, which is the figure that grows with
-        the book rather than the one that says how the book is doing: +€20,940
+        the book rather than the one that says how the book is doing: a euro P&L
         answers nothing without the capital behind it, while +8.62% is the answer
         and is comparable to every other percentage in the issue. The euro amount
         keeps its place, first on the caption line.
@@ -574,7 +575,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             rebal_color, rebal_bg = PALETTE["amber"], PALETTE["amber_bg"]
 
     return {
-        # Hero big number, rounded to whole euros (€221,593): decimals add
+        # Hero big number, rounded to whole euros (e.g. €XXX,XXX): decimals add
         # visual noise to the largest figure in the Status section.
         "total_value": _eur(m.total_value, decimals=0),
         # Total PnL — lifetime, realized + unrealized (order path).
@@ -1060,7 +1061,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     table style shared by all three groups (no donuts). Each row dict carries ``label_html``, ``now``,
     ``target``, ``spark_vals`` and ``color``. When ``base`` (the EUR value of
     100%) is given, the Now/Target cells also show the compact absolute
-    amount inline (e.g. "26.5% · €10.3k") — same row height, no extra
+    amount inline (e.g. "26.5% · €12.5k") — same row height, no extra
     columns, since the % is what drives width/alignment.
 
     ``subs`` gates the trend-pp line under the sparkline and the leverage
@@ -1484,8 +1485,8 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     # class weight × invested capital, exactly as the asset-class table's own
     # leverage math uses. Multiplying a notional share by the physical market
     # value instead (Σ current_value) mixes two different denominators: it made
-    # Emerging Markets read €15.9k while its sole holding, XMME, was worth
-    # €17.5k on its own.
+    # Emerging Markets read fewer euros than its sole holding, XMME, was
+    # worth on its own.
     byclass = getattr(m, "allocation_by_class", None)
 
     def _notional_sleeve_eur(klass: str) -> float:

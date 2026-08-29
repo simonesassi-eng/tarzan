@@ -23,7 +23,7 @@
                        520px trigger — the grid never actually rendered as a
                        grid for its one reader. Fixed table layout (below)
                        keeps the three 33.33% columns structurally intact at
-                       any width; the widest tile value ("€234,579" at 22px
+                       any width; the widest tile value ("€XXX,XXX" at 22px
                        monospace, ~120px) wraps to a second line inside its
                        own cell on the narrowest phones rather than breaking
                        the grid — that is the accepted tradeoff for holding
@@ -31,7 +31,7 @@
                     {# ``table-layout:fixed`` makes the three declared 33.33%
                        columns authoritative. Without it the client is free to
                        auto-size columns to their content, and a long monospace
-                       value (€234,579 / −3.05pp) pushes a tile past its third,
+                       value (€XXX,XXX / −3.05pp) pushes a tile past its third,
                        overflows the row, and gets stacked one per line — the
                        Apple Mail symptom. Fixed layout clips or wraps inside the
                        cell instead of reflowing the grid. #}

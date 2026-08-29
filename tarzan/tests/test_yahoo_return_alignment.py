@@ -173,8 +173,9 @@ class TestWindowMatrixHasOneSource:
 
     The 1D row used to be overwritten by a separate live-quote move
     (``performance_full["1d"]``, de-compounded against invested_value), so the
-    row could print a number the series never contained — -€2.8k beside a +€11
-    Session tile on 19 Aug 2026. The override is gone: the row reads the same
+    row could print a number the series never contained — a four-figure loss
+    beside a +€11 Session tile on 19 Aug 2026. The override is gone: the row
+    reads the same
     ``pnl_series`` / ``portfolio_history`` as the 5D and 1M rows, whose current
     point the engine has already stamped from the live valuation. A divergent
     ``performance_full`` must not be able to move it.

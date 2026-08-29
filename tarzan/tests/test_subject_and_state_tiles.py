@@ -2,7 +2,7 @@
 
 Two requests, one property between them: the headline figure a reader sees first
 should be the one that says how the book is DOING, and it must be the same number
-the body prints. The euro amount grows with the book; +€20,940 answers nothing
+the body prints. The euro amount grows with the book; a euro P&L answers nothing
 without the capital behind it.
 """
 
@@ -120,21 +120,21 @@ class TestThePnlTilesLeadWithThePercentage:
             metrics=m, config=InvestorConfig()))["tiles"]}
 
     def test_total_pnl_headlines_the_percentage_and_captions_the_euros(self):
-        t = self._tiles(pnl_eur=20_940.0, pnl_pct=8.62)["Total P&amp;L"]
-        assert H.unescape(t["value"]) == "+8.62%"
+        t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Total P&amp;L"]
+        assert H.unescape(t["value"]) == "+10.00%"
         cap = H.unescape(t["caption"])
-        assert cap.startswith("+€20.9k"), cap
+        assert cap.startswith("+€12.5k"), cap
         assert cap.endswith("on contributed capital"), cap
 
     def test_unrealized_pnl_headlines_the_percentage_too(self):
-        t = self._tiles(pnl_eur=20_940.0, pnl_pct=8.62)["Unrealized P&amp;L"]
+        t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Unrealized P&amp;L"]
         assert H.unescape(t["value"]).endswith("%")
         assert "€" in H.unescape(t["caption"])
 
     def test_the_euro_amount_is_not_lost(self):
         """It moved, it did not go away — it is still the first thing on the
         caption line."""
-        t = self._tiles(pnl_eur=20_940.0, pnl_pct=8.62)["Total P&amp;L"]
+        t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Total P&amp;L"]
         assert "€" not in H.unescape(t["value"])
         assert "€" in H.unescape(t["caption"])
 
@@ -157,7 +157,7 @@ class TestThePnlTilesLeadWithThePercentage:
         defaults the percentage to 0.0), but NaN can, and it is the case that
         would print the dash.
         """
-        t = self._tiles(pnl_eur=20_940.0, pnl_pct=float("nan"))["Total P&amp;L"]
+        t = self._tiles(pnl_eur=12_500.0, pnl_pct=float("nan"))["Total P&amp;L"]
         assert "€" in H.unescape(t["value"]), t
         assert "%" not in H.unescape(t["value"]), t
         assert H.unescape(t["caption"]) == "on contributed capital", t

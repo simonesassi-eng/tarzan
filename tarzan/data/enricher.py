@@ -3661,8 +3661,8 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     # thread scheduling, and that order is the rebalancer's coordinate order:
     # its iterated local search accepts an improvement at 1e-9, so two runs of
     # the same deterministic analysis converged on different local optima and
-    # recommended materially different purchases (CL2 +€16.6k vs +€14.3k,
-    # X25E +€11.9k vs +€7.1k) from the same budget. Every other figure matched,
+    # recommended materially different purchases (CL2 and X25E each shifting by
+    # thousands of euros) from the same budget. Every other figure matched,
     # because sums and weighted averages do not care about order.
     slots: list[Optional[Holding]] = [None] * len(holdings)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:

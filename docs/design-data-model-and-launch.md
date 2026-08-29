@@ -148,7 +148,7 @@ skipped):**
 - **Measured before deciding** (real 144-order portfolio, on `main`):
   - `sum(net_eur)`: float vs exact-Decimal drift ≈ **4.4e-11 EUR** (~0.00000000004 ¢)
   - `sum(cost_basis)`: drift **0.0**
-  So the reported `total_value` (€233,049.18) is already correct to the cent;
+  So the reported `total_value` is already correct to the cent;
   the float error is ~11 decimal places down and rounds away at every display
   precision. Reason it's so small: Tarzan reads pre-computed EUR values from
   the CSV and mostly *adds* a few hundred numbers — float drift only reaches

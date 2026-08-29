@@ -1161,8 +1161,8 @@ class TestEnrichHoldingsOrderIsInputOrder:
     That list is the rebalancer's coordinate order, and its iterated local
     search accepts an improvement at 1e-9: two runs of the *same* deterministic
     analysis converged on different local optima and recommended materially
-    different purchases from the same budget (CL2 +€16.6k vs +€14.3k, X25E
-    +€11.9k vs +€7.1k), while every other figure matched because sums and
+    different purchases from the same budget (CL2 and X25E each shifting by
+    thousands of euros), while every other figure matched because sums and
     weighted averages are order-independent.
 
     These tests force completion order to be the reverse of input order, which

@@ -309,8 +309,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # other row, and that series' current point IS the live valuation
     # (metrics._current_prices stamps it), so re-deriving the session move from
     # performance_full would be a second answer to a question already answered
-    # — which is exactly how this row came to print -€2.8k beside a +€11
-    # Session tile on 19 Aug 2026.
+    # — which is exactly how this row came to print a multi-thousand-euro loss
+    # beside a +€11 Session tile on 19 Aug 2026.
 
     bt = f"1px solid {P['border']}"
 

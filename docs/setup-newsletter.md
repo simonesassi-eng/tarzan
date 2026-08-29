@@ -118,8 +118,8 @@ your folder without you sharing your personal Drive credentials.
 
 1. Open the JSON file. Copy the value of `"client_email"` (looks like
    `tarzan-drive-reader@tarzan-newsletter.iam.gserviceaccount.com`).
-2. Go to your Drive folder:
-   <https://drive.google.com/drive/folders/1I9BaXVO1R7cpeps-USyrpWB759YQX48a>
+2. Go to your Drive folder
+   (`https://drive.google.com/drive/folders/<your-folder-id>`).
 3. Click **Share**.
 4. Paste the `client_email`, set role to **Viewer**, untick "Notify
    people", click **Share**.
@@ -155,10 +155,10 @@ In your repo on github.com:
 
 | Name                            | Value                                                  |
 |---------------------------------|--------------------------------------------------------|
-| `SMTP_USER`                     | `simonesassi4@gmail.com`                               |
+| `SMTP_USER`                     | Your Gmail address, e.g. `you@gmail.com`               |
 | `SMTP_PASS`                     | The 16-char App Password from step 3 (spaces don't matter) |
-| `RECIPIENT_EMAIL`               | `simonesassi4@gmail.com`                               |
-| `DRIVE_FOLDER_ID`               | `1I9BaXVO1R7cpeps-USyrpWB759YQX48a` (from your folder URL) |
+| `RECIPIENT_EMAIL`               | Where the digest is sent, e.g. `you@gmail.com`        |
+| `DRIVE_FOLDER_ID`               | The 33-char id from your folder URL                    |
 | `GOOGLE_DRIVE_CREDENTIALS_JSON` | The **entire** content of the JSON key file from step 2d |
 
 > **For `GOOGLE_DRIVE_CREDENTIALS_JSON`:** open the JSON file in a text
@@ -173,7 +173,7 @@ In your repo on github.com:
 2. Click **Run workflow** → leave the label as `manual` → **Run**.
 3. Wait ~3 minutes for the green check.
 4. Open your inbox. You should see an email like
-   `[Tarzan] manual · €213,476 (+X.XX%) · N action(s)`.
+   `[Tarzan] manual · €NNN,NNN (+X.XX%) · N action(s)`.
 5. Open the run logs to confirm "Drive: downloaded ..." and
    "Sent newsletter to ...".
 
@@ -205,7 +205,7 @@ fire the same GitHub workflow via `repository_dispatch`.
 
 ### 6b. Create the Apps Script project
 
-1. Sign in as `simonesassi4@gmail.com` and go to <https://script.google.com>.
+1. Sign in as the same Gmail account and go to <https://script.google.com>.
 2. **New project**.
 3. Replace the contents of `Code.gs` with the contents of
    `scripts/apps_script/Code.gs` from this repo. (Just copy and paste.)

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Reject a commit message carrying a real money figure.
+#
+# This repo is PUBLIC. Commit messages here are narrative and quote live runs,
+# which is how portfolio NAV, P&L and sleeve sizes ended up readable by anyone.
+# Blocked: a thousands-separated amount (€242,224.03) or a k/M suffix (€19.5k).
+# Allowed: bare small figures (€11, €88) — they say nothing about the book.
+#
+# Deliberate exception: git commit --no-verify
+#
+# ponytail: message-only. The staged diff is not scanned, because the golden
+# fixtures legitimately carry synthetic amounts (€19,650) and the hook would
+# fight every golden regeneration. Add a pre-commit scan with a tests/ exclude
+# if code comments start leaking real figures again.
+
+PATTERN='(€|EUR ?)[0-9]{1,3}[.,][0-9]{3}|(€|EUR ?)[0-9]+([.,][0-9]+)?[kKmM]\b'
+
+# Strip comment lines so a commented-out template cannot trip the hook.
+if hits=$(grep -v '^#' "$1" | grep -nEo "$PATTERN"); then
+	echo "commit-msg: real money figure in the commit message — this repo is public." >&2
+	echo "$hits" | sed 's/^/  /' >&2
+	echo "" >&2
+	echo "Round it away (\"a six-figure book\"), drop it, or: git commit --no-verify" >&2
+	exit 1
+fi

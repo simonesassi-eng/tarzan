@@ -6,7 +6,7 @@ contributes 200% of its value, a 90/60 efficient-core fund 90%), so their
 inline euro must be that same notional sleeve. Multiplying the notional share
 by the physical market value instead mixed two denominators and made a region
 read fewer euros than its sole holding was worth on its own — Emerging Markets
-showed €15.9k while XMME, a pure-EM fund, was worth €17.5k.
+showed less than XMME, a pure-EM fund, was worth by itself.
 
 Network-free: a hand-built PortfolioMetrics with one leveraged holding.
 """

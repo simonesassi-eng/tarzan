@@ -257,7 +257,7 @@ def short_instrument_name(
 
 
 def eur_smart(amount: Optional[float], signed: bool = False) -> str:
-    """Compact EUR formatter: shows ``€9.6k`` / ``€215k`` / ``€1.2M``.
+    """Compact EUR formatter: shows ``€9.6k`` / ``€340k`` / ``€1.2M``.
 
     Rules:
       |amount| < 1,000      → €<int>           (e.g. €356)

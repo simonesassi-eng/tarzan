@@ -938,7 +938,7 @@ class TestUnsettledFutureOrders:
     settlement ``date``. A trade executed before the run date but settling
     after it (T+2) must be fully reflected in every metric — otherwise the
     cash flow lands while the position it creates is invisible and PnL
-    drops by the net unsettled capital (regression: the +€4.5k buy that
+    drops by the net unsettled capital (regression: a four-figure buy that
     vanished from the terminal value)."""
 
     def test_trade_before_run_settles_after_is_valued(self):

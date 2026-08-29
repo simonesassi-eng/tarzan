@@ -6,7 +6,7 @@ Three things have to hold at once, and each was wrong at some point:
    separately-walked window. The original code used ``_window_money_pnl(..., 1)``,
    which spans a CALENDAR day, while ``session_pct`` is the last-TRADING-day
    change; across a weekend those are different spans, which is how a -0.18%
-   session printed "-EUR1.2k" on the 2026-07-29 issue.
+   session printed a four-figure euro loss on the 2026-07-29 issue.
 2. The base excludes cash. ``session_pct`` is a price-only return over the
    priced holdings (metrics._portfolio_history sums price_history x quantity),
    so cash contributes no price move to it.
@@ -43,16 +43,16 @@ def _session_caption(total: float, invested: float, pct: float) -> str:
 
 
 def test_session_euro_excludes_cash_from_its_base():
-    """Real figures from the 2026-07-29 run: EUR238,059 total of which
-    EUR9,607.58 is cash, session -0.175119%.
+    """A round book with the 4% cash weight and the -0.175119% session that
+    exposed this on the 2026-07-29 issue: EUR100,000 total, EUR4,000 of it cash.
 
-    -0.175119% of the EUR228,451.42 priced sleeve is -EUR401. Billing it
-    against the cash-inclusive total gives -EUR418 -- a EUR17 overstatement
-    that grows with the cash weight (at a 20% cash buffer it is over EUR80).
+    -0.175119% of the EUR96,000 priced sleeve is -EUR168. Billing it against
+    the cash-inclusive total gives -EUR175 -- a EUR7 overstatement that grows
+    with the cash weight (at a 20% buffer the gap is five times larger).
     """
-    caption = _session_caption(238059.00459144596, 228451.42, -0.175119)
-    assert "−€401" in caption, caption
-    assert "−€418" not in caption, \
+    caption = _session_caption(100_000.0, 96_000.0, -0.175119)
+    assert "−€168" in caption, caption
+    assert "−€175" not in caption, \
         "the euro figure must not be billed against a cash-inclusive total"
 
 

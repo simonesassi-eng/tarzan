@@ -42,7 +42,7 @@ def nice_ticks(lo: float, hi: float, n: int = 4) -> tuple[float, float, list[flo
     """Round-number axis ticks (1/2/5 × 10ⁿ steps).
 
     Returns ``(nice_lo, nice_hi, [ticks])`` so the axis spans clean bounds and
-    labels read 6% / €232k rather than 5.96% / €231.4k.
+    labels read 6% / €120k rather than 5.96% / €119.4k.
     """
     if hi <= lo:
         hi = lo + 1.0
