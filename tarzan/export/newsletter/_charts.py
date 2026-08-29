@@ -580,6 +580,38 @@ def spark_note(text: str) -> str:
             f'line-height:1.25;white-space:nowrap;color:{PALETTE["subtle"]};'
             f'margin-top:1px;">{text}</div>' if text else "")
 
+def session_span_labels(m, fmt: str = "%d/%m") -> tuple[str, str]:
+    """``(base_label, end_label)`` for the 1D figure — the two dates it spans.
+
+    Read off the SAME series the figure is computed from, and its own
+    ``window_anchor``, rather than from the run's clock. ``_prev_session_label``
+    answers a third question ("the last index date strictly before today"), which
+    coincides with neither end reliably, and was captioning both:
+
+      * on Sat 29 Aug 2026 it returned 28 Aug — the session the +0.45% figure ENDS
+        on — under the wording "close-to-close vs 28 Aug", naming the endpoint as
+        if it were the baseline. The baseline was Thursday the 27th.
+      * on the evening of Fri 28, after the close, it returned 27 Aug while the
+        very same figure described the 28 Aug session. Wrong in the opposite
+        direction.
+
+    Both ends come from one place here, so a caption can name whichever it means
+    and cannot name the other by accident.
+    """
+    ph = getattr(m, "portfolio_history", None)
+    try:
+        from tarzan.engine.stats import normalize_index, window_anchor
+
+        series = normalize_index(ph.dropna(), drop_duplicates=True)
+        if len(series) < 2:
+            return "", ""
+        base = window_anchor(series, "1d")
+        return (pd.Timestamp(base).strftime(fmt) if base is not None else "",
+                pd.Timestamp(series.index[-1]).strftime(fmt))
+    except Exception:  # noqa: BLE001 — a caption must never break a render
+        return "", ""
+
+
 def _prev_session_label(m, fmt: str = "%d/%m") -> str:
     """Report-level 'previous session' date for the PREV. DAY tag and the 1D
     column header — the last completed trading day in the portfolio history

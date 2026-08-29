@@ -55,6 +55,7 @@ from tarzan.export.newsletter._charts import (
     _hero_flow_chips,
     _hero_value_chart,
     _prev_session_label,
+    session_span_labels,
     _spark,
     _timeline_vals,
     bullet as _bullet,
@@ -86,8 +87,11 @@ def _session_basis(perf: Optional[dict], m) -> str:
     p = perf or {}
     if bool(p.get("1d_live")):
         return f'market {"open" if _market_is_open(p) else "closed"}'
-    close_label = _prev_session_label(m, "%d %b")
-    return f"close-to-close vs {close_label}" if close_label else "close-to-close"
+    # Name the session the figure DESCRIBES, not the date on the other side of it.
+    # "close-to-close vs 28 Aug" read as though 28 Aug were the baseline, while it
+    # was the endpoint: on Sat 29 Aug 2026 the +0.45% spanned Thu 27 → Fri 28.
+    _base, end = session_span_labels(m, "%d %b")
+    return f"{end} session, close to close" if end else "close-to-close"
 
 
 def _priced_today_note(perf: Optional[dict]) -> str:
@@ -248,13 +252,23 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     if risk.get("sharpe") is not None:
         status_bar.append(_bar("SHARPE", f'{float(risk["sharpe"]):.2f}'))
 
-    # Data stamp: the issue date, the close every 1D figure is measured
-    # against, and whether a session is open. All three change what the numbers
-    # below mean, and none of them was stated before.
-    close_label = _prev_session_label(m, "%d %b")
+    # Data stamp: the issue date, the close the figures below rest on, and
+    # whether a session is open. All three change what the numbers mean.
+    #
+    # Which close that is depends on the session, and one phrase cannot claim
+    # both. With a session open the terminal point is LIVE, so the meaningful
+    # close is the one it is measured from \u2014 the 1D's baseline. With every
+    # session closed the terminal point IS a close, and that is what the issue is
+    # valued at. This printed "close {last completed session}" under a comment
+    # claiming it was the 1D baseline, which on Sat 29 Aug 2026 named 28 Aug \u2014 the
+    # endpoint of the +0.45%, whose baseline was the 27th.
+    base_label, end_label = session_span_labels(m, "%d %b")
+    live = bool((perf or {}).get("1d_live"))
     stamp = now.strftime("%a, %d %b %Y")
-    if close_label:
-        stamp += f" \u00b7 close {close_label}"
+    if live and base_label:
+        stamp += f" \u00b7 vs {base_label} close"
+    elif not live and end_label:
+        stamp += f" \u00b7 at the {end_label} close"
     stamp += f' \u00b7 market {"OPEN" if _market_is_open(perf) else "CLOSED"}'
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
