@@ -197,3 +197,67 @@ class TestTheCurrencyMarkIsOnEveryRow:
         html = H.unescape(_perf_name_html("Xtr. MSCI World Quality", "XDEQ", []))
         assert "Xtr. MSCI World Quality" in html
         assert "[" not in html.split("Xtr. MSCI World Quality")[1][:4]
+
+
+class TestEveryReturnsRowCarriesItsMarker:
+    """The wiring, not just the formatter.
+
+    Both halves were right and the seam between them was not: the watchlist reads
+    the ``holding_performance`` row directly and carried all 55 marks, while the
+    holdings table projects a FIXED list of period keys into a per-ticker dict —
+    so ``currency`` was silently dropped and all 16 rows rendered bare. Verifying
+    one table and assuming the other is what let it ship.
+
+    A fixed-key projection is invisible to a new column, so the guard is a count:
+    every row in the table has a mark, whatever the column list says.
+    """
+
+    @staticmethod
+    def _snapshot(rows):
+        from tarzan.export.newsletter._constants import _NewsletterContext
+        from tarzan.export.newsletter._sections_perf import _build_returns_snapshot
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        m = PortfolioMetrics(total_value=1000.0, invested_value=1000.0)
+        m.holdings_df = pd.DataFrame([
+            {"ticker": t, "isin": f"X{i}", "name": n, "asset_class": "Equities",
+             "current_value": 500.0, "cost_basis_eur": 400.0, "weight_pct": 50.0}
+            for i, (t, n, _c) in enumerate(rows)
+        ])
+        m.holding_performance = pd.DataFrame([
+            dict({"ticker": t, "name": n, "type": "In portfolio", "currency": c,
+                  "live_1d": False},
+                 **{k: 1.0 for k in ("1d", "5d", "1m", "3m", "6m", "1y", "3y",
+                                     "5y", "ytd")})
+            for t, n, c in rows
+        ])
+        m.performance_full = {"1d": 0.1, "5d": 0.2, "1m": 0.3}
+        out = _build_returns_snapshot(
+            _NewsletterContext(metrics=m, config=InvestorConfig()))
+        return H.unescape(out.get("table_html", ""))
+
+    def test_a_eur_and_a_usd_holding_each_get_their_own_mark(self):
+        """Asserted on the marks, not on the names: ``display_instrument_name``
+        resolves through the curated taxonomy, so a made-up name never survives
+        into the row."""
+        import re
+
+        html = self._snapshot([("XDEQ.MI", "Xtr Quality", "EUR"),
+                               ("RSSB", "Ret Stacked", "USD")])
+
+        assert re.findall(r'\[(?:\$|€)\]', html) == ["€", "$"] or \
+            sorted(re.findall(r'\[(\$|€)\]', html)) == ["$", "€"], html[-400:]
+        assert "[€]" in html and "[$]" in html
+
+    def test_every_row_is_marked(self):
+        rows = [(f"T{i}.MI", f"Name {i}", "EUR") for i in range(6)]
+        html = self._snapshot(rows)
+        import re
+        assert len(re.findall(r'\[(?:\$|€)\]', html)) == len(rows)
+
+    def test_the_returns_still_render_beside_the_mark(self):
+        """The projection carries the period columns AND the currency; a fix that
+        replaced the dict rather than extending it would blank the numbers."""
+        html = self._snapshot([("XDEQ.MI", "Xtr Quality", "EUR")])
+        assert "[€]" in html
+        assert "+1.00%" in html
