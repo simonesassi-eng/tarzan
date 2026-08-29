@@ -261,3 +261,83 @@ class TestEveryReturnsRowCarriesItsMarker:
         html = self._snapshot([("XDEQ.MI", "Xtr Quality", "EUR")])
         assert "[€]" in html
         assert "+1.00%" in html
+
+
+class TestHoldingsStampBothTapesToo:
+    """The regression this shipped, and how it got past the benchmark tests.
+
+    ``_current_prices`` (benchmarks) was taught to stamp both tapes; the holdings
+    path in ``current_session.apply_to_holdings`` was not. So every row in Returns
+    and Target instruments read a native tape that never received today's point and
+    sat a session behind — AVEM.DE printed +0.02% (Wed→Thu, 27.625/27.62) where its
+    own Friday session was +1.16% (27.945 against a 27.625 previous close).
+
+    It hit EUR listings too, which is the part the benchmark tests could not have
+    caught: the two tapes are separate OBJECTS even when they hold identical
+    numbers, so stamping one never reaches the other.
+    """
+
+    FRI = datetime.datetime(2026, 8, 28, 15, 35,
+                            tzinfo=datetime.timezone.utc).timestamp()
+
+    def _holding(self, monkeypatch, *, last, quote_price):
+        from tarzan.data import current_session as cs
+        from tarzan.models.holding import Holding
+
+        monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 29))
+        monkeypatch.setattr(
+            "tarzan.data.market_quotes.official_quotes",
+            lambda symbols: {"AVEM.DE": {"price": quote_price,
+                                         "prev_close": last,
+                                         "time": self.FRI}})
+        h = Holding(isin="IE000K975W13", ticker="AVEM.DE", quantity=0.0,
+                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR")
+        h.price_history = _tape(last)
+        h.price_history_native = _tape(last)
+        h.price_currency = "EUR"
+        cs.apply_to_holdings([h])
+        return h
+
+    def test_the_native_tape_receives_todays_point(self, monkeypatch):
+        h = self._holding(monkeypatch, last=27.625, quote_price=27.945)
+
+        native = h.price_history_native.dropna()
+        assert pd.Timestamp(native.index[-1]).date() == datetime.date(2026, 8, 28)
+        assert float(native.iloc[-1]) == pytest.approx(27.945)
+
+    def test_the_one_day_return_is_fridays_not_thursdays(self, monkeypatch):
+        from tarzan.engine.stats import compute_period_return
+
+        h = self._holding(monkeypatch, last=27.625, quote_price=27.945)
+
+        got = compute_period_return(h.price_history_native, "1d")
+        assert got == pytest.approx((27.945 / 27.625 - 1) * 100, abs=1e-6)
+        assert got > 1.0, "the unstamped tape reads +0.02%"
+
+    def test_both_tapes_move_together(self, monkeypatch):
+        """A EUR listing has identical numbers on both tapes, so a reader must not
+        be able to tell which one a figure came from."""
+        h = self._holding(monkeypatch, last=27.625, quote_price=27.945)
+        for tape in (h.price_history, h.price_history_native):
+            assert float(tape.dropna().iloc[-1]) == pytest.approx(27.945)
+
+    def test_a_holding_without_a_native_tape_still_stamps(self, monkeypatch):
+        from tarzan.data import current_session as cs
+        from tarzan.models.holding import Holding
+
+        monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 29))
+        monkeypatch.setattr(
+            "tarzan.data.market_quotes.official_quotes",
+            lambda symbols: {"AVEM.DE": {"price": 27.945, "prev_close": 27.625,
+                                         "time": self.FRI}})
+        h = Holding(isin="IE1", ticker="AVEM.DE", quantity=1.0,
+                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR")
+        h.price_history = _tape(27.625)
+        h.price_history_native = None
+
+        assert cs.apply_to_holdings([h]) == ("AVEM.DE",)
+        assert float(h.price_history.dropna().iloc[-1]) == pytest.approx(27.945)

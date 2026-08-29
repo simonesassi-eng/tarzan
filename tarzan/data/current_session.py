@@ -289,6 +289,35 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
 
     stamped: list[str] = []
     for holding in holdings:
+
+        def _stamp(tape):
+            """Stamp one tape against ITS OWN last close, or ``(None, None)``.
+
+            Each tape resolves its own quote, because the level gate compares a
+            candidate against the reference it is handed. Two tapes exist per
+            instrument — the EUR one every portfolio figure reads, and the native
+            one the per-instrument return columns read — and stamping only the
+            first left every return column a session behind: AVEM.DE printed
+            +0.02% (Wed→Thu, 27.625/27.62) where its own Friday session was
+            +1.16% (27.945 against a 27.625 previous close). All 19 rows were
+            affected, EUR listings included, because the two tapes are separate
+            OBJECTS even where they hold identical numbers.
+            """
+            clean = None if tape is None else tape.dropna()
+            if clean is None or len(clean) == 0:
+                return None, None
+            q = pick_quote(candidates.get(str(holding.ticker), []), quotes,
+                           float(clean.iloc[-1]))
+            p = q.get("price")
+            if not p:
+                return None, None
+            return stamp_today(tape, today, float(p),
+                               q, ticker=str(holding.ticker)), q
+
+        native_stamped, _nq = _stamp(getattr(holding, "price_history_native", None))
+        if native_stamped is not None:
+            holding.price_history_native = native_stamped
+
         series = getattr(holding, "price_history", None)
         usable = None if series is None else series.dropna()
         if usable is None or len(usable) == 0:
