@@ -1,0 +1,37 @@
+{
+  "first_order": "2026-08-03",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-08-15",
+  "note": "EU-only accumulating ETFs, 3 weeks, 4 orders",
+  "order_count": 4,
+  "portfolio_id": "P01",
+  "seed": 1001,
+  "truth": {
+    "cash_from_flows": -20292.95,
+    "currency_by_isin": {
+      "IE00B4L5Y983": "EUR",
+      "IE00B6R52259": "EUR",
+      "IE00BTJRMP35": "EUR",
+      "LU0274209740": "EUR"
+    },
+    "currency_by_ticker": {
+      "ISAC": "EUR",
+      "SWDA": "EUR",
+      "XMJP": "EUR",
+      "XMME": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B4L5Y983": "ETF",
+      "IE00B6R52259": "ETF",
+      "IE00BTJRMP35": "ETF",
+      "LU0274209740": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B4L5Y983": 60.0,
+      "IE00B6R52259": 58.0,
+      "IE00BTJRMP35": 15.0,
+      "LU0274209740": 34.0
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "first_order": "2020-09-07",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-08-29",
+  "note": "pathological: off-taxonomy, unresolvable ISIN, fractional, weekend, same-day",
+  "order_count": 6,
+  "portfolio_id": "P10",
+  "seed": 1010,
+  "truth": {
+    "cash_from_flows": -14448.82,
+    "currency_by_isin": {
+      "IE00B4L5Y983": "EUR",
+      "LU0328475792": "EUR",
+      "LU0380865021": "EUR",
+      "US4642872349": "USD",
+      "US9219097683": "USD",
+      "XX0000000000": "EUR"
+    },
+    "currency_by_ticker": {
+      "EEM": "USD",
+      "SWDA": "EUR",
+      "VEU": "USD",
+      "XESC": "EUR",
+      "XSX6": "EUR",
+      "ZZZZ": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B4L5Y983": "ETF",
+      "LU0328475792": "ETF",
+      "LU0380865021": "ETF",
+      "US4642872349": "ETF",
+      "US9219097683": "ETF",
+      "XX0000000000": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B4L5Y983": 3.4567,
+      "LU0328475792": 9.0,
+      "LU0380865021": 7.0,
+      "US4642872349": 71.0,
+      "US9219097683": 117.0,
+      "XX0000000000": 50.0
+    }
+  }
+}

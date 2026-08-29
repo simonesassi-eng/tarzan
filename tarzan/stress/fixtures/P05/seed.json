@@ -1,0 +1,37 @@
+{
+  "first_order": "2021-09-06",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2025-05-06",
+  "note": "single stock + commodity ETCs, 5 years",
+  "order_count": 5,
+  "portfolio_id": "P05",
+  "seed": 1005,
+  "truth": {
+    "cash_from_flows": -52869.73,
+    "currency_by_isin": {
+      "IE00B579F325": "EUR",
+      "IE00BFXR6159": "EUR",
+      "IE00BKFB6L02": "EUR",
+      "NL0000009355": "EUR"
+    },
+    "currency_by_ticker": {
+      "ENCO": "EUR",
+      "SGLD": "EUR",
+      "UEQC": "EUR",
+      "UNA": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B579F325": "ETF",
+      "IE00BFXR6159": "ETF",
+      "IE00BKFB6L02": "ETF",
+      "NL0000009355": "STOCK"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B579F325": 71.0,
+      "IE00BFXR6159": 83.0,
+      "IE00BKFB6L02": 61.0,
+      "NL0000009355": 200.0
+    }
+  }
+}

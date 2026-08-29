@@ -1,0 +1,5 @@
+# The run log is local evidence: append-only, 2 MB after a dozen sessions, and it
+# records absolute paths from the machine that produced it. The corpus is the code
+# and the fixtures; the ledger is the receipt for one session's runs.
+ledger.jsonl
+__pycache__/

@@ -1,0 +1,5 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2026-08-03,2026-08-01,buy,IE00B4L5Y983,Synthetic SWDA,SWDA,60,EUR,124.1795,1.0,7450.77,19.0,-7469.77,ETF,stress
+2026-08-07,2026-08-05,buy,IE00B6R52259,Synthetic ISAC,ISAC,58,EUR,126.6451,1.0,7345.42,19.0,-7364.42,ETF,stress
+2026-08-11,2026-08-09,buy,IE00BTJRMP35,Synthetic XMME,XMME,15,EUR,84.5018,1.0,1267.53,19.0,-1286.53,ETF,stress
+2026-08-15,2026-08-13,buy,LU0274209740,Synthetic XMJP,XMJP,34,EUR,122.1538,1.0,4153.23,19.0,-4172.23,ETF,stress

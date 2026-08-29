@@ -1,0 +1,25 @@
+{
+  "first_order": "2024-10-01",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-05-18",
+  "note": "liquidated to zero then re-bought",
+  "order_count": 4,
+  "portfolio_id": "P07",
+  "seed": 1007,
+  "truth": {
+    "cash_from_flows": -9666.0,
+    "currency_by_isin": {
+      "IE00B6R52259": "EUR"
+    },
+    "currency_by_ticker": {
+      "ISAC": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B6R52259": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B6R52259": 100.0
+    }
+  }
+}
