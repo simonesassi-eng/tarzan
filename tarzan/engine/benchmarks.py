@@ -69,6 +69,16 @@ class ResolvedBenchmark:
     requested_ticker: str
     ticker: str
     history: pd.Series
+    # The same series before the FX step, and the LISTING's currency. Every
+    # portfolio-level consumer reads ``history`` (EUR); the per-instrument return
+    # columns read ``history_native``, because a return is a ratio and FX does not
+    # divide out of one. 24 of the 62 tracked instruments trade in USD.
+    history_native: Optional[pd.Series] = None
+    currency: Optional[str] = None
+
+
+_NATIVE_ATTR = "tarzan_native_series"
+_CURRENCY_ATTR = "tarzan_listing_currency"
 
 
 def _drop_weekends(series: pd.Series) -> pd.Series:
@@ -127,12 +137,12 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         # corrupted MSCI ACWI / ISAC.MI). A missing currency is likewise not
         # evidence of USD; only a positively non-EUR currency converts.
         currency = _enr.venue_currency(selected_ticker) or data.get("info", {}).get("currency")
+        native = _drop_weekends(prices)
         series = (
-            _enr.convert_to_eur(prices, currency)
+            _drop_weekends(_enr.convert_to_eur(prices, currency))
             if currency and currency != "EUR"
-            else prices
+            else native
         )
-        series = _drop_weekends(series)
 
     # The exact provider symbol is part of the series contract.  ``name`` is
     # intentionally the same full symbol so serialized/debug series cannot
@@ -142,6 +152,11 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
     series.attrs.update({
         "resolved_ticker": selected_ticker,
         "requested_ticker": ticker,
+        # Carried on attrs rather than through a second return value, the way the
+        # FX evidence already travels: this function is injected in tests and
+        # called in several places, and a widened signature would touch them all.
+        _NATIVE_ATTR: native.reindex(series.index).dropna() if len(series) else native,
+        _CURRENCY_ATTR: currency or "EUR",
     })
 
     with _enr._net_lock:
@@ -188,11 +203,17 @@ def preprocess_benchmarks(
             "resolved_ticker": resolved_ticker,
             "requested_ticker": input_ticker,
         })
+        native = canonical_history.attrs.get(_NATIVE_ATTR)
+        if native is not None and len(native):
+            native = native.copy()
+            native.name = resolved_ticker
         catalog[name] = ResolvedBenchmark(
             name=name,
             requested_ticker=input_ticker,
             ticker=resolved_ticker,
             history=canonical_history,
+            history_native=native,
+            currency=canonical_history.attrs.get(_CURRENCY_ATTR) or "EUR",
         )
 
     logger.info(

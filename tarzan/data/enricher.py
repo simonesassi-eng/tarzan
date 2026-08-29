@@ -3111,21 +3111,40 @@ def _set_price_data(
     holding.price_is_fallback = False
 
     if history is not None and not history.empty and "Close" in history:
-        prices = history["Close"].copy()
-        prices, history_currency = _normalize_minor_currency(prices, currency)
+        native = history["Close"].copy()
+        native, history_currency = _normalize_minor_currency(native, currency)
+        # Clean FIRST, convert LAST, so the native and EUR series are the same
+        # series in two currencies rather than two independently cleaned ones.
+        # Every step here is either pointwise (dropna, >0) or date-based
+        # (_clip_to_as_of), so none of them depends on the unit.
+        native = native.dropna()
+        native = native[native > 0]
+        native = _clip_to_as_of(native)
         fx_evidence: dict[str, dict[str, object]] = {}
         if history_currency != "EUR":
-            prices = convert_to_eur(prices, history_currency)
+            prices = convert_to_eur(native, history_currency)
             fx_evidence = prices.attrs.get(_FX_EVIDENCE_ATTR, {})
-        prices = prices.dropna()
-        prices = prices[prices > 0]
-        prices = _clip_to_as_of(prices)
+            prices = prices.dropna()
+            prices = prices[prices > 0]
+        else:
+            prices = native
         if len(prices) > 0:
             # Name the series after the listing it came from: that is how every
             # window resolves which exchange calendar governs it (see
             # stats._series_ticker). The benchmark path already does the same.
             prices.name = holding.ticker or prices.name
             holding.price_history = prices
+            # The SAME series before the FX step, kept so the per-instrument
+            # return columns can be quoted in the currency the instrument
+            # actually trades in. A return is a ratio, and FX does not divide out
+            # of it: RSSY's five sessions to 28 Aug 2026 read −1.28% on its own
+            # Nasdaq tape and −2.18% once each end is converted at its own day's
+            # rate. Both are true statements about different things; the tables
+            # compare instruments, so they use the instrument's own tape.
+            native = native.reindex(prices.index).dropna()
+            native.name = prices.name
+            holding.price_history_native = native
+            holding.price_currency = history_currency
             selected_index = prices.index[-1]
             selected_key = _history_timestamp_key(selected_index)
             current_price = float(prices.iloc[-1])

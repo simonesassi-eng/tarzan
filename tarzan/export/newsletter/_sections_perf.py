@@ -1047,7 +1047,28 @@ def _intraday_column(flags) -> bool:
     return bool(flags) and all(flags)
 
 
-def _perf_name_html(name: str, ticker: str, tags: list) -> str:
+# Short marks for the currencies that have one; the ISO code otherwise, which is
+# clearer than a glyph nobody recognises (kr is three different currencies).
+_CURRENCY_MARK = {"EUR": "\u20ac", "USD": "$", "GBP": "\u00a3", "JPY": "\u00a5"}
+
+
+def _currency_mark(code) -> str:
+    """`` [$]`` / `` [\u20ac]`` for the instrument's own LISTING currency.
+
+    On every row, not only the non-EUR ones: "no mark means euro" is a convention
+    the reader has to be told, and the mark is what says whether a figure was
+    converted. It is the LISTING's currency, not the fund's base currency —
+    EXUS.MI is named "Xtrackers MSCI World ex USA UCITS ETF 1C USD" and trades on
+    Milan in EUR, so it reads [\u20ac] and its returns are unconverted.
+    """
+    code = str(code or "").strip().upper()
+    if not code:
+        return ""
+    return f" [{_CURRENCY_MARK.get(code, code)}]"
+
+
+def _perf_name_html(name: str, ticker: str, tags: list,
+                    currency: object = None) -> str:
     """Instrument label used in the returns tables. Delegates to the shared
     :func:`uni_name`, so the ticker leads the name here exactly as it does in
     the book, the risk table and the optimizer, and the role stays in the group
@@ -1056,8 +1077,8 @@ def _perf_name_html(name: str, ticker: str, tags: list) -> str:
     # Tight line-height: the curated name (already abbreviated in _format so
     # it fits ~2 lines in the 148px column) wraps with an almost-zero gap
     # between line one and two, so a two-line name barely adds row height.
-    return uni_name(name, ticker or "", tags=tuple(tags or ()),
-                    line_height=1.05)
+    return uni_name(f"{name}{_currency_mark(currency)}", ticker or "",
+                    tags=tuple(tags or ()), line_height=1.05)
 
 def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     """Build the per-holding returns snapshot table.
@@ -1224,7 +1245,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             # below still carries the full untruncated name for every holding.)
             "name_html": _perf_name_html(
                 display_instrument_name(isin, ticker, raw_name),
-                display_tk, []),
+                display_tk, [],
+                perf_by_ticker.get(ticker, {}).get("currency")),
             "spark_inner": inner,
             "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
@@ -1454,6 +1476,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
                 "role": role,
+                "currency": r.get("currency"),
                 "d1": r.get("1d"),
                 "live": bool(r.get("live_1d", False)),
                 "tags": [],
@@ -1512,6 +1535,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
                 "role": role,
+                "currency": r.get("currency"),
                 "d1": r.get("1d"),
                 "live": bool(r.get("live_1d", False)),
                 "tags": tags,
@@ -1607,7 +1631,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                         # the curated name is already abbreviated to ~2 tight
                         # lines in _format.
                         "name_html": _perf_name_html(r["name"], r.get("ticker"),
-                                                     r.get("tags")),
+                                                     r.get("tags"),
+                                                     r.get("currency")),
                         "spark_inner": inner,
                         "day_raw": r.get("d1"),
                         "returns": r["returns"],
