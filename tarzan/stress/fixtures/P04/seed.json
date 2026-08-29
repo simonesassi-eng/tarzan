@@ -1,0 +1,37 @@
+{
+  "first_order": "2020-10-01",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-03-01",
+  "note": "fixed income, 6 years, 3 tax years, coupons + per-100 BTP",
+  "order_count": 9,
+  "portfolio_id": "P04",
+  "seed": 1004,
+  "truth": {
+    "cash_from_flows": -39745.27,
+    "currency_by_isin": {
+      "IT0009999999": "EUR",
+      "LU0290357507": "EUR",
+      "LU0290357846": "EUR",
+      "LU0290357929": "EUR"
+    },
+    "currency_by_ticker": {
+      "BTP99": "EUR",
+      "X15E": "EUR",
+      "X25E": "EUR",
+      "XGIN": "EUR"
+    },
+    "kind_by_isin": {
+      "IT0009999999": "BOND",
+      "LU0290357507": "ETF",
+      "LU0290357846": "ETF",
+      "LU0290357929": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IT0009999999": 10000.0,
+      "LU0290357507": 46.0,
+      "LU0290357846": 66.0,
+      "LU0290357929": 64.0
+    }
+  }
+}

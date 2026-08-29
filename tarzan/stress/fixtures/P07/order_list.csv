@@ -1,0 +1,5 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2024-10-01,2024-09-27,buy,IE00B6R52259,Synthetic ISAC,ISAC,100,EUR,96.0,1.0,9600.0,19.0,-9619.0,ETF,stress
+2025-04-14,2025-04-10,sell,IE00B6R52259,Synthetic ISAC,ISAC,-100,EUR,103.0,1.0,10300.0,19.0,10281.0,ETF,stress
+2025-11-03,2025-10-30,buy,IE00B6R52259,Synthetic ISAC,ISAC,60,EUR,99.5,1.0,5970.0,19.0,-5989.0,ETF,stress
+2026-05-18,2026-05-14,buy,IE00B6R52259,Synthetic ISAC,ISAC,40,EUR,108.0,1.0,4320.0,19.0,-4339.0,ETF,stress

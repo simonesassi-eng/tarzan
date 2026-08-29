@@ -1,0 +1,6 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2024-09-02,2024-09-02,buy,US88636J2042,Synthetic RSSB,RSSB,183,USD,33.2226,1.1399,5333.57,19.0,-5352.57,ETF,stress
+2025-01-20,2025-01-20,buy,US88636J3453,Synthetic RSSY,RSSY,86,USD,20.7051,1.0984,1621.12,19.0,-1640.12,ETF,stress
+2025-06-09,2025-06-09,buy,US82889N2282,Synthetic CTAP,CTAP,199,USD,31.4348,1.1207,5581.8,19.0,-5600.8,ETF,stress
+2025-10-27,2025-10-27,buy,US97717Y3523,Synthetic WTIP,WTIP,161,USD,39.0747,1.0742,5856.48,19.0,-5875.48,ETF,stress
+2026-06-15,2026-06-11,sell,US88636J2042,Synthetic RSSB,RSSB,-20,USD,41.7822,1.09,766.65,19.0,747.65,ETF,stress

@@ -1,0 +1,7 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2020-09-07,2020-09-07,buy,US9219097683,Synthetic VEU,VEU,117,USD,73.3081,1.11,7727.07,19.0,-7746.07,ETF,stress
+2022-08-08,2022-08-08,buy,US4642872349,Synthetic EEM,EEM,71,USD,47.1061,1.11,3013.09,19.0,-3032.09,ETF,stress
+2023-06-12,2023-06-08,buy,XX0000000000,Synthetic ZZZZ,ZZZZ,50,EUR,20.0,1.0,1000.0,19.0,-1019.0,ETF,stress
+2024-02-05,2024-02-01,buy,IE00B4L5Y983,Synthetic SWDA,SWDA,3.4567,EUR,97.25,1.0,336.16,19.0,-355.16,ETF,stress
+2026-08-26,2026-08-26,buy,LU0328475792,Synthetic XSX6,XSX6,9,EUR,172.0,1.0,1548.0,19.0,-1567.0,ETF,stress
+2026-08-29,2026-08-29,buy,LU0380865021,Synthetic XESC,XESC,7,EUR,101.5,1.0,710.5,19.0,-729.5,ETF,stress

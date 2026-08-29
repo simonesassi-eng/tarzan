@@ -1,0 +1,37 @@
+{
+  "first_order": "2025-03-04",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-02-06",
+  "note": "entirely liquidated, zero today",
+  "order_count": 6,
+  "portfolio_id": "P09",
+  "seed": 1009,
+  "truth": {
+    "cash_from_flows": 5050.34,
+    "currency_by_isin": {
+      "IE00B579F325": "EUR",
+      "IE00BTJRMP35": "EUR",
+      "LU0274209740": "EUR"
+    },
+    "currency_by_ticker": {
+      "SGLD": "EUR",
+      "XMJP": "EUR",
+      "XMME": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B579F325": "ETF",
+      "IE00BTJRMP35": "ETF",
+      "LU0274209740": "ETF"
+    },
+    "liquidated_isins": [
+      "IE00BTJRMP35",
+      "LU0274209740",
+      "IE00B579F325"
+    ],
+    "quantity_by_isin": {
+      "IE00B579F325": 0.0,
+      "IE00BTJRMP35": 0.0,
+      "LU0274209740": 0.0
+    }
+  }
+}

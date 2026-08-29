@@ -1,0 +1,37 @@
+{
+  "first_order": "2023-09-04",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-06-10",
+  "note": "distributing + dividends + transfers, 3 years",
+  "order_count": 8,
+  "portfolio_id": "P06",
+  "seed": 1006,
+  "truth": {
+    "cash_from_flows": -17067.08,
+    "currency_by_isin": {
+      "IE0005PGDJ30": "EUR",
+      "IE000UWJUW87": "EUR",
+      "IE00B4L5Y983": "EUR",
+      "LU2951555403": "EUR"
+    },
+    "currency_by_ticker": {
+      "CATB": "EUR",
+      "DBMFE": "EUR",
+      "MONEY": "EUR",
+      "SWDA": "EUR"
+    },
+    "kind_by_isin": {
+      "IE0005PGDJ30": "ETF",
+      "IE000UWJUW87": "ETF",
+      "IE00B4L5Y983": "ETF",
+      "LU2951555403": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE0005PGDJ30": 149.0,
+      "IE000UWJUW87": 86.0,
+      "IE00B4L5Y983": 20.0,
+      "LU2951555403": 74.0
+    }
+  }
+}

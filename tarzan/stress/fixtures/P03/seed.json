@@ -1,0 +1,45 @@
+{
+  "first_order": "2022-09-05",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2025-07-21",
+  "note": "EU+US+LSE, 4 years, includes a GBp order",
+  "order_count": 6,
+  "portfolio_id": "P03",
+  "seed": 1003,
+  "truth": {
+    "cash_from_flows": -22528.53,
+    "currency_by_isin": {
+      "IE00B4L5Y983": "EUR",
+      "IE00B6R52259": "EUR",
+      "IE00BJ38QD84": "GBp",
+      "IE00BTJRMP35": "EUR",
+      "US88636J2042": "USD",
+      "US88636J3453": "USD"
+    },
+    "currency_by_ticker": {
+      "ISAC": "EUR",
+      "R2US": "GBp",
+      "RSSB": "USD",
+      "RSSY": "USD",
+      "SWDA": "EUR",
+      "XMME": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B4L5Y983": "ETF",
+      "IE00B6R52259": "ETF",
+      "IE00BJ38QD84": "ETF",
+      "IE00BTJRMP35": "ETF",
+      "US88636J2042": "ETF",
+      "US88636J3453": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B4L5Y983": 78.0,
+      "IE00B6R52259": 43.0,
+      "IE00BJ38QD84": 79.0,
+      "IE00BTJRMP35": 72.0,
+      "US88636J2042": 66.0,
+      "US88636J3453": 57.0
+    }
+  }
+}

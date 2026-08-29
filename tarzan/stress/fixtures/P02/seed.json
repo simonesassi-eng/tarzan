@@ -1,0 +1,37 @@
+{
+  "first_order": "2024-09-02",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-06-15",
+  "note": "US-only USD, 2 years, native tape + FX",
+  "order_count": 5,
+  "portfolio_id": "P02",
+  "seed": 1002,
+  "truth": {
+    "cash_from_flows": -17721.32,
+    "currency_by_isin": {
+      "US82889N2282": "USD",
+      "US88636J2042": "USD",
+      "US88636J3453": "USD",
+      "US97717Y3523": "USD"
+    },
+    "currency_by_ticker": {
+      "CTAP": "USD",
+      "RSSB": "USD",
+      "RSSY": "USD",
+      "WTIP": "USD"
+    },
+    "kind_by_isin": {
+      "US82889N2282": "ETF",
+      "US88636J2042": "ETF",
+      "US88636J3453": "ETF",
+      "US97717Y3523": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "US82889N2282": 199.0,
+      "US88636J2042": 163.0,
+      "US88636J3453": 86.0,
+      "US97717Y3523": 161.0
+    }
+  }
+}

@@ -1,0 +1,6 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2021-09-06,2021-09-06,buy,NL0000009355,Synthetic UNA,UNA,300,EUR,48.0,1.0,14400.0,19.0,-14419.0,STOCK,stress
+2022-07-03,2022-07-03,buy,IE00B579F325,Synthetic SGLD,SGLD,71,EUR,465.0132,1.0,33015.94,19.0,-33034.94,ETF,stress
+2023-04-29,2023-04-29,buy,IE00BKFB6L02,Synthetic UEQC,UEQC,61,EUR,128.6969,1.0,7850.51,19.0,-7869.51,ETF,stress
+2024-02-23,2024-02-23,buy,IE00BFXR6159,Synthetic ENCO,ENCO,83,EUR,36.2443,1.0,3008.28,19.0,-3027.28,ETF,stress
+2025-05-06,2025-05-02,sell,NL0000009355,Synthetic UNA,UNA,-100,EUR,55.0,1.0,5500.0,19.0,5481.0,STOCK,stress

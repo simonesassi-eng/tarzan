@@ -1,0 +1,25 @@
+{
+  "first_order": "2026-08-25",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-08-25",
+  "note": "a single order",
+  "order_count": 1,
+  "portfolio_id": "P08",
+  "seed": 1008,
+  "truth": {
+    "cash_from_flows": -1231.0,
+    "currency_by_isin": {
+      "IE00B4L5Y983": "EUR"
+    },
+    "currency_by_ticker": {
+      "SWDA": "EUR"
+    },
+    "kind_by_isin": {
+      "IE00B4L5Y983": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IE00B4L5Y983": 12.0
+    }
+  }
+}

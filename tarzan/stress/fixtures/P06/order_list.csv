@@ -1,0 +1,9 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2023-09-04,2023-09-04,buy,LU2951555403,Synthetic DBMFE,DBMFE,74,EUR,94.0208,1.0,6957.54,19.0,-6976.54,ETF,stress
+2024-01-15,2024-01-15,transfer_in,IE00B4L5Y983,Synthetic SWDA,SWDA,25,EUR,92.0,1.0,2300.0,19.0,-2319.0,ETF,stress
+2024-03-22,2024-03-22,buy,IE000UWJUW87,Synthetic CATB,CATB,86,EUR,79.5307,1.0,6839.64,19.0,-6858.64,ETF,stress
+2024-06-10,2024-06-10,dividend,LU2951555403,Synthetic DBMFE,DBMFE,0.0,EUR,,1.0,88.0,0.0,88.0,ETF,stress
+2024-10-08,2024-10-08,buy,IE0005PGDJ30,Synthetic MONEY,MONEY,149,EUR,10.9658,1.0,1633.9,19.0,-1652.9,ETF,stress
+2025-02-20,2025-02-20,transfer_out,IE00B4L5Y983,Synthetic SWDA,SWDA,-5,EUR,99.0,1.0,495.0,19.0,476.0,ETF,stress
+2025-06-10,2025-06-10,dividend,LU2951555403,Synthetic DBMFE,DBMFE,0.0,EUR,,1.0,88.0,0.0,88.0,ETF,stress
+2026-06-10,2026-06-10,dividend,LU2951555403,Synthetic DBMFE,DBMFE,0.0,EUR,,1.0,88.0,0.0,88.0,ETF,stress
