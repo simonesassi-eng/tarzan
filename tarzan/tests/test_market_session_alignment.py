@@ -458,13 +458,100 @@ class TestSessionTileNamesItsBasis:
 
         return _session_basis(perf, _M())
 
-    def test_a_non_live_figure_states_the_close_it_measures_from(self):
-        # The Tuesday 08:58 shape: a real close-to-close move, no intraday feed.
-        assert self._basis({"market_open": True, "1d_live": False}) == \
-            "close-to-close vs 14 Aug"
+    def test_a_non_live_figure_names_the_session_it_describes(self):
+        """The Tuesday 08:58 shape: a real close-to-close move, no intraday feed.
+
+        The fixture spans 13 → 14 Aug, so the figure IS the 14 Aug session. This
+        used to assert "close-to-close vs 14 Aug", which names the endpoint as
+        though it were the baseline — the reading that made the Sat 29 Aug 2026
+        digest look like it was reporting the wrong day when the arithmetic was
+        right and only the caption was wrong.
+        """
+        caption = self._basis({"market_open": True, "1d_live": False})
+        assert caption == "14 Aug session, close to close"
+        # The endpoint is named; the baseline is not presented as a reference.
+        assert "vs 14 Aug" not in caption
+        assert "13 Aug" not in caption
 
     def test_a_live_figure_states_the_exchange_hours(self):
         assert self._basis({"market_open": True, "1d_live": True}) == "market open"
+
+
+class TestTheOneDaySpanIsReadOffItsOwnSeries:
+    """``session_span_labels`` replaces a clock-derived label with the two dates
+    the figure actually spans.
+
+    ``_prev_session_label`` answers "the last index date strictly before today",
+    which matches neither end reliably. Demonstrated on the real Saturday book,
+    whose series ended Fri 28 Aug and whose 1D spanned Thu 27 → Fri 28:
+
+      * asked on Sat 29 it returned 28 Aug — the ENDPOINT — and the caption said
+        "close-to-close vs 28 Aug";
+      * asked on the evening of Fri 28, after the close, it returned 27 Aug while
+        the same figure described the 28 Aug session.
+
+    Wrong in opposite directions from one function, which is why the span is now
+    read off the series and its own ``window_anchor`` instead of the clock.
+    """
+
+    @staticmethod
+    def _metrics():
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        idx = pd.bdate_range("2026-08-03", "2026-08-28")   # ends Fri 28 Aug
+        m = PortfolioMetrics()
+        m.portfolio_history = pd.Series(
+            range(100, 100 + len(idx)), index=idx, dtype=float)
+        return m
+
+    def test_the_labels_are_the_two_ends_of_the_move(self):
+        from tarzan.export.newsletter._charts import session_span_labels
+
+        base, end = session_span_labels(self._metrics(), "%d %b")
+
+        assert end == "28 Aug"           # the session the figure describes
+        assert base == "27 Aug"          # the close it is measured from
+        assert base != end
+
+    def test_the_labels_do_not_move_with_the_run_clock(self):
+        """Same series, asked on the Saturday and on the Friday evening. A figure
+        does not change which sessions it spans because of when it is read."""
+        import datetime as dt
+
+        import pytest as _pytest
+
+        from tarzan import runtime
+        from tarzan.export.newsletter._charts import (
+            _prev_session_label,
+            session_span_labels,
+        )
+
+        m = self._metrics()
+        seen, old_labels = set(), set()
+        with _pytest.MonkeyPatch.context() as mp:
+            for day in (dt.date(2026, 8, 29), dt.date(2026, 8, 28)):
+                mp.setattr(runtime, "today", lambda d=day: d)
+                seen.add(session_span_labels(m, "%d %b"))
+                old_labels.add(_prev_session_label(m, "%d %b"))
+
+        assert seen == {("27 Aug", "28 Aug")}, seen
+        # The label this replaced did move, which is the defect.
+        assert old_labels == {"28 Aug", "27 Aug"}, old_labels
+
+    def test_a_series_too_short_to_span_a_day_labels_nothing(self):
+        from tarzan.models.portfolio import PortfolioMetrics
+        from tarzan.export.newsletter._charts import session_span_labels
+
+        m = PortfolioMetrics()
+        m.portfolio_history = pd.Series(
+            [1.0], index=pd.to_datetime(["2026-08-28"]))
+        assert session_span_labels(m, "%d %b") == ("", "")
+
+    def test_no_series_labels_nothing(self):
+        from tarzan.models.portfolio import PortfolioMetrics
+        from tarzan.export.newsletter._charts import session_span_labels
+
+        assert session_span_labels(PortfolioMetrics(), "%d %b") == ("", "")
 
 
 class TestIntradayColumnHeader:
