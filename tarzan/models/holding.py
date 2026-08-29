@@ -127,6 +127,15 @@ class Holding:
     # still describe an old market close.
     fetch_timestamp: Optional[datetime] = None
     price_history: Optional[pd.Series] = field(default=None, repr=False)
+    # The same series before the FX step, plus the currency it is quoted in.
+    # Everything that values the PORTFOLIO reads ``price_history`` (EUR, the
+    # book's currency); the per-instrument return columns read this, because a
+    # return is a ratio and FX does not divide out of one — RSSY's five sessions
+    # to 28 Aug 2026 read −1.28% on its own tape and −2.18% converted end to end.
+    # ``price_currency`` is the LISTING's currency, not the fund's base currency:
+    # EXUS.MI is named "…UCITS ETF 1C USD" and trades on Milan in EUR.
+    price_history_native: Optional[pd.Series] = field(default=None, repr=False)
+    price_currency: Optional[str] = None
     price_observation_timestamp: Optional[datetime] = None
     price_is_fallback: bool = False
 

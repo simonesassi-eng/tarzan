@@ -1163,6 +1163,27 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     # Per-holding performance
     # ------------------------------------------------------------------
+    @staticmethod
+    def _own_tape(series, native, currency: Optional[str]) -> tuple:
+        """``(series, currency)`` for a per-instrument row: the instrument's OWN
+        tape, not the book's currency.
+
+        A return is a ratio and FX does not divide out of one. RSSY's five
+        sessions to 28 Aug 2026 read −1.28% on its own Nasdaq tape and −2.18%
+        with each end converted at its own day's rate; the second is a true
+        statement about a euro investor's outcome, the first is what the
+        instrument did, and a table that compares instruments to each other (and
+        to the figure the reader sees on the issuer's or Yahoo's page) needs the
+        first. Everything that values the PORTFOLIO keeps reading the EUR series.
+
+        Falls back to the EUR series when no native one was kept, so a row is
+        never dropped for want of a tape — 57 of the 81 rows list in EUR anyway,
+        where the two series are the same object.
+        """
+        if native is not None and len(native) >= 2:
+            return native, (currency or "EUR")
+        return series, (currency or "EUR")
+
     def _holding_performance(self, ctx: dict) -> None:
         rows = []
         ab_record = self._alpha_beta_benchmark(ctx)
@@ -1177,13 +1198,16 @@ class MetricsEngine:
                 continue
             if h.price_history is None or len(h.price_history) < 2:
                 continue
-            s = _cap_to_years(h.price_history, 5)
+            tape, ccy = self._own_tape(h.price_history, h.price_history_native,
+                                       h.price_currency)
+            s = _cap_to_years(tape, 5)
             # Holdings have already crossed the enrichment preprocessing
             # boundary: ``h.ticker`` is the sole full operational ticker.
             row: dict = {
                 "ticker": h.ticker,
                 "name": h.name or h.ticker,
                 "type": "In portfolio",
+                "currency": ccy,
             }
             _populate_perf_row(row, s, bench_history, self._rf_daily(ctx))
             rows.append(row)
@@ -1213,7 +1237,9 @@ class MetricsEngine:
                 # tables and out of the benchmark projections.
                 "type": "Target not held",
             }
-            _populate_perf_row(row, _cap_to_years(h.price_history, 5),
+            tape, row["currency"] = self._own_tape(
+                h.price_history, h.price_history_native, h.price_currency)
+            _populate_perf_row(row, _cap_to_years(tape, 5),
                                bench_history, self._rf_daily(ctx))
             rows.append(row)
 
@@ -1221,11 +1247,14 @@ class MetricsEngine:
         # history is used for every metric and chart.
         catalog: dict[str, ResolvedBenchmark] = ctx.get("_benchmark_catalog", {})
         for record in catalog.values():
-            bs = _cap_to_years(record.history, 5)
+            tape, ccy = self._own_tape(record.history, record.history_native,
+                                       record.currency)
+            bs = _cap_to_years(tape, 5)
             row = {
                 "ticker": record.ticker,
                 "name": record.name,
                 "type": "Benchmark index",
+                "currency": ccy,
             }
             _populate_perf_row(row, bs, bench_history, self._rf_daily(ctx))
             rows.append(row)
@@ -1270,18 +1299,42 @@ class MetricsEngine:
             usable = None if series is None else series.dropna()
             if usable is None or len(usable) == 0:
                 continue
-            quote = current_session.pick_quote(
-                candidates.get(record.ticker, []), quotes,
-                float(usable.iloc[-1]),
-            )
-            price = quote.get("price")
-            if not price:
+
+            def _stamp(tape):
+                """Stamp one tape against ITS OWN last close, or None.
+
+                Each tape resolves its own quote, because the level gate compares
+                a price against the reference it is handed: an EUR-per-unit close
+                against a native quote fails by the whole FX rate. That is why the
+                EUR tape of a USD listing is never stamped (0 of 24 on 29 Aug
+                2026) while its native tape is — and the two must be attempted
+                INDEPENDENTLY. Stamping them in sequence, with the EUR failure
+                short-circuiting the loop, left every native USD tape a session
+                behind: RSSY read +0.74% (Wed→Thu) where its own Friday session was
+                −0.37%, on the very rows whose reason for being native is that the
+                reader checks them against Yahoo.
+                """
+                clean = None if tape is None else tape.dropna()
+                if clean is None or len(clean) == 0:
+                    return None
+                q = current_session.pick_quote(
+                    candidates.get(record.ticker, []), quotes,
+                    float(clean.iloc[-1]))
+                p = q.get("price")
+                if not p:
+                    return None
+                return current_session.stamp_today(
+                    tape, today, float(p), q, ticker=record.ticker)
+
+            history = _stamp(series)
+            native_stamped = _stamp(record.history_native)
+            if history is None and native_stamped is None:
                 continue
-            history = current_session.stamp_today(
-                series, today, float(price), quote, ticker=record.ticker)
-            if history is None:
-                continue        # the quote belongs on no session for this venue
-            ctx["_benchmark_catalog"][name] = replace(record, history=history)
+            ctx["_benchmark_catalog"][name] = replace(
+                record,
+                history=history if history is not None else record.history,
+                history_native=(native_stamped if native_stamped is not None
+                                else record.history_native))
             stamped.append(record.ticker)
 
         if stamped:
