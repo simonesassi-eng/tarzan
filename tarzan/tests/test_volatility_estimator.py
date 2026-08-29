@@ -164,13 +164,19 @@ class TestTheLinesAreComparable:
         window against 21 in another's, and weekend zero-returns would deflate the
         estimate while √252 annualizes as if they were not there.
 
-        Density, not weekday labels: ``normalize_index`` collapses a tz-aware
-        index through UTC, so a Milan bar stamped at local midnight lands on the
-        previous calendar date and every Monday reads as a Sunday. The real target
-        series carries 69 such Sunday labels while still holding exactly one row
-        per session — a uniform relabelling, which leaves the return sequence (and
-        therefore every σ) untouched. Asserting "no weekend rows" would pass on a
-        synthetic fixture and promise something production does not hold.
+        Density, not weekday labels. When this was written ``normalize_index``
+        collapsed a tz-aware index through UTC, so a Milan bar stamped at local
+        midnight landed on the previous calendar date and every Monday read as a
+        Sunday: the real target series carried 69 such Sunday labels while still
+        holding exactly one row per session. That relabelling was uniform, so it
+        never touched the return sequence or any σ — and it has since been fixed
+        (``normalize_index`` now drops the tz at local wall time), so the live
+        series carry no weekend rows at all.
+
+        The assertion stays on density anyway. It is the property that makes 21
+        rows mean 21 sessions on every line, it survives whatever the index
+        labelling does, and "no weekend rows" would be a stricter promise than the
+        estimator actually needs.
         """
         m = self._metrics()
         for name, s in [("portfolio", m.portfolio_history),
