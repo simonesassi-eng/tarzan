@@ -1194,7 +1194,14 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         is_holding = type_col.str.contains("portfolio") if type_col is not None else None
         holdings_perf = hp[is_holding] if is_holding is not None else hp
         for _, pr in holdings_perf.iterrows():
-            perf_by_ticker[str(pr.get("ticker", ""))] = {k: pr.get(k) for k in period_keys}
+            # ``period_keys`` alone dropped the listing currency, so every row in
+            # the holdings table rendered without its marker while the watchlist
+            # (which reads the frame row directly) carried all 55. Projecting a
+            # fixed key list is what hid it: a new column is invisible here until
+            # it is named.
+            projected = {k: pr.get(k) for k in period_keys}
+            projected["currency"] = pr.get("currency")
+            perf_by_ticker[str(pr.get("ticker", ""))] = projected
 
     # Curated taxonomy (asset_class already on df) for the shared grouping
     # engine, so the snapshot groups exactly like every other instrument table.
