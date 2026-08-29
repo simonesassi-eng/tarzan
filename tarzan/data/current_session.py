@@ -35,10 +35,18 @@ and ``_valuation``, which is why ``total_value`` and the series terminal could
 not agree by construction.
 
 Pinned runs (``--as_of`` / ``--deterministic``) stamp nothing: no live
-observation may enter a reproducible run. Weekend runs stamp nothing either —
-the last real close IS the current value (Yahoo shows exactly that on a closed
-market), and appending a weekend-dated point slides ``window_anchor`` onto the
-day a month before the WEEKEND rather than the last session.
+observation may enter a reproducible run.
+
+Weekend runs DO stamp. What may never be written is a point on a date that is not
+a session — appending a Saturday-dated point slides ``window_anchor`` onto the day
+a month before the WEEKEND rather than the last session — and that is now checked
+per venue against the exchange calendar (:func:`stamp_date`) instead of by a
+weekday test on the run's own clock. Refusing the whole weekend also refused a
+FRIDAY close that the quote endpoint was carrying while the daily-bar feed was
+not, which is how the Sat 29 Aug 2026 digest reported Thursday's session: Yahoo
+held a 28 Aug row with a null close for all sixteen holdings, and every quote
+carried the real Friday close. On a weekday that gap self-heals through the stamp,
+so it surfaced only on the Saturday issue.
 """
 
 from __future__ import annotations
@@ -118,8 +126,49 @@ def quote_observed_at(quote: dict) -> Optional[datetime]:
         return None
 
 
+def stamp_date(quote: dict, today, ticker: str = "") -> Optional[pd.Timestamp]:
+    """The SESSION date this quote's price belongs on, or None when it belongs on
+    no session at all.
+
+    Two rules, in order. The point belongs to the session the quote was OBSERVED
+    in, read on the venue's own clock — not to the run's calendar day. And that
+    date must be a real session for the venue, per the vendored exchange
+    calendar: a price series may only ever carry session dates.
+
+    The second rule is what used to be a weekday test in
+    :func:`stamping_allowed`, and it is strictly stronger. Rejecting Saturday and
+    Sunday outright also refused to write a FRIDAY close that the quote endpoint
+    was carrying and the history endpoint was not, which is how the Sat 29 Aug
+    2026 08:02 digest reported Thursday's session: Yahoo's daily bars held a
+    28 Aug row with a null close for all sixteen holdings, while every quote
+    carried the real Friday close (XDEQ.MI 79.73, observed Fri 16:20, against a
+    series terminating at its own prev_close of 79.11). Dating from the
+    observation puts that on Friday, where it belongs; asking the calendar
+    whether the resolved date is a session is what keeps a Saturday-dated quote
+    out — and covers exchange holidays, which the weekday rule never did.
+    """
+    observed = quote_observed_at(quote)
+    day = pd.Timestamp(today)
+    if observed is not None:
+        venue_day = observed
+        try:
+            from tarzan.data.market_quotes import _exchange_tz
+
+            tz = _exchange_tz(ticker)
+            if tz is not None:
+                venue_day = observed.astimezone(tz)
+        except Exception:  # noqa: BLE001 — a clock must never break a stamp
+            pass
+        day = pd.Timestamp(venue_day.date())
+    if day is None or pd.isna(day):
+        return None
+    from tarzan.data.exchange_calendar import is_session
+
+    return day if is_session(ticker, day.date()) else None
+
+
 def stamp_today(series: pd.Series, today, today_value: float,
-                quote: dict, ticker: str = "") -> pd.Series:
+                quote: dict, ticker: str = "") -> Optional[pd.Series]:
     """Return ``series`` with today's point set to ``today_value`` and the prior
     session's close reconciled onto the same ruler via ``quote``.
 
@@ -142,28 +191,20 @@ def stamp_today(series: pd.Series, today, today_value: float,
     Dating it correctly repairs the gap AND leaves settled history alone, so the
     1D stays available and correct instead of measuring two sessions under a
     one-session label.
-    """
-    out = series.copy()
-    # The point belongs to the session the quote was OBSERVED in, not to the
-    # run's calendar day. Before Xetra opens on a Tuesday, ``regularMarketPrice``
-    # is still Monday's closing quote (``regularMarketTime`` says so), and dating
-    # it Tuesday moved the whole window one session forward: AVWS.DE's 5D then
-    # anchored on 19 Aug and read -0.55% where its own five sessions ending on
-    # the observed one anchor 18 Aug and read -1.04%. Falls back to ``today``
-    # when the provider dated nothing.
-    observed = quote_observed_at(quote)
-    if observed is not None:
-        venue_day = observed
-        try:
-            from tarzan.data.market_quotes import _exchange_tz
 
-            tz = _exchange_tz(ticker or str(series.name or ""))
-            if tz is not None:
-                venue_day = observed.astimezone(tz)
-        except Exception:  # noqa: BLE001 — a clock must never break a stamp
-            pass
-        today = pd.Timestamp(venue_day.date())
-    stamp = today.tz_localize(series.index.tz) if series.index.tz else today
+    Returns None when the quote belongs on no session (see :func:`stamp_date`),
+    so a caller writes neither the series nor the price it would have paired with.
+    """
+    # Before Xetra opens on a Tuesday, ``regularMarketPrice`` is still Monday's
+    # closing quote (``regularMarketTime`` says so), and dating it Tuesday moved
+    # the whole window one session forward: AVWS.DE's 5D then anchored on 19 Aug
+    # and read -0.55% where its own five sessions ending on the observed one
+    # anchor 18 Aug and read -1.04%.
+    day = stamp_date(quote, today, ticker or str(series.name or ""))
+    if day is None:
+        return None
+    out = series.copy()
+    stamp = day.tz_localize(series.index.tz) if series.index.tz else day
     prev_eur = prev_close_eur(quote, today_value)
     if prev_eur is not None:
         # Dated on the venue's OWN calendar: the session before the Tuesday
@@ -186,19 +227,29 @@ def stamp_today(series: pd.Series, today, today_value: float,
 def stamping_allowed() -> tuple[bool, Optional[pd.Timestamp]]:
     """``(allowed, today)`` for this run — the one gate both callers share.
 
-    ``allowed`` is False for a pinned/reproducible run (no live observation may
-    enter one) and on a weekend/holiday-less Saturday or Sunday, where there is
-    no live session to stamp.
+    ``allowed`` is False only for a pinned/reproducible run: no live observation
+    may enter one.
+
+    It used to also refuse Saturdays and Sundays, on the reasoning that there is
+    no live session to stamp at the weekend. True, and it conflated two things —
+    "no session is in progress" with "there is no newer close to write". When the
+    daily-bar feed is a session behind, the quote endpoint still carries that
+    session's official close, and :func:`stamp_date` dates it onto its own venue
+    day. Refusing the whole weekend is what made the Sat 29 Aug 2026 digest report
+    THURSDAY: Yahoo's history held a 28 Aug row with a null close for all sixteen
+    holdings while every quote carried the real Friday close. On a weekday the
+    same gap self-heals through the stamp, which is why this only ever surfaced on
+    the Saturday issue.
+
+    The weekend is now rejected where it belongs — per venue, by the exchange
+    calendar, on the date the observation actually falls on — which also covers
+    the exchange holidays the old weekday rule admitted it did not model.
     """
     from tarzan import runtime
 
     if not runtime.allows_live_transport():
         return False, None
-    today = pd.Timestamp(runtime.today())
-    # ponytail: weekends only, holidays not modelled (see stats._window_end).
-    if today.weekday() >= 5:
-        return False, today
-    return True, today
+    return True, pd.Timestamp(runtime.today())
 
 
 def _candidates(tickers) -> dict[str, list[str]]:
@@ -255,8 +306,14 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         # is ``quantity * price`` for every instrument kind, with no second
         # application of the bond per-100 convention.
         stamped_price = float(price)
-        holding.price_history = stamp_today(
+        history = stamp_today(
             series, today, stamped_price, quote, ticker=str(holding.ticker))
+        if history is None:
+            # The quote belongs on no session for this venue, so neither the
+            # series nor the price it would pair with may be written: they are
+            # one observation and must not diverge.
+            continue
+        holding.price_history = history
         holding.current_price = stamped_price
         quantity = float(getattr(holding, "quantity", 0.0) or 0.0)
         holding.current_value = quantity * stamped_price

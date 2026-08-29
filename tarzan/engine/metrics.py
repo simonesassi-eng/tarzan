@@ -1277,12 +1277,11 @@ class MetricsEngine:
             price = quote.get("price")
             if not price:
                 continue
-            ctx["_benchmark_catalog"][name] = replace(
-                record,
-                history=current_session.stamp_today(
-                    series, today, float(price), quote,
-                    ticker=record.ticker),
-            )
+            history = current_session.stamp_today(
+                series, today, float(price), quote, ticker=record.ticker)
+            if history is None:
+                continue        # the quote belongs on no session for this venue
+            ctx["_benchmark_catalog"][name] = replace(record, history=history)
             stamped.append(record.ticker)
 
         if stamped:

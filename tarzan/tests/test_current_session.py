@@ -138,9 +138,13 @@ class TestNoLiveObservationEntersAReproducibleRun:
         assert cs.apply_to_holdings([h]) == ()
         assert h.current_price == 40.31
 
-    def test_a_weekend_run_stamps_nothing(self, monkeypatch):
-        # Sat 22 Aug 2026: no live session, and a weekend-dated point would
-        # slide window_anchor onto the day a month before the WEEKEND.
+    def test_an_undated_weekend_quote_stamps_nothing(self, monkeypatch):
+        """Sat 22 Aug 2026 with a quote the provider dated nothing.
+
+        The date falls back to the run's own day, which is not a session, so
+        nothing is written: a weekend-dated point would slide window_anchor onto
+        the day a month before the WEEKEND rather than the last session.
+        """
         monkeypatch.setattr("tarzan.runtime.today",
                             lambda: datetime.date(2026, 8, 22))
         h = _holding("EXUS.MI", [40.5, 40.6, 40.31], quantity=1.0)
@@ -148,6 +152,107 @@ class TestNoLiveObservationEntersAReproducibleRun:
 
         assert cs.apply_to_holdings([h]) == ()
         assert h.price_history.index[-1] != pd.Timestamp("2026-08-22")
+
+    def test_a_holiday_dated_quote_stamps_nothing(self, monkeypatch):
+        """The weekday rule never modelled holidays; the calendar does.
+
+        15 Aug 2026 is a Saturday, so take Milan's Assumption closure of Friday
+        15 Aug 2025 — a WEEKDAY the venue did not trade. A quote dated there
+        belongs on no session and must not be written.
+        """
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2025, 8, 15))
+        h = _holding("EXUS.MI", [40.5, 40.6, 40.31], quantity=1.0,
+                     start="2025-08-11")
+        _quotes(monkeypatch, {"EXUS.MI": {"price": 40.4, "prev_close": 40.31}})
+
+        assert cs.apply_to_holdings([h]) == ()
+
+
+class TestAWeekendRunStillRecoversTheLastSession:
+    """The Saturday digest read THURSDAY.
+
+    Refusing to stamp at the weekend also refused a FRIDAY close that the quote
+    endpoint was carrying while Yahoo's daily bars were not: on Sat 29 Aug 2026 the
+    28 Aug row came back with a null close for all sixteen holdings, and every
+    quote held the real Friday close — XDEQ.MI at 79.73, observed Fri 16:20,
+    against a series terminating at its own prev_close of 79.11.
+
+    On a weekday the same gap self-heals through the stamp, which is why this only
+    ever surfaced on the Saturday issue. The rule is not "never at the weekend",
+    it is "never onto a non-session date".
+    """
+
+    FRI = datetime.datetime(2026, 8, 28, 16, 20,
+                            tzinfo=datetime.timezone.utc).timestamp()
+
+    def _saturday(self, monkeypatch):
+        monkeypatch.setattr("tarzan.runtime.today",
+                            lambda: datetime.date(2026, 8, 29))
+
+    def test_a_friday_dated_quote_lands_on_friday(self, monkeypatch):
+        self._saturday(monkeypatch)
+        # A series that stops on Thursday 27th, exactly as the vendor left it.
+        h = _holding("XDEQ.MI", [78.99, 79.12, 79.11], quantity=100.0,
+                     start="2026-08-25")
+        _quotes(monkeypatch, {"XDEQ.MI": {
+            "price": 79.73, "prev_close": 79.11, "time": self.FRI}})
+
+        assert cs.apply_to_holdings([h]) == ("XDEQ.MI",)
+        assert h.price_history.index[-1] == pd.Timestamp("2026-08-28")
+        assert float(h.price_history.iloc[-1]) == pytest.approx(79.73)
+        # Thursday's settled close is untouched, so the 1D spans one session.
+        assert float(h.price_history.loc[pd.Timestamp("2026-08-27")]) == \
+            pytest.approx(79.11)
+
+    def test_the_valuation_moves_with_it(self, monkeypatch):
+        self._saturday(monkeypatch)
+        h = _holding("XDEQ.MI", [78.99, 79.12, 79.11], quantity=100.0,
+                     start="2026-08-25")
+        _quotes(monkeypatch, {"XDEQ.MI": {
+            "price": 79.73, "prev_close": 79.11, "time": self.FRI}})
+
+        cs.apply_to_holdings([h])
+
+        assert h.current_price == pytest.approx(79.73)
+        assert h.current_value == pytest.approx(7973.0)
+        assert h.price_is_fallback is False
+
+    def test_the_one_day_move_becomes_fridays(self, monkeypatch):
+        """The number the reader was shown on Saturday morning.
+
+        Before: the series ended Thursday, so "1D" measured Wed→Thu. After: it
+        ends Friday and measures Thu→Fri, which is what a Saturday reader means by
+        the last session.
+        """
+        from tarzan.engine.stats import compute_period_return
+
+        self._saturday(monkeypatch)
+        h = _holding("XDEQ.MI", [78.99, 79.12, 79.11], quantity=100.0,
+                     start="2026-08-25")
+        before = compute_period_return(h.price_history, "1d")
+        _quotes(monkeypatch, {"XDEQ.MI": {
+            "price": 79.73, "prev_close": 79.11, "time": self.FRI}})
+
+        cs.apply_to_holdings([h])
+        after = compute_period_return(h.price_history, "1d")
+
+        assert before == pytest.approx((79.11 / 79.12 - 1) * 100, abs=1e-6)
+        assert after == pytest.approx((79.73 / 79.11 - 1) * 100, abs=1e-6)
+
+    def test_a_saturday_dated_quote_is_still_refused(self, monkeypatch):
+        """The guard is on the resolved DATE, not on the run day, so a provider
+        that stamps a weekend instant is still rejected."""
+        self._saturday(monkeypatch)
+        sat = datetime.datetime(2026, 8, 29, 10, 0,
+                                tzinfo=datetime.timezone.utc).timestamp()
+        h = _holding("XDEQ.MI", [78.99, 79.12, 79.11], quantity=100.0,
+                     start="2026-08-25")
+        _quotes(monkeypatch, {"XDEQ.MI": {
+            "price": 79.73, "prev_close": 79.11, "time": sat}})
+
+        assert cs.apply_to_holdings([h]) == ()
+        assert h.price_history.index[-1] == pd.Timestamp("2026-08-27")
 
 
 class TestTheStampBelongsToTheObservedSession:
