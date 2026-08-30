@@ -21,11 +21,39 @@ exchange_country:
 # ---------------------------------------------------------------------------
 # ISIN probing suffixes
 # ---------------------------------------------------------------------------
-# Probed in order, so the venues an EUR investor actually trades come first
-# and a later entry only ever answers what the earlier ones could not. Munich
-# (.MU) is last: it is the sole Yahoo venue carrying a price for some
-# swap-based UCITS listings (IS39 among them), and without it those resolve to
-# no history at all.
+# This order does TWO jobs, and it is worth knowing both before editing it.
+#
+#  1. It is the rank tiebreak (``enricher._suffix_priority``): when two candidate
+#     listings tie on everything that matters — curated, name overlap, currency —
+#     the one with the earlier suffix wins.
+#  2. It is the probe order, and the sweep is SUFFIX-MAJOR (every OpenFIGI root on
+#     .MI, then every root on .SG, ...) under a budget of ``_MAX_RESOLVE_FETCHES``
+#     candidates. So a suffix late in this list may never be probed at all for an
+#     ISIN that produced many roots.
+#
+# Milan first: it is where this book actually trades. Munich (.MU) is last on
+# purpose — it is the sole Yahoo venue carrying a price for some swap-based UCITS
+# listings (IS39 among them), so it must be reachable but must not win a tie.
+#
+# TWO THINGS HERE ARE NOT JUSTIFIED, stated so nobody assumes they were reasoned:
+#
+# * .SG (Stuttgart) outranks .DE (Xetra). Stuttgart is a retail venue and Xetra is
+#   the liquid German one, and the resolver's own candidate walk complains about
+#   exactly this: "a thin Stuttgart '.SG' line that yfinance quotes but has no
+#   daily series would otherwise win on suffix priority". The order predates the
+#   rename and carries no recorded rationale.
+# * .SW is last, which is NOT the Munich argument. Munich is a fallback-only venue;
+#   SIX Swiss is the PRIMARY listing of a Swiss instrument, so being probed last
+#   and losing every tie is backwards for the one case it exists to serve. It sits
+#   here only because appending was the change that could not perturb the budget or
+#   the tie order for the 91 instruments already resolving correctly.
+#
+# The deeper issue is that one flat list conflates "which venue do I prefer" with
+# "which venue can answer at all", and the fetch budget makes the two interact.
+# Preferring the instrument's OWN primary venue — derivable from the ISIN country
+# prefix, CH->.SW, GB->.L, IT->.MI — and keeping this list purely as the fallback
+# sweep would separate them. Not done: it changes resolution for every instrument,
+# so it wants its own measurement against the real book.
 isin_exchange_suffixes:
   - ".MI"
   - ".SG"
@@ -35,12 +63,9 @@ isin_exchange_suffixes:
   - ".L"
   - ".PA"
   - ".MU"
-  # SIX Swiss, last for the same reason Munich is: it answers only what the
-  # others cannot. Its absence made every Swiss listing UNREACHABLE by ISIN —
-  # Nestle's own ISIN could not reach NESN.SW at all, so the resolver ranked
-  # whatever else the sweep had turned up and settled on a different company.
-  # The wider venue list the enricher probes for a EUR quote already carries
-  # .SW; the two disagreed and only one direction was tested.
+  # SIX Swiss. Without it every Swiss listing was UNREACHABLE by ISIN: Nestle's
+  # own ISIN could not reach NESN.SW at all. See the note above on why last is
+  # the wrong place for it and why it is here anyway.
   - ".SW"
 
 # ---------------------------------------------------------------------------
