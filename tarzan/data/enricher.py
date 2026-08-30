@@ -274,15 +274,10 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
 # Convention: the minor-unit code is the 2-letter currency code followed by
 # a lowercase letter (e.g. GBp, ZAc, ILa). There is no FX pair for these
 # codes on yfinance, so we must rescale to the major unit first.
-_MINOR_TO_MAJOR_CURRENCY: dict[str, str] = {
-    "GBp": "GBP",   # British pence
-    "GBX": "GBP",   # British pence (alternate code, uppercase)
-    "ZAc": "ZAR",   # South African cents
-    "ZAC": "ZAR",
-    "ILa": "ILS",   # Israeli agorot
-    "ILA": "ILS",
-    "ZWL": "ZWL",   # edge case, keep as-is
-}
+# The list itself lives in tarzan.models.currency, below both this layer and the
+# engine, because the seed path in returns_builder needed the same fact and had no
+# way to reach it — so it valued a GBp position 100x too high.
+from tarzan.models.currency import MINOR_TO_MAJOR as _MINOR_TO_MAJOR_CURRENCY
 
 
 def _normalize_minor_currency(
