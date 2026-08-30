@@ -1113,14 +1113,17 @@ def _resolve_isin(
     # nothing, and whose currency disagrees could still win on venue priority
     # alone — and be cached as the authoritative mapping for that ISIN.
     #
-    # That is not a hypothetical. Nestle's own ISIN resolved to NESR.SG, a
-    # different company on a different exchange, purely because SIX Swiss was
-    # missing from the probe list so the real listing was never a candidate, and
-    # nothing then refused the best of the wrong ones. The position was valued at
-    # another company's prices, with no diagnostic.
+    # No live instance is on record — this is a guard against a shape the ranking
+    # permits, not a fix for an observed wrong answer. (It was written after a
+    # suspected one that turned out to be correct: NESR.SG really is Nestle on
+    # Stuttgart, and only the bare NESR on Nasdaq is a different company. Reading a
+    # symbol without its venue is what made it look wrong.)
     #
     # Refusing leaves the instrument on the carry-flat/synthetic rung, which is
-    # DEGRADED and disclosed. A confident wrong company is not.
+    # DEGRADED and disclosed. A confidently wrong listing would not be. Verified
+    # against the real book before shipping: all 35 held ISINs still resolve,
+    # including the nine that settle on a non-curated symbol — each of those has a
+    # name overlap or a currency agreement.
     identified = [
         c for c in candidates
         if cfg.instrument_taxonomy_has(c.symbol)
