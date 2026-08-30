@@ -1,0 +1,33 @@
+{
+  "first_order": "2022-04-05",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-11-08",
+  "note": "hybrid income: stock dividend + ETF distribution + bond coupon",
+  "order_count": 15,
+  "portfolio_id": "P13",
+  "seed": 1013,
+  "truth": {
+    "cash_from_flows": -36718.19,
+    "currency_by_isin": {
+      "IT0009999999": "EUR",
+      "LU0290357929": "EUR",
+      "US4781601046": "USD"
+    },
+    "currency_by_ticker": {
+      "BTP99": "EUR",
+      "JNJ": "USD",
+      "XGIN": "EUR"
+    },
+    "kind_by_isin": {
+      "IT0009999999": "BOND",
+      "LU0290357929": "ETF",
+      "US4781601046": "STOCK"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "IT0009999999": 8000.0,
+      "LU0290357929": 118.0,
+      "US4781601046": 82.0
+    }
+  }
+}

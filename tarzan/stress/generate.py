@@ -80,6 +80,28 @@ BTP = [("IT0009999999", "BTP99", "BOND", "EUR")]
 #: A single stock with no cached tape.
 STOCK = [("NL0000009355", "UNA", "STOCK", "EUR")]
 
+# --- Single stocks, by venue -------------------------------------------------
+# The corpus was 46 ETF orders, 6 BOND and 2 STOCK, and its one stock was
+# EUR-quoted on Euronext Amsterdam. So nothing exercised a US single stock, a
+# suffixless US ticker, a stock in a minor unit, or a stock with no TER — which is
+# how a whole class of venue-resolution defect went unnoticed for 71 runs.
+#
+# Real, public, large-cap instruments with their real ISINs; every SIZE below is
+# invented from the book's seed. None has a cached tape, so each prices carry-flat
+# from its own order ladder — the same footing as every other synthetic sleeve
+# here, which is enough to exercise kind=STOCK, the currency and venue paths, the
+# no-TER path and the dividend path.
+US_STOCK = [
+    ("US0378331005", "AAPL", "STOCK", "USD"),
+    ("US5949181045", "MSFT", "STOCK", "USD"),
+    ("US4781601046", "JNJ", "STOCK", "USD"),     # a reliable dividend payer
+]
+#: LSE, quoted in PENCE — the minor-unit rescale on a STOCK rather than an ETF.
+UK_STOCK = [("GB0009895292", "AZN", "STOCK", "GBp")]
+#: SIX Swiss. CHF has no FX series in the offline cache, so this is the
+#: currency-known-but-unconvertible path on a stock.
+CH_STOCK = [("CH0038863350", "NESN", "STOCK", "CHF")]
+
 ORDER_COLUMNS = [
     "date", "trade_date", "type", "isin", "name", "ticker", "quantity",
     "currency", "price_native", "fx_rate", "gross_eur", "fees_eur", "net_eur",
@@ -299,6 +321,83 @@ def _p10(rng, emit):
     emit(_row(dt.date(2026, 8, 26), dt.date(2026, 8, 26), "buy", EU_ETF[5], 9, 172.0))
 
 
+def _p11(rng, emit):
+    """US only, stocks AND ETFs, every leg USD on a suffixless ticker.
+
+    The book the corpus was missing. A US stock differs from a US ETF in ways the
+    pipeline cares about: it carries no TER (so it enters the avg_ter weighted
+    average with nothing to contribute), the curated taxonomy does not describe it
+    (so its asset class comes from nowhere), and it pays a dividend rather than a
+    distribution.
+    """
+    d = dt.date(2024, 3, 4)
+    for inst, base in zip(US_STOCK[:2] + US_ETF[:2], (170, 400, 30, 28)):
+        emit(_row(d, d, "buy", inst, rng.randint(8, 60), _price(rng, base),
+                  fx=round(rng.uniform(1.05, 1.15), 4)))
+        d += dt.timedelta(days=120)
+    # A dividend on the STOCK, once a year. Stocks pay dividends; ETFs distribute.
+    for year in (2025, 2026):
+        emit(_row(dt.date(year, 5, 12), dt.date(year, 5, 12), "dividend",
+                  US_STOCK[0], 61.0, 0))
+    # A partial sell, so the book has a realized leg as well as open positions.
+    emit(_row(dt.date(2026, 7, 20), dt.date(2026, 7, 16), "sell", US_STOCK[1], 5,
+              _price(rng, 430), fx=1.09))
+
+
+def _p12(rng, emit):
+    """FOUR venues in one book, so four exchange calendars govern one portfolio.
+
+    A US stock, a Milan ETF, a London stock in pence and a Swiss stock in francs.
+    Every US holiday is a Milan trading day and the reverse, so a book like this is
+    where a venue resolved to the wrong calendar — or to none — shows up as one
+    sleeve's window sliding while its neighbours' hold.
+    """
+    d = dt.date(2023, 6, 6)
+    plan = [(US_STOCK[0], 165.0, 1.09), (EU_ETF[0], 96.0, 1.0),
+            (UK_STOCK[0], 11200.0, 0.86), (CH_STOCK[0], 104.0, 0.96)]
+    for inst, base, fx in plan:
+        emit(_row(d, d, "buy", inst, rng.randint(6, 45), _price(rng, base), fx=fx))
+        d += dt.timedelta(days=190)
+    # Top up the Swiss leg: CHF has no FX series offline, so a second order proves
+    # the unconvertible-currency path survives more than one visit.
+    emit(_row(dt.date(2026, 4, 14), dt.date(2026, 4, 10), "buy", CH_STOCK[0],
+              rng.randint(4, 20), _price(rng, 112), fx=0.94))
+
+
+def _p13(rng, emit):
+    """Every income type in one book: a stock DIVIDEND, an ETF DISTRIBUTION and a
+    bond COUPON, so the three cannot be conflated by a check that only ever saw one.
+    """
+    d = dt.date(2022, 4, 5)
+    emit(_row(d, d, "buy", US_STOCK[2], rng.randint(20, 90), _price(rng, 165),
+              fx=1.08))
+    emit(_row(d + dt.timedelta(days=60), d + dt.timedelta(days=60), "buy",
+              BOND_ETF[2], rng.randint(30, 140), _price(rng, 100)))
+    emit(_row(d + dt.timedelta(days=150), d + dt.timedelta(days=150), "buy",
+              BTP[0], 8000, 99.0))
+    for year in (2023, 2024, 2025, 2026):
+        emit(_row(dt.date(year, 3, 15), dt.date(year, 3, 15), "dividend",
+                  US_STOCK[2], 74.0, 0))
+        emit(_row(dt.date(year, 9, 20), dt.date(year, 9, 20), "dividend",
+                  BOND_ETF[2], 52.0, 0))
+        emit(_row(dt.date(year, 11, 8), dt.date(year, 11, 8), "coupon",
+                  BTP[0], 140.0, 0))
+
+
+def _p14(rng, emit):
+    """Stocks ONLY, three venues, no fund anywhere in the book.
+
+    Nothing here carries a TER, so the weighted average has no contributor at all,
+    and no leg is described by the curated taxonomy, so every asset class is the
+    residual one. Both are paths a book with a single ETF in it silently covers up.
+    """
+    d = dt.date(2021, 11, 9)
+    for inst, base, fx in ((US_STOCK[0], 148.0, 1.13), (UK_STOCK[0], 8600.0, 0.85),
+                           (STOCK[0], 47.0, 1.0)):
+        emit(_row(d, d, "buy", inst, rng.randint(12, 70), _price(rng, base), fx=fx))
+        d += dt.timedelta(days=260)
+
+
 BOOKS = [
     ("P01", 1001, "EU-only accumulating ETFs, 3 weeks, 4 orders", _p1),
     ("P02", 1002, "US-only USD, 2 years, native tape + FX", _p2),
@@ -310,6 +409,10 @@ BOOKS = [
     ("P08", 1008, "a single order", _p8),
     ("P09", 1009, "entirely liquidated, zero today", _p9),
     ("P10", 1010, "pathological: off-taxonomy, unresolvable ISIN, fractional, weekend, same-day", _p10),
+    ("P11", 1011, "hybrid US: single stocks + ETFs, all USD, suffixless tickers", _p11),
+    ("P12", 1012, "hybrid four venues: US stock + Milan ETF + LSE stock (GBp) + Swiss stock (CHF)", _p12),
+    ("P13", 1013, "hybrid income: stock dividend + ETF distribution + bond coupon", _p13),
+    ("P14", 1014, "stocks only, three venues, no fund and therefore no TER", _p14),
 ]
 
 

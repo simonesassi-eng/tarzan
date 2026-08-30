@@ -1,0 +1,37 @@
+{
+  "first_order": "2024-03-04",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-07-20",
+  "note": "hybrid US: single stocks + ETFs, all USD, suffixless tickers",
+  "order_count": 7,
+  "portfolio_id": "P11",
+  "seed": 1011,
+  "truth": {
+    "cash_from_flows": -21629.12,
+    "currency_by_isin": {
+      "US0378331005": "USD",
+      "US5949181045": "USD",
+      "US88636J2042": "USD",
+      "US88636J3453": "USD"
+    },
+    "currency_by_ticker": {
+      "AAPL": "USD",
+      "MSFT": "USD",
+      "RSSB": "USD",
+      "RSSY": "USD"
+    },
+    "kind_by_isin": {
+      "US0378331005": "STOCK",
+      "US5949181045": "STOCK",
+      "US88636J2042": "ETF",
+      "US88636J3453": "ETF"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "US0378331005": 31.0,
+      "US5949181045": 45.0,
+      "US88636J2042": 36.0,
+      "US88636J3453": 15.0
+    }
+  }
+}

@@ -1,0 +1,4 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2021-11-09,2021-11-09,buy,US0378331005,Synthetic AAPL,AAPL,44,USD,111.5063,1.13,4341.84,19.0,-4360.84,STOCK,stress
+2022-07-27,2022-07-27,buy,GB0009895292,Synthetic AZN,AZN,28,GBp,6630.0327,0.85,2184.01,19.0,-2203.01,STOCK,stress
+2023-04-13,2023-04-13,buy,NL0000009355,Synthetic UNA,UNA,39,EUR,54.3125,1.0,2118.19,19.0,-2137.19,STOCK,stress

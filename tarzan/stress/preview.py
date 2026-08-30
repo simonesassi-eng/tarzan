@@ -23,7 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DEST = REPO / "output" / "stress_previews"
 
-#: (cell, book, instant, mode) — ten books live, then three point-in-time so the
+#: (cell, book, instant, mode) — every book live, then three point-in-time so the
 #: same book can be compared across run modes.
 PREVIEWS = [
     ("01-eu-only", "P01", "C4", "LIVE"),
@@ -36,9 +36,13 @@ PREVIEWS = [
     ("08-single-order", "P08", "C4", "LIVE"),
     ("09-fully-liquidated", "P09", "C4", "LIVE"),
     ("10-pathological", "P10", "C4", "LIVE"),
-    ("11-us-usd-fx-pit", "P02", "C1", "PIT"),
-    ("12-fixed-income-pit", "P04", "C1", "PIT"),
-    ("13-pathological-pit", "P10", "C1", "PIT"),
+    ("11-hybrid-us-stocks-etfs", "P11", "C4", "LIVE"),
+    ("12-hybrid-four-venues", "P12", "C4", "LIVE"),
+    ("13-hybrid-income-types", "P13", "C4", "LIVE"),
+    ("14-stocks-only-no-ter", "P14", "C4", "LIVE"),
+    ("15-us-usd-fx-pit", "P02", "C1", "PIT"),
+    ("16-fixed-income-pit", "P04", "C1", "PIT"),
+    ("17-hybrid-us-pit", "P11", "C1", "PIT"),
 ]
 
 NOTES = {
@@ -52,6 +56,10 @@ NOTES = {
     "P08": "a single order",
     "P09": "entirely liquidated — zero holdings today",
     "P10": "pathological: off-taxonomy, unresolvable ISIN, fractional, weekend, same-day",
+    "P11": "HYBRID — US single stocks plus US ETFs, every leg USD on a suffixless ticker",
+    "P12": "HYBRID — four venues at once: US stock, Milan ETF, London stock in pence, Swiss stock in francs",
+    "P13": "HYBRID — every income type: a stock dividend, an ETF distribution, a bond coupon",
+    "P14": "stocks ONLY, three venues, no fund anywhere so no TER to average",
 }
 
 
@@ -109,7 +117,7 @@ def _write_index(rows: list) -> None:
         "li{margin-bottom:1.1em}code{color:#666;font-size:12px}"
         "small{color:#444}</style>"
         "<h1>Synthetic book previews</h1>"
-        "<p>Thirteen newsletters rendered from the ten seeded stress books. No real "
+        "<p>One newsletter per seeded stress book. No real "
         "position, quantity or size appears in any of them.</p>"
         f"<ol>{''.join(li)}</ol>\n", encoding="utf-8")
 

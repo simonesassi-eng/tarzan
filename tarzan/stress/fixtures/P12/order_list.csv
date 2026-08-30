@@ -1,0 +1,6 @@
+date,trade_date,type,isin,name,ticker,quantity,currency,price_native,fx_rate,gross_eur,fees_eur,net_eur,instrument_kind,source
+2023-06-06,2023-06-06,buy,US0378331005,Synthetic AAPL,AAPL,27,USD,139.4372,1.09,3453.95,19.0,-3472.95,STOCK,stress
+2023-12-13,2023-12-13,buy,IE00B4L5Y983,Synthetic SWDA,SWDA,31,EUR,83.9942,1.0,2603.82,19.0,-2622.82,ETF,stress
+2024-06-20,2024-06-20,buy,GB0009895292,Synthetic AZN,AZN,7,GBp,10714.1844,0.86,872.08,19.0,-891.08,STOCK,stress
+2024-12-27,2024-12-27,buy,CH0038863350,Synthetic NESN,NESN,33,CHF,111.2711,0.96,3824.94,19.0,-3843.94,STOCK,stress
+2026-04-14,2026-04-10,buy,CH0038863350,Synthetic NESN,NESN,10,CHF,127.3414,0.94,1354.7,19.0,-1373.7,STOCK,stress

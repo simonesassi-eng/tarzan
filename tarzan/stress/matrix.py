@@ -18,7 +18,7 @@ import dataclasses
 import datetime as dt
 from typing import Optional
 
-PORTFOLIOS = [f"P{i:02d}" for i in range(1, 11)]
+PORTFOLIOS = [f"P{i:02d}" for i in range(1, 15)]
 INSTANTS = ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
 MODES = ["LIVE", "PIT", "REPRO"]
 
