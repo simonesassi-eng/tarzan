@@ -79,7 +79,9 @@ def main() -> int:
             continue
         out = DEST / f"{name}.html"
         shutil.copyfile(src, out)
-        m = res.summary or {}
+        # summary.json nests the figures under "metrics"; reading them off the top
+        # level printed "None holdings" for every issue in the index.
+        m = (res.summary or {}).get("metrics") or {}
         note = (f"{m.get('num_holdings')} holdings · "
                 f"EUR {m.get('total_value_eur')} · {m.get('valuation_availability')}")
         rows.append((name, book, mode, out.name, note))
