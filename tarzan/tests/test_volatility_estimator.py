@@ -14,6 +14,8 @@ it over the same lookback. These fix the definition:
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -354,3 +356,75 @@ class TestTheSinceInceptionPanelIsRendered:
         html = self._section()["vs_market_html"]
         assert "line: rolling 21 sessions" in html
         assert "key: whole span, annualized" in html
+
+
+class TestAWindowWithNoEstimateIsNotALine:
+    """Stress book P07 — bought, sold out entirely, bought back — had a real sigma
+    early in its history and none inside the 30-day window, and the WHOLE issue
+    failed to render: ``nice_ticks`` cannot floor a NaN bound, so the only symptom
+    was ``ValueError: cannot convert float NaN to integer`` from ``main.py``.
+
+    A NAV pinned at zero has 0/0 returns, so no window inside the zero run has an
+    estimate. That is the shape reproduced here.
+    """
+
+    @staticmethod
+    def _zero_tail_nav():
+        vals = list(_wobble(200)) + [0.0] * (len(_IDX) - 200)
+        return pd.Series(vals, index=_IDX)
+
+    def _metrics(self):
+        m = PortfolioMetrics(total_value=0.0, invested_value=0.0, cash_value=0.0,
+                             holdings_df=pd.DataFrame())
+        m.portfolio_history = self._zero_tail_nav()
+        return m
+
+    def test_the_trailing_window_has_no_line(self):
+        vs = _perf_vol_series(self._metrics(), None, n_days=30)
+        assert vs is None or vs.get("port") is None, \
+            "a window with no estimate must not be handed to the chart as a line"
+
+    def test_the_since_inception_line_keeps_the_part_it_measured(self):
+        """Guards against over-correcting into "drop the line because today is
+        missing": the first year DID have a sigma and must survive."""
+        vs = _perf_vol_series(self._metrics(), None, n_days=None)
+        assert vs and vs.get("port"), "the measured part of the line was dropped"
+        assert any(np.isfinite(v) for v in vs["port"])
+
+    def test_a_series_with_no_estimate_omits_the_chart_not_the_issue(self):
+        from tarzan.export._charts import chart_pct_compact
+
+        svg = chart_pct_compact(
+            [{"values": [float("nan")] * 23, "color": "#fff", "end_label": "—"}],
+            list(_IDX[-23:]), include_zero=False, min_day_ticks=5, end_gutter=52)
+        assert svg == "", "the leaf must omit the chart, never abort the issue"
+
+    def test_a_gap_mid_line_is_neither_bridged_nor_emitted_as_nan(self):
+        from tarzan.export._charts import chart_pct_compact
+
+        nan = float("nan")
+        svg = chart_pct_compact(
+            [{"values": [10.0, 11.0, nan, nan, 12.0, 13.0], "color": "#fff"}],
+            list(_IDX[:6]))
+        assert "nan" not in svg, "NaN geometry reached the markup"
+        assert svg.count("<polyline") == 2, \
+            "the gap must split the line, not be bridged across"
+
+    def test_the_dot_and_its_label_sit_on_the_last_estimated_point(self):
+        """A trailing gap must not put the marker — or the end label, which shares
+        one vertical ``shift`` with every other label on the panel — at ``nan``."""
+        from tarzan.export._charts import chart_pct_compact
+
+        nan = float("nan")
+        svg = chart_pct_compact(
+            [{"values": [10.0, 11.0, 12.0, nan, nan], "color": "#fff",
+              "end_label": "+12.0%"}],
+            list(_IDX[:5]), end_gutter=52)
+        assert "nan" not in svg
+        cx = re.search(r'<circle cx="([\d.]+)"', svg)
+        assert cx, "no marker drawn"
+        # Three finite points of five: the dot belongs at the third x position,
+        # not at the right edge where the series merely stops.
+        assert float(cx.group(1)) < 250.0, \
+            "the marker is at the panel edge, not on the last estimated point"
+        assert "+12.0%" in svg, "the end label was dropped with the gap"

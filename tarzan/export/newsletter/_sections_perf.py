@@ -561,18 +561,31 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # the names live in the colour keys, so ~54px is enough on all three (the
     # wide chart used to reserve 132px for "MSCI ACWI +14.16%").
     G_WIDE, G_HALF = 54, 52
+    def _last_estimate(values):
+        """The last FINITE value of a line, or None when it has none.
+
+        The dot and its label sit on the last point the estimator actually
+        produced, so labelling ``values[-1]`` printed an em-dash beside a dot
+        drawn mid-plot — a line whose stated end value belonged to a different
+        place than its visible end.
+        """
+        return next((v for v in reversed(values or ()) if math.isfinite(v)), None)
+
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
                    w=W_HALF, h=H_HALF, gutter=G_HALF) -> str:
         series = []
         if vs and vs.get("port"):
             series.append({"values": vs["port"], "color": VOL, "width": 2.2,
-                           "end_label": _pct(vs["port"][-1], signed=False)})
+                           "end_label": _pct(_last_estimate(vs["port"]),
+                                             signed=False)})
         if vs and vs.get("target"):
             series.append({"values": vs["target"], "color": TARGET,
-                           "end_label": _pct(vs["target"][-1], signed=False)})
+                           "end_label": _pct(_last_estimate(vs["target"]),
+                                             signed=False)})
         if vs and vs.get("acwi"):
             series.append({"values": vs["acwi"], "color": BENCH,
-                           "end_label": _pct(vs["acwi"][-1], signed=False)})
+                           "end_label": _pct(_last_estimate(vs["acwi"]),
+                                             signed=False)})
         if not series:
             return ""
         return _charts.chart_pct_compact(series, dates_, include_zero=False,
@@ -616,20 +629,23 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # wide chart is the same measure as the left half panel over a longer
         # window, so it is "Return · since inception" to the half panel's
         # "Return · last 30 days".
+        # Each chart is hoisted before its caption: chart_pct_compact returns ""
+        # when no series holds a finite point, and concatenating unconditionally
+        # would leave a caption and a colour key introducing a plot that is not
+        # there \u2014 the same reason ``if vol_panel:`` below gates all three parts
+        # together.
+        _si_chart = _charts.chart_pct_compact(
+            ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
+            month_ticks=True, end_gutter=G_WIDE) if ssi else ""
         left_ret = (_colcap("Return \u00b7 since inception")
-                    + _charts.chart_pct_compact(
-                        ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
-                        month_ticks=True, end_gutter=G_WIDE)
-                    + _mini_legend(si_leg)) if ssi else ""
+                    + _si_chart + _mini_legend(si_leg)) if _si_chart else ""
+        # Five date ticks, not twelve: at half width twelve rotated labels
+        # overlapped into a grey band, which is worse than no axis at all.
+        _30_chart = _charts.chart_pct_compact(
+            s30, dates, include_zero=True, w=W_HALF, h=H_HALF,
+            min_day_ticks=5, end_gutter=G_HALF) if s30 else ""
         right_ret = (_colcap("Return \u00b7 last 30 days")
-                     # Five date ticks, not twelve: at half width twelve
-                     # rotated labels overlapped into a grey band, which is
-                     # worse than no axis at all.
-                     + _charts.chart_pct_compact(s30, dates, include_zero=True,
-                                                 w=W_HALF, h=H_HALF,
-                                                 min_day_ticks=5,
-                                                 end_gutter=G_HALF)
-                     + _mini_legend(ret_leg)) if s30 else ""
+                     + _30_chart + _mini_legend(ret_leg)) if _30_chart else ""
         # The volatility panel shares the return panel's 30-day window and its
         # five day-ticks, so the two half panels read on one x-axis. The caption
         # names the measure (annualized volatility, same units as the risk tile)
@@ -1055,11 +1071,18 @@ _CURRENCY_MARK = {"EUR": "\u20ac", "USD": "$", "GBP": "\u00a3", "JPY": "\u00a5"}
 def _currency_mark(code) -> str:
     """`` [$]`` / `` [\u20ac]`` for the instrument's own LISTING currency.
 
-    On every row, not only the non-EUR ones: "no mark means euro" is a convention
-    the reader has to be told, and the mark is what says whether a figure was
-    converted. It is the LISTING's currency, not the fund's base currency —
-    EXUS.MI is named "Xtrackers MSCI World ex USA UCITS ETF 1C USD" and trades on
-    Milan in EUR, so it reads [\u20ac] and its returns are unconverted.
+    On every row whose currency is KNOWN, not only the non-EUR ones: "no mark means
+    euro" is a convention the reader has to be told, and the mark is what says
+    whether a figure was converted. It is the LISTING's currency, not the fund's
+    base currency — EXUS.MI is named "Xtrackers MSCI World ex USA UCITS ETF 1C
+    USD" and trades on Milan in EUR, so it reads [\u20ac] and its returns are
+    unconverted.
+
+    The one row with NO mark is the one whose currency the provider never reported
+    (a listing whose ``.info`` call failed while its daily history succeeded). That
+    used to be defaulted to EUR upstream, which printed [\u20ac] on figures that
+    may well have been dollars. An absent mark states nothing; it does not state
+    euro.
     """
     code = str(code or "").strip().upper()
     if not code:
@@ -1244,7 +1267,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             _raw1d.get(ticker), ticker, _snap_intraday,
             live=bool(_live1d.get(ticker, False)))
         row_items.append({
-            "_ac": str(h.get("asset_class", "") or "") or "Other",
+            "_ac": h.get("asset_class"),
             "_isin": isin, "_ticker": ticker,
             # Ticker + the curated (abbreviated) name, exactly like the
             # Watchlist rows, so the two grids read as one view. No hard cut:
@@ -1308,15 +1331,14 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
     def _enrich(row):
         ticker = row.get("ticker", "")
         match = df[df["ticker"] == ticker] if not df.empty else pd.DataFrame()
-        klass = match["asset_class"].iloc[0] if not match.empty else "Equities"
         value = float(match["current_value"].iloc[0]) if not match.empty else 0.0
         pct = float(row.get("5d") or 0.0)
         eur = value * pct / 100
         return {
             "name": row.get("name", ticker),
             "ticker": ticker,
-            "asset_class": klass,
-            "asset_color": ASSET_COLORS.get(klass, PALETTE["accent"]),
+            # No class/colour here either: both were unread, and both could only
+            # be filled by defaulting an unmatched ticker to "Equities".
             "pct": _pct(pct, signed=True),
             "is_positive": pct >= 0,
             "eur": _eur_smart(abs(eur)),
@@ -1620,7 +1642,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # of things it does not own.
     def _table_for(rows: list) -> str:
         raw_groups = group_by_class_role(
-            rows, asset_class=lambda r: r.get("asset_class") or "Other",
+            rows, asset_class=lambda r: r.get("asset_class"),
             role=lambda r: r.get("role"), ticker=lambda r: r.get("ticker"))
         groups = []
         for ac, col, role_list in raw_groups:

@@ -15,6 +15,7 @@ from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.models.taxonomy import (
     ORDER_NEWSLETTER as _ORDER_NEWSLETTER,
     ORDER_PERF as _ORDER_PERF,
+    class_key,
 )
 from tarzan.export._format import (
     ASSET_CLASS_COLORS,
@@ -132,7 +133,7 @@ def group_by_class_role(items, *, asset_class, taxonomy=None,
 
     grouped: dict = {}
     for it in items:
-        ac = str(asset_class(it) or "") or "Other"
+        ac = class_key(asset_class(it))
         if role is not None:
             r = str(role(it) or "") or "—"
         else:

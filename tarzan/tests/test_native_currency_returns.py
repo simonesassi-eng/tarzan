@@ -54,9 +54,20 @@ class TestTheTapeIsTheInstrumentsOwn:
         tape, _ = MetricsEngine._own_tape(eur, stub, "USD")
         assert tape is eur
 
-    def test_an_unstated_currency_reads_as_euro(self):
+    def test_an_unstated_currency_claims_nothing(self):
+        """The mark exists so the reader knows which currency a figure is in, so an
+        unstated currency must print NO mark rather than assert euro.
+
+        This test used to pin the opposite ("reads as euro"), which is how a
+        fabricated claim survived: a USD listing whose ``.info`` call failed while
+        its daily history succeeded arrived with no currency and was labelled [€].
+        Asserted from both ends — the engine value and the rendered mark.
+        """
+        from tarzan.export.newsletter._sections_perf import _currency_mark
+
         _tape_, ccy = MetricsEngine._own_tape(_tape(1.0), None, None)
-        assert ccy == "EUR"
+        assert ccy == ""
+        assert _currency_mark(ccy) == ""
 
 
 class TestTheEnricherKeepsTheTapeUnconverted:

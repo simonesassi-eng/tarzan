@@ -59,6 +59,10 @@ def _stub_enrich(holdings):
             h.isin, ("Equities", "USA", 100.0, 1.10))
         series = pd.Series([p0 * (1 + (mult - 1) * i / 179) for i in range(180)], index=idx)
         h.price_history = series
+        # The enricher never writes a tape without its listing currency — they are
+        # assigned in one block — so a fixture that omitted it was leaning on a
+        # production EUR fallback for the golden's own currency marks. State it.
+        h.price_currency = "EUR"
         h.current_price = float(series.iloc[-1])
         h.current_value = h.quantity * h.current_price
         h.asset_class = ac_map[ac_s]

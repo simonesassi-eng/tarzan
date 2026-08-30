@@ -32,6 +32,8 @@ from tarzan.export.newsletter._constants import (
     TYPE,
     TYPE_PX,
     _NewsletterContext,
+    _ordered,
+    class_key,
     group_by_class_role,
     render_unified_table,
     role_for,
@@ -1641,14 +1643,22 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
     from tarzan import config as _cfg
     _tax = _cfg.instrument_taxonomy()
 
-    # Class totals for header summary chips.
-    class_totals = df.groupby("asset_class")["current_value"].sum().to_dict()
-    class_counts = df.groupby("asset_class").size().to_dict()
+    # Class totals and counts, keyed by the SAME normaliser as the row lookup
+    # below and as the grouping engine that writes the headers. Keyed on the raw
+    # column, a holding with no class was in neither dict — ``groupby`` drops
+    # None/NaN outright — so its "% Class" divided its euro value by the ``.get``
+    # default of 1, and the chips never counted it at all.
+    class_keys = df["asset_class"].map(class_key)
+    class_totals = df.groupby(class_keys)["current_value"].sum().to_dict()
+    class_counts = df.groupby(class_keys).size().to_dict()
 
     summary = []
-    for klass in ASSET_CLASS_ORDER:
-        if klass not in class_counts:
-            continue
+    # Canonical classes in their canonical order, then any residual class
+    # appended — the same "present first, extras never dropped" helper the group
+    # headers are ordered with. Iterating ASSET_CLASS_ORDER and skipping what was
+    # not in it meant a rendered group could have no chip, and the chip counts did
+    # not add up to the number of holdings.
+    for klass in _ordered(list(class_counts), ASSET_CLASS_ORDER):
         summary.append({
             "name": klass,
             "color": ASSET_COLORS.get(klass, PALETTE["accent"]),
@@ -1660,10 +1670,12 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
     invested_base = m.invested_value if m.invested_value > 0 else 0.0
     row_items = []
     for _, h in df.iterrows():
-        klass = str(h.get("asset_class", "") or "") or "Other"
+        klass = class_key(h.get("asset_class"))
         value = float(h["current_value"])
-        cls_total = class_totals.get(klass, 1) or 1
-        pct_class = value / cls_total * 100
+        # Same normaliser on both sides of the lookup, so the keys cannot
+        # disagree, and a default of 0.0 — "no total", as phys_by_class.get does
+        # at line 910 — never a money amount standing in for one.
+        cls_total = class_totals.get(klass, 0.0)
         gain_pct = h.get("gain_pct")
         gain_eur = h.get("gain_eur")
         has_gain = gain_pct is not None and not pd.isna(gain_pct)
@@ -1672,6 +1684,12 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             weight_str = "—"
         else:
             weight_str = _pct(value / invested_base * 100, decimals=1)
+        # A class whose holdings sum to exactly zero has no share to state — the
+        # em-dash, the way the cash weight above does it, never a division by a
+        # stand-in value. A NEGATIVE total still yields a real share (−300 of
+        # −500 is 60%), so only zero is withheld.
+        class_str = (_pct(value / cls_total * 100, decimals=1)
+                     if cls_total != 0 else "—")
         gain_color = (PALETTE["green"] if (gain_pct or 0) >= 0
                       else PALETTE["red"]) if has_gain else PALETTE["muted"]
         row_items.append({
@@ -1689,7 +1707,7 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
                 # The class share is the faintest figure in the row: the class
                 # itself is named in the group header above, in its colour, so
                 # repeating that colour on every cell said it a second time.
-                uni_cell(_pct(pct_class, decimals=1),
+                uni_cell(class_str,
                          color=PALETTE["subtle"], width=52),
                 uni_cell(_pct(gain_pct, signed=True) if has_gain else "—",
                          color=gain_color, weight=700, width=62),
@@ -1772,11 +1790,6 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
         amount = float(s["amount_eur"])
         ticker = s.get("ticker", "")
         isin = s.get("isin", "")
-        klass = "Equities"
-        if not df.empty:
-            match = df[df["ticker"] == ticker]
-            if not match.empty:
-                klass = match["asset_class"].iloc[0]
         signed_amount = amount if direction == "BUY" else -amount
         # Suggestions already carry the full ticker selected during
         # preprocessing; presentation must not re-resolve it from ISIN/cache.
@@ -1787,7 +1800,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
         dir_color = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
         actions.append({
             "direction": direction,
-            "asset_class": klass,
+            # No "asset_class" here: nothing read it, and the only way to fill it
+            # was a default of "Equities" for a suggestion whose ticker is not in
+            # the book — which is every BUY of something not yet held.
             "role": role_for(isin, ticker, taxonomy),
             "_row_bg": row_bg,
             # Name cell: action pill + ticker pin + shortened name, via the
