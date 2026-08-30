@@ -1,0 +1,37 @@
+{
+  "first_order": "2023-06-06",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2026-04-14",
+  "note": "hybrid four venues: US stock + Milan ETF + LSE stock (GBp) + Swiss stock (CHF)",
+  "order_count": 5,
+  "portfolio_id": "P12",
+  "seed": 1012,
+  "truth": {
+    "cash_from_flows": -12204.49,
+    "currency_by_isin": {
+      "CH0038863350": "CHF",
+      "GB0009895292": "GBp",
+      "IE00B4L5Y983": "EUR",
+      "US0378331005": "USD"
+    },
+    "currency_by_ticker": {
+      "AAPL": "USD",
+      "AZN": "GBp",
+      "NESN": "CHF",
+      "SWDA": "EUR"
+    },
+    "kind_by_isin": {
+      "CH0038863350": "STOCK",
+      "GB0009895292": "STOCK",
+      "IE00B4L5Y983": "ETF",
+      "US0378331005": "STOCK"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "CH0038863350": 43.0,
+      "GB0009895292": 7.0,
+      "IE00B4L5Y983": 31.0,
+      "US0378331005": 27.0
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "first_order": "2021-11-09",
+  "generator": "tarzan.stress.generate",
+  "last_order": "2023-04-13",
+  "note": "stocks only, three venues, no fund and therefore no TER",
+  "order_count": 3,
+  "portfolio_id": "P14",
+  "seed": 1014,
+  "truth": {
+    "cash_from_flows": -8701.04,
+    "currency_by_isin": {
+      "GB0009895292": "GBp",
+      "NL0000009355": "EUR",
+      "US0378331005": "USD"
+    },
+    "currency_by_ticker": {
+      "AAPL": "USD",
+      "AZN": "GBp",
+      "UNA": "EUR"
+    },
+    "kind_by_isin": {
+      "GB0009895292": "STOCK",
+      "NL0000009355": "STOCK",
+      "US0378331005": "STOCK"
+    },
+    "liquidated_isins": [],
+    "quantity_by_isin": {
+      "GB0009895292": 28.0,
+      "NL0000009355": 39.0,
+      "US0378331005": 44.0
+    }
+  }
+}
