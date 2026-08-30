@@ -307,14 +307,18 @@ def main(argv=None) -> int:
             "delivery_purpose": publication.delivery_purpose.value,
             "critical_failure_refs": list(publication.critical_failure_ids),
         })
+        # The publication decision is the ONLY thing that may set a failing exit
+        # code. A zero total is not evidence of failure — a fully liquidated book's
+        # true total IS zero — and the run's real failures are on the ledger, which
+        # is what the decision reads. The deleted proxy manufactured a
+        # disagreement: it exited 1 while the decision beside it said SEND_NORMAL
+        # and no issue had been written, so three parts of one run each reported a
+        # different outcome for the same state.
         if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
             logger.critical(
                 "Normal newsletter blocked by critical run evidence: %s",
                 ", ".join(publication.critical_failure_ids),
             )
-            return 1
-        if metrics.total_value == 0:
-            logger.error("No portfolio value computed. Check input data.")
             return 1
 
         # Long-history backtest of the candidate portfolios — for the local-only

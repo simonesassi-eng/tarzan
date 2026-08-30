@@ -429,12 +429,18 @@ def run_and_send() -> int:
             ledger=RunLedger(envelope.attempt_id),
         )
 
-    if metrics.total_value == 0 and not result.ledger.failure_records():
+    # A zero total is not by itself evidence of failure: a fully liquidated book's
+    # true total IS zero, and blocking its issue turned a legitimate state into an
+    # "Analysis failure" notice. What is evidence is an EMPTY LEDGER — a run that
+    # recorded no stage at all never really ran, and the send boundary must stay
+    # fail-closed on that. A genuinely unpriceable real book still opens its own
+    # CRITICAL record upstream (MATERIAL_VALUATION_GAP), so it is still blocked.
+    if metrics.total_value == 0 and not result.ledger.entries:
         result.ledger.open_failure(
             stage="valuation",
             stable_code="EMPTY_PORTFOLIO_VALUE",
             severity="CRITICAL",
-            error="pipeline produced no portfolio value",
+            error="the run recorded no ledger entry at all; no analysis took place",
             affected_outputs=["portfolio", "total", "planning", "publication"],
             analytical_impact="portfolio total and planning are unavailable",
             publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
