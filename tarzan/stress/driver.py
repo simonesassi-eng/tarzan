@@ -205,8 +205,19 @@ def quantities_in_process(*, portfolio: str, as_of, cache_dir: Path,
         targets_per_holding_source=str(fixture / "targets_per_holding.csv"),
         as_of=as_of)
     df = getattr(metrics, "holdings_df", None)
-    if df is None or df.empty or "isin" not in df or "quantity" not in df:
+    # Three outcomes, and they must not be collapsed:
+    #   None  the oracle could not read a frame at all -> nothing was verified.
+    #   {}    the frame is EMPTY -> a real reading of a book that holds nothing.
+    #         A liquidated book's frame has no columns either, so the column check
+    #         must come after the emptiness one or a legitimate empty book reads as
+    #         a malfunction and C5 certifies the emptiness it failed to read.
+    #   {..}  the quantities.
+    if df is None:
+        return None
+    if df.empty:
         return {}
+    if "isin" not in df or "quantity" not in df:
+        return None
     return {str(r["isin"]): float(r["quantity"]) for _, r in df.iterrows()}
 
 

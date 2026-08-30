@@ -45,17 +45,63 @@ NEWSLETTER_CLOCK_RE = re.compile(r"(As of \d\d:\d\d|generated [^<]*\d\d:\d\d)")
 class Verdict:
     check: str
     kind: str                 # INVARIANT | DIFFERENTIAL | EXTERNAL
-    passed: Optional[bool]    # None = could not be executed
+    passed: Optional[bool]    # None = no claim was made; ``void`` says WHY
     detail: str
     expected_fail: bool = False
+    #: Why no claim was made. Declaring it is the whole point of FINDING F7.
+    #:
+    #: ""             a claim was made; ``passed`` carries it.
+    #: "n/a"          the state the check tests genuinely did not arise. A
+    #:                property of the FIXTURE, independent of how the run went.
+    #:                This is real coverage: the check looked and there was
+    #:                nothing to judge.
+    #: "no-artifact"  the product produced nothing to judge. NOT coverage — the
+    #:                reason there is nothing to read is itself the defect, and
+    #:                C0 owns it. Counted separately so it can never again be
+    #:                mistaken for a clean result.
+    #: "reported"     observed and deliberately not asserted, because the bench
+    #:                cannot build a sound oracle for it (see c7_fx_and_native).
+    #:
+    #: Collapsing the last three into one word is how twelve runs that rendered
+    #: no newsletter at all still collected zero FAILs: one cell scored
+    #: "4 PASS, 5 SKIP, 0 FAIL" for a run that exited 1 and produced nothing.
+    void: str = ""
+
+    def state(self) -> str:
+        """The ONE place a verdict becomes a word.
+
+        ``run.py`` and ``external.py`` each carried their own copy of this
+        ternary and both dropped the expected-failure cases, so the ledger
+        recorded four XPASSes as PASS and one XFAIL as FAIL.
+        """
+        if self.void:
+            return {"no-artifact": "VOID", "reported": "NOTE"}.get(self.void, "SKIP")
+        if self.passed is None:
+            return "SKIP"
+        if self.expected_fail:
+            return "XFAIL" if self.passed is False else "XPASS"
+        return "PASS" if self.passed else "FAIL"
 
     def line(self) -> str:
-        state = "SKIP" if self.passed is None else ("PASS" if self.passed else "FAIL")
-        if self.passed is False and self.expected_fail:
-            state = "XFAIL"
-        if self.passed is True and self.expected_fail:
-            state = "XPASS"
-        return f"{state:5s} {self.check:6s} {self.kind:12s} {self.detail}"
+        return f"{self.state():5s} {self.check:6s} {self.kind:12s} {self.detail}"
+
+
+def _void(check: str, kind: str, why: str) -> Verdict:
+    """No artifact to judge. NOT a skip: a skip says the state did not arise,
+    this says the product produced nothing — and C0 must be failing alongside."""
+    return Verdict(check, kind, None, why, void="no-artifact")
+
+
+def _na(check: str, kind: str, why: str) -> Verdict:
+    """The state genuinely did not arise — a property of the fixture, not the run.
+    This IS coverage: the check looked and found nothing to judge."""
+    return Verdict(check, kind, None, why, void="n/a")
+
+
+def _note(check: str, kind: str, what: str) -> Verdict:
+    """Observed, deliberately not asserted. The bench cannot build a sound oracle
+    for it, and says so rather than pretending either way."""
+    return Verdict(check, kind, None, what, void="reported")
 
 
 def _close_money(a, b) -> bool:
@@ -130,28 +176,77 @@ def _metrics(res) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# C0 — the gate
+# --------------------------------------------------------------------------- #
+
+def c0_run_rendered(res) -> list:
+    """A run must exit 0 and leave a newsletter. No exemptions.
+
+    Its ABSENCE is FINDING F7, and it is the most consequential thing the bench got
+    wrong about itself. ``exit_code`` was written to the ledger on every run and
+    asserted nowhere — ``driver.RunResult.ok`` existed and had zero callers — while
+    every check that needs the rendered HTML returned SKIP when there was none. So
+    twelve of seventy-one runs produced nothing at all and still collected zero
+    FAILs. One cell scored "4 PASS, 5 SKIP, 0 FAIL" for a run that exited 1, and the
+    matrix reported the session healthy.
+
+    Deliberately unconditional. An earlier draft pre-registered the fully-liquidated
+    book as unable to render, which would have been an exemption granted to the very
+    defect it was hiding: that book SHOULD render, stating the realized gain on its
+    closed positions, and now does. If a future cell genuinely cannot produce an
+    issue, the honest move is to fix the product or to declare the exemption
+    alongside the reason and assert the reason too — not to widen this gate.
+    """
+    rendered = res.newsletter is not None
+    ok = bool(res.ok and rendered)
+    return [Verdict("C0", "INVARIANT", ok,
+                    f"exit={res.exit_code}, newsletter "
+                    + ("rendered" if rendered else "MISSING")
+                    + ("" if ok else f" — {res.error or 'no error captured'}"))]
+
+
+# --------------------------------------------------------------------------- #
 # D1 / D2 / D3 / D4 — determinism and invariance
 # --------------------------------------------------------------------------- #
 
 def d1_reproducible_identical(a, b) -> list:
-    """Same seed + REPRO, two runs -> identical artefacts after masking."""
+    """Same seed + REPRO, two runs -> identical artefacts after masking.
+
+    Voided PER ARTEFACT, not in one block. Every one of these compared two absent
+    values and passed: ``None == None`` and ``[] == []`` are both true, so two runs
+    that produced nothing were certified byte-identical. Voiding the whole check
+    instead would throw away the three comparisons that are still real when only
+    the newsletter is missing.
+    """
     out = []
-    out.append(Verdict("D1.sum", "DIFFERENTIAL", a.summary == b.summary,
-                       "summary.json compared WHOLE (it carries no id and no timestamp)"
-                       if a.summary == b.summary else
-                       f"summary.json differs: {_first_json_diff(a.summary, b.summary)}"))
-    la, lb = _mask_ledger(a.ledger), _mask_ledger(b.ledger)
-    out.append(Verdict("D1.ldg", "DIFFERENTIAL", la == lb,
-                       f"ledger.jsonl masked {MASKED_LEDGER_FIELDS + MASKED_LEDGER_PAYLOAD_PATHS}"
-                       if la == lb else f"ledger differs at {_first_list_diff(la, lb)}"))
-    ma, mb = _mask_manifest(a.manifest), _mask_manifest(b.manifest)
-    out.append(Verdict("D1.man", "DIFFERENTIAL", ma == mb,
-                       f"manifest.json masked {MASKED_MANIFEST_FIELDS} + unstable checksums"
-                       if ma == mb else f"manifest differs: {_first_json_diff(ma, mb)}"))
-    na, nb = _mask_newsletter(a.newsletter), _mask_newsletter(b.newsletter)
-    out.append(Verdict("D1.nl", "DIFFERENTIAL", na == nb,
-                       "newsletter.html masked for the two HH:MM strings"
-                       if na == nb else "newsletter differs outside the clock strings"))
+    if a.summary is None or b.summary is None:
+        out.append(_void("D1.sum", "DIFFERENTIAL", "a run wrote no summary.json"))
+    else:
+        out.append(Verdict("D1.sum", "DIFFERENTIAL", a.summary == b.summary,
+                           "summary.json compared WHOLE (it carries no id and no timestamp)"
+                           if a.summary == b.summary else
+                           f"summary.json differs: {_first_json_diff(a.summary, b.summary)}"))
+    if not a.ledger or not b.ledger:
+        out.append(_void("D1.ldg", "DIFFERENTIAL", "a run wrote no ledger entry"))
+    else:
+        la, lb = _mask_ledger(a.ledger), _mask_ledger(b.ledger)
+        out.append(Verdict("D1.ldg", "DIFFERENTIAL", la == lb,
+                           f"ledger.jsonl masked {MASKED_LEDGER_FIELDS + MASKED_LEDGER_PAYLOAD_PATHS}"
+                           if la == lb else f"ledger differs at {_first_list_diff(la, lb)}"))
+    if a.manifest is None or b.manifest is None:
+        out.append(_void("D1.man", "DIFFERENTIAL", "a run wrote no manifest.json"))
+    else:
+        ma, mb = _mask_manifest(a.manifest), _mask_manifest(b.manifest)
+        out.append(Verdict("D1.man", "DIFFERENTIAL", ma == mb,
+                           f"manifest.json masked {MASKED_MANIFEST_FIELDS} + unstable checksums"
+                           if ma == mb else f"manifest differs: {_first_json_diff(ma, mb)}"))
+    if a.newsletter is None or b.newsletter is None:
+        out.append(_void("D1.nl", "DIFFERENTIAL", "a run rendered no newsletter"))
+    else:
+        na, nb = _mask_newsletter(a.newsletter), _mask_newsletter(b.newsletter)
+        out.append(Verdict("D1.nl", "DIFFERENTIAL", na == nb,
+                           "newsletter.html masked for the two HH:MM strings"
+                           if na == nb else "newsletter differs outside the clock strings"))
     return out
 
 
@@ -161,7 +256,13 @@ D2_ALLOWED = {"market_open", "1d_live", "1d_coverage_pct", "1d"}
 
 def d2_time_of_day_invariance(a, b) -> list:
     """Two closed-market instants, same effective date -> identical analytics
-    except the four intraday fields."""
+    except the four intraday fields.
+
+    ``_metrics`` returns {} for a run with no summary, and {} == {} is true, so two
+    runs that produced nothing were certified invariant.
+    """
+    if a.summary is None or b.summary is None:
+        return [_void("D2", "DIFFERENTIAL", "a run wrote no summary.json")]
     pa, pb = _perf(a), _perf(b)
     offenders = sorted(k for k in set(pa) | set(pb)
                        if k not in D2_ALLOWED and pa.get(k) != pb.get(k))
@@ -176,6 +277,8 @@ def d2_time_of_day_invariance(a, b) -> list:
 
 
 def d3_row_permutation(base, shuffled) -> list:
+    if base.summary is None or shuffled.summary is None:
+        return [_void("D3", "DIFFERENTIAL", "a run wrote no summary.json")]
     keys = ("total_value_eur", "invested_value_eur", "cash_value_eur",
             "num_holdings", "twror_pct", "xirr_pct")
     bad = []
@@ -191,6 +294,8 @@ def d3_row_permutation(base, shuffled) -> list:
 
 
 def d4_no_lookahead(full, truncated) -> list:
+    if full.summary is None or truncated.summary is None:
+        return [_void("D4", "DIFFERENTIAL", "a run wrote no summary.json")]
     keys = ("total_value_eur", "invested_value_eur", "num_holdings", "twror_pct")
     bad = []
     for k in keys:
@@ -220,8 +325,9 @@ def c5_quantity_and_cash(res, truth: dict) -> list:
     out = []
     holdings = _holdings_from_summary(res)
     if holdings is None:
-        return [Verdict("C5.qty", "INVARIANT", None,
-                        "no quantities captured (run produced no holdings frame)")]
+        return [_void("C5.qty", "INVARIANT",
+                      "no quantities captured (the oracle produced no holdings "
+                      "frame) — nothing was verified")]
     bad = []
     for isin, qty in (truth.get("quantity_by_isin") or {}).items():
         got = holdings.get(isin)
@@ -243,8 +349,8 @@ def c6_weights_and_contributions(res) -> list:
     total, invested, cash = (m.get("total_value_eur"), m.get("invested_value_eur"),
                              m.get("cash_value_eur"))
     if None in (total, invested, cash):
-        out.append(Verdict("C6.parts", "INVARIANT", None,
-                           "total/invested/cash not all present"))
+        out.append(_void("C6.parts", "INVARIANT",
+                         "total/invested/cash not all present in the summary"))
     else:
         ok = _close_money(invested + cash, total)
         out.append(Verdict("C6.parts", "INVARIANT", ok,
@@ -286,18 +392,17 @@ def c7_fx_and_native(res, truth: dict) -> list:
     by_ticker = {t: c for t, c in (truth.get("currency_by_ticker") or {}).items() if t}
     by_ticker.update({i: c for i, c in (truth.get("currency_by_isin") or {}).items() if i})
     if not any(c not in ("EUR", None) for c in by_ticker.values()):
-        return [Verdict("C7", "INVARIANT", None, "book is EUR-only; nothing to convert")]
+        return [_na("C7", "INVARIANT", "book is EUR-only; nothing to convert")]
     html = res.newsletter or ""
     shown = _book_values(html)
     if not shown:
-        return [Verdict("C7", "INVARIANT", None,
-                        "no priced rows rendered at all — that is C14's finding, "
-                        "not a currency-mark defect")]
+        return [_void("C7", "INVARIANT",
+                      "no priced rows rendered at all")]
     expected = {t: c for t, c in by_ticker.items()
                 if t in shown and c not in ("EUR", None)}
     if not expected:
-        return [Verdict("C7", "INVARIANT", None,
-                        f"every rendered row ({sorted(shown)}) is a EUR listing")]
+        return [_na("C7", "INVARIANT",
+                    f"every rendered row ({sorted(shown)}) is a EUR listing")]
     # Read the mark off the instrument's OWN row in Returns. Asking whether any
     # non-EUR mark appears anywhere in the document cannot distinguish "this USD
     # row is marked EUR" from "this USD row is marked nothing at all", and the two
@@ -311,17 +416,17 @@ def c7_fx_and_native(res, truth: dict) -> list:
     # a code reading, because no run here reaches it with a resolvable tape.)
     checkable = {t: c for t, c in expected.items() if marks.get(t, (None, False))[1]}
     if not checkable:
-        return [Verdict("C7", "INVARIANT", None,
-                        f"{len(expected)} non-EUR row(s) print no returns at all "
-                        "(unresolved tape); no currency claim to verify")]
+        return [_na("C7", "INVARIANT",
+                    f"{len(expected)} non-EUR row(s) print no returns at all "
+                    "(unresolved tape); no currency claim to verify")]
     odd = [f"{t}: {marks[t][0] or 'no mark'} (order list says {c})"
            for t, c in sorted(checkable.items())
            if marks[t][0] not in (_CCY_MARK.get(c), c)]
     # ``None`` = reported, not asserted. See the docstring: a disagreement here is
     # as likely to mean the resolver picked a different venue than that the mark is
     # wrong, and this bench cannot tell the two apart.
-    return [Verdict("C7", "INVARIANT", None,
-                    f"{len(checkable)} priced non-EUR row(s) agree with the order "
+    return [_note("C7", "INVARIANT",
+                  f"{len(checkable)} priced non-EUR row(s) agree with the order "
                     "list's currency"
                     if not odd else
                     f"REPORTED (not asserted): {len(odd)} of {len(checkable)} rows "
@@ -383,7 +488,7 @@ def c8_cross_artifact(res) -> list:
     """The recurring family: one number, several renderings, field by field."""
     m, html = _metrics(res), res.newsletter
     if not html:
-        return [Verdict("C8", "INVARIANT", None, "no newsletter rendered")]
+        return [_void("C8", "INVARIANT", "no newsletter rendered")]
     avail = m.get("valuation_availability")
     misses, checked = [], 0
     for key, how, conditional in C8_OVERLAP:
@@ -428,8 +533,15 @@ def _render_tokens(v, how) -> list:
 def _holdings_from_summary(res):
     """Quantities come from the captured metrics object, not from an artifact:
     summary.json is aggregates only and The Book renders value/weight/gain but
-    never quantity. Verdicts say so."""
-    return getattr(res, "quantity_by_isin", None) or None
+    never quantity. Verdicts say so.
+
+    ``None`` and ``{}`` are DIFFERENT answers and must not be collapsed with
+    ``or None``: None means the oracle malfunctioned and nothing was verified,
+    while an empty dict is a real reading of a book that holds nothing — which is
+    exactly what a fully liquidated book returns, and exactly the case that must
+    still be checked against the truth rather than waved through.
+    """
+    return getattr(res, "quantity_by_isin", None)
 
 
 def c14_every_holding_is_visible(res) -> list:
@@ -450,12 +562,19 @@ def c14_every_holding_is_visible(res) -> list:
     """
     m, html = _metrics(res), res.newsletter
     n = m.get("num_holdings")
-    if not html or n in (None, 0):
-        return [Verdict("C14", "INVARIANT", None,
-                        "no newsletter or no holdings to be visible")]
+    if not html:
+        return [_void("C14", "INVARIANT", "no newsletter to read")]
+    if n == 0:
+        # A liquidated book holds nothing, so there is nothing that OUGHT to be
+        # visible. The state genuinely did not arise — not the same thing as
+        # having no artifact to look at.
+        return [_na("C14", "INVARIANT",
+                    "the book holds no positions; nothing ought to be visible")]
+    if n is None:
+        return [_void("C14", "INVARIANT", "the summary carries no num_holdings")]
     total = m.get("total_value_eur")
     if total in (None, 0):
-        return [Verdict("C14", "INVARIANT", None, "no priced total to account for")]
+        return [_void("C14", "INVARIANT", "no priced total to account for")]
     # The Book prints a Value EUR per row; sum them and see how much of the
     # portfolio total has no row. Counting TICKERS was the first version and it
     # flagged every book with one unpriceable line — a holding worth nothing
@@ -516,9 +635,14 @@ def c16_share_percentages_are_shares(res) -> list:
     ``or 1`` guard reads as division-by-zero protection but the 1 arrives as a
     default, not as a zero, and 1 is a money amount rather than a neutral divisor.
     """
-    body = _book_body(res.newsletter or "")
+    if res.newsletter is None:
+        return [_void("C16", "INVARIANT", "no newsletter to read")]
+    body = _book_body(res.newsletter)
     if not body:
-        return [Verdict("C16", "INVARIANT", None, "no book section rendered")]
+        # The issue rendered but carries no book table — a book with no positions.
+        # The state did not arise; there is no missing artifact.
+        return [_na("C16", "INVARIANT",
+                    "the issue renders no book table (no positions held)")]
     bad, seen = [], 0
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S):
         sym = re.search(r'color:#6E9BFF;">([A-Z0-9.]{1,14})</span>', row)
@@ -542,7 +666,8 @@ def c16_share_percentages_are_shares(res) -> list:
             if val > _SHARE_CEILING:
                 bad.append(f"{sym.group(1)} {label}={txt}")
     if not seen:
-        return [Verdict("C16", "INVARIANT", None, "no share percentages rendered")]
+        return [_na("C16", "INVARIANT",
+                    "the book rendered no share percentages to band-check")]
     return [Verdict("C16", "INVARIANT", not bad,
                     f"{seen} share percentages in [0,{_SHARE_CEILING}]"
                     if not bad else
@@ -585,6 +710,16 @@ def _book_values(html: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 def g11_degradation(res) -> list:
+    """Degradation must be stated, not implied by a zero.
+
+    Every branch here PASSED vacuously on a run that produced nothing: an empty
+    ledger has no FAILURE_OPEN entry without a failure_id, so "all carry a
+    failure_id" was true of zero entries, and ``availability=None total=None``
+    satisfied the zero rule by having neither. Three green ticks for a run that
+    never happened — FINDING F7 in its purest form.
+    """
+    if not res.summary and not res.ledger:
+        return [_void("G11", "INVARIANT", "no summary and no ledger to judge")]
     out = []
     m = _metrics(res)
     avail = m.get("valuation_availability")
@@ -649,8 +784,12 @@ def c13_planning_determinism(a, b) -> list:
     than the content has. Registered up front so its failure is evidence, not a
     surprise.
     """
-    pa = ((a.summary or {}).get("sections") or {}).get("planning") or {}
-    pb = ((b.summary or {}).get("sections") or {}).get("planning") or {}
+    if a.summary is None or b.summary is None:
+        return [_void("C13", "DIFFERENTIAL", "a run wrote no summary.json")]
+    pa = (a.summary.get("sections") or {}).get("planning")
+    pb = (b.summary.get("sections") or {}).get("planning")
+    if pa is None or pb is None:
+        return [_void("C13", "DIFFERENTIAL", "a run wrote no planning section")]
     same_id = (a.summary or {}).get("analysis_id") == (b.summary or {}).get("analysis_id")
     equal = pa == pb
     return [Verdict("C13", "DIFFERENTIAL", equal,
@@ -668,12 +807,12 @@ def e9_windows_against_the_tape(res, samples: list) -> list:
     """
     html = res.newsletter or ""
     if not html:
-        return [Verdict("E9", "EXTERNAL", None, "no newsletter rendered")]
+        return [_void("E9", "EXTERNAL", "no newsletter rendered")]
     out = []
     for ticker, exp1, exp5, exp1m in samples:
         row = _row_for(html, ticker)
         if row is None:
-            out.append(Verdict("E9", "EXTERNAL", None, f"{ticker}: no row rendered"))
+            out.append(_void("E9", "EXTERNAL", f"{ticker}: no row rendered"))
             continue
         got = _pcts(row)
         bad = []
@@ -705,7 +844,7 @@ def e10_sessions_from_the_calendar(cases: list) -> list:
         try:
             is_sess = ec.is_session(ticker, day)
         except Exception as exc:                       # noqa: BLE001
-            out.append(Verdict("E10.cal", "EXTERNAL", None, f"{ticker} {day}: {exc}"))
+            out.append(_void("E10.cal", "EXTERNAL", f"{ticker} {day}: calendar raised {exc}"))
             continue
         out.append(Verdict("E10.cal", "EXTERNAL", is_sess is False,
                            f"{ticker} {day} ({why}): calendar says session={is_sess}"))
@@ -768,9 +907,25 @@ def _first_list_diff(a: list, b: list) -> str:
 
 
 def _row_for(html: str, ticker: str) -> Optional[str]:
-    m = re.search(rf'color:#6E9BFF;">{re.escape(ticker)}</span>(.{{0,3000}}?)</tr>',
-                  html, re.S)
-    return m.group(1) if m else None
+    """The instrument's RETURNS row — the first one carrying real figures.
+
+    Taking the first occurrence of the ticker and the next ``</tr>`` within 3000
+    characters was fragile in two ways at once: a symbol appears in several tables
+    (the book, a chip, a legend), and a long row simply fell outside the window. So
+    a held instrument whose row was on the page reported "no row rendered", which
+    the caller then filed as a missing artifact. Walk every candidate and keep the
+    first that actually carries three or more percentages.
+    """
+    best = None
+    for m in re.finditer(rf'color:#6E9BFF;">{re.escape(ticker)}</span>', html):
+        end = html.find("</tr>", m.end())
+        if end < 0:
+            continue
+        row = html[m.end():end]
+        if len(_pcts(row)) >= 3:
+            return row
+        best = best or row
+    return best
 
 
 def _pcts(row_html: str) -> list:

@@ -19,7 +19,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-SAMPLES = ["RSSB", "RSSY", "CTAP", "WTIP", "XDEQ.MI"]
+#: The four instruments P02 actually HOLDS. XDEQ.MI was in this list and is not in
+#: that book, so its verdict was permanently "no row rendered" — a sample the book
+#: cannot answer for is not coverage, it is a gap that reads like one.
+SAMPLES = ["RSSB", "RSSY", "CTAP", "WTIP"]
 
 
 def tape_expectations(tickers: list) -> dict:
@@ -111,12 +114,16 @@ def main() -> int:
         fh.write(json.dumps({"kind": "run", "cell": "E01", "mode": "LIVE",
                              "network_attempts": len(res.network_attempts),
                              "exit_code": res.exit_code}, default=str) + "\n")
-        for v in checks.e9_windows_against_the_tape(res, samples):
+        # The gate applies here too. This was the FOURTH run site and the only one
+        # not gated, so the one networked block kept the exact defect F7 names.
+        for v in (checks.c0_run_rendered(res)
+                  + checks.e9_windows_against_the_tape(res, samples)):
             print(" ", v.line())
+            # v.state() is the ONE conversion; this copy of the ternary dropped
+            # the expected-failure cases the same way run.py's did.
             fh.write(json.dumps({"kind": "check", "cell": "E01", "check": v.check,
-                                 "type": v.kind,
-                                 "verdict": "SKIP" if v.passed is None else
-                                            ("PASS" if v.passed else "FAIL"),
+                                 "type": v.kind, "verdict": v.state(),
+                                 "void": v.void,
                                  "detail": v.detail}, default=str) + "\n")
     print(f"\nnetwork calls used: {len(res.network_attempts)}")
     return 0
