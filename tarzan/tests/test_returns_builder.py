@@ -1994,3 +1994,56 @@ class TestNoCapitalMeansNoReturn:
         assert (ds > 0).all()
         assert ds.iloc[-1] == pytest.approx(ds.iloc[0]), \
             "a carry-flat held position must report no return, not a loss"
+
+
+class TestAMinorUnitPriceIsRescaledInTheSeed:
+    """A price quoted in pence is not a price in pounds.
+
+    ``_seed_market_value`` valued a position from its latest order price through
+    ``value_position``, which applies the INSTRUMENT-KIND convention (a bond's
+    per-100) and knows nothing about the CURRENCY's. So an LSE order at
+    "653.3082 GBp" — £6.533082 — was seeded as if it were £653.3082: 79 units on a
+    €619 cost basis were valued at €60,013, a +9,593% gain that made up 73% of the
+    portfolio total. The order carried ``currency="GBp"`` the whole time.
+
+    The enricher's own comment on its rescale says what is at stake: "If we skip
+    this step, current_value explodes by 100x." Three modules each knew the code
+    list separately and the seed path could reach none of them; the list now lives
+    in tarzan.models.currency and every reader imports it.
+    """
+
+    @staticmethod
+    def _seed(currency: str, fx: float) -> float:
+        from tarzan.engine.returns_builder import _seed_market_value
+
+        orders = [_o(OrderType.BUY, "IE00BJ38QD84", qty=79.0,
+                     gross=600.13, price=653.3082, d=(2025, 7, 21),
+                     kind=InstrumentKind.ETF, currency=currency, fx=fx)]
+        return _seed_market_value(orders, "IE00BJ38QD84", 79.0)
+
+    def test_a_pence_price_is_divided_by_a_hundred(self):
+        # 79 x 6.533082 GBP / 0.86 = 600.13 EUR — the order's own gross_eur.
+        assert self._seed("GBp", 0.86) == pytest.approx(600.13, abs=0.01)
+
+    def test_the_seed_agrees_with_the_order_s_own_cash_leg(self):
+        """The cash leg and the valuation must not disagree by a factor of 100:
+        that is what produced the +9,593% gain."""
+        assert self._seed("GBp", 0.86) == pytest.approx(600.13, abs=0.01)
+
+    def test_an_ordinary_currency_is_untouched(self):
+        """Guards against over-correcting: a major-unit price must not be divided.
+        79 x 653.3082 / 1.09."""
+        assert self._seed("USD", 1.09) == pytest.approx(47349.02, rel=1e-4)
+
+    def test_every_minor_code_the_enricher_knows_is_rescaled_here_too(self):
+        """The two lists were separate copies; a code in one and not the other is
+        exactly how this defect survived."""
+        from tarzan.data.enricher import _MINOR_TO_MAJOR_CURRENCY
+        from tarzan.models.currency import MINOR_UNITS
+
+        for code, major in _MINOR_TO_MAJOR_CURRENCY.items():
+            if code == major:                       # ZWL: not a minor unit
+                continue
+            assert code in MINOR_UNITS, f"{code} is rescaled by the enricher only"
+            assert self._seed(code, 1.0) == pytest.approx(
+                self._seed("EUR", 1.0) / 100.0, rel=1e-9), code

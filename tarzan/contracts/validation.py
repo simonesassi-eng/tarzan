@@ -82,7 +82,9 @@ def normalize_currency(raw: Optional[str]) -> str:
     if s == "" or s.lower() == "nan":
         return "EUR"
     # Preserve known minor-unit codes verbatim (mixed case is significant).
-    if s in ("GBp", "GBX", "ZAc", "ZAC", "ILa", "ILA"):
+    from tarzan.models.currency import MINOR_UNITS
+
+    if s in MINOR_UNITS:
         return s
     return s.upper()
 

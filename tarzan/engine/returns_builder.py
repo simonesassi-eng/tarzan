@@ -42,6 +42,7 @@ import pandas as pd
 from tarzan.data.bond_fetcher import value_position
 from tarzan.engine import allocations as _alloc
 from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+from tarzan.models.currency import to_major
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.models.order import Order, OrderType
@@ -352,6 +353,14 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
         # Foreign order with no usable FX rate: no seed (native-as-EUR would
         # overstate by the FX rate); enrichment supplies the real EUR value.
         return 0.0
+    # ``value_position`` applies the INSTRUMENT-KIND convention (a bond's per-100)
+    # and knows nothing about the CURRENCY's. A price quoted in a minor unit —
+    # "653.3082 GBp" is £6.533082, not £653 — was seeded a hundred times too high:
+    # 79 units against a €619 cost basis were valued at €60,013, a +9,593% gain
+    # that made up 73% of the portfolio total. The order itself carried
+    # ``currency="GBp"`` the whole time. There is no FX pair for a minor code, so
+    # the rescale has to happen before the divide, not after.
+    price = to_major(price, getattr(last, "currency", None))
     seeded = value_position(
         abs(qty),
         price,
