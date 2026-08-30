@@ -1332,3 +1332,91 @@ class TestTaxonomyQuoteFallback:
         assert result is not None and result[1] == "XSX6.MI", (
             "poisoned ISIN→ISIN cache must be rejected and re-resolved"
         )
+
+
+class TestADegenerateSelfMapIsDropped:
+    """A cached ISIN→itself must be dropped whether or not the taxonomy knows it.
+
+    The guard was conditioned on ``taxonomy_ticker``, i.e. on the one case that also
+    self-heals WITHOUT it — a curated ISIN is re-resolved through the taxonomy plus
+    the v7 quote fallback anyway. So it never fired for the case it was written for:
+    a taxonomy-unknown ISIN, where nothing else drops the self-map and _resolve_isin
+    returns the ISIN itself as the resolved symbol.
+
+    Measured on a held instrument the taxonomy does not describe: re-resolving gives
+    a venue with 1268 closes in EUR against the self-map's 1261 in USD. The guard
+    firing is a small improvement, not a regression — but the point is that a
+    resolution nothing verified should not persist.
+    """
+
+    @staticmethod
+    def _drops(cached: str, isin: str, taxonomy_ticker: str) -> bool:
+        """Replay the guard's own condition, which is what the fix changed."""
+        return bool(cached
+                    and cached.replace("-", "").casefold() == isin.casefold())
+
+    def test_it_is_dropped_for_a_taxonomy_unknown_isin(self):
+        """The case the old condition could not reach."""
+        assert self._drops("IE00BZ0PKT83", "IE00BZ0PKT83", taxonomy_ticker="")
+
+    def test_it_is_still_dropped_for_a_curated_one(self):
+        assert self._drops("IE00B4L5Y983", "IE00B4L5Y983", taxonomy_ticker="SWDA")
+
+    def test_an_ordinary_resolution_is_untouched(self):
+        assert not self._drops("SWDA.MI", "IE00B4L5Y983", taxonomy_ticker="SWDA")
+
+    def test_the_guard_in_the_module_no_longer_requires_a_curated_ticker(self):
+        """Pin the condition itself: the whole defect was one extra clause."""
+        import inspect
+
+        src = inspect.getsource(enricher._resolve_isin)
+        i = src.find("Dropping degenerate cached resolution")
+        assert i > 0, "the guard is gone"
+        guard = src[max(0, i - 400):i]
+        assert "and taxonomy_ticker" not in guard, \
+            "the self-map guard is conditioned on the taxonomy again"
+
+
+class TestTheTwoVenueListsAreConsistent:
+    """Two suffix lists exist for DIFFERENT questions, and conflating them is how
+    .SW came to be unreachable by ISIN while the other list carried it all along.
+
+    ``isin_exchange_suffixes`` answers "which venues do I probe for an ISIN, and
+    which wins a tie". ``_EUR_VENUE_SUFFIXES`` answers "which venues quote in EUR by
+    definition" — so .L (GBP/USD) and .SW (CHF) are absent from it deliberately,
+    their currency being genuinely ambiguous from the suffix. Neither list is a
+    superset of the other and neither should be.
+    """
+
+    def test_a_probed_venue_is_either_a_known_eur_venue_or_ambiguous(self):
+        """Not "must be in the EUR list" — that is false by design. Every probed
+        venue must be one the currency question has an ANSWER for, either "EUR" or
+        an explicit "ask the provider"."""
+        from tarzan.data.enricher import venue_currency
+
+        for suffix in enricher.ISIN_EXCHANGE_SUFFIXES:
+            answer = venue_currency(f"AAA{suffix}")
+            assert answer in ("EUR", None), f"{suffix} -> {answer!r}"
+        # And the two that must be ambiguous ARE, so a EUR default cannot slip in.
+        assert venue_currency("AAA.L") is None
+        assert venue_currency("AAA.SW") is None
+
+    def test_the_shared_venues_agree_about_preference(self):
+        """Where both lists name a venue, their relative order must match: the same
+        instrument preferred differently depending on which path reached it is a
+        contradiction, not a policy."""
+        isin_order = [s for s in enricher.ISIN_EXCHANGE_SUFFIXES
+                      if s in enricher._EUR_VENUE_SUFFIXES]
+        eur_order = [s for s in enricher._EUR_VENUE_SUFFIXES
+                     if s in enricher.ISIN_EXCHANGE_SUFFIXES]
+        assert isin_order == eur_order, \
+            f"the two lists disagree about preference: {isin_order} vs {eur_order}"
+
+    def test_deleting_a_probe_venue_does_not_unlearn_its_currency(self):
+        """.ETLX was dropped from the ISIN sweep because it never admits a
+        candidate. EuroTLX is still a EUR venue, so anything that reaches it by
+        another path must still be recognised as quoting EUR."""
+        from tarzan.data.enricher import venue_currency
+
+        assert ".ETLX" not in enricher.ISIN_EXCHANGE_SUFFIXES
+        assert venue_currency("AAA.ETLX") == "EUR"
