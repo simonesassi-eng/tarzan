@@ -18,7 +18,7 @@ Network-free: every test pins the clock and feeds fixture series.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -742,3 +742,139 @@ class TestChartExtentIsTradedExtent:
         spread = _poly_xs(_intraday_spark(ser, 100.0, w=62, in_progress=False))
         assert max(growing) < 62 * 0.15
         assert max(spread) == 62.0
+
+
+class TestAUSListingHasACalendar:
+    """A suffixless US ticker used to resolve to no venue at all.
+
+    Yahoo spells US listings with no suffix, and ``_exchange_for``'s only path for a
+    bare symbol was to read a venue off the taxonomy's own suffix — which no row
+    carries. So the 24 US-domiciled rows had no MIC, no hours caption, and
+    ``is_session`` fell back to Mon–Fri and called Thanksgiving a trading day, even
+    though the vendored table has carried XNYS and its closures all along. The ISIN
+    that settles it was already being returned by the call and discarded.
+    """
+
+    def test_a_us_etf_resolves_to_the_us_venue(self):
+        from tarzan.data.exchange_calendar import venue_mic
+
+        assert mq._exchange_for("RSSB") == "US"
+        assert venue_mic("RSSB") == "XNYS"
+        assert mq.session_caption("RSSB")
+
+    def test_a_european_ucits_with_a_bare_ticker_is_not_promoted(self):
+        """The inference is 'US ISIN on a row whose ticker is bare', not 'bare'.
+        Most of this taxonomy's bare tickers are Irish or Luxembourg funds."""
+        from tarzan.data.exchange_calendar import venue_mic
+
+        for tk in ("VWCE", "SWDA"):
+            assert mq._exchange_for(tk) is None, tk
+            assert venue_mic(tk) is None, tk
+
+    def test_an_isin_passed_as_a_ticker_cannot_fabricate_a_venue(self):
+        from tarzan.data.exchange_calendar import venue_mic
+
+        assert venue_mic("US88636J2042") is None
+        assert venue_mic("XX0000000000") is None
+
+    def test_thanksgiving_is_not_a_session_for_a_us_holding(self):
+        from tarzan.data.exchange_calendar import (
+            is_session, previous_session, sessions_back,
+        )
+
+        assert is_session("RSSB", date(2026, 11, 26)) is False
+        # The session before Fri 27 Nov is Wed 25 Nov, not Thanksgiving itself.
+        assert previous_session("RSSB", date(2026, 11, 27)) == date(2026, 11, 25)
+        # And the 5-session anchor must agree with the index that already had a
+        # calendar — they were a day apart, understating every US 5D that spans a
+        # closure by one session's move.
+        assert (sessions_back("RSSB", date(2026, 11, 27), 5)
+                == sessions_back("^GSPC", date(2026, 11, 27), 5)
+                == date(2026, 11, 19))
+
+
+class TestAHalfDayIsNotAFullSession:
+    """An early close IS a session, so the calendar rightly calls it open — but the
+    hours table holds one fixed close per venue group, so the exchange read open for
+    the three hours after it had actually shut.
+
+    Giving US listings a calendar is what made this reachable: before, they returned
+    None ("fall back to recency") and were accidentally right on a completed
+    half-day.
+    """
+
+    def test_the_afternoon_of_a_half_day_is_closed(self):
+        et = timezone(timedelta(hours=-5))          # ET in November/December
+        for day in (date(2026, 11, 27), date(2026, 12, 24)):
+            morning = datetime(day.year, day.month, day.day, 11, 0, tzinfo=et)
+            afternoon = datetime(day.year, day.month, day.day, 14, 0, tzinfo=et)
+            assert mq.market_open_now("RSSB", now=morning) is True, day
+            assert mq.market_open_now("RSSB", now=afternoon) is False, day
+
+    def test_an_ordinary_session_keeps_its_full_hours(self):
+        et = timezone(timedelta(hours=-5))
+        n = datetime(2026, 11, 25, 14, 0, tzinfo=et)
+        assert mq.market_open_now("RSSB", now=n) is True
+
+    def test_the_table_carries_the_close_time(self):
+        from tarzan.data.exchange_calendar import session_close
+
+        assert session_close("RSSB", date(2026, 11, 27)) == (13, 0)
+        assert session_close("RSSB", date(2026, 11, 25)) is None
+
+
+class TestADateLabelIsNotAnInstant:
+    """A daily bar's observation is a DATE LABEL, and it is naive on purpose.
+
+    ``market_session_age_seconds`` reads a naive value as venue-local precisely so
+    it can tell a date label from a real quote timestamp. ``provider.py`` assumed
+    UTC before handing it over, which destroyed that distinction — and UTC midnight
+    is the previous EVENING anywhere west of Greenwich, so a bar labelled Thursday
+    arrived claiming to have been observed before Wednesday's close.
+
+    Latent until US listings got a calendar: Rome is east of UTC, so midnight lands
+    on the same session either way and every European holding measured the same
+    before and after. Only the Americas were exposed, and no US holding had a venue
+    to be measured against.
+    """
+
+    @staticmethod
+    def _wednesday_label():
+        return datetime(2026, 8, 26)                 # naive: a date label
+
+    def test_a_us_bar_is_aged_in_session_time_not_wall_clock(self):
+        et = timezone(timedelta(hours=-4))           # ET in August
+        thursday_10am = datetime(2026, 8, 27, 10, 0, tzinfo=et)
+
+        label = self._wednesday_label()
+        as_utc = label.replace(tzinfo=timezone.utc)
+
+        correct = mq.market_session_age_seconds("RSSB", label, thursday_10am)
+        wrong = mq.market_session_age_seconds("RSSB", as_utc, thursday_10am)
+
+        # Thirty minutes into Thursday's session, not a day and a half.
+        assert correct == 1800.0
+        assert wrong == 88200.0, "the UTC assumption overstated the age 49x"
+
+    def test_a_european_bar_is_unaffected_either_way(self):
+        """Why this stayed hidden: east of UTC, midnight falls on the same session.
+        Stated so nobody 'fixes' it back by testing only a Milan holding."""
+        from zoneinfo import ZoneInfo
+
+        label = self._wednesday_label()
+        as_utc = label.replace(tzinfo=timezone.utc)
+        for hour in (9, 14):
+            now = datetime(2026, 8, 27, hour, 0, tzinfo=ZoneInfo("Europe/Rome"))
+            assert (mq.market_session_age_seconds("XMME.MI", label, now)
+                    == mq.market_session_age_seconds("XMME.MI", as_utc, now))
+
+    def test_the_provider_hands_over_the_naive_value(self):
+        """The fix is in provider.py, so pin it there rather than only downstream."""
+        import inspect
+
+        from tarzan.runtime import provider
+
+        src = inspect.getsource(provider.ValuationCompletenessEvaluator)
+        assert "observed_local" in src, \
+            "provider.py must pass the unmodified observation to the session clock"
+        assert "market_session_age_seconds(" in src

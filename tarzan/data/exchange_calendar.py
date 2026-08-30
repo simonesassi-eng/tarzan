@@ -24,9 +24,13 @@ so the table does too — see :func:`covers`, which is why every lookup degrades
 to the weekday rule beyond the horizon instead of silently reading an unknown
 future date as a trading day. Re-run the generator to extend it.
 
-Known remaining ceiling: half-days. An early close (Christmas Eve, the US day
-after Thanksgiving) IS a session, so it does not affect any date question asked
-here; it would only matter to the intraday hours in ``market_quotes._SESSIONS``.
+Half-days are modelled too, in the ``close`` column: an early close IS a session,
+so it changes no date question asked here, but the hours table in
+``market_quotes._SESSIONS`` holds one fixed close per venue group and therefore
+called the exchange open for the hours after it had shut. 157 of them across twelve
+venues — the US day after Thanksgiving and Christmas Eve are the familiar ones, and
+London, Paris, Dublin, Hong Kong and Sydney have their own. See
+:func:`session_close`.
 """
 
 from __future__ import annotations
@@ -82,29 +86,63 @@ _INDEX_MIC: dict[str, str] = {
 
 
 @lru_cache(maxsize=1)
-def _table() -> tuple[dict[str, frozenset], dict[str, tuple]]:
-    """``({mic: {closed weekdays}}, {mic: (first, last)})`` from the bundle.
+def _table() -> tuple[dict[str, frozenset], dict[str, tuple], dict[str, dict]]:
+    """``({mic: {closed weekdays}}, {mic: (first, last)}, {mic: {date: (h, m)}})``.
 
-    Empty on any failure: a missing or corrupt table degrades every caller to
-    the Mon–Fri rule, which is what they all did before this existed.
+    The third element is the EARLY CLOSES: a short session is still a session, so
+    it is absent from the closure set, and a reader holding one fixed close per
+    venue therefore called the exchange open for the hours after it had shut. The
+    time is the venue's own wall clock, the same units the session-hours table
+    uses.
+
+    Empty on any failure: a missing or corrupt table degrades every caller to the
+    Mon–Fri rule, which is what they all did before this existed. A table written
+    before the ``close`` column existed still reads correctly — every row simply
+    has no close, which is what a closure means.
     """
     try:
         import pandas as pd
 
         frame = pd.read_csv(_BUNDLED, dtype=str)
+        closes = (frame["close"] if "close" in frame.columns
+                  else [None] * len(frame))
         closed: dict[str, set] = {}
-        for mic, date in zip(frame["mic"], frame["date"]):
-            closed.setdefault(str(mic), set()).add(
-                datetime.date.fromisoformat(str(date)))
+        early: dict[str, dict] = {}
+        for mic, date, close in zip(frame["mic"], frame["date"], closes):
+            mic, day = str(mic), datetime.date.fromisoformat(str(date))
+            text = "" if close is None else str(close).strip()
+            if text and text.lower() != "nan":
+                hh, _, mm = text.partition(":")
+                early.setdefault(mic, {})[day] = (int(hh), int(mm))
+            else:
+                closed.setdefault(mic, set()).add(day)
         # The horizon is per MIC: each source calendar bounds itself, and a
-        # lookup past that bound is unknown, not "open".
-        spans = {mic: (min(days), max(days)) for mic, days in closed.items()}
-        return ({mic: frozenset(days) for mic, days in closed.items()}, spans)
+        # lookup past that bound is unknown, not "open". An early close is a
+        # dated fact from the same source, so it counts towards the span.
+        spans = {}
+        for mic in set(closed) | set(early):
+            days = closed.get(mic, set()) | set(early.get(mic, {}))
+            spans[mic] = (min(days), max(days))
+        return ({mic: frozenset(days) for mic, days in closed.items()},
+                spans, early)
     except Exception as exc:  # noqa: BLE001 — never break a run over a calendar
         logger.warning(
             "exchange holiday table unavailable (%s); every session question "
             "falls back to the Mon-Fri rule", exc)
-        return ({}, {})
+        return ({}, {}, {})
+
+
+def session_close(ticker: str, day: datetime.date) -> Optional[tuple[int, int]]:
+    """``(hour, minute)`` of an EARLY close for ``ticker`` on ``day``, else None.
+
+    None means "the venue's regular hours apply", which is also the honest answer
+    for a date outside the vendored horizon or a venue the table does not know.
+    """
+    mic = venue_mic(ticker)
+    if mic is None:
+        return None
+    _, _, early = _table()
+    return (early.get(mic) or {}).get(day)
 
 
 @lru_cache(maxsize=2048)
@@ -141,7 +179,7 @@ def venue_mic(ticker: str) -> Optional[str]:
 def _covers_mic(mic: Optional[str], day: datetime.date) -> bool:
     if mic is None:
         return False
-    _, spans = _table()
+    _, spans, _early = _table()
     span = spans.get(mic)
     if span is None:
         return False
@@ -155,7 +193,7 @@ def _is_session_mic(mic: Optional[str], day: datetime.date) -> bool:
         return False
     if mic is None or not _covers_mic(mic, day):
         return True
-    closed, _ = _table()
+    closed, _, _early = _table()
     return day not in closed.get(mic, frozenset())
 
 

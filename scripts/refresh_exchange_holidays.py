@@ -58,8 +58,8 @@ def _naive(value) -> pd.Timestamp:
 def main() -> None:
     import exchange_calendars as xc
 
-    rows: list[tuple[str, str]] = []
-    report: list[tuple[str, object, object, int]] = []
+    rows: list[tuple[str, str, str]] = []
+    report: list[tuple[str, object, object, int, int]] = []
     for mic in MICS:
         calendar = xc.get_calendar(mic)
         low = max(_naive(START), _naive(calendar.first_session))
@@ -68,16 +68,39 @@ def main() -> None:
         # Only WEEKDAYS are recorded: weekends are never sessions anywhere, so
         # listing them would quadruple the table for no information.
         closed = [d for d in pd.bdate_range(low, high) if _naive(d) not in sessions]
-        rows.extend((mic, d.date().isoformat()) for d in closed)
-        report.append((mic, low.date(), high.date(), len(closed)))
+        # A closure carries no close time; the column is what tells the two apart.
+        rows.extend((mic, d.date().isoformat(), "") for d in closed)
 
-    frame = pd.DataFrame(rows, columns=["mic", "date"]).sort_values(["mic", "date"])
+        # EARLY CLOSES. A short session is still a session, so it is absent from
+        # the closure list above — and a reader with only one fixed close per venue
+        # therefore calls the exchange open for the three hours after it shut. The
+        # US half-days (the day before Independence Day, the day after
+        # Thanksgiving, Christmas Eve) are the familiar ones, but Xetra and London
+        # have them too. Recorded as the venue-LOCAL wall clock, because that is
+        # what the session-hours table is expressed in.
+        tz = calendar.tz
+        early = 0
+        for day in calendar.early_closes:
+            day = _naive(day)
+            if not (low <= day <= high):
+                continue
+            close = calendar.closes.get(pd.Timestamp(day))
+            if close is None or pd.isna(close):
+                continue
+            local = close.tz_convert(tz) if close.tzinfo is not None else close
+            rows.append((mic, day.date().isoformat(), local.strftime("%H:%M")))
+            early += 1
+        report.append((mic, low.date(), high.date(), len(closed), early))
+
+    frame = (pd.DataFrame(rows, columns=["mic", "date", "close"])
+             .sort_values(["mic", "date"]))
     frame.to_csv(OUT, index=False, compression="gzip")
 
     print(f"exchange_calendars {xc.__version__}  requested horizon {START}..{END}")
-    print(f"{len(frame)} closed weekdays across {len(MICS)} venues -> {OUT}")
-    for mic, low, high, count in report:
-        print(f"   {mic:<6} {low} .. {high}  {count:>4} closed weekdays")
+    print(f"{len(frame)} rows across {len(MICS)} venues -> {OUT}")
+    for mic, low, high, count, early in report:
+        print(f"   {mic:<6} {low} .. {high}  {count:>4} closed weekdays, "
+              f"{early:>3} early closes")
     print("\nUpdate the library version noted in "
           "tarzan/data/exchange_calendar.py, then run the suite.")
 

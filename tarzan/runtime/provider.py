@@ -218,13 +218,28 @@ class ValuationCompletenessEvaluator:
         freshness_age_seconds = None
         session_adjusted = False
         if evidence_time is not None:
-            if evidence_time.tzinfo is None:
-                evidence_time = evidence_time.replace(tzinfo=timezone.utc)
+            # A daily bar's observation is a DATE LABEL, not an instant: it is
+            # naive on purpose, and ``market_session_age_seconds`` reads a naive
+            # value as venue-local precisely so it can tell a date label from a
+            # real quote timestamp. Assuming UTC here destroyed that distinction
+            # before the callee could use it — UTC midnight is 19:00 the PREVIOUS
+            # evening in New York, so a bar labelled Thursday arrived claiming to
+            # have been observed before Wednesday's close, and the callee's own
+            # ``hour == 0`` date-label test could no longer fire either.
+            #
+            # The UTC assumption is still right for the WALL-CLOCK age below,
+            # which needs two comparable instants. So it applies there and the
+            # original value is what travels on.
+            observed_local = evidence_time
+            evidence_instant = (
+                evidence_time.replace(tzinfo=timezone.utc)
+                if evidence_time.tzinfo is None else evidence_time
+            )
             if captured_at.tzinfo is None:
                 captured_at = captured_at.replace(tzinfo=timezone.utc)
             age_seconds = max(
                 0.0,
-                (captured_at - evidence_time).total_seconds(),
+                (captured_at - evidence_instant).total_seconds(),
             )
             freshness_age_seconds = age_seconds
             try:
@@ -232,7 +247,7 @@ class ValuationCompletenessEvaluator:
 
                 market_age = market_session_age_seconds(
                     str(getattr(holding, "ticker", None) or ""),
-                    evidence_time,
+                    observed_local,
                     captured_at,
                 )
                 if market_age is not None:

@@ -108,7 +108,7 @@ class TestUnknownIsNotOpen:
         assert ec.is_session("NOPE.XX", datetime.date(2026, 8, 22)) is False
 
     def test_a_missing_table_does_not_break_a_run(self, monkeypatch):
-        monkeypatch.setattr(ec, "_table", lambda: ({}, {}))
+        monkeypatch.setattr(ec, "_table", lambda: ({}, {}, {}))
         assert ec.is_session("EXUS.MI", datetime.date(2025, 8, 15)) is True
         assert ec.last_session_on_or_before(
             "EXUS.MI", datetime.date(2026, 8, 23)) == datetime.date(2026, 8, 21)
@@ -143,7 +143,7 @@ class TestEveryReachableVenueHasACalendar:
         assert [g for g in _SESSIONS if g not in ec._GROUP_MIC] == []
 
     def test_every_mapped_mic_is_present_in_the_table(self):
-        closed, _ = ec._table()
+        closed, _, _early = ec._table()
         wanted = set(ec._SUFFIX_MIC.values()) | set(ec._GROUP_MIC.values())
         assert sorted(m for m in wanted if m not in closed) == []
 

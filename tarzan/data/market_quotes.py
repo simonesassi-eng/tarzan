@@ -101,9 +101,28 @@ _SUFFIX_EXCHANGE: dict[str, str] = {
 def _exchange_for(ticker: str) -> Optional[str]:
     """Map a verified Yahoo listing to its exchange-session group.
 
-    A suffixless symbol is not inherently American. Curated taxonomy evidence
-    may promote a bare input to a full listing; otherwise ``None`` deliberately
-    delegates freshness to wall-clock age instead of fabricating a venue.
+    A suffixless symbol is not inherently American, so this asks the curated row
+    rather than guessing: most of this taxonomy's bare tickers are Irish or
+    Luxembourg UCITS whose real listing is a ``.MI``/``.DE`` sibling. ``None``
+    still delegates freshness to wall-clock age rather than fabricating a venue.
+
+    Two kinds of evidence, in order. A taxonomy ticker that carries a SUFFIX names
+    its venue outright. Failing that, a US ISIN on a row whose curated ticker is
+    the bare symbol is read as a US listing — and that second rung is new, because
+    without it the 24 US-domiciled rows had no venue at all and therefore no
+    calendar, so ``is_session`` fell back to Mon–Fri and called Thanksgiving a
+    trading day. The ISIN was already in hand: the call below returns it and the
+    old code discarded it.
+
+    ponytail: an ISIN is the ISSUER's domicile, not the venue, so this reads a
+    US-domiciled fund listed only in Europe as American. Measured on this
+    taxonomy: 91 rows, 24 with a US ISIN, all 24 ``kind=etf`` with a bare ticker,
+    and the production resolution cache confirms all 24 settle on that bare US
+    symbol. No row contradicts the inference today. Note what does NOT justify it:
+    no row carries a suffix at all, so "no US ISIN pairs with a non-US suffix" is
+    vacuous and the suffix rung above cannot be what keeps this safe. What keeps
+    it safe is that the 24 are the only US-ISIN rows and all resolve to themselves.
+    An explicit venue column is the upgrade the day a row needs to disagree.
     """
     t = (ticker or "").strip().upper()
     if not t:
@@ -118,10 +137,15 @@ def _exchange_for(ticker: str) -> Optional[str]:
     try:
         from tarzan import config as cfg
 
-        _, resolved_ticker = cfg.resolve_taxonomy_identity("", t)
+        resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity("", t)
         resolved = str(resolved_ticker or "").strip().upper()
         if resolved != t and "." in resolved:
             return _SUFFIX_EXCHANGE.get(resolved.rsplit(".", 1)[1])
+        # The curated row's own ticker IS this bare symbol, and its ISIN is US:
+        # a US listing. Matching is on the ticker column only, so an ISIN passed
+        # in as a ticker returns no row and cannot reach this.
+        if resolved == t and str(resolved_isin or "").upper().startswith("US"):
+            return "US"
     except Exception:  # noqa: BLE001 - freshness must fail conservatively
         pass
     return None
@@ -172,10 +196,20 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     # exactly that test. Imported here rather than at module scope because
     # exchange_calendar reaches back into this module (venue_mic → _exchange_for)
     # to resolve a suffixless symbol.
-    from tarzan.data.exchange_calendar import is_session
+    from tarzan.data.exchange_calendar import is_session, session_close
 
     if not is_session(t, n.date()):
         return False
+    # A HALF-DAY is still a session, so the calendar rightly calls it open — but
+    # the hours table holds one fixed close per venue group, so the exchange read
+    # open for the three hours after it had actually shut. The US half-days (the
+    # weekday before Independence Day, the day after Thanksgiving, Christmas Eve)
+    # are the familiar ones; London, Paris, Dublin, Hong Kong and Sydney have them
+    # too, 157 of them across twelve venues in the vendored table. None means the
+    # regular hours apply, which is also the honest answer beyond the horizon.
+    early = session_close(t, n.date())
+    if early is not None:
+        ch, cm = early
     return dtime(oh, om) <= n.time() <= dtime(ch, cm)
 
 
