@@ -1321,8 +1321,11 @@ def _build_daily_series(
             r_t = (V_t - flow_t) / V_{t-1} - 1
 
         The returns are chained into an index anchored at the first day's
-        real value. Risk metrics (volatility, Sharpe, Sortino, VaR, beta)
-        must use THIS series.
+        real value. A day with NO CAPITAL AT RISK contributes no return: the
+        chain is suspended and resumes on the new base, so a round trip out of
+        and back into the book reports the chained return of its two invested
+        periods rather than dividing by capital that left months earlier. Risk
+        metrics (volatility, Sharpe, Sortino, VaR, beta) must use THIS series.
 
       * ``actual_value_series`` is the same daily raw value with the
         deposit/withdrawal jumps left in — the real euro worth of the
@@ -1344,8 +1347,18 @@ def _build_daily_series(
         lambda d: _closed_identity_groups(timeline, d, identity_by_isin)
     )
 
-    def raw_value(d: datetime.date) -> float:
+    def raw_value(d: datetime.date) -> tuple[float, bool, bool]:
+        """The day's value, plus ``(held, priced)`` — the PROVENANCE of a 0.0.
+
+        A bare float cannot distinguish the two zeros, and the difference decides
+        whether a return may be read out of the day at all. ``held`` is True when
+        the book carried a non-flat, non-closed position; ``priced`` when at least
+        one such position got a usable price. Held-but-unpriced means the 0.0 is
+        UNKNOWN — a transient pricing gap — not "worth nothing".
+        """
         total = 0.0
+        held = False
+        priced = False
         closed = _closed(d)
         for isin in isins:
             qty = timeline.qty_at(isin, d)
@@ -1353,6 +1366,7 @@ def _build_daily_series(
                 continue
             if _identity_key(isin, identity_by_isin) in closed:
                 continue  # explicitly equivalent group nets flat → closed
+            held = True
             price, source = resolver.price_on(isin, d)
             if record_source is not None:
                 record_source(isin, source)
@@ -1365,11 +1379,12 @@ def _build_daily_series(
                 if kind is None:
                     continue
                 total += value_position(qty, price, instrument_kind=kind)
-        return total
+            priced = True
+        return total, held, priced
 
-    raw = [(ts.date(), raw_value(ts.date())) for ts in days]
+    raw = [(ts.date(), *raw_value(ts.date())) for ts in days]
     # Anchor on the first strictly-positive value.
-    anchor_i = next((i for i, (_, v) in enumerate(raw) if v > 0), None)
+    anchor_i = next((i for i, row in enumerate(raw) if row[1] > 0), None)
     if anchor_i is None:
         empty = pd.Series(dtype=float)
         return empty, empty
@@ -1383,24 +1398,46 @@ def _build_daily_series(
     actual_vals.append(raw[anchor_i][1])
 
     prev_v = raw[anchor_i][1]
-    for d, v in raw[anchor_i + 1:]:
+    for d, v, held, priced in raw[anchor_i + 1:]:
         flow = external_flows.get(d, 0.0)
-        # Only advance the flow-adjusted NAV on a day with a real positive
-        # value. A day where every held ISIN prices to 0/None (a transient
-        # pricing gap) or the book is briefly fully liquidated to cash would
-        # otherwise give r=(0-0)/prev_v-1=-1, and since prev_v is only
-        # refreshed when v>0, nav*=(1+r)=0 would pin the index at zero for the
-        # ENTIRE rest of the window — fabricating a permanent -100% that
-        # poisons volatility/Sharpe/VaR/drawdown/CAGR. Carry the index flat
-        # across such days instead (they contribute a 0% return, not -100%).
-        if prev_v > 0 and v > 0:
-            r = (v - flow) / prev_v - 1.0
-            nav *= (1.0 + r)
+        # Chain the sub-period return on the capital that was already in the book
+        # at the START of the day: V_before = V_after − that day's external flow.
+        # Same convention ``stats.twror`` applies to the sparse valuations, where a
+        # pure deposit correctly yields r = 0.
+        #
+        # The two zero-value days must be told apart, and the old ``v > 0`` guard
+        # could not:
+        #   * HELD BUT UNPRICED — every held position resolved to None on a
+        #     transient pricing gap. The 0.0 is UNKNOWN, not "worth nothing": carry
+        #     the index flat AND keep the last real base, so the move across the
+        #     gap lands on the day pricing resumes.
+        #   * NO CAPITAL AT RISK — the book holds nothing, between the legs of a
+        #     round trip or after a wind-down. A period holding nothing earns
+        #     nothing, so the chain is SUSPENDED: the disposal day still chains its
+        #     own return (V_before is the sale proceeds — that gain used to be
+        #     dropped outright), then prev_v becomes 0 and the re-entry deposit
+        #     resumes the chain on the NEW base.
+        #
+        # Refusing to refresh prev_v on a legitimately-zero day is what pinned the
+        # index: months later the re-entry divided by capital that had left the book
+        # long before, giving exactly r = −1 — and since external flows are valued
+        # at the same resolver price as the valuation, V_before − flow is EXACTLY
+        # zero for a flat book, so this was structural rather than a coincidence of
+        # one price source. The result was a permanent −100% that poisoned
+        # volatility, Sharpe, VaR, drawdown and CAGR alike. It also had a silent
+        # variant: a residual below ``_QTY_EPS`` left the book reading flat while
+        # the re-entry day priced just above zero, so the index read −99.995% with a
+        # matching real drawdown, no NaN, no crash and nothing in the ledger.
+        if priced or not held:
+            v_before = v - flow
+            # ``v_before > 0`` is byte-for-byte the guard stats.twror uses, so the
+            # dense and sparse paths cannot disagree about a wipeout.
+            if prev_v > 0 and v_before > 0:
+                nav *= v_before / prev_v
+            prev_v = v
         index_dates.append(pd.Timestamp(d))
         index_vals.append(nav)
         actual_vals.append(v)
-        if v > 0:
-            prev_v = v
 
     idx = pd.DatetimeIndex(index_dates)
     return (
