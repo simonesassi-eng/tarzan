@@ -175,61 +175,111 @@ default_benchmarks:
 # =============================================================================
 
 geography_map:
+  # Each country appears under its NAME and its ISO-2 code: a provider
+  # reports the name, while an ISIN carries only the code, and a single
+  # stock's geography has to be resolvable from either. The map already
+  # carried US and JP in both forms; the rest were name-only, so a Swiss
+  # share whose secondary listing publishes no country could not be placed.
   # USA
   United States: USA
-  US: USA
+  "US": USA
   # Japan
   Japan: Japan
-  JP: Japan
+  "JP": Japan
   # Eurozone EMU
   Austria: Eurozone EMU
+  "AT": Eurozone EMU
   Belgium: Eurozone EMU
+  "BE": Eurozone EMU
   Finland: Eurozone EMU
+  "FI": Eurozone EMU
   France: Eurozone EMU
+  "FR": Eurozone EMU
   Germany: Eurozone EMU
+  "DE": Eurozone EMU
   Ireland: Eurozone EMU
+  "IE": Eurozone EMU
   Italy: Eurozone EMU
+  "IT": Eurozone EMU
   Netherlands: Eurozone EMU
+  "NL": Eurozone EMU
   Portugal: Eurozone EMU
+  "PT": Eurozone EMU
   Spain: Eurozone EMU
+  "ES": Eurozone EMU
   # Developed ex-USA ex-EMU ex-Japan
   Australia: Dev ex-USA ex-EMU ex-JP
+  "AU": Dev ex-USA ex-EMU ex-JP
   Canada: Dev ex-USA ex-EMU ex-JP
+  "CA": Dev ex-USA ex-EMU ex-JP
   Denmark: Dev ex-USA ex-EMU ex-JP
+  "DK": Dev ex-USA ex-EMU ex-JP
   Hong Kong: Dev ex-USA ex-EMU ex-JP
+  "HK": Dev ex-USA ex-EMU ex-JP
   Israel: Dev ex-USA ex-EMU ex-JP
+  "IL": Dev ex-USA ex-EMU ex-JP
   New Zealand: Dev ex-USA ex-EMU ex-JP
+  "NZ": Dev ex-USA ex-EMU ex-JP
   Norway: Dev ex-USA ex-EMU ex-JP
+  "NO": Dev ex-USA ex-EMU ex-JP
   Singapore: Dev ex-USA ex-EMU ex-JP
+  "SG": Dev ex-USA ex-EMU ex-JP
   Sweden: Dev ex-USA ex-EMU ex-JP
+  "SE": Dev ex-USA ex-EMU ex-JP
   Switzerland: Dev ex-USA ex-EMU ex-JP
+  "CH": Dev ex-USA ex-EMU ex-JP
   United Kingdom: Dev ex-USA ex-EMU ex-JP
+  "GB": Dev ex-USA ex-EMU ex-JP
   # Emerging Markets
   Brazil: Emerging Markets
+  "BR": Emerging Markets
   Chile: Emerging Markets
+  "CL": Emerging Markets
   China: Emerging Markets
+  "CN": Emerging Markets
   Colombia: Emerging Markets
+  "CO": Emerging Markets
   Czech Republic: Emerging Markets
+  "CZ": Emerging Markets
   Egypt: Emerging Markets
+  "EG": Emerging Markets
   Greece: Emerging Markets
+  "GR": Emerging Markets
   Hungary: Emerging Markets
+  "HU": Emerging Markets
   India: Emerging Markets
+  "IN": Emerging Markets
   Indonesia: Emerging Markets
+  "ID": Emerging Markets
   Korea: Emerging Markets
+  "KR": Emerging Markets
   South Korea: Emerging Markets
   Kuwait: Emerging Markets
+  "KW": Emerging Markets
   Malaysia: Emerging Markets
+  "MY": Emerging Markets
   Mexico: Emerging Markets
+  "MX": Emerging Markets
   Peru: Emerging Markets
+  "PE": Emerging Markets
   Philippines: Emerging Markets
+  "PH": Emerging Markets
   Poland: Emerging Markets
+  "PL": Emerging Markets
   Qatar: Emerging Markets
+  "QA": Emerging Markets
   Saudi Arabia: Emerging Markets
+  "SA": Emerging Markets
   South Africa: Emerging Markets
+  "ZA": Emerging Markets
   Taiwan: Emerging Markets
+  "TW": Emerging Markets
   Thailand: Emerging Markets
+  "TH": Emerging Markets
   Turkey: Emerging Markets
+  "TR": Emerging Markets
   United Arab Emirates: Emerging Markets
+  "AE": Emerging Markets
 
 
 # =============================================================================

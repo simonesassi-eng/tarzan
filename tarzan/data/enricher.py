@@ -1108,6 +1108,42 @@ def _resolve_isin(
         # confirm a EUR venue through the sturdier v7 quote batch.
         return _resolve_via_taxonomy_quote(clean_isin, taxonomy_ticker)
 
+    # An ISIN may only resolve to a symbol something POSITIVELY identifies. The
+    # ranking has no floor, so a candidate that is not curated, whose name matches
+    # nothing, and whose currency disagrees could still win on venue priority
+    # alone — and be cached as the authoritative mapping for that ISIN.
+    #
+    # That is not a hypothetical. Nestle's own ISIN resolved to NESR.SG, a
+    # different company on a different exchange, purely because SIX Swiss was
+    # missing from the probe list so the real listing was never a candidate, and
+    # nothing then refused the best of the wrong ones. The position was valued at
+    # another company's prices, with no diagnostic.
+    #
+    # Refusing leaves the instrument on the carry-flat/synthetic rung, which is
+    # DEGRADED and disclosed. A confident wrong company is not.
+    identified = [
+        c for c in candidates
+        if cfg.instrument_taxonomy_has(c.symbol)
+        or _name_match_score(c.name, canonical_name) > 0
+        or _currency_matches(c.currency, expected_currency)
+    ]
+    if identified:
+        candidates = identified
+    elif candidates:
+        logger.warning(
+            "ISIN %s: no candidate carries any identity evidence (checked %s); "
+            "refusing to resolve rather than pick one on venue priority alone",
+            clean_isin, ", ".join(c.symbol for c in candidates[:6]),
+        )
+        dq.warning(
+            "instrument_resolution",
+            "no provider listing could be positively identified for this ISIN "
+            "(no curated match, no name overlap, no currency agreement); the "
+            "position falls back to order-price history",
+            context=clean_isin,
+        )
+        return None
+
     # Rank all candidates deterministically (best first). The alphabetical
     # symbol is the final tiebreak (smaller symbol wins when keys are equal).
     ranked = sorted(
