@@ -33,16 +33,35 @@ that session is suspect.
 
 ## Reading a verdict
 
-| verdict | meaning |
-|---|---|
-| `PASS` | the oracle agreed |
-| `FAIL` | the oracle disagreed — a claim about the product |
-| `SKIP` | the state this check needs did not arise; the check made no claim |
-| `XFAIL` | a pre-registered expected failure (a known, accepted gap) |
-| `XPASS` | a pre-registered expected failure that passed |
+| verdict | meaning | coverage? |
+|---|---|---|
+| `PASS` | the oracle agreed | yes |
+| `FAIL` | the oracle disagreed — a claim about the product | yes |
+| `SKIP` | the state this check needs did not arise | yes — it looked |
+| `NOTE` | observed and deliberately NOT asserted (no sound oracle) | no |
+| `VOID` | there was no artefact to judge | **no** |
+| `XFAIL` | a pre-registered expected failure | yes |
+| `XPASS` | a pre-registered expected failure that passed | yes |
 
-`SKIP` is not a weak `PASS`. A check that skips has verified nothing, and the
-count of skips is part of the coverage answer.
+The distinction between `SKIP` and `VOID` is the one that matters, and conflating
+them is how the bench ran past two defects seventy-one times.
+
+A `SKIP` says the check looked and the state was not there — a EUR-only book has no
+currency to convert, and that is a fact about the fixture. A `VOID` says there was
+nothing to look at, and the reason there was nothing is usually the defect itself.
+Twelve runs produced no newsletter at all; every check that needed the HTML returned
+`SKIP`, and one cell reported "4 PASS, 5 SKIP, 0 FAIL" for a run that exited 1.
+Worse, seven checks passed VACUOUSLY on those runs: `None == None` is true, so two
+runs that wrote nothing were certified byte-identical, and "every failure record
+carries an id" was true of zero records.
+
+So `C0` now gates every run — exit 0 and a rendered newsletter, no exemptions — and
+`VOID` is printed and counted apart from `SKIP`. If you see `VOID`, `C0` should be
+failing beside it; if it is not, the bench has another blind spot.
+
+**Known open item:** `E9` reports `VOID` for one instrument in the networked block.
+Its row renders offline in the same configuration, so the gap is in live resolution,
+not in the oracle. Left visible rather than reclassified.
 
 ## The thing this bench keeps teaching
 

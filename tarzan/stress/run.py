@@ -86,7 +86,7 @@ def _truncated_orders(portfolio: str, dest: Path, cutoff: dt.date) -> str:
     return str(out)
 
 
-def _quantities(cell, cache) -> dict:
+def _quantities(cell, cache):
     """Quantities for the conservation check, from a direct orchestrator call.
 
     No artifact carries per-holding quantity, so this is the only sound source —
@@ -98,7 +98,9 @@ def _quantities(cell, cache) -> dict:
         return driver.quantities_in_process(portfolio=cell.portfolio,
                                             as_of=_effective(cell), cache_dir=cache)
     except Exception:                                  # noqa: BLE001 — recorded
-        return {}
+        # None, not {}: an empty dict is indistinguishable from a book that really
+        # holds nothing, and C5 would then certify the emptiness it failed to read.
+        return None
 
 
 def _effective(cell) -> dt.date | None:
@@ -113,8 +115,13 @@ def _per_run_checks(res, portfolio: str, effective: dt.date | None = None,
     from tarzan.stress import checks
     truth = _truth(portfolio, effective)
     out = []
-    if quantities is not None:
-        res.quantity_by_isin = quantities
+    # Propagate the oracle's None: guarding the assignment left C5's own
+    # no-oracle branch unreachable, so a malfunctioning oracle read as an empty
+    # book instead of as "nothing was verified".
+    res.quantity_by_isin = quantities
+    # The gate FIRST: every other check in this list can only make a claim about
+    # an artifact that exists.
+    out += checks.c0_run_rendered(res)
     out += checks.c5_quantity_and_cash(res, truth)
     out += checks.c6_weights_and_contributions(res)
     out += checks.c7_fx_and_native(res, truth)
@@ -184,11 +191,16 @@ def main(argv=None) -> int:
                   if res.outdir else []})
         return res
 
+    tally: dict = {}
+
     def record(cell_id: str, verdicts: list) -> None:
         for v in verdicts:
+            tally[v.state()] = tally.get(v.state(), 0) + 1
+            # v.state() is the ONE conversion. This copy of the ternary dropped
+            # XFAIL/XPASS, so the ledger recorded four expected-failure passes as
+            # ordinary PASSes and one expected failure as a real FAIL.
             _log(fh, {"kind": "check", "cell": cell_id, "check": v.check,
-                      "type": v.kind, "verdict": ("SKIP" if v.passed is None else
-                                                  "PASS" if v.passed else "FAIL"),
+                      "type": v.kind, "verdict": v.state(), "void": v.void,
                       "expected_fail": v.expected_fail, "detail": v.detail})
             print(f"  {cell_id:5s} {v.line()}")
 
@@ -286,11 +298,21 @@ def main(argv=None) -> int:
     except SystemExit as exc:
         print(f"\nSTOPPED by stop rule (exit {exc.code})")
     finally:
-        _log(fh, {"kind": "session_end", "runs": runs,
+        _log(fh, {"kind": "session_end", "runs": runs, "tally": dict(tally),
                   "seconds": round(time.time() - started, 1),
                   "network_attempts_total": len(net.attempts())})
         fh.close()
-        print(f"\n{runs} runs in {round(time.time()-started)}s · "
+        # VOID is printed apart from SKIP and NOT counted as coverage. Collapsing
+        # the two is how twelve runs that produced nothing read as a clean session:
+        # a SKIP means the check looked and the state was not there, a VOID means
+        # there was nothing to look at.
+        order = ("PASS", "FAIL", "XFAIL", "XPASS", "SKIP", "NOTE", "VOID")
+        line = " · ".join(f"{k} {tally[k]}" for k in order if tally.get(k))
+        print(f"\n{sum(tally.values())} verdicts: {line}")
+        if tally.get("VOID"):
+            print(f"  {tally['VOID']} VOID = no artifact to judge. NOT coverage; "
+                  "C0 names the runs that produced nothing.")
+        print(f"{runs} runs in {round(time.time()-started)}s · "
               f"network attempts {len(net.attempts())} · ledger {LEDGER}")
         print(f"session tree {session} (delete when done)")
     return 0
