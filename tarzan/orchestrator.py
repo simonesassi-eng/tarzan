@@ -538,8 +538,30 @@ def _run_once(
     _apply_per_holding_targets(holdings, targets_by_isin)
 
     if not holdings:
-        logger.error("Order list produced no holdings.")
-        return PortfolioMetrics(), config
+        # A fully liquidated book is a legitimate state, not bad input: every
+        # effective order nets to zero, so €0 IS the true total and the realized
+        # gain on the closed round trips is a real figure the reader is owed.
+        # Returning an empty PortfolioMetrics here threw that away and called it an
+        # error — the run exited 1, no issue was rendered, and summary.json still
+        # said SEND_NORMAL, so three parts of one run disagreed about it.
+        #
+        # ZERO EFFECTIVE ORDERS is the input error, and both branches above already
+        # catch it and return. Reaching here means the orders are real; only the
+        # position is empty. So the pipeline continues: the returns stage derives
+        # lifetime P&L from the order flows, which for a liquidated book IS the
+        # realized gain, and TWROR is the return over the periods the money was in.
+        logger.warning(
+            "All %d effective order(s) net to zero: the book is fully liquidated "
+            "and holds nothing. Reporting realized P&L over the closed positions.",
+            len(orders),
+        )
+        session.ledger.append(LedgerEntryType.STAGE, {
+            "stage": "snapshot",
+            "outcome": "SUCCEEDED",
+            "availability": Availability.AVAILABLE.value,
+            "holdings": 0,
+            "fully_liquidated": True,
+        })
 
     # Per-holding-only mode: seed zero-value positions for target instruments
     # not currently held, so the optimizer can buy them toward target. These

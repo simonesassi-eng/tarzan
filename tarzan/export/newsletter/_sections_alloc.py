@@ -300,7 +300,14 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     #     capital contributed (current_value − Total PnL). It answers "how
     #     much have I actually made on the money I put in".
     unrealized_eur = m.unrealized_pnl_eur
-    unrealized_pct = m.unrealized_pnl_pct or 0.0
+    # NOT ``or 0.0``. ``unrealized_pnl_pct`` returns None precisely when there is
+    # no cost basis to divide by, and 0.00% reads as "break-even" rather than "not
+    # applicable" — the numeric-zero-is-not-unavailable rule the property's own
+    # docstring states. Coercing it defeated ``_pnl_tile``'s ``is_missing``
+    # fallback, so a fully liquidated book headlined "Total P&L 0.00%" beside a
+    # caption reading "+€5.1k": the big number said the book had made nothing while
+    # the small one said what it had really made.
+    unrealized_pct = m.unrealized_pnl_pct
 
     has_total_pnl = m.pnl_eur is not None
     total_pnl_eur = m.pnl_eur if has_total_pnl else unrealized_eur
