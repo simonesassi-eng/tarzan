@@ -811,11 +811,19 @@ class TestCumExConservationProperty:
         assert res.valuations[-1][1] == pytest.approx(0.0)
         assert res.actual_value_series.loc[pd.Timestamp(opened)] == pytest.approx(20000.0)
         assert res.actual_value_series.loc[pd.Timestamp(closed)] == pytest.approx(0.0)
-        # Full liquidation carries the flow-adjusted NAV flat; it must not
-        # leave a residual or fabricate a permanent -100% return.
-        assert res.daily_series.loc[pd.Timestamp(closed)] == pytest.approx(
-            res.daily_series.loc[pd.Timestamp(closed - datetime.timedelta(days=1))]
-        )
+        # Full liquidation must not leave a residual or fabricate a permanent
+        # -100%, and must not DROP the disposal's own holding-period gain either.
+        # This used to assert the index was carried flat across the closing day,
+        # which encoded a real defect: bought at 100, sold at 105, the dense index
+        # reported 0.0% while stats.twror on the SAME build reported +5.0%. Two
+        # implementations of one measure, disagreeing, with a test pinning the
+        # wrong one. The disposal day now chains its own return — V_before is the
+        # sale proceeds — and the two paths agree.
+        assert res.daily_series.loc[pd.Timestamp(closed)] == pytest.approx(21000.0)
+        assert res.daily_series.iloc[-1] == pytest.approx(21000.0), \
+            "the index must stay flat after the wind-down, not decay"
+        assert (res.daily_series.iloc[-1] / res.daily_series.iloc[0] - 1) == \
+            pytest.approx(0.05), "a bond bought at 100 and sold at 105 made 5%"
         # Whole-history provenance retains the fallback used while the cum leg
         # was held and the exact observation used to value the closing ex-leg
         # external flow. The closed group still contributes no terminal value,
@@ -1897,3 +1905,92 @@ class TestUnavailableOrderHistory:
             "_portfolio_history_from_orders",
             "_returns",
         }
+
+
+class TestNoCapitalMeansNoReturn:
+    """A period holding nothing earns nothing — the chain suspends and resumes.
+
+    Selling out and buying back in used to pin the flow-adjusted index at ZERO for
+    the rest of history. ``prev_v`` was only refreshed on a strictly-positive day,
+    so months later the re-entry divided by capital that had left the book long
+    before: ``r = (V − flow) / stale_base − 1``, and because external flows are
+    valued at the SAME resolver price as the valuation, ``V − flow`` is exactly zero
+    for a book that was flat — so ``r = −1`` exactly, whatever the price source.
+
+    Everything read off that series was then wrong: a permanent −100%, a −100%
+    drawdown, and 0/0 NaN returns that took the whole newsletter down with them.
+
+    The silent variant is worse than the loud one: a residual below ``_QTY_EPS``
+    leaves the book reading flat while the re-entry day prices just above zero, so
+    the index lands at −99.99% with a matching REAL drawdown — no NaN, no crash and
+    nothing in the ledger to say so.
+    """
+
+    @staticmethod
+    def _round_trip(residual: float = 0.0) -> object:
+        """Buy at 100, sell everything at 110, buy back at 110, end at 121.
+
+        Two invested periods of +10% each, so the chained return is +21%.
+        ``residual`` leaves that many units behind on the sale — below
+        ``_QTY_EPS`` it is the silent variant, above it the book never goes flat.
+        """
+        return build_order_derived_series(
+            [
+                _o(OrderType.BUY, "IT0000000001", qty=100.0, gross=10000.0,
+                   price=100.0, d=(2025, 1, 2)),
+                _o(OrderType.SELL, "IT0000000001", qty=-(100.0 - residual),
+                   net=(100.0 - residual) * 110.0, price=110.0, d=(2025, 3, 3)),
+                _o(OrderType.BUY, "IT0000000001", qty=100.0, gross=11000.0,
+                   price=110.0, d=(2025, 5, 5)),
+                _o(OrderType.SELL, "IT0000000001", qty=-100.0, net=12100.0,
+                   price=121.0, d=(2025, 7, 7)),
+            ],
+            enriched_by_isin={}, today=datetime.date(2025, 9, 1))
+
+    def test_a_round_trip_chains_its_two_invested_periods(self):
+        ds = self._round_trip().daily_series
+        assert ds.iloc[-1] / ds.iloc[0] - 1 == pytest.approx(0.21, abs=1e-6), \
+            "two +10% periods must chain to +21%, not to a pinned -100%"
+
+    def test_the_index_never_reaches_zero(self):
+        ds = self._round_trip().daily_series
+        assert (ds > 0).all(), "the flow-adjusted index was pinned at zero"
+        assert not ds.isna().any(), "a zero index produces 0/0 NaN returns"
+
+    def test_no_drawdown_is_fabricated(self):
+        ds = self._round_trip().daily_series
+        assert ((ds / ds.cummax()) - 1).min() == pytest.approx(0.0, abs=1e-9), \
+            "a book that only ever gained reported a drawdown"
+
+    def test_the_silent_sub_epsilon_residual_variant(self):
+        """0.005 units left behind is below ``_QTY_EPS``, so the book READS flat
+        while the re-entry day still prices above zero: no NaN, no crash, and an
+        index that used to land at -99.99% with a real matching drawdown."""
+        ds = self._round_trip(residual=0.005).daily_series
+        assert ds.iloc[-1] / ds.iloc[0] - 1 > 0.20, \
+            f"the silent variant still collapses the index ({ds.iloc[-1]:.4f})"
+
+    def test_the_dense_and_sparse_paths_agree(self):
+        """Two implementations of one measure. ``stats.twror`` chains the sparse
+        valuations and was always right here; the dense builder disagreed, and the
+        two must not be allowed to drift apart again."""
+        from tarzan.engine.stats import twror
+
+        res = self._round_trip()
+        span = (datetime.date(2025, 9, 1) - datetime.date(2025, 1, 2)).days
+        sparse = twror(res.valuations, res.external_flows, span)
+        dense = (res.daily_series.iloc[-1] / res.daily_series.iloc[0] - 1) * 100
+        assert dense == pytest.approx(sparse.cumulative_pct, rel=1e-9)
+
+    def test_a_pricing_gap_is_still_bridged_not_treated_as_a_wipeout(self):
+        """The one part of the old guard that was right: a day where every HELD
+        position resolves to no price is UNKNOWN, not worth nothing. The base must
+        stay stale across it so the move lands when pricing resumes."""
+        res = build_order_derived_series(
+            [_o(OrderType.BUY, "IT0000000002", qty=10.0, gross=1000.0,
+                price=100.0, d=(2025, 1, 2))],
+            enriched_by_isin={}, today=datetime.date(2025, 4, 1))
+        ds = res.daily_series
+        assert (ds > 0).all()
+        assert ds.iloc[-1] == pytest.approx(ds.iloc[0]), \
+            "a carry-flat held position must report no return, not a loss"
