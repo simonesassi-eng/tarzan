@@ -44,6 +44,14 @@ def nice_ticks(lo: float, hi: float, n: int = 4) -> tuple[float, float, list[flo
     Returns ``(nice_lo, nice_hi, [ticks])`` so the axis spans clean bounds and
     labels read 6% / €120k rather than 5.96% / €119.4k.
     """
+    # A non-finite bound has no axis at all: ``math.floor(NaN)`` below raises
+    # ValueError, and this is the leaf every chart's axis goes through — so one
+    # NaN in one caller's series aborted the WHOLE issue, and the only symptom was
+    # "Validation error: cannot convert float NaN to integer". Degrade to a 0–1
+    # axis instead. Deciding that a series has nothing worth drawing belongs to
+    # whoever can tell a missing estimate from a flat one, not to the tick math.
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        lo, hi = 0.0, 1.0
     if hi <= lo:
         hi = lo + 1.0
     rng = hi - lo
@@ -120,7 +128,16 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
     # three-panel section is a whole row of height.
     ml, mr, mt, mb = 30, (8 + max(0, int(end_gutter))), 10, (32 if _rotate else 20)
     pw, ph = w - ml - mr, h - mt - mb
-    allv = [v for s in series for v in s["values"]]
+    # Finite points only. ``min``/``max`` over a list holding a NaN is silently
+    # ORDER-DEPENDENT — a leading NaN propagates because every comparison against
+    # it is False, a trailing one is ignored — so the axis depended on where the
+    # estimator's gap happened to sit. Nothing finite anywhere means there is no
+    # chart to draw: return "" like the empty-series case above, which every
+    # caller already treats as "omit the panel". This also covers a series whose
+    # ``values`` is empty, where ``min()`` raised on an empty iterable.
+    allv = [v for s in series for v in s["values"] if math.isfinite(v)]
+    if not allv:
+        return ""
     dlo, dhi = min(allv), max(allv)
     if include_zero:
         dlo, dhi = min(dlo, 0.0), max(dhi, 0.0)
@@ -221,8 +238,27 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
             _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
     _end_labels: list[tuple] = []
     for s in series:
-        pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
-        line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        # One polyline per contiguous run of FINITE points, each point kept on its
+        # own x position. A "nan,nan" inside the points attribute truncates the
+        # line at the gap in every client, and a NaN endpoint wipes EVERY end
+        # label on the panel, because the placement below shares one ``shift``
+        # across all of them. Bridging the gap with a straight segment instead
+        # would draw a figure across a stretch the estimator deliberately refused
+        # to estimate — the same reason ``_rolling_ann_vol`` will not back-fill.
+        # ponytail: an isolated finite point between two gaps becomes a
+        # single-point polyline, which draws nothing; a dot per run would fix that
+        # if a real series ever turns out to look like that.
+        runs, run = [], []
+        for i, v in enumerate(s["values"]):
+            if math.isfinite(v):
+                run.append((X(i), Y(v)))
+            elif run:
+                runs.append(run)
+                run = []
+        if run:
+            runs.append(run)
+        if not runs:
+            continue
         # Thin solid lines so small variations read clearly. The benchmark is
         # distinguished by its grey colour, not a dash (dashes hide the very
         # wobble the reader is trying to compare); ``dash`` is still honoured if
@@ -232,8 +268,11 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
         # references — the emphasis the portfolio line used to get from being the
         # only saturated colour among greys.
         sw = float(s.get("width", 1.5))
-        out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{dash} stroke-linejoin="round"/>')
-        lx, ly = pts[-1]
+        for r in runs:
+            line = " ".join(f"{x:.1f},{y:.1f}" for x, y in r)
+            out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{dash} stroke-linejoin="round"/>')
+        # The dot and the end label sit on the last point that HAS an estimate.
+        lx, ly = runs[-1][-1]
         out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" '
                    f'fill="{s["color"]}" stroke="{_P["card_alt"]}" '
                    f'stroke-width="1"/>')

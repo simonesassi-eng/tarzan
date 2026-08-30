@@ -130,6 +130,11 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
     history = data.get("history", pd.DataFrame())
     if history.empty:
         series = pd.Series(dtype=float)
+        # ``native`` and ``currency`` are only bound in the else branch, and both
+        # are read below — an empty-history benchmark raised UnboundLocalError,
+        # which ``preprocess_benchmarks`` then reported as a resolution failure.
+        native = pd.Series(dtype=float)
+        currency = ""
     else:
         prices = history["Close"]
         # A EUR venue is EUR by definition, so a flaky info.currency cannot
@@ -156,8 +161,16 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
         # FX evidence already travels: this function is injected in tests and
         # called in several places, and a widened signature would touch them all.
         _NATIVE_ATTR: native.reindex(series.index).dropna() if len(series) else native,
-        _CURRENCY_ATTR: currency or "EUR",
+        # Unknown stays unknown: the returns table omits the mark rather than claim
+        # euro for a listing whose currency the provider never reported. Empty
+        # string, not None, because this travels into a pandas column where a NaN
+        # renders as "[NAN]".
+        _CURRENCY_ATTR: currency or "",
     })
+    if not currency and len(series):
+        logger.warning(
+            "%s reported no listing currency; its returns are quoted unconverted "
+            "and carry no currency mark", selected_ticker)
 
     with _enr._net_lock:
         _enr._benchmark_memo[ticker] = series
@@ -213,7 +226,9 @@ def preprocess_benchmarks(
             ticker=resolved_ticker,
             history=canonical_history,
             history_native=native,
-            currency=canonical_history.attrs.get(_CURRENCY_ATTR) or "EUR",
+            # Same rule as the attr above: re-fabricating EUR here would undo it,
+            # and this branch also covers an injected fetch stub that sets no attr.
+            currency=canonical_history.attrs.get(_CURRENCY_ATTR) or "",
         )
 
     logger.info(

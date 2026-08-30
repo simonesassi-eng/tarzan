@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from datetime import datetime as dt, timezone
+from functools import partial
 from typing import Optional
 from urllib.request import Request, urlopen
 
@@ -161,8 +162,14 @@ def _get_fx_series(currency: str) -> pd.Series:
     For EUR, returns an empty series (sentinel for no conversion needed).
     Tries direct pair first, then inverse pair as fallback. Fetched fresh
     from yfinance on every call.
+
+    An EMPTY currency takes the same sentinel. There is no ``EUR?=X`` pair to
+    fetch, so asking for one only burns a request and logs "No FX data for ;
+    conversion unavailable" with a blank where the code should be. All three
+    callers route through here, which is why the guard belongs here rather than in
+    ``convert_to_eur``.
     """
-    if currency == "EUR":
+    if not currency or currency == "EUR":
         return pd.Series(dtype=float)
     return _fetch_fx_pair(currency)
 
@@ -3627,6 +3634,16 @@ def _apply_geo_breakdown(holding: Holding) -> None:
 MAX_WORKERS = cfg.max_workers()
 
 
+def _enrich_deferring(holding: Holding, diagnostics: list) -> Holding:
+    """Worker entry point: buffer this holding's diagnostics for ordered replay.
+
+    ``_enrich_and_classify`` is looked up globally rather than captured, so the
+    order tests that monkeypatch it keep working.
+    """
+    dq.defer_into(diagnostics)
+    return _enrich_and_classify(holding)
+
+
 def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     """Enrich all holdings in parallel using ThreadPoolExecutor.
 
@@ -3664,29 +3681,47 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     # recommended materially different purchases (CL2 and X25E each shifting by
     # thousands of euros) from the same budget. Every other figure matched,
     # because sums and weighted averages do not care about order.
+    # Diagnostics are buffered per holding and replayed at the INPUT index, for the
+    # same reason the results are: the run ledger records the order it is told about
+    # them, and a failure id is a (stage, code, ORDINAL) hash. Two off-taxonomy
+    # instruments that complete in either order swapped their failure ids between
+    # two REPRODUCIBLE runs of the same book, in 6 of 44 runs.
     slots: list[Optional[Holding]] = [None] * len(holdings)
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Context variables do not propagate to executor threads implicitly.
-        # Give each task its own copied context so run mode, effective date,
-        # active ledger, and transport policy remain authoritative in workers.
-        futures = {
-            executor.submit(copy_context().run, _enrich_and_classify, h): index
-            for index, h in enumerate(holdings)
-        }
-        for future in as_completed(futures):
-            index = futures[future]
-            try:
-                slots[index] = future.result()
-            except Exception as e:
-                h = holdings[index]
-                logger.error("Enrichment failed for %s: %s", h.ticker, e)
-                dq.error(
-                    "enricher",
-                    f"enrichment raised ({e}); holding kept UN-enriched (no live "
-                    "price/classification) — it may distort value, allocation and returns",
-                    context=(h.ticker or h.isin),
-                )
-                slots[index] = h
+    diagnostics: list[list] = [[] for _ in holdings]
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Context variables do not propagate to executor threads implicitly.
+            # Give each task its own copied context so run mode, effective date,
+            # active ledger, and transport policy remain authoritative in workers.
+            futures = {
+                executor.submit(
+                    copy_context().run, _enrich_deferring, h, diagnostics[index]
+                ): index
+                for index, h in enumerate(holdings)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    slots[index] = future.result()
+                except Exception as e:
+                    h = holdings[index]
+                    logger.error("Enrichment failed for %s: %s", h.ticker, e)
+                    diagnostics[index].append(partial(
+                        dq.error,
+                        "enricher",
+                        f"enrichment raised ({e}); holding kept UN-enriched (no live "
+                        "price/classification) — it may distort value, allocation "
+                        "and returns",
+                        context=(h.ticker or h.isin),
+                    ))
+                    slots[index] = h
+    finally:
+        # In a finally, not on the happy path: a BaseException escaping the pool
+        # (KeyboardInterrupt, or the SIGKILL-adjacent cases) would otherwise
+        # discard every diagnostic the workers had already produced — the evidence
+        # of what went wrong, lost exactly when it matters.
+        for buffered in diagnostics:
+            dq.replay(buffered)
     enriched: list[Holding] = [h for h in slots if h is not None]
 
     # Surface holdings that came through with no usable market price — they

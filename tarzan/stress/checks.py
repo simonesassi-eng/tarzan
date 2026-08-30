@@ -689,12 +689,13 @@ def e9_windows_against_the_tape(res, samples: list) -> list:
 
 
 def e10_sessions_from_the_calendar(cases: list) -> list:
-    """EXTERNAL + pre-registered expected failure.
+    """EXTERNAL. ``is_session`` reads the vendored exchange calendar and must call
+    a weekday holiday closed.
 
-    ``is_session`` reads the vendored exchange calendar and must call a weekday
-    holiday closed. ``market_open_now`` does NOT consult that calendar at all
-    (market_quotes.py:148 says holidays are not modelled), so the same date reads
-    OPEN there. Both are asserted; the second is registered as expected to fail.
+    Was half of a pre-registered expected failure: the calendar knew the holiday
+    while ``market_open_now`` judged by exchange hours plus a Mon–Fri test and
+    never asked it, so the same date read OPEN there. It asks now — see
+    :func:`e10_market_open_reads_the_calendar`.
     """
     from tarzan.data import exchange_calendar as ec
     from tarzan.data import market_quotes as mq
@@ -711,14 +712,24 @@ def e10_sessions_from_the_calendar(cases: list) -> list:
     return out
 
 
-def e10_market_open_ignores_holidays(pin_instant, ticker: str, day) -> list:
+def e10_market_open_reads_the_calendar(pin_instant, ticker: str, day) -> list:
+    """EXTERNAL. The pinned weekday holiday must read CLOSED.
+
+    Was a pre-registered expected failure: ``market_open_now`` judged by exchange
+    hours plus a Mon–Fri test and never read the calendar, so a holiday was a
+    session — the masthead said the market was open and every row was badged live
+    over a close-to-close figure. It now asks ``exchange_calendar.is_session`` on
+    the venue's own date, so this is an ordinary check.
+
+    The verdict id stays ``E10.mq`` so the append-only ledger keeps one identifier
+    for one question across the runs recorded before the fix.
+    """
     from tarzan.data import market_quotes as mq
 
     open_now = mq.market_open_now(ticker)
     return [Verdict("E10.mq", "EXTERNAL", open_now is False,
                     f"market_open_now({ticker}) on {day} = {open_now}; "
-                    "market_quotes never consults exchange_calendar",
-                    expected_fail=True)]
+                    "the venue is shut per the vendored exchange calendar")]
 
 
 # --------------------------------------------------------------------------- #

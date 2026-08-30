@@ -69,6 +69,17 @@ _GROUP_MIC: dict[str, str] = {
     "HE": "XHEL", "IR": "XDUB",
 }
 
+# Indices whose own venue is NOT the one their exchange group resolves to.
+# ``_exchange_for`` files every continental European symbol under "EU", which
+# _GROUP_MIC sends to Milan — fine for a Milan-listed ETF, wrong for the DAX and
+# the CAC, which follow Frankfurt's and Paris' holidays. The three calendars
+# genuinely differ (Milan trades 6 Jan and Frankfurt does not; Frankfurt shuts
+# 24 and 31 Dec and Milan does not), so without this the markets strip would
+# state a German index open on a German holiday and shut on an Italian one.
+_INDEX_MIC: dict[str, str] = {
+    "^GDAXI": "XETR", "^FCHI": "XPAR", "^N100": "XPAR", "^STOXX50E": "XETR",
+}
+
 
 @lru_cache(maxsize=1)
 def _table() -> tuple[dict[str, frozenset], dict[str, tuple]]:
@@ -109,6 +120,11 @@ def venue_mic(ticker: str) -> Optional[str]:
     text = str(ticker or "").strip().upper()
     if not text:
         return None
+    # Before the group fallback: an index carries no suffix, so it would
+    # otherwise be resolved by exchange group and land on the wrong calendar.
+    mic = _INDEX_MIC.get(text)
+    if mic:
+        return mic
     if "." in text:
         mic = _SUFFIX_MIC.get(text.rsplit(".", 1)[1])
         if mic:

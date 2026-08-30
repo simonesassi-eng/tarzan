@@ -144,8 +144,9 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     Returns True/False for instruments on a known cash exchange (mapped by
     Yahoo suffix or index symbol); True for 24/7 crypto; and None when the
     session concept doesn't cleanly apply (FX and futures trade nearly around
-    the clock) so callers can fall back to recency. Weekends are closed;
-    holidays are not modelled. Never raises."""
+    the clock) so callers can fall back to recency. A day the venue does not
+    trade — weekend or exchange holiday — is closed, per the vendored exchange
+    calendar. Never raises."""
     t = (ticker or "").upper()
     if t.endswith("-USD"):
         return True  # crypto trades 24/7
@@ -161,7 +162,19 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
         n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return None
-    if n.weekday() >= 5:  # Saturday / Sunday
+    # Weekend OR exchange holiday, asked on the VENUE's own date. ``n`` is already
+    # exchange-local, which is the same discipline current_session.stamp_date
+    # follows, and the difference is real: 23:30 UTC on 24 Dec is 10:30 on
+    # Christmas morning in Sydney, inside ASX hours, so judging by the run clock's
+    # date would call a shut exchange open. ``is_session`` rejects Saturday and
+    # Sunday itself, so it subsumes the weekday test it replaces, and outside the
+    # vendored horizon — or for a venue the table does not know — it degrades to
+    # exactly that test. Imported here rather than at module scope because
+    # exchange_calendar reaches back into this module (venue_mic → _exchange_for)
+    # to resolve a suffixless symbol.
+    from tarzan.data.exchange_calendar import is_session
+
+    if not is_session(t, n.date()):
         return False
     return dtime(oh, om) <= n.time() <= dtime(ch, cm)
 
@@ -229,23 +242,37 @@ def futures_open_now(now: Optional[datetime] = None) -> bool:
 _WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def _session_date(n: datetime, oh: int, om: int):
+def _session_date(n: datetime, oh: int, om: int, ticker: str = ""):
     """The exchange-local DATE whose cash session is live at ``n``, or was the
     most recently started one: today once today's own session has opened,
-    otherwise the previous trading day (walking back over a weekend one
-    weekday further). ``n`` must already be in exchange-local time."""
+    otherwise the most recent earlier session. ``n`` must already be in
+    exchange-local time.
+
+    ``ticker`` lets the walk-back use the venue's own calendar instead of a
+    Mon–Fri rule. Without it Christmas Day was named as the live session — the
+    caption read "Cl. Fri" on a Friday the exchange never opened — and
+    :func:`session_day` handed that non-session date to the intraday selector.
+    Both surfaces share this helper, so they stop being holiday-blind together.
+    """
     from datetime import timedelta
+
     d = n
     if not (d.weekday() < 5 and d.time() >= dtime(oh, om)):
         d = d - timedelta(days=1)
         while d.weekday() >= 5:
             d = d - timedelta(days=1)
-    return d.date()
+    day = d.date()
+    try:
+        from tarzan.data.exchange_calendar import last_session_on_or_before
+
+        return last_session_on_or_before(ticker, day) if ticker else day
+    except Exception:  # noqa: BLE001 — a calendar must never break a caption
+        return day
 
 
-def _cash_session_day(n: datetime, oh: int, om: int) -> str:
+def _cash_session_day(n: datetime, oh: int, om: int, ticker: str = "") -> str:
     """The weekday label of :func:`_session_date` — the caption form."""
-    return _WD[_session_date(n, oh, om).weekday()]
+    return _WD[_session_date(n, oh, om, ticker).weekday()]
 
 
 def fx_open_now(now: Optional[datetime] = None) -> bool:
@@ -313,7 +340,7 @@ def market_status(ticker: str, now: Optional[datetime] = None) -> tuple:
         n = (now if now is not None else _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return None, ""
-    return market_open_now(ticker, now), _cash_session_day(n, oh, om)
+    return market_open_now(ticker, now), _cash_session_day(n, oh, om, ticker)
 
 
 def market_session_age_seconds(
@@ -329,8 +356,14 @@ def market_session_age_seconds(
     (86,400 seconds); an in-progress current session contributes only elapsed
     open time. Same-day evidence uses ordinary elapsed time so stale intraday
     data remains detectable. ``None`` delegates to wall-clock freshness for
-    continuous or unknown markets. Holidays are not modelled because Tarzan
-    currently has no authoritative exchange calendar.
+    continuous or unknown markets.
+
+    Holidays are deliberately NOT applied here, even though
+    ``exchange_calendar`` could now supply them. Counting a holiday as a full
+    aging day makes evidence look older than it is, which biases the valuation
+    policy towards distrusting a price — the safe direction. Applying the
+    calendar here would relax that, so it is a policy change rather than a
+    correction, and it is not one this function should make on its own.
     """
     from datetime import timedelta
 
@@ -612,7 +645,7 @@ def session_day(ticker: str, now: Optional[datetime] = None):
         n = (now or _intraday_reference_now()).astimezone(tz)
     except Exception:  # noqa: BLE001
         return None
-    return _session_date(n, oh, om)
+    return _session_date(n, oh, om, ticker)
 
 
 def session_span(ticker: str, now: Optional[datetime] = None):
@@ -715,8 +748,9 @@ def _observed_day(ts, tz=None):
 
 def _no_trading_day_skipped(ticker: str, last_ts, now) -> bool:
     """Whether every calendar day strictly between ``last_ts`` and ``now``
-    was a non-trading day for ``ticker`` (weekend, per market_open_now's
-    weekday gate) - i.e. the market had no opportunity to print anything
+    was a non-trading day for ``ticker`` (weekend or exchange holiday, per the
+    vendored calendar market_open_now now reads) - i.e. the market had no
+    opportunity to print anything
     fresher in between. Probed once at midday per intervening day; coarse
     but sufficient to separate "just closed" from "stuck behind a session
     that did happen". Conservative on any error: reports a skip (False),

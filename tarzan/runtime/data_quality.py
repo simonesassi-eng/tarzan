@@ -16,6 +16,7 @@ import logging
 from collections import Counter
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,16 @@ class _Report:
 # issue and its ledger evidence.
 _report: ContextVar[Optional[_Report]] = ContextVar("tarzan_data_quality", default=None)
 
+# Set by a parallel caller inside each worker's COPIED context: records go into
+# that worker's buffer instead of into the report and the ledger, so the caller can
+# replay them in input order.
+#
+# Ledger order is evidence, and a failure id is a (stage, code, ORDINAL) hash — so
+# recording in thread-completion order made the id an instrument received depend on
+# which worker happened to finish first. Two off-taxonomy instruments swapped their
+# failure ids between two REPRODUCIBLE runs of the same book, in 6 of 44 runs.
+_deferred: ContextVar[Optional[list]] = ContextVar("tarzan_dq_deferred", default=None)
+
 
 def _current_report() -> _Report:
     report = _report.get()
@@ -57,6 +68,25 @@ def _current_report() -> _Report:
 def reset() -> None:
     """Start a fresh report in the current run context."""
     _report.set(_Report())
+    # Clear the deferral with it: a reset reached inside a deferring context would
+    # otherwise keep buffering into a list nobody replays, silently dropping every
+    # diagnostic after it.
+    _deferred.set(None)
+
+
+def defer_into(buffer: list) -> None:
+    """Buffer this context's records into ``buffer`` instead of recording them."""
+    _deferred.set(buffer)
+
+
+def replay(buffer: list) -> None:
+    """Record diagnostics buffered by :func:`defer_into`, in the buffer's order.
+
+    Runs in the CALLER's context, where ``_deferred`` is unset, so a replayed
+    record takes the normal path and cannot re-buffer itself.
+    """
+    for buffered in buffer:
+        buffered()
 
 
 def record(
@@ -76,6 +106,18 @@ def record(
     review instead of inferring acceptance from closure alone.
     """
     try:
+        # One gate at the single chokepoint every emitter routes through
+        # (warning / accepted_warning / error / info all call this), so it covers
+        # every dq call site in any module a worker can reach. Inside the existing
+        # try, so a diagnostic still cannot break the pipeline.
+        buffer = _deferred.get()
+        if buffer is not None:
+            buffer.append(partial(
+                record, severity, source, message, context,
+                accepted_resolution=accepted_resolution,
+                acceptance_provenance=tuple(acceptance_provenance),
+            ))
+            return
         issue = Issue(severity=severity, source=source, message=message, context=context)
         _current_report().issues.append(issue)
         from tarzan.runtime.ledger import Availability, LedgerEntryType

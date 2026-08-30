@@ -97,6 +97,57 @@ class TestSessionDay:
         assert mq.session_day("SGLD.MI") == date(2026, 8, 12)
 
 
+class TestAHolidayIsNotASession:
+    """``market_open_now`` reads the vendored calendar, not just Mon–Fri.
+
+    Christmas Day 2026 is a Friday. Judged on the hours table alone, Borsa
+    Italiana read OPEN: the masthead said the market was open, every holding row
+    was badged live over a close-to-close figure the series had correctly dated to
+    the 24th, and a feed rightly frozen on the 24th was hunted for a fresher
+    sibling that cannot exist.
+    """
+
+    def test_a_milan_holiday_is_closed(self, monkeypatch):
+        _pin(monkeypatch, "2026-12-25 11:00")      # Christmas Day, a Friday
+        assert mq.market_open_now("XMME.MI") is False
+
+    def test_an_ordinary_wednesday_is_open(self, monkeypatch):
+        _pin(monkeypatch, "2026-12-23 11:00")      # two days earlier, a session
+        assert mq.market_open_now("XMME.MI") is True
+
+    def test_the_holiday_is_the_venue_s_own_date(self):
+        """Sydney is eleven hours ahead in December, so 23:30 UTC on the 24th is
+        10:30 on Christmas morning there — inside the ASX's 10:00–16:00 hours. The
+        RUN clock's date is the 24th, which IS a session; only the venue's own date
+        says holiday. Same rule as ``current_session.stamp_date``."""
+        n = datetime(2026, 12, 24, 23, 30, tzinfo=timezone.utc)
+        assert mq.market_open_now("^AXJO", now=n) is False
+
+    def test_the_caption_names_the_last_REAL_session(self, monkeypatch):
+        """The label must not name a day the exchange never opened.
+
+        On Christmas Friday the walk-back stopped at the Friday itself, so the
+        caption read "Cl. Fri" for a session that did not happen. Milan shuts
+        Christmas Eve too, so the last real session is Wednesday the 23rd — which
+        a Mon–Fri walk-back could never reach either.
+        """
+        _pin(monkeypatch, "2026-12-25 11:00")
+        is_open, day = mq.market_status("XMME.MI")
+        assert is_open is False
+        assert day == "Wed", f"caption names {day!r}, not the last real session"
+
+    def test_a_continental_index_uses_its_own_calendar(self):
+        """^GDAXI is filed under the "EU" exchange group, which maps to Milan —
+        but the DAX follows Frankfurt. Frankfurt shuts 24 December and Milan does
+        not, so resolving the index by group would state the DAX open on a day
+        Xetra is closed."""
+        from tarzan.data.exchange_calendar import is_session, venue_mic
+
+        assert venue_mic("^GDAXI") == "XETR"
+        assert venue_mic("^FCHI") == "XPAR"
+        assert is_session("^GDAXI", date(2026, 12, 24)) is False
+
+
 class TestEveryReachableVenueHasASession:
     """A suffix the resolver can pick but ``_SUFFIX_EXCHANGE`` does not know has
     no session: ``session_day`` returns None and that instrument silently keeps

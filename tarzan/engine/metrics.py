@@ -1179,10 +1179,17 @@ class MetricsEngine:
         Falls back to the EUR series when no native one was kept, so a row is
         never dropped for want of a tape — 57 of the 81 rows list in EUR anyway,
         where the two series are the same object.
+
+        An unknown currency stays UNKNOWN. ``_currency_mark`` already omits the
+        mark for an empty code, so defaulting to "EUR" here printed ``[€]`` on a
+        row whose listing currency nobody ever reported — and the mark exists
+        precisely so the reader knows which currency a figure is in. Empty string
+        rather than None: this value lands in a pandas column, and a NaN renders
+        as ``[NAN]``.
         """
         if native is not None and len(native) >= 2:
-            return native, (currency or "EUR")
-        return series, (currency or "EUR")
+            return native, (currency or "")
+        return series, (currency or "")
 
     def _holding_performance(self, ctx: dict) -> None:
         rows = []

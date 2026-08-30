@@ -62,10 +62,10 @@ INSTANTS = {
     "C4": dt.datetime(2026, 8, 26, 18, 0, tzinfo=ROME),   # EU closed, US open
     "C5": dt.datetime(2026, 8, 26, 23, 30, tzinfo=ROME),  # both closed, post-US
     "C6": dt.datetime(2026, 8, 29, 12, 0, tzinfo=ROME),   # Saturday
-    # FINDING F1: a weekday exchange holiday is NOT expressible. market_open_now
-    # never consults exchange_calendar (market_quotes.py:148 says so), so this
-    # instant reads EU OPEN on Christmas Day. Kept in the matrix precisely to
-    # record that, as check E10's pre-registered expected failure.
+    # A weekday exchange holiday. market_open_now asks exchange_calendar for the
+    # venue's own date, so this instant reads EU CLOSED / US OPEN; check E10 pins
+    # it. It was the bench's first pre-registered expected failure, back when the
+    # only session rule was exchange hours plus Mon-Fri.
     # A PAST holiday, deliberately. Pinning a FUTURE effective date while in LIVE
     # mode makes the enricher compute a refresh window from the cache's last date
     # to a date months ahead and allocate without bound: the process is

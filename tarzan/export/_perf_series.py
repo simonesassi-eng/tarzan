@@ -11,6 +11,7 @@ are unchanged.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import pandas as pd
@@ -458,8 +459,9 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     scaling matches the sampling. A calendar-daily input would put ~29 calendar
     days in one line's window against 21 sessions in another's.
 
-    Returns ``{dates, port, acwi, target}`` (% lists; either reference may be
-    None), or None when unavailable."""
+    Returns ``{dates, port, acwi, target}`` (% lists; ANY line may be None — a
+    window that holds no estimate has no line, the portfolio's included), or None
+    when unavailable."""
     from tarzan.engine.stats import TRADING_DAYS
 
     nav_full = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
@@ -491,7 +493,26 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     if len(idx) < 2:
         return None
 
-    port = list(port_vol_full.reindex(idx, method="ffill").values.astype(float))
+    def _line(v: "pd.Series"):
+        """A rolling-vol line sampled on ``idx``, or None when the window holds
+        no estimate at all.
+
+        ``first_valid_index`` above only proves an estimate exists SOMEWHERE in
+        the history. A NAV sitting at zero across the window — a fully liquidated
+        stretch, or one pinned there by a re-entry flow — has no computable
+        returns, so the reindexed line is all-NaN. Same rule as
+        ``_perf_window._window_pct``: a NaN line is not a line. It has no axis
+        bounds (``_charts.nice_ticks`` cannot floor a NaN, which used to abort the
+        WHOLE issue), and the legend beside it would name a series nothing drew.
+
+        ``math.isfinite`` rather than ``notna``, because ``pct_change`` produces
+        ±inf on a zero-to-positive step and an infinite bound is no more
+        plottable than a NaN one.
+        """
+        vals = list(v.reindex(idx, method="ffill").values.astype(float))
+        return vals if any(math.isfinite(x) for x in vals) else None
+
+    port = _line(port_vol_full)
 
     # One σ per line over the PORTFOLIO's own life, so the three are comparable.
     # Each series' own full history is not: the benchmark holds two years where
@@ -533,7 +554,10 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         opens = v.first_valid_index()
         if opens is None or opens > pd.Timestamp(idx[0]):
             return None
-        return list(v.reindex(idx, method="ffill").values.astype(float))
+        # Same rule as the portfolio line: the left-edge demand above proves the
+        # reference OPENS before the window, not that it says anything inside one
+        # — an interior gap in its own history still lands a NaN on idx[0].
+        return _line(v)
 
     return {"dates": list(idx), "port": port, "acwi": _bench_vol(acwi_full),
             "target": _bench_vol(target_full), "span": span}

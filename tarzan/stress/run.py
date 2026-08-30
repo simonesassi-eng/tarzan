@@ -276,8 +276,10 @@ def main(argv=None) -> int:
             ]))
             from tarzan.stress import clock
             clock.install(clock.pin_for("C7"))
-            record("E10", checks.e10_market_open_ignores_holidays(
-                clock.INSTANTS["C7"], "XMME.MI", dt.date(2026, 12, 25)))
+            # Name the date actually measured: the installed pin is C7, and the
+            # verdict line used to print 2026-12-25 while evaluating C7's own day.
+            record("E10", checks.e10_market_open_reads_the_calendar(
+                clock.INSTANTS["C7"], "XMME.MI", clock.INSTANTS["C7"].date()))
             _log(fh, {"kind": "note", "cell": "E01",
                       "detail": "live tape comparison requires network; run separately "
                                 "with STRESS_ALLOW_NETWORK=1"})

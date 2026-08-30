@@ -1189,6 +1189,58 @@ class TestEnrichHoldingsOrderIsInputOrder:
         result = enricher.enrich_holdings(holdings)
         assert [h.ticker for h in result] == [h.ticker for h in holdings]
 
+    def test_diagnostics_do_not_follow_completion_order(self, monkeypatch):
+        """A failure id must belong to the instrument it describes, run to run.
+
+        ``failure_id`` is a ``(stage, code, ORDINAL)`` hash, so the id an
+        instrument receives is decided by the order the ledger is TOLD about its
+        diagnostic. Recording from inside the workers made that thread-completion
+        order: two off-taxonomy instruments swapped their failure ids between two
+        REPRODUCIBLE runs of the same book, in 6 of 44 runs.
+
+        Eight holdings, not four, because ``MAX_WORKERS`` comes from config — with
+        fewer workers than holdings the sleep ladder no longer forces a fully
+        reversed completion and the test would pass without asserting anything.
+        """
+        import datetime as _dt
+
+        from tarzan.runtime.ledger import LedgerEntryType, RunLedger
+        from tarzan.runtime.session import (
+            RunContext, RunMode, RunSession, activate_session,
+        )
+        from tarzan.runtime import data_quality as dq
+
+        holdings = self._holdings(8)
+        order = {h.ticker: i for i, h in enumerate(holdings)}
+
+        def slow_then_complain(h):
+            time.sleep(0.02 * (len(holdings) - order[h.ticker]))
+            dq.error("instrument_capability",
+                     "Explicit instrument kind/category is unknown or ambiguous",
+                     context=h.isin)
+            return h
+
+        monkeypatch.setattr(enricher, "_enrich_and_classify", slow_then_complain)
+        ledger = RunLedger("t")
+        ctx = RunContext(
+            attempt_id="t", mode=RunMode.REPRODUCIBLE,
+            effective_date=_dt.date(2026, 8, 26),
+            captured_at=_dt.datetime(2026, 8, 26, tzinfo=_dt.timezone.utc),
+        )
+        with activate_session(RunSession(context=ctx, config_snapshot={},
+                                         ledger=ledger)):
+            enricher.enrich_holdings(holdings)
+
+        # Filter on the stage: enrich_holdings also emits its own per-holding
+        # "no market price resolved" warnings, under stage "enricher".
+        seen = [e.payload["original_failure"]["context"]
+                for e in ledger.entries
+                if e.entry_type is LedgerEntryType.FAILURE_OPEN
+                and e.payload.get("stage") == "instrument_capability"]
+        assert seen == [h.isin for h in holdings], (
+            "the ledger recorded completion order, so ordinal 1 — and the "
+            "failure_id derived from it — belongs to the wrong instrument")
+
     def test_failed_holding_keeps_its_slot(self, monkeypatch):
         holdings = self._holdings(5)
 
