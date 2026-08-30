@@ -918,11 +918,19 @@ def _resolve_isin(
     # knows a real ticker, drop it here so resolution re-runs and self-heals via
     # the taxonomy + v7 quote fallback — every run, since CI restores the
     # poisoned cache and never re-saves on a same-day cache hit.
-    if (cached_symbol and taxonomy_ticker
+    # No ``and taxonomy_ticker``: the guard was conditioned on the one case that
+    # also self-heals WITHOUT it (a curated ISIN is re-resolved through the
+    # taxonomy + v7 quote fallback anyway), and it therefore never fired for the
+    # case it was written for — a taxonomy-unknown ISIN, where nothing else drops
+    # the self-map and ``_resolve_isin`` returns the ISIN as the resolved symbol.
+    # Measured on a held instrument the taxonomy does not describe: re-resolving
+    # gives a Milan venue with 1268 closes in EUR, against the self-map's 1261 in
+    # USD — so the guard firing is a small improvement, not a regression.
+    if (cached_symbol
             and cached_symbol.replace("-", "").casefold() == clean_isin.casefold()):
         logger.info(
-            "Dropping degenerate cached resolution %s→itself for ISIN with "
-            "curated ticker %s; re-resolving.", clean_isin, taxonomy_ticker,
+            "Dropping degenerate cached resolution %s→itself; re-resolving "
+            "(curated ticker: %s).", clean_isin, taxonomy_ticker or "none",
         )
         cached_symbol = None
 

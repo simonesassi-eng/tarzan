@@ -21,43 +21,47 @@ exchange_country:
 # ---------------------------------------------------------------------------
 # ISIN probing suffixes
 # ---------------------------------------------------------------------------
-# This order does TWO jobs, and it is worth knowing both before editing it.
+# This order is the RANK TIEBREAK and nothing more: ``enricher._suffix_priority``
+# returns the index, and that index is the last element of ``_rank_key(curated,
+# name_bucket, currency_match, suffix_rank)``. Two candidates tying on everything
+# observable are separated by this order alone.
 #
-#  1. It is the rank tiebreak (``enricher._suffix_priority``): when two candidate
-#     listings tie on everything that matters — curated, name overlap, currency —
-#     the one with the earlier suffix wins.
-#  2. It is the probe order, and the sweep is SUFFIX-MAJOR (every OpenFIGI root on
-#     .MI, then every root on .SG, ...) under a budget of ``_MAX_RESOLVE_FETCHES``
-#     candidates. So a suffix late in this list may never be probed at all for an
-#     ISIN that produced many roots.
+# It is ALSO the probe order, but that half does not bite. ``_MAX_RESOLVE_FETCHES``
+# counts candidates that ANSWERED, not fetches, and the break is evaluated before
+# each probe with len(metas) <= i — so symbols 0..9 are always probed, and for a
+# curated hint those first ten are exactly the hint plus all nine venues. Measured:
+# the cap never truncates before the winner for any curated instrument, and live
+# truncation (3 of 32 ISIN resolutions) always happened after the hint block with
+# the winner already probed, at the identical point under any order.
 #
-# Milan first: it is where this book actually trades. Munich (.MU) is last on
-# purpose — it is the sole Yahoo venue carrying a price for some swap-based UCITS
-# listings (IS39 among them), so it must be reachable but must not win a tie.
+# Milan first: it is where this book actually trades. Munich (.MU) and SIX (.SW)
+# are last on purpose. Munich is the sole Yahoo venue carrying a price for some
+# swap-based UCITS (IS39 among them), so it must be REACHABLE without winning a
+# tie. .SW is the same shape once you test the right thing: it is never the sole
+# usable venue for anything here, and promoting it moves a held instrument from
+# its London line (1262 closes) to its Swiss one (1254) — a tiebreak change with
+# nothing to recommend it.
 #
-# TWO THINGS HERE ARE NOT JUSTIFIED, stated so nobody assumes they were reasoned:
+# .SG (Stuttgart) outranking .DE (Xetra) looks wrong and is measured to cost
+# nothing. Of 91 curated roots, .SG yields a usable daily series for exactly ONE,
+# and that one is a different instrument (CL2.SG is CyberAgent Inc, not the
+# fund) which .MI outranks anyway; its other ten candidates quote a live price with
+# ZERO closes in a five-year pull, so both usability tests reject them. Swapping
+# the pair changes 0 of 91 resolutions and saves 6 history fetches across 32 cold
+# resolutions. So the order stays: its presence is unconstrained by any evidence in
+# this book, and so is its removal. What DOES depend on it is
+# test_enricher.py::test_prefers_candidate_with_usable_history, which uses a .SG
+# candidate to prove the history preference beats suffix priority — demote .SG and
+# that test passes for the wrong reason.
 #
-# * .SG (Stuttgart) outranks .DE (Xetra). Stuttgart is a retail venue and Xetra is
-#   the liquid German one, and the resolver's own candidate walk complains about
-#   exactly this: "a thin Stuttgart '.SG' line that yfinance quotes but has no
-#   daily series would otherwise win on suffix priority". The order predates the
-#   rename and carries no recorded rationale.
-# * .SW is last, which is NOT the Munich argument. Munich is a fallback-only venue;
-#   SIX Swiss is the PRIMARY listing of a Swiss instrument, so being probed last
-#   and losing every tie is backwards for the one case it exists to serve. It sits
-#   here only because appending was the change that could not perturb the budget or
-#   the tie order for the 91 instruments already resolving correctly.
-#
-# The deeper issue is that one flat list conflates "which venue do I prefer" with
-# "which venue can answer at all", and the fetch budget makes the two interact.
-# Preferring the instrument's OWN primary venue — derivable from the ISIN country
-# prefix, CH->.SW, GB->.L, IT->.MI — and keeping this list purely as the fallback
-# sweep would separate them. Not done: it changes resolution for every instrument,
-# so it wants its own measurement against the real book.
+# .ETLX was deleted after measurement, not on suspicion: it admitted zero
+# candidates for all 91 roots through the real ranking gate (_fetch_candidate_meta
+# returns None; 98 chart 404s), the taxonomy holds no Italian ISIN and no bond, and
+# removing it preserves every other pair's relative order — so it could not change
+# a resolution, only stop spending ~2 dead provider calls per root per run.
 isin_exchange_suffixes:
   - ".MI"
   - ".SG"
-  - ".ETLX"
   - ".DE"
   - ".F"
   - ".L"
