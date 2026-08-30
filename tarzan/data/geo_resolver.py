@@ -175,7 +175,58 @@ def _lookup_asset_geo(
 
 
 # ---------------------------------------------------------------------------
-# Priority 3: yfinance top holdings → country → geo
+# Priority 3: a single stock's OWN country
+# ---------------------------------------------------------------------------
+
+def _geo_from_own_country(ticker: str) -> Optional[tuple[dict[Geography, float], str]]:
+    """A single stock's geography is its own country. 100% of it, in one bucket.
+
+    The resolver had two paths and neither fitted an ordinary share: the curated
+    taxonomy, which a user fills for the FUNDS they hold, and a look-through to an
+    ETF's top holdings. For a stock the second is meaningless — Apple has no top
+    holdings, it IS one — so ``_geo_from_top_holdings("AAPL")`` returns None and
+    every share fell through to "Not Available". A book of US single stocks reported
+    95% of its value as geographically unknown, and the drift column then printed a
+    +95pp deviation against a bucket that is not a target.
+
+    Everything needed was already here: the provider reports ``country`` on the
+    instrument itself, and the config's country→geography map already knows what to
+    do with it. Nothing joined them.
+
+    ``country`` is the company's domicile rather than its listing venue, which is
+    also how index providers classify a constituent — so it is the right answer for
+    an EXPOSURE question, not merely the available one.
+    """
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
+    try:
+        import yfinance as yf
+
+        from tarzan.data import _yf_net
+
+        info = _yf_net.fetch_yf(lambda: yf.Ticker(str(ticker)).info,
+                                what=f"info {ticker}", log=logger) or {}
+    except Exception:  # noqa: BLE001 — geography must never break a run
+        return None
+    # Only for an actual share. A fund reports ETF/MUTUALFUND here, and its
+    # geography is a look-through question the next rung answers.
+    if str(info.get("quoteType") or "").upper() != "EQUITY":
+        return None
+    country = str(info.get("country") or "").strip()
+    geo = _geo_map().get(country)
+    if geo is None:
+        # A country the map does not place is not Geography.OTHER by default: the
+        # top-holdings rung uses that fallback for one constituent among many,
+        # where it is diluted. Here it would BE the whole answer.
+        return None
+    logger.info("single-stock geo for %s: %s (country %s)", ticker, geo.value, country)
+    return {geo: 100.0}, f"instrument country ({country})"
+
+
+# ---------------------------------------------------------------------------
+# Priority 4: yfinance top holdings → country → geo
 # ---------------------------------------------------------------------------
 
 def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float], str]]:
@@ -405,7 +456,8 @@ def resolve_geo(
 
     Priority:
     1. instrument_taxonomy.csv lookup (by ISIN, ticker, or index name)
-    2. yfinance top holdings fallback
+    2. a single stock's own country — it has no holdings to look through
+    3. yfinance top holdings fallback
 
     Args:
         isin: Holding ISIN.
@@ -429,6 +481,13 @@ def resolve_geo(
     if not runtime.allows_live_transport():
         return None
 
+    # Priority 3: a single stock's own country. Asked BEFORE the index-name bridge
+    # and the top-holdings look-through, both of which are fund questions that cost
+    # a scrape and a fetch per constituent to answer "None" for a share.
+    result = _geo_from_own_country(ticker)
+    if result:
+        return result
+
     # Then try index name match via justETF
     index_name = justetf_index_name(isin)
     if index_name:
@@ -436,7 +495,7 @@ def resolve_geo(
         if result:
             return result
 
-    # Priority 3: yfinance top holdings
+    # Priority 4: yfinance top holdings
     result = _geo_from_top_holdings(ticker)
     if result:
         return result
