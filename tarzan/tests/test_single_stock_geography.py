@@ -99,3 +99,113 @@ class TestTheResolverAsksBeforeTheFundPaths:
         breakdown, _ = gr.resolve_geo("US0378331005", "AAPL")
 
         assert breakdown == {Geography.USA: 100.0}
+
+
+class TestASecondaryListingFallsBackToTheDomicile:
+    """A secondary listing often publishes no country at all.
+
+    Nestlé's Stuttgart line reports ``quoteType='EQUITY'`` and ``country=None``,
+    while its primary Swiss listing says Switzerland. The ISIN's own prefix settles
+    it: for a SHARE that prefix is the company's domicile, the same fact the
+    provider would have reported. Not a usable signal for a fund, whose domicile
+    says nothing about its exposure — and this rung already refuses anything but
+    EQUITY.
+    """
+
+    def test_the_isin_prefix_places_a_countryless_listing(self, monkeypatch, _live):
+        _stub_info(monkeypatch, {"quoteType": "EQUITY"})       # no country
+
+        breakdown, source = gr._geo_from_own_country("NESR.SG", "CH0038863350")
+
+        assert breakdown == {Geography.DEVELOPED_EX_USA_EMU_JP: 100.0}
+        assert "CH" in source
+
+    def test_the_reported_country_still_wins_when_present(self, monkeypatch, _live):
+        """The prefix is a FALLBACK. A listing that states its country is
+        authoritative — a company can be domiciled in Jersey and be British."""
+        _stub_info(monkeypatch, {"quoteType": "EQUITY", "country": "United States"})
+
+        breakdown, source = gr._geo_from_own_country("X", "CH0038863350")
+
+        assert breakdown == {Geography.USA: 100.0}
+        assert "United States" in source
+
+    def test_an_unplaceable_prefix_claims_nothing(self, monkeypatch, _live):
+        """KY (Cayman) and BM (Bermuda) are not in the bucket map, and guessing
+        would be worse than declining."""
+        _stub_info(monkeypatch, {"quoteType": "EQUITY"})
+        assert gr._geo_from_own_country("X", "KY0000000000") is None
+
+    def test_the_map_carries_both_a_name_and_a_code_for_every_country(self):
+        """The map already held US and JP in both forms and the rest name-only,
+        which is why a Swiss share could not be placed from its ISIN."""
+        from tarzan import config as cfg
+
+        gm = cfg.geography_map()
+        names = {k: v for k, v in gm.items() if len(k) > 2}
+        codes = {k for k in gm if len(k) == 2 and k.isupper()}
+        assert len(codes) >= 40, f"only {len(codes)} ISO-2 codes in the map"
+        # Every bucket reachable by name must be reachable by a code too.
+        assert set(names.values()) == {gm[c] for c in codes}
+
+
+class TestAnAllOtherLookThroughIsNotAnAnswer:
+    """``gm.get(country, Geography.OTHER)`` turns every miss into a positive claim.
+
+    An aggregate that is ENTIRELY Other learned nothing about any constituent, and
+    returning it says "geography known, and it is Other" — which blocks the rungs
+    below and prints a bucket the reader cannot act on. Measured on a single stock
+    whose ISIN the provider would not link: {Other: 100.0} from the fund
+    look-through, on an instrument that has no constituents at all.
+    """
+
+    def test_an_all_other_aggregate_is_declined(self, monkeypatch, _live):
+        import pandas as pd
+
+        holdings = pd.DataFrame({"Holding Percent": [0.6, 0.4]},
+                                index=["AAA", "BBB"])
+
+        class _Funds:
+            top_holdings = holdings
+
+        class _T:
+            funds_data = _Funds()
+            info = {"country": "Ruritania"}          # unplaceable
+
+        monkeypatch.setattr("yfinance.Ticker", lambda *a, **k: _T())
+        monkeypatch.setattr("tarzan.data._yf_net.fetch_yf",
+                            lambda fn, **kw: fn())
+
+        assert gr._geo_from_top_holdings("XXXX") is None
+
+    def test_a_partially_placed_aggregate_is_still_returned(self, monkeypatch, _live):
+        """Guards against over-correcting: Other is legitimate for SOME of a real
+        fund's constituents, where it is diluted by the ones that placed."""
+        import pandas as pd
+
+        holdings = pd.DataFrame({"Holding Percent": [0.7, 0.3]},
+                                index=["USCO", "ZZCO"])
+        countries = {"USCO": "United States", "ZZCO": "Ruritania"}
+
+        class _Funds:
+            top_holdings = holdings
+
+        class _T:
+            def __init__(self, sym=""):
+                self.symbol = str(sym)
+                self.funds_data = _Funds()
+
+            @property
+            def info(self):
+                return {"country": countries.get(self.symbol, "")}
+
+        monkeypatch.setattr("yfinance.Ticker", lambda sym="", *a, **k: _T(sym))
+        monkeypatch.setattr("tarzan.data._yf_net.fetch_yf",
+                            lambda fn, **kw: fn())
+
+        result = gr._geo_from_top_holdings("FUND")
+
+        assert result is not None
+        breakdown, _ = result
+        assert breakdown[Geography.USA] == pytest.approx(70.0)
+        assert Geography.OTHER in breakdown

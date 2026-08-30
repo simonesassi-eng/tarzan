@@ -178,7 +178,7 @@ def _lookup_asset_geo(
 # Priority 3: a single stock's OWN country
 # ---------------------------------------------------------------------------
 
-def _geo_from_own_country(ticker: str) -> Optional[tuple[dict[Geography, float], str]]:
+def _geo_from_own_country(ticker: str, isin: str = "") -> Optional[tuple[dict[Geography, float], str]]:
     """A single stock's geography is its own country. 100% of it, in one bucket.
 
     The resolver had two paths and neither fitted an ordinary share: the curated
@@ -216,13 +216,28 @@ def _geo_from_own_country(ticker: str) -> Optional[tuple[dict[Geography, float],
         return None
     country = str(info.get("country") or "").strip()
     geo = _geo_map().get(country)
-    if geo is None:
-        # A country the map does not place is not Geography.OTHER by default: the
-        # top-holdings rung uses that fallback for one constituent among many,
-        # where it is diluted. Here it would BE the whole answer.
-        return None
-    logger.info("single-stock geo for %s: %s (country %s)", ticker, geo.value, country)
-    return {geo: 100.0}, f"instrument country ({country})"
+    if geo is not None:
+        logger.info("single-stock geo for %s: %s (country %s)",
+                    ticker, geo.value, country)
+        return {geo: 100.0}, f"instrument country ({country})"
+
+    # A SECONDARY listing often carries no country at all: Nestle's Stuttgart line
+    # reports quoteType EQUITY and country None, while its primary Swiss listing
+    # says Switzerland. The ISIN's own prefix settles it — for a SHARE that prefix
+    # is the company's domicile, which is the same fact the provider would have
+    # reported. (It is not a usable signal for a FUND, whose domicile says nothing
+    # about its exposure, and this rung already refuses anything but EQUITY.)
+    code = str(isin or "").strip().upper()[:2]
+    geo = _geo_map().get(code) if len(code) == 2 and code.isalpha() else None
+    if geo is not None:
+        logger.info("single-stock geo for %s: %s (ISIN prefix %s; the listing "
+                    "reported no country)", ticker, geo.value, code)
+        return {geo: 100.0}, f"instrument domicile ({code})"
+
+    # A country the map does not place is not Geography.OTHER by default: the
+    # top-holdings rung uses that fallback for one constituent among many, where it
+    # is diluted. Here it would BE the whole answer.
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +293,16 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
             total_weight += weight
 
         if not geo_weights or total_weight <= 0:
+            return None
+        # An aggregate that is ENTIRELY Geography.OTHER learned nothing: every
+        # constituent's country was absent or unplaceable, and `gm.get(country,
+        # OTHER)` turned each of those misses into a positive claim. Returning it
+        # says "geography known, and it is Other", which then blocks the rungs
+        # below and prints a bucket the reader cannot act on. Measured on a single
+        # stock whose ISIN the provider would not link: {Other: 100.0}.
+        if set(geo_weights) == {Geography.OTHER}:
+            logger.info("top_holdings geo for %s placed no constituent; "
+                        "declining rather than claiming Other", ticker)
             return None
 
         # Normalize to 100%
@@ -484,7 +509,7 @@ def resolve_geo(
     # Priority 3: a single stock's own country. Asked BEFORE the index-name bridge
     # and the top-holdings look-through, both of which are fund questions that cost
     # a scrape and a fetch per constituent to answer "None" for a share.
-    result = _geo_from_own_country(ticker)
+    result = _geo_from_own_country(ticker, isin)
     if result:
         return result
 

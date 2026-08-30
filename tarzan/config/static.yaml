@@ -35,6 +35,13 @@ isin_exchange_suffixes:
   - ".L"
   - ".PA"
   - ".MU"
+  # SIX Swiss, last for the same reason Munich is: it answers only what the
+  # others cannot. Its absence made every Swiss listing UNREACHABLE by ISIN —
+  # Nestle's own ISIN could not reach NESN.SW at all, so the resolver ranked
+  # whatever else the sweep had turned up and settled on a different company.
+  # The wider venue list the enricher probes for a EUR quote already carries
+  # .SW; the two disagreed and only one direction was tested.
+  - ".SW"
 
 # ---------------------------------------------------------------------------
 # OpenFIGI mappings
