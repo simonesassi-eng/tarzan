@@ -786,3 +786,85 @@ def _alt_series(fin: Optional[pd.Series]):
         return trend, f"{label} (managed futures)", tstart
     spliced = pd.concat([fin.loc[fin.index < tstart], trend]).sort_index()
     return spliced, f"{label} {tstart:%Y}+/cash", tstart
+
+
+# ---------------------------------------------------------------------------
+# Market state: today's starting point, for conditioning a forward simulation
+# ---------------------------------------------------------------------------
+
+_CAPE_BUNDLE = Path(__file__).with_name("shiller_cape.csv.gz")
+
+
+def shiller_cape() -> Optional[pd.Series]:
+    """Monthly US CAPE (Shiller's cyclically-adjusted P/E), vendored from 1900.
+
+    Used only to price the STARTING POINT of a forward simulation, never to
+    forecast a path. Snapshot, not live: Shiller publishes with a lag of a month
+    or two, so callers should read ``market_state()["cape_asof"]`` rather than
+    assume the last row is today.
+
+    TO REFRESH: take the ``ie_data.xls`` link from the page source of
+    https://shillerdata.com/ — it carries a per-release path segment and a
+    ``?ver=`` stamp, and the directory-level URL without them serves a STALE
+    file. That trap cost a run once: the older blob ended 23 months early at a
+    CAPE of 35.2 against the then-current 41.2, which alone halved the equity
+    valuation adjustment. Parse the ``Data`` sheet with ``skiprows=7``, keep
+    ``Date`` and ``CAPE``, and store the trailing rows where CAPE is blank as
+    absent rather than carrying the last value forward."""
+    if not _CAPE_BUNDLE.exists():
+        return None
+    try:
+        df = pd.read_csv(_CAPE_BUNDLE, index_col=0, parse_dates=True)
+    except Exception:  # noqa: BLE001
+        return None
+    s = df.iloc[:, 0].astype(float).dropna()
+    return s if not s.empty else None
+
+
+def market_state(sample_start=None, sample_end=None) -> dict:
+    """Today's state variables next to their average over the backtest sample.
+
+    A backtest treats its own window as the future's distribution; that is only
+    right if today looks like an average day in it. These are the three inputs
+    where "today" is measurable and clearly does NOT: the short rate that prices
+    leverage, the long yield that anchors bond returns, and the equity valuation
+    that anchors equity returns.
+
+    Returns raw levels in percent (plus the CAPE as a ratio), with no judgement
+    applied — turning them into return assumptions is
+    :func:`tarzan.engine.robustness.conditional_drift`'s job, and needs anchors
+    a caller has to own. Missing inputs come back as ``None`` rather than a
+    guess, so a partial state degrades a scenario instead of inventing one.
+    """
+    out: dict = {"short_rate_now": None, "short_rate_avg": None,
+                 "long_yield_now": None, "long_yield_avg": None,
+                 "cape_now": None, "cape_avg": None, "cape_asof": None}
+
+    def _level(ticker: str):
+        try:
+            s = _fetch_max(ticker)
+        except Exception:  # noqa: BLE001
+            return None
+        if s is None or getattr(s, "empty", True):
+            return None
+        s = s.dropna()
+        return s if not s.empty else None
+
+    for key, ticker in (("short_rate", "^IRX"), ("long_yield", "^TNX")):
+        s = _level(ticker)
+        if s is None:
+            continue
+        out[f"{key}_now"] = float(s.iloc[-1])
+        win = s.loc[sample_start:sample_end] if (sample_start or sample_end) else s
+        if not win.empty:
+            out[f"{key}_avg"] = float(win.mean())
+
+    cape = shiller_cape()
+    if cape is not None:
+        out["cape_now"] = float(cape.iloc[-1])
+        out["cape_asof"] = cape.index[-1].date().isoformat()
+        win = cape.loc[sample_start:sample_end] if (sample_start or sample_end) else cape
+        if not win.empty:
+            out["cape_avg"] = float(win.mean())
+            out["cape_at_sample_start"] = float(win.iloc[0])
+    return out

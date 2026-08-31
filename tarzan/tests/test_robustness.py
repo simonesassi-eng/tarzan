@@ -263,6 +263,77 @@ class TestJointBootstrap:
         assert rob.joint_bootstrap(df.iloc[:200], w, n_sims=50) == {}
 
 
+class TestConditionalDrift:
+    """Today's starting point turned into per-sleeve return shifts."""
+
+    STATE = {"short_rate_now": 3.7, "short_rate_avg": 1.9,
+             "long_yield_now": 4.7, "long_yield_avg": 3.3,
+             "cape_now": 35.2, "cape_avg": 27.3, "cape_at_sample_start": 41.9}
+
+    def test_a_sample_that_started_expensive_is_not_double_counted(self):
+        """CAPE fell 41.9 -> 35.2 inside the sample, so the realised return
+        already carries a valuation drag. The shift must be the DIFFERENCE
+        between the forward and in-sample contributions, not the forward one
+        alone, or the drag gets charged twice."""
+        expo = {"EQ": {"Equities": 1.0}}
+        sh = rob.conditional_drift(self.STATE, expo, {"EQ": 8.0},
+                                   horizon_years=15.0, sample_years=24.7)
+        forward_only = ((27.3 / 35.2) ** (1 / 15.0) - 1) * 100
+        assert sh["EQ"] > forward_only + 0.3, "in-sample drag not credited back"
+        assert -1.5 < sh["EQ"] < -0.5
+
+    def test_leverage_multiplies_the_equity_shift(self):
+        """A 2x equity sleeve takes twice the valuation shift; collapsing each
+        fund to one dominant class would understate it."""
+        sh = rob.conditional_drift(self.STATE, {"X1": {"Equities": 1.0},
+                                                "X2": {"Equities": 2.0}}, {})
+        assert sh["X2"] == pytest.approx(2 * sh["X1"], rel=1e-9)
+
+    def test_bond_leg_offsets_the_equity_drag_in_an_efficient_core(self):
+        """Higher yields help the bond sleeve, so a 90/60 fund is hit far less
+        than a pure equity one — the case a per-class mapping cannot express."""
+        sh = rob.conditional_drift(
+            self.STATE, {"EC": {"Equities": 0.9, "Fixed Income": 0.6},
+                         "EQ": {"Equities": 1.0}}, {})
+        assert sh["EC"] > sh["EQ"]
+
+    def test_gold_is_a_delta_against_what_it_actually_delivered(self):
+        sh = rob.conditional_drift(self.STATE, {"AU": {"Gold": 1.0}},
+                                   {"AU": 10.3}, gold_real_return=1.0, inflation=2.0)
+        assert sh["AU"] == pytest.approx(3.0 - 10.3, abs=0.01)
+
+    def test_unanchored_classes_are_absent_not_zero(self):
+        """Trend and commodities have no valuation state; the caller must be able
+        to tell "no adjustment" from "could not compute"."""
+        sh = rob.conditional_drift(self.STATE, {"TR": {"Alternative": 1.0}}, {})
+        assert "TR" not in sh
+
+    def test_unanchored_sleeves_still_pay_for_the_leverage(self):
+        """Financing is a portfolio cost: a trend sleeve has no valuation view but
+        cannot dodge the higher cost of the leverage funding it."""
+        sh = rob.conditional_drift(self.STATE, {"TR": {"Alternative": 1.0}}, {},
+                                   leverage_borrowed=0.26)
+        assert sh["TR"] == pytest.approx(-0.26 * (3.7 - 1.9), abs=1e-9)
+
+    def test_financing_charges_only_the_borrowed_part(self):
+        a = rob.conditional_drift(self.STATE, {"EQ": {"Equities": 1.0}}, {},
+                                  leverage_borrowed=0.0)
+        b = rob.conditional_drift(self.STATE, {"EQ": {"Equities": 1.0}}, {},
+                                  leverage_borrowed=0.26)
+        assert b["EQ"] == pytest.approx(a["EQ"] - 0.26 * (3.7 - 1.9), abs=1e-9)
+
+    def test_missing_state_yields_no_shifts(self):
+        assert rob.conditional_drift({}, {"EQ": {"Equities": 1.0}}, {}) == {}
+
+    def test_drift_shift_moves_the_simulated_median_by_the_weighted_amount(self):
+        df, w = TestJointBootstrap._sleeves()
+        base = rob.joint_bootstrap(df, w, n_sims=600)
+        shifted = rob.joint_bootstrap(df, w, n_sims=600, drift_shift={"A": -6.0})
+        # A carries half the portfolio, so a -6pp sleeve shift is about -3pp.
+        delta = shifted["cagr"]["median"] - base["cagr"]["median"]
+        assert -4.0 < delta < -2.0, delta
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))
