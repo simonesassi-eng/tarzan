@@ -678,7 +678,7 @@ def _summary_sheet(wb, portfolios) -> None:
     # leverage, the per-window KPI detail, and the wide instrument recap last.
     fixed_pre = [("Portfolio", 19)]
     decision = [("MC15y med", 8), ("MC15y p5", 7), ("MC15y band", 9),
-                ("DD str p5", 9), ("€100k→15y", 9),
+                ("DD str p5", 9), ("corr→1 ΔDD", 10), ("€100k→15y", 9),
                 ("×mult", 6),
                 ("R5y med", 7), ("R5y p5", 7), ("R10y med", 8), ("R10y p5", 7),
                 ("R15y med", 8), ("R15y p5", 7),
@@ -714,7 +714,11 @@ def _summary_sheet(wb, portfolios) -> None:
         "(p95−p5 = OUTCOME DISPERSION; narrower = more reliable, less path-dependent). DD str p5 = "
         "5th-pct 15y drawdown under a GARCH(1,1)+filtered-historical stress, which CAN string "
         "together a persistent high-vol regime the block bootstrap cannot; it moves the drawdown "
-        "tail (-33% to -38% on the lead target) and leaves the return distribution alone. €100k→15y "
+        "tail (-33% to -38% on the lead target) and leaves the return distribution alone. corr→1 ΔDD = "
+        "extra 5th-pct drawdown if the sleeves stopped diversifying, i.e. how much of the "
+        "portfolio rests on correlations that held in the sample but have no law behind them "
+        "(-19 points on the lead target); both legs come from the same sleeve-level engine, which "
+        "unlike the blended one also actually rebalances. €100k→15y "
         "= €100k compounded 15y at the MC median (your horizon). R5y/R10y/R15y med & p5 = median "
         "and 5th-pct annualised return over all historical rolling 5/10/15y holds (15y windows "
         "few & overlapping → thin, prefer MC15y). Eq/Bond/Gold/Trend/Comm = notional %% of "
@@ -798,6 +802,12 @@ def _summary_sheet(wb, portfolios) -> None:
         # GARCH-FHS drawdown tail: the bad case the block bootstrap cannot build.
         vals.append((_clean_num((((p.rob or {}).get("mc_stress", {}) or {})
                                 .get("max_drawdown", {}) or {}).get("p05")), "0.0"))
+        # Diversification dependence: the extra tail drawdown you take on if the
+        # sleeves stop diversifying. Both legs come from the SAME sleeve-level
+        # engine, so the difference isolates the correlations.
+        _jh = (((p.rob or {}).get("mc_joint", {}) or {}).get("max_drawdown", {}) or {}).get("p05")
+        _j1 = (((p.rob or {}).get("mc_joint_corr1", {}) or {}).get("max_drawdown", {}) or {}).get("p05")
+        vals.append((_clean_num((_j1 - _jh) if (None not in (_jh, _j1)) else None), "0.0"))
         vals.append((fv, "eur"))
         vals.append(((fv / 100_000) if fv is not None else None, "0.00\"x\""))  # multiplier
         for hz in (5, 10, 15):                         # rolling historical N-year holds
@@ -857,9 +867,9 @@ def _summary_sheet(wb, portfolios) -> None:
     per_win = ["hi", "lo", "hi", "hi", "hi", "hi", "lo", "hi"]  # CAGR Vol Shrp Sort MaxDD Calmr β α
     base = 1 + len(fixed_pre)                              # MC15y med column
     # MC med, p5, band, then the GARCH drawdown tail (less negative = better).
-    dirs = {base: "hi", base + 1: "hi", base + 2: "lo", base + 3: "hi"}
-    dirs[base + 5] = "hi"                                  # ×mult (base+4 = €100k text, skip)
-    for k in range(6, 12):                                 # R5/R10/R15 med & p5
+    dirs = {base: "hi", base + 1: "hi", base + 2: "lo", base + 3: "hi", base + 4: "hi"}
+    dirs[base + 6] = "hi"                                  # ×mult (base+5 = €100k text, skip)
+    for k in range(7, 13):                                 # R5/R10/R15 med & p5
         dirs[base + k] = "hi"
     for wi in range(len(_SUMMARY_WINDOWS)):                # the per-window KPI blocks
         for mi, d in enumerate(per_win):
@@ -869,7 +879,7 @@ def _summary_sheet(wb, portfolios) -> None:
         ws.conditional_formatting.add(f"{L}{hr + 1}:{L}{last_data}", _cs(d == "hi"))
     # Magnitude heatmap (white→dark blue) on asset split + geography + leverage.
     lev_col = base + len(decision) - 1
-    for col in list(range(base + 12, base + 22)) + [lev_col]:   # Eq..EM + Lev
+    for col in list(range(base + 13, base + 23)) + [lev_col]:   # Eq..EM + Lev
         L = get_column_letter(col)
         ws.conditional_formatting.add(f"{L}{hr + 1}:{L}{last_data}", _blue())
 

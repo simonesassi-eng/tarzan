@@ -146,6 +146,11 @@ class Portfolio:
         self.metrics_aligned_eur: dict = {}
         self.metrics_aligned_usd: dict = {}
         self.rob: dict = {}
+        # Per-sleeve daily returns (columns = tickers) and their target weights,
+        # in the reporting currency. The blended NAV above has the correlations
+        # and the rebalancing baked in; these keep them separable.
+        self.sleeve_returns = None
+        self.sleeve_weights = None
 
     @property
     def gross(self) -> float:

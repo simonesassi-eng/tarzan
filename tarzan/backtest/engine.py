@@ -187,7 +187,7 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
             spliced = syn.splice_returns(base, real)
         if spliced is None or spliced.empty:
             continue
-        key = f"i{i}"
+        key = it.bare or f"i{i}"
         cols[key] = spliced
         weights[key] = it.weight / 100.0
     if not cols:
@@ -195,6 +195,14 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
     df = pd.DataFrame(cols).dropna(how="any")
     if df.empty:
         return pd.Series(dtype=float)
+    # Keep the per-SLEEVE frame, not just the blended series. Resampling the
+    # blended NAV freezes the cross-sleeve correlations and the rebalancing
+    # policy as they happened; keeping the sleeves lets the joint simulation
+    # rebalance and stress correlations (see robustness.joint_bootstrap).
+    # Called once per numeraire with the default currency LAST, so what survives
+    # here is the default-currency frame — the same one the metrics use.
+    p.sleeve_returns = df
+    p.sleeve_weights = pd.Series(weights)
     return syn.combine_returns(df, pd.Series(weights), rebalance)
 
 
@@ -270,6 +278,16 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                     # are made of; a GARCH fit with resampled residuals can.
                     # Quote its drawdown tail, not its CAGR (see garch_stress).
                     "mc_stress": rob.garch_stress(nav, rf_annual=rf),
+                    # Sleeve-level simulation, which the blended NAV cannot do:
+                    # it rebalances, and it can break the correlations. Both runs
+                    # share one engine so their difference is the diversification
+                    # dependence and nothing else.
+                    "mc_joint": rob.joint_bootstrap(
+                        p.sleeve_returns, p.sleeve_weights, rebalance=rebalance,
+                        n_sims=400, rf_annual=rf),
+                    "mc_joint_corr1": rob.joint_bootstrap(
+                        p.sleeve_returns, p.sleeve_weights, rebalance=rebalance,
+                        n_sims=400, corr_shift=1.0, rf_annual=rf),
                 }
 
     proxy_data.set_target_currency(default_ccy)
