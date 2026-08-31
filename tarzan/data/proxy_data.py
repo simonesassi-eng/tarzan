@@ -836,8 +836,11 @@ def market_state(sample_start=None, sample_end=None) -> dict:
     a caller has to own. Missing inputs come back as ``None`` rather than a
     guess, so a partial state degrades a scenario instead of inventing one.
     """
-    out: dict = {"short_rate_now": None, "short_rate_avg": None,
-                 "long_yield_now": None, "long_yield_avg": None,
+    # "Today" is not one date: the rates are the last TRADING day while the CAPE
+    # is the last published MONTH, so each level carries its own as-of stamp
+    # rather than letting a reader assume they were all measured together.
+    out: dict = {"short_rate_now": None, "short_rate_avg": None, "short_rate_asof": None,
+                 "long_yield_now": None, "long_yield_avg": None, "long_yield_asof": None,
                  "cape_now": None, "cape_avg": None, "cape_asof": None}
 
     def _level(ticker: str):
@@ -855,6 +858,7 @@ def market_state(sample_start=None, sample_end=None) -> dict:
         if s is None:
             continue
         out[f"{key}_now"] = float(s.iloc[-1])
+        out[f"{key}_asof"] = s.index[-1].date().isoformat()
         win = s.loc[sample_start:sample_end] if (sample_start or sample_end) else s
         if not win.empty:
             out[f"{key}_avg"] = float(win.mean())

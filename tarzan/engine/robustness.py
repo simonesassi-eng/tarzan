@@ -578,6 +578,51 @@ def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
     }
 
 
+def conditional_drift_components(state: dict, *, horizon_years: float = 15.0,
+                                 sample_years: float = 25.0,
+                                 gold_real_return: float = 1.0, inflation: float = 2.0,
+                                 leverage_borrowed: float = 0.0,
+                                 cape_anchor: str = "sample_avg") -> dict:
+    """Per-CLASS annual shifts implied by today's state, BEFORE exposures.
+
+    Split out from :func:`conditional_drift` so a caller can report the drivers
+    separately from the per-sleeve result: multiplying each of these by the
+    portfolio's exposure to that class gives an exactly additive decomposition of
+    the conditional return, which is the only way to see WHICH assumption moved
+    the answer. Values in percentage points per year; ``None`` where the state
+    lacks the input. ``gold_target`` is an absolute expectation, not a shift —
+    the delta needs each sleeve's realised return, which lives with the caller.
+    """
+    cape_now = state.get("cape_now")
+    cape_avg = state.get("cape_avg")
+    cape_start = state.get("cape_at_sample_start")
+    long_now, long_avg = state.get("long_yield_now"), state.get("long_yield_avg")
+    sr_now, sr_avg = state.get("short_rate_now"), state.get("short_rate_avg")
+
+    eq_shift = in_sample = forward = None
+    if cape_now and cape_start and sample_years > 0:
+        in_sample = ((cape_now / cape_start) ** (1.0 / sample_years) - 1.0) * 100.0
+        if cape_anchor == "none":
+            forward = 0.0
+        else:
+            target = (state.get("cape_long_run_avg") or cape_avg
+                      if cape_anchor == "long_run" else cape_avg)
+            forward = (((target / cape_now) ** (1.0 / horizon_years) - 1.0) * 100.0
+                       if target else None)
+        if forward is not None:
+            eq_shift = forward - in_sample
+    return {
+        "equity": eq_shift,
+        "equity_in_sample": in_sample,
+        "equity_forward": forward,
+        "fixed_income": ((long_now - long_avg)
+                         if (long_now is not None and long_avg is not None) else None),
+        "gold_target": gold_real_return + inflation,
+        "financing": (-(sr_now - sr_avg) * float(leverage_borrowed)
+                      if (sr_now is not None and sr_avg is not None) else 0.0),
+    }
+
+
 def conditional_drift(state: dict, sleeve_exposures: dict, realised: dict, *,
                       horizon_years: float = 15.0, sample_years: float = 25.0,
                       gold_real_return: float = 1.0, inflation: float = 2.0,
@@ -634,33 +679,14 @@ def conditional_drift(state: dict, sleeve_exposures: dict, realised: dict, *,
     absent rather than zeroed, so the caller can tell "no adjustment" from "could
     not compute".
     """
+    comp = conditional_drift_components(
+        state, horizon_years=horizon_years, sample_years=sample_years,
+        gold_real_return=gold_real_return, inflation=inflation,
+        leverage_borrowed=leverage_borrowed, cape_anchor=cape_anchor)
+    eq_shift, fi_shift = comp["equity"], comp["fixed_income"]
+    gold_target, fin_drag = comp["gold_target"], comp["financing"]
+
     shifts: dict[str, float] = {}
-    cape_now = state.get("cape_now")
-    cape_avg = state.get("cape_avg")
-    cape_start = state.get("cape_at_sample_start")
-    long_now, long_avg = state.get("long_yield_now"), state.get("long_yield_avg")
-    sr_now, sr_avg = state.get("short_rate_now"), state.get("short_rate_avg")
-
-    eq_shift = None
-    if cape_now and cape_start and sample_years > 0:
-        in_sample = ((cape_now / cape_start) ** (1.0 / sample_years) - 1.0) * 100.0
-        if cape_anchor == "none":
-            forward = 0.0
-        elif cape_anchor == "long_run":
-            target = state.get("cape_long_run_avg") or cape_avg
-            forward = (((target / cape_now) ** (1.0 / horizon_years) - 1.0) * 100.0
-                       if target else None)
-        else:
-            forward = (((cape_avg / cape_now) ** (1.0 / horizon_years) - 1.0) * 100.0
-                       if cape_avg else None)
-        if forward is not None:
-            eq_shift = forward - in_sample
-
-    fi_shift = (long_now - long_avg) if (long_now is not None and long_avg is not None) else None
-    # Financing: the rise in the short rate, charged on the borrowed notional.
-    fin_drag = (-(sr_now - sr_avg) * float(leverage_borrowed)
-                if (sr_now is not None and sr_avg is not None) else 0.0)
-
     per_class = {"Equities": eq_shift, "Fixed Income": fi_shift}
     for ticker, exposures in (sleeve_exposures or {}).items():
         total, seen = 0.0, False
@@ -673,7 +699,7 @@ def conditional_drift(state: dict, sleeve_exposures: dict, realised: dict, *,
                 have = realised.get(ticker) if realised else None
                 if have is None:
                     continue
-                total += expo * ((gold_real_return + inflation) - have)
+                total += expo * (gold_target - have)
                 seen = True
                 continue
             adj = per_class.get(cls)

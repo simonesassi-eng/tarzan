@@ -438,7 +438,11 @@ def _risk_matrix(ws, row, portfolios) -> int:
 # else is ranked below them. target_fac_cl2 is the one currently written into
 # input/targets_per_holding.csv (the live rebalancing target); the others stay
 # starred because they remain in the running.
-_TARGETS = {"target_fac_cl2", "target_fac", "target_mix", "mom_6040"}
+# A TUPLE, not a set: the order is meaningful. The first entry is the allocation
+# currently written into input/targets_per_holding.csv, and the Method sheet's
+# worked example follows this order so it documents the live target rather than
+# whichever name a set happened to yield first.
+_TARGETS = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040")
 
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
@@ -1061,6 +1065,7 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
         _simulation_sheet(wb, sim_rows)
     if testfol:
         _testfol_sheet(wb, testfol, testfol_byinst)
+    _method_sheet(wb, portfolios)
 
     # Summary FIRST (created at index 0): one row per portfolio, full metric set.
     _summary_sheet(wb, portfolios)
@@ -1068,6 +1073,488 @@ def export_whatif_excel(path, portfolios, asset_target, geo_target, anchor,
     wb.save(path)
     logger.info("What-if workbook saved to %s", path)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Method & assumptions
+# ---------------------------------------------------------------------------
+
+# Every column in the Summary, and what it rests on. Kept as data rather than
+# prose in a docstring so the workbook can explain itself to a reader who does
+# not have the code — the numbers are only usable if the assumptions travel with
+# them. (group, column, what it is, how it is computed, what it assumes).
+_METHOD_ROWS: list[tuple[str, str, str, str]] = [
+    ("ENGINE", "Synthetic history",
+     "One aligned daily series per portfolio, 2000-2026, in EUR.",
+     "Each sleeve is rebuilt from geo/market proxies (leverage financed at the short rate + 0.5% spread), "
+     "net of TER, then spliced onto the fund's real returns once they start. Factor ETFs get a factor tilt "
+     "on the Fama-French legs. ASSUMES the proxies represent the sleeve and that a reconstructed past is "
+     "informative; the pre-inception tail omits the regression residual, so its idiosyncratic vol is a floor."),
+    ("ENGINE", "Rebalancing",
+     "Quarterly by default: weights drift between dates and reset at each boundary.",
+     "Modelled with no transaction cost — no commissions, no bid-ask, no tax. On 8 positions at ~EUR19/order "
+     "that is 0.13-0.26%/yr of real drag not shown anywhere in this workbook. The sleeve simulation below "
+     "measures rebalancing as worth ~0.19pp of CAGR against 1.1pp of dispersion, with annual ~= quarterly."),
+    ("ENGINE", "Currency & inflation",
+     "Everything is NOMINAL EUR.",
+     "No inflation adjustment anywhere. At 2% inflation a 15-year nominal multiplier of 3.4x is 2.5x in "
+     "today's purchasing power. Sharpe/Sortino/Calmar/MaxDD/beta are unaffected (nominal excess over a "
+     "nominal risk-free is already a real quantity); the wealth projections are not."),
+    ("RETURN", "CAGR",
+     "Annualised compound return over the window, from endpoint to endpoint.",
+     "Frequency-independent, so unaffected by the daily-noise issue below. Net of TER and financing, gross "
+     "of commissions and tax."),
+    ("RISK", "Vol%",
+     "Annualised standard deviation, from MONTHLY returns.",
+     "Monthly on purpose: the reconstruction's DAILY frequency carries non-synchronous pricing noise "
+     "(proxies closing in different time zones, an FX stamp at another hour, stale historical NAVs) which "
+     "inflated vol by ~1.4x. Proof it is noise: over 2021+, where the funds have real prices, daily and "
+     "monthly agree (ratio 1.06 vs 1.41 full-window). It hit diversified portfolios hardest (1.43x on 8 "
+     "sleeves vs 1.24x on 2), because noise is independent across sleeves while true returns are not."),
+    ("RISK", "Shrp / Sort",
+     "Sharpe and Sortino on monthly excess returns over a time-varying risk-free.",
+     "Each month is charged the rate that actually prevailed. Sortino uses target semideviation (RMS "
+     "shortfall below the risk-free), not the std of negatives. Both were ~30-40% understated while "
+     "measured daily."),
+    ("RISK", "MaxDD% / Calmr",
+     "Worst peak-to-trough on the DAILY path; Calmar = CAGR / |MaxDD|.",
+     "Deliberately daily, unlike Vol: a month-end drawdown would erase real intra-month crashes such as "
+     "March 2020. Not comparable to the Monte-Carlo drawdowns, which are month-end."),
+    ("RISK", "beta / alpha",
+     "Daily regression against an ACWI-weighted blend of the geo proxies.",
+     "Kept daily because portfolio and benchmark are built from the same proxies, so their timing noise is "
+     "common and cancels in the ratio (beta moves 0.71 -> 0.70 monthly) while daily gives 20x the "
+     "observations. Alpha is Jensen, annualised."),
+    ("MONTE CARLO", "MC15y med / p5 / band",
+     "Median, 5th percentile and p95-p5 spread of the 15-year CAGR over 2000 simulated paths.",
+     "Moving-block bootstrap of MONTHLY returns, 1-month blocks: the portfolio's own months are drawn with "
+     "replacement and compounded into new 15-year paths. It reshuffles the PAST, it does not forecast. "
+     "Monthly and 1-month blocks because the answer then stops depending on the block length (band 10.1 / "
+     "10.1 / 10.1 / 10.5 for 1/3/6/12-month blocks, against 14.4 / 11.7 / 10.6 for daily 1/21/126-day "
+     "blocks). ASSUMES the future is drawn from the sample, with its means, correlations and tails."),
+    ("MONTE CARLO", "DD str p5",
+     "5th-percentile 15-year drawdown under a volatility-clustering stress.",
+     "GARCH(1,1) fitted to monthly returns, then the STANDARDISED residuals are resampled (filtered "
+     "historical simulation), so shock shapes stay empirical. Exists because the bootstrap draws months "
+     "independently and structurally cannot build a persistent bad regime, which is what deep drawdowns are "
+     "made of. It moves the tail only (-33% -> -38% on the lead target) and leaves returns alone, so quote "
+     "the bootstrap's CAGR, not this one's."),
+    ("MONTE CARLO", "corr->1 dDD",
+     "Extra 5th-percentile drawdown if the sleeves stopped diversifying.",
+     "Sleeve-level simulation twice: once at historical correlations, once with a Gaussian copula that keeps "
+     "each sleeve's empirical monthly marginal while sliding the correlation matrix to all-ones. The "
+     "difference is how much of the portfolio rests on correlations that held in the sample but have no law "
+     "behind them. Both legs share one engine, so nothing else differs."),
+    ("MONTE CARLO", "cond CAGR",
+     "15-year median CAGR started from TODAY's yields and valuations instead of the sample's average day.",
+     "A SCENARIO UNDER STATED ASSUMPTIONS, NOT A FORECAST. Only the means move; volatilities, correlations "
+     "and tails stay empirical. Shifts scale by each fund's own exposure, so a 90/60 efficient-core takes "
+     "0.9 of the equity shift and 0.6 of the bond shift and a 2x ETF takes double. See the driver table "
+     "below for what moves each portfolio. TWO LIMITS: the equity anchor is the US CAPE applied to ALL "
+     "equity sleeves, so it overstates the drag on the cheaper non-US ones; and because the only views are "
+     "per asset class, portfolios with the same class mix get the SAME shift — this column separates a "
+     "gold-heavy portfolio from a bond-heavy one, but says nothing about which equities you hold."),
+    ("HISTORY", "R5y / R10y / R15y",
+     "Median and 5th percentile annualised return over every rolling 5/10/15-year hold in the history.",
+     "Overlapping windows, so they are not independent observations: 26 years hold about 2-3 independent "
+     "15-year periods. Read them as texture, prefer the Monte Carlo for the horizon."),
+    ("EXPOSURE", "Lev / Eq..Comm / USA..EM",
+     "Leverage, notional asset split as % of capital, equity geography as % of the equity sleeve.",
+     "Notional, i.e. leverage-aware: an efficient-core fund contributes both its equity and its bond "
+     "futures. Geography comes from the taxonomy's per-instrument breakdown, not from a lookthrough."),
+    ("PROJECTION", "EUR100k->15y / xmult",
+     "The MC median CAGR compounded for 15 years from EUR100k.",
+     "Median, not mean: compound returns are right-skewed, so the mean is dragged up by a few paths nobody "
+     "will live (EUR389k mean vs EUR352k median on the lead target). NOMINAL, and it inherits every "
+     "assumption of the MC column it comes from."),
+]
+
+
+def _method_sheet(wb, portfolios) -> None:
+    """A sheet that explains the workbook: what each Summary column is, how it is
+    computed and what it assumes, followed by an additive attribution of the
+    conditional scenario per portfolio.
+
+    A number without its assumptions is not usable. The conditional CAGR in
+    particular is a scenario, and a reader who cannot see that gold contributes
+    more of it than the financing cost does has no way to argue with it — which
+    is the only thing that earns a scenario a place in a decision.
+    """
+    ws = wb.create_sheet("Method")
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.tabColor = _C["muted"]
+    for col, wid in (("A", 14), ("B", 24), ("C", 58), ("D", 112)):
+        ws.column_dimensions[col].width = wid
+
+    ws.merge_cells("A1:D1")
+    t = ws.cell(row=1, column=1, value="METHOD & ASSUMPTIONS — how every Summary column is built")
+    t.font = _font(15, bold=True, color=_C["white"]); t.fill = _fill(_C["header"])
+    ws.row_dimensions[1].height = 26
+    ws.merge_cells("A2:D2")
+    ws.cell(row=2, column=1, value=(
+        "Read this before quoting anything from Summary. Backtested figures are net of TER and financing "
+        "and GROSS of commissions and tax; everything is nominal EUR. Where a choice was made — sampling "
+        "frequency, an anchor, a haircut — it is named here rather than buried."
+    )).font = _font(9, italic=True, color=_C["muted"])
+    ws.row_dimensions[2].height = 24
+
+    hdr = 3
+    for j, lab in enumerate(("Block", "Column", "What it is",
+                             "How it is computed / what it assumes")):
+        c = ws.cell(row=hdr, column=1 + j, value=lab)
+        c.font = _font(9, bold=True, color=_C["white"]); c.fill = _fill(_C["band"])
+        c.alignment = _align("left"); c.border = _border()
+    r = hdr + 1
+    last_group = None
+    for group, column, what, how in _METHOD_ROWS:
+        bg = _C["alt"] if (r % 2) else _C["white"]
+        for j, val in enumerate((group if group != last_group else "", column, what, how)):
+            c = ws.cell(row=r, column=1 + j, value=val)
+            c.font = _font(9, bold=(j == 0 and bool(val)), color=_C["text"])
+            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            c.fill = _fill(bg); c.border = _border()
+        ws.row_dimensions[r].height = max(28, 11 * (1 + len(how) // 100))
+        last_group = group
+        r += 1
+
+    def _first(key):
+        for q in portfolios:
+            v = ((q.rob or {}).get("mc_conditional", {}) or {}).get(key)
+            if v:
+                return v
+        return None
+
+    r += 2
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+    h = ws.cell(row=r, column=1,
+                value="CONDITIONAL SCENARIO — what moves each portfolio (additive attribution)")
+    h.font = _font(12, bold=True, color=_C["white"]); h.fill = _fill(_C["header"])
+    r += 1
+    state, comp = _first("state"), _first("components")
+    bits = []
+    if state:
+        for lab, kn, ka, fmt in (("short rate", "short_rate_now", "short_rate_avg", "{:.2f}%"),
+                                 ("10y yield", "long_yield_now", "long_yield_avg", "{:.2f}%"),
+                                 ("US CAPE", "cape_now", "cape_avg", "{:.1f}")):
+            if state.get(kn) is not None and state.get(ka) is not None:
+                bits.append(f"{lab} today {fmt.format(state[kn])} vs sample avg {fmt.format(state[ka])}")
+        if state.get("cape_asof"):
+            bits.append(f"CAPE as of {state['cape_asof']}")
+    if comp:
+        if comp.get("equity") is not None:
+            bits.append(
+                f"equity shift {comp['equity']:+.2f}pp/yr (forward "
+                f"{comp.get('equity_forward') or 0:+.2f} minus in-sample "
+                f"{comp.get('equity_in_sample') or 0:+.2f}, so the sample's own valuation move is "
+                f"credited back instead of charged twice)")
+        if comp.get("fixed_income") is not None:
+            bits.append(f"bond shift {comp['fixed_income']:+.2f}pp/yr")
+        bits.append(f"gold assumed {comp.get('gold_target') or 0:.1f}% nominal vs what it realised")
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+    ws.cell(row=r, column=1, value=("STARTING POINT — " + "  |  ".join(bits) if bits
+                                    else "Conditional scenario unavailable.")
+            ).font = _font(9, italic=True, color=_C["muted"])
+    ws.row_dimensions[r].height = 30
+    r += 1
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+    ws.cell(row=r, column=1, value=(
+        "Each driver = that class's shift times this portfolio's exposure to the class, so the four add up. "
+        "The %-of-total columns show WHICH assumption is doing the work: where gold dominates, the number is "
+        "mostly a judgement about gold rather than about the portfolio. 'total pp' is the analytic sum; the "
+        "simulated gap in Summary differs from it by rebalancing and compounding."
+    )).font = _font(9, italic=True, color=_C["muted"])
+    ws.row_dimensions[r].height = 30
+    r += 2
+
+    # --- How each shift is computed, with the live inputs -------------------
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+    hh = ws.cell(row=r, column=1, value="SHIFT ARITHMETIC — every number below is reproducible from these")
+    hh.font = _font(11, bold=True, color=_C["white"]); hh.fill = _fill(_C["band"])
+    r += 1
+    for j, lab in enumerate(("Driver", "Formula", "Inputs (live)", "Result")):
+        c = ws.cell(row=r, column=1 + j, value=lab)
+        c.font = _font(9, bold=True, color=_C["white"]); c.fill = _fill(_C["header"])
+        c.alignment = _align("left"); c.border = _border()
+    r += 1
+    sy = _first("sample_years") or 25.0
+    gold_t = (comp or {}).get("gold_target")
+    arith_rows = [
+        ("equity valuation",
+         "shift = forward - in_sample, where each = (CAPE_to / CAPE_from) ^ (1 / years) - 1",
+         (f"in_sample: CAPE {state.get('cape_at_sample_start'):.1f} -> {state.get('cape_now'):.1f} "
+          f"over {sy:.1f}y = {(comp or {}).get('equity_in_sample') or 0:+.2f}%/yr  |  "
+          f"forward: CAPE {state.get('cape_now'):.1f} -> {state.get('cape_avg'):.1f} over 15y = "
+          f"{(comp or {}).get('equity_forward') or 0:+.2f}%/yr"
+          if state and comp else "n/a"),
+         f"{(comp or {}).get('equity') or 0:+.2f} pp/yr"),
+        ("", "WHY the subtraction",
+         "The sample's realised return already contains whatever the multiple did INSIDE it. Charging the "
+         "forward reversion alone would bill that move twice. Here the sample started and ended at almost "
+         "the same multiple, so it carries almost no drag to credit back and the forward figure passes "
+         "through nearly whole.", ""),
+        ("bond yield",
+         "shift = yield_today - average yield over the sample",
+         (f"10y {state.get('long_yield_now'):.2f}% today vs {state.get('long_yield_avg'):.2f}% average"
+          if state and state.get("long_yield_now") is not None else "n/a"),
+         f"{(comp or {}).get('fixed_income') or 0:+.2f} pp/yr"),
+        ("", "WHY the starting yield",
+         "For a bond held near its duration the entry yield is the dominant term of the eventual return, "
+         "so today's level is a genuine anchor rather than an assumption. It is the one driver here that "
+         "helps: yields are higher now than they averaged.", ""),
+        ("gold",
+         "shift = (assumed real return + assumed inflation) - what this sleeve REALISED in the sample",
+         (f"assumed {gold_t:.1f}% nominal (1% real + 2% inflation) against a realised rate that ran above "
+          f"10%/yr in this window" if gold_t is not None else "n/a"),
+         "per sleeve (see table)"),
+        ("", "WHY an absolute level",
+         "Gold pays no cash flow, so no yield or multiple anchors it and its realised rate is not an "
+         "expectation. This is a JUDGEMENT, and it is the assumption to argue with first: moving the real "
+         "return from 1% to 4% lifts the lead target's conditional CAGR by about half a point.", ""),
+        ("financing",
+         "shift = -(short rate today - average short rate) x borrowed notional",
+         (f"{state.get('short_rate_now'):.2f}% today vs {state.get('short_rate_avg'):.2f}% average, "
+          f"borrowed = leverage - 1"
+          if state and state.get("short_rate_now") is not None else "n/a"),
+         "per portfolio (see table)"),
+        ("", "WHY on every sleeve",
+         "The backtest financed leverage at the rate that prevailed then. Higher now means every sleeve's "
+         "return has more to clear, including the ones with no valuation view — otherwise trend and "
+         "commodities would ride the leverage for free.", ""),
+        ("per sleeve",
+         "shift_sleeve = SUM over classes ( exposure_to_class x shift_class ) + financing",
+         "Exposure is per unit of the FUND's own NAV and is not normalised: a 90/60 efficient-core takes "
+         "0.9 x equity + 0.6 x bond, a 2x ETF takes 2 x equity.", "input to the simulation"),
+        ("per driver",
+         "contribution = shift_class x SUM over sleeves ( portfolio weight x exposure_to_class )",
+         "This is why the four columns add up, and why two portfolios with the same class mix show the same "
+         "attribution even when they hold different funds.", "the table below"),
+    ]
+    for i, (drv, formula, inputs, res) in enumerate(arith_rows):
+        bg = _C["alt"] if i % 2 else _C["white"]
+        for j, val in enumerate((drv, formula, inputs, res)):
+            c = ws.cell(row=r, column=1 + j, value=val)
+            c.font = _font(9, bold=(j == 0 and bool(drv)),
+                           italic=formula.startswith("WHY"), color=_C["text"])
+            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            c.fill = _fill(bg); c.border = _border()
+        ws.row_dimensions[r].height = max(26, 11 * (1 + max(len(inputs), len(formula)) // 95))
+        r += 1
+    r += 2
+
+    cols = [("Portfolio", 24), ("MC15y med", 10), ("cond CAGR", 10), ("total pp", 9),
+            ("equity pp", 10), ("bond pp", 9), ("gold pp", 9), ("fin pp", 8),
+            ("equity % of total", 15), ("gold % of total", 14)]
+    for j, (lab, wid) in enumerate(cols):
+        c = ws.cell(row=r, column=1 + j, value=lab)
+        c.font = _font(9, bold=True, color=_C["white"]); c.fill = _fill(_C["band"])
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = _border()
+        if j:
+            ws.column_dimensions[get_column_letter(1 + j)].width = wid
+    ws.row_dimensions[r].height = 26
+    r += 1
+    first_data = r
+    ordered = sorted(
+        portfolios,
+        key=lambda q: -((((q.rob or {}).get("mc_conditional", {}) or {})
+                         .get("cagr", {}) or {}).get("median") or -1e9))
+    for i, p in enumerate(ordered):
+        cond = ((p.rob or {}).get("mc_conditional", {}) or {})
+        dr = cond.get("drivers") or {}
+        if not dr:
+            continue
+        mc = ((((p.rob or {}).get("horizons", {}) or {}).get(15, {}) or {})
+              .get("mc", {}).get("cagr", {}) or {}).get("median")
+        gross = sum(abs(v) for v in dr.values()) or 1.0
+        bg = _C["alt"] if i % 2 else _C["white"]
+        vals = [("★ " if p.name in _TARGETS else "") + p.name.replace("_", " "),
+                (_clean_num(mc), "0.00"),
+                (_clean_num((cond.get("cagr", {}) or {}).get("median")), "0.00"),
+                (_clean_num(cond.get("drivers_total")), "0.00"),
+                (_clean_num(dr.get("equity_valuation")), "0.00"),
+                (_clean_num(dr.get("bond_yield")), "0.00"),
+                (_clean_num(dr.get("gold")), "0.00"),
+                (_clean_num(dr.get("financing")), "0.00"),
+                (abs(dr.get("equity_valuation") or 0.0) / gross, "0%"),
+                (abs(dr.get("gold") or 0.0) / gross, "0%")]
+        for j, item in enumerate(vals):
+            if j == 0:
+                c = ws.cell(row=r, column=1, value=item)
+                c.font = _font(9, bold=p.name in _TARGETS, color=_C["text"])
+                c.alignment = _align("left")
+            else:
+                v, fmt = item
+                c = ws.cell(row=r, column=1 + j, value=("n/a" if v is None else v))
+                if v is not None:
+                    c.number_format = fmt
+                c.font = _font(9, color=_C["text"]); c.alignment = _align("center")
+            c.fill = _fill(bg); c.border = _border()
+        r += 1
+    # --- The four questions a reader actually asks ---------------------------
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+    hq = ws.cell(row=r, column=1, value="READING IT CORRECTLY — what the shift is against, and what it is not")
+    hq.font = _font(11, bold=True, color=_C["white"]); hq.fill = _fill(_C["band"])
+    r += 1
+    asof = ""
+    if state:
+        parts = [f"{lab} {state.get(k)}" for lab, k in
+                 (("short rate", "short_rate_asof"), ("10y yield", "long_yield_asof"),
+                  ("CAPE", "cape_asof")) if state.get(k)]
+        asof = "; ".join(parts)
+    qa = [
+        ("the shift is against WHAT?",
+         "Against each sleeve's OWN REALISED RETURN in the sample, not against the median CAGR. The annual "
+         "shift is converted to a monthly one ((1+pp/100)^(1/12)-1) and ADDED to every resampled month of "
+         "that sleeve, so it moves the mean of the distribution the bootstrap is drawing from. The median "
+         "CAGR is the OUTPUT, and it does not move by the same amount: compounding a lower mean for 180 "
+         "months and rebalancing on the way turns an analytic -3.13 pp into a simulated -3.65."),
+        ("why is GOLD computed differently?",
+         "Equities and bonds have an OBSERVABLE anchor — a CAPE says whether equities are expensive, a yield "
+         "says what a bond will pay — so their shift is DERIVED. Gold pays no dividend, coupon or earnings, "
+         "so there is no price-to-anything and nothing to derive from: you cannot say gold is expensive the "
+         "way you can for an index. So the row states an ABSOLUTE expectation (1% real, from the ~120-year "
+         "long-run record where gold roughly preserves purchasing power, plus 2% inflation = 3% nominal) and "
+         "subtracts what the sleeve actually delivered. 'Per sleeve' in the Result column means exactly that: "
+         "the answer depends on each sleeve's own realised rate, unlike equities and bonds where one class "
+         "shift serves all. This is the one row that is entirely a JUDGEMENT — if gold repeated its realised "
+         "rate the shift would be ~0 and the lead target's conditional CAGR would be about a point higher."),
+        ("what does TODAY mean?",
+         "Not one date. The rates are the last TRADING day, the CAPE is the last PUBLISHED MONTH (Shiller is "
+         "monthly and lags). As of this workbook: " + (asof or "n/a") + ". 'Valuations' means precisely the "
+         "Shiller CAPE on the S&P 500 — real price over the ten-year average of real earnings — which is the "
+         "only valuation anchor available here."),
+        ("does the ORDER of the months matter?",
+         "For the final value, NO: compounding is a product and multiplication commutes, so -50% then +50% "
+         "and +50% then -50% both land on 75 from 100. Permuting all the sampled months therefore leaves the "
+         "CAGR untouched — measured on this history, a band of exactly 0.00. For the DRAWDOWN, very much yes: "
+         "the same three months (-30%, -30%, +60%) give a -51% drawdown when the two losses land back to back "
+         "and -30% when a rally separates them, and permuting the real history moved the max drawdown across "
+         "a 23-point band at zero CAGR dispersion. That is sequence risk in pure form, and it is why the "
+         "drawdown columns have to be simulated rather than derived from the return."),
+        ("what about the volatility drag?",
+         "It is inherited, not modelled. The simulation never applies an average return: it compounds the "
+         "monthly returns one by one, (1+r1)x(1+r2)x...x(1+r180), so the gap between the arithmetic and the "
+         "geometric mean is there by construction. On the gold sleeve the arithmetic mean annualises to "
+         "+11.69% while the compound rate is +10.29% — a 1.39pp drag, almost exactly the sigma^2/2 of 1.29pp. "
+         "Using the arithmetic mean instead would overstate 15-year wealth by roughly a quarter. It also "
+         "explains why a shift does not move the answer by its own size: subtracting a constant from every "
+         "month leaves volatility untouched while lowering the mean, so the drag weighs relatively more on "
+         "what is left. A -7.78pp shift on gold moved its simulated median by -8.52pp, and the same effect is "
+         "part of why the analytic attribution below (-3.13) and the simulated gap (-3.65) differ."),
+        ("do the MC paths start from today?",
+         "NO, and this is the sharpest limitation. The unconditional MC starts from today's MONEY but from "
+         "the sample's average CONDITIONS: it draws random months from 2000-2026 and knows nothing about "
+         "where we are. The conditional column draws the same months with a shifted mean, which is a CONSTANT "
+         "drift whose 15-year average equals what the reversion would deliver — it is NOT a path where the "
+         "CAPE actually falls from today's level to the anchor. Three consequences: the reversion is spread "
+         "evenly rather than front- or back-loaded, so sequence risk around WHEN multiples compress is not "
+         "modelled; there is no feedback, so a crash does not make the next month cheaper and therefore more "
+         "promising; and only the mean was moved, so the band was not widened for uncertainty about the "
+         "assumption itself. The one piece that genuinely starts from today is the GARCH stress, which begins "
+         "at the CURRENT conditional volatility rather than the long-run one. A model that starts from today "
+         "in the full sense — state variables evolving and returns following — is a VAR of the Vanguard-VCMM "
+         "kind, and is not built here."),
+    ]
+    for i, (q, a) in enumerate(qa):
+        bg = _C["alt"] if i % 2 else _C["white"]
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+        c = ws.cell(row=r, column=1, value=q)
+        c.font = _font(9, bold=True, color=_C["band"])
+        c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        c.fill = _fill(bg); c.border = _border()
+        ws.cell(row=r, column=2).fill = _fill(bg)
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=10)
+        c2 = ws.cell(row=r, column=3, value=a)
+        c2.font = _font(9, color=_C["text"])
+        c2.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        c2.fill = _fill(bg); c2.border = _border()
+        for cc in range(4, 11):
+            ws.cell(row=r, column=cc).fill = _fill(bg)
+        ws.row_dimensions[r].height = max(30, 11 * (1 + len(a) // 150))
+        r += 1
+    r += 2
+
+    # --- Worked example: the same arithmetic, sleeve by sleeve --------------
+    by_name = {q.name: q for q in portfolios}
+    lead = next((by_name[n] for n in _TARGETS
+                 if n in by_name
+                 and ((by_name[n].rob or {}).get("mc_conditional", {}) or {})
+                 .get("sleeve_exposures")), None)
+    if lead is not None:
+        cond = (lead.rob or {}).get("mc_conditional", {}) or {}
+        expo = cond.get("sleeve_exposures") or {}
+        wts = cond.get("weights") or {}
+        shifts = cond.get("drift_shift") or {}
+        realised = cond.get("realised") or {}
+        r += 2
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+        hw = ws.cell(row=r, column=1, value=(
+            f"WORKED EXAMPLE — {lead.name.replace('_', ' ')}, sleeve by sleeve "
+            f"(borrowed notional {cond.get('leverage_borrowed') or 0:.0%})"))
+        hw.font = _font(11, bold=True, color=_C["white"]); hw.fill = _fill(_C["band"])
+        r += 1
+        heads = ("Sleeve", "Weight", "Equity expo", "Bond expo", "Gold expo",
+                 "Realised %/yr", "Shift pp/yr", "x weight = pp", "")
+        for j, lab in enumerate(heads):
+            c = ws.cell(row=r, column=1 + j, value=lab)
+            c.font = _font(9, bold=True, color=_C["white"]); c.fill = _fill(_C["header"])
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = _border()
+        r += 1
+        tot = 0.0
+        for i, tk in enumerate(sorted(expo, key=lambda t: -wts.get(t, 0.0))):
+            e = expo[tk]
+            wt = wts.get(tk, 0.0)
+            sh = shifts.get(tk)
+            contrib = (sh * wt) if sh is not None else None
+            if contrib is not None:
+                tot += contrib
+            bg = _C["alt"] if i % 2 else _C["white"]
+            row_vals = [tk, (wt, "0%"), (e.get("Equities"), "0.00"),
+                        (e.get("Fixed Income"), "0.00"), (e.get("Gold"), "0.00"),
+                        (_clean_num(realised.get(tk)), "0.00"),
+                        (_clean_num(sh), "0.00"), (_clean_num(contrib), "0.00"), ("", "s")]
+            for j, item in enumerate(row_vals):
+                if j == 0:
+                    c = ws.cell(row=r, column=1, value=item)
+                    c.font = _font(9, bold=True, color=_C["text"]); c.alignment = _align("left")
+                else:
+                    v, fmt = item
+                    c = ws.cell(row=r, column=1 + j,
+                                value=("" if v in (None, "") else v))
+                    if isinstance(v, float):
+                        c.number_format = fmt
+                    c.font = _font(9, color=_C["text"]); c.alignment = _align("center")
+                c.fill = _fill(bg); c.border = _border()
+            r += 1
+        c = ws.cell(row=r, column=1, value="weighted total")
+        c.font = _font(9, bold=True, color=_C["band"]); c.alignment = _align("left")
+        c2 = ws.cell(row=r, column=8, value=_clean_num(tot))
+        c2.number_format = "0.00"; c2.font = _font(9, bold=True, color=_C["band"])
+        c2.alignment = _align("center")
+        r += 1
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+        ws.cell(row=r, column=1, value=(
+            "A blank exposure means the sleeve has no view for that class. A sleeve with no valuation "
+            "anchor at all (trend, commodities) still carries the financing shift and nothing else. The "
+            "weighted total is the analytic answer; the simulation's own median differs from it by "
+            "rebalancing and by compounding a shifted mean over 180 months."
+        )).font = _font(9, italic=True, color=_C["muted"])
+        ws.row_dimensions[r].height = 28
+        r += 1
+
+    if r > first_data:
+        from openpyxl.formatting.rule import ColorScaleRule
+        for col in range(4, 11):
+            L = get_column_letter(col)
+            ws.conditional_formatting.add(
+                f"{L}{first_data}:{L}{r - 1}",
+                ColorScaleRule(start_type="min", start_color="F8696B",
+                               mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                               end_type="max", end_color="63BE7B"))
+    # No freeze_panes here on purpose: the driver table starts ~25 rows down, and
+    # freezing at it pins more than a screenful, which reads as a sheet that
+    # cannot scroll. This is a document, not a grid to navigate.
 
 
 def _simulation_sheet(wb, sim_rows) -> None:
