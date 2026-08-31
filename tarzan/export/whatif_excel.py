@@ -120,6 +120,11 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "target_mix_cl2": "target_mix (NTSG 35) with the same SC2X to CL2 swap: cheaper and far less synthetic, at the cost of a US-only leveraged sleeve.",
     "fwd_fac_cl2": "target_fac_cl2 rebuilt for the FORWARD state rather than the sample average, changing only what the conditional analysis actually implies. Gold 15->10 because it realised 10.3%/yr in this window, has no valuation anchor and was 30% of the whole conditional drag. Long duration BACK IN at 6 (X25E), reversing the earlier removal: bonds are the ONE class where today's starting point beats the sample average, and unlike the gold cut that is derived from a yield rather than assumed. Levered sleeve 10->7 because the short rate financing it is 3.68% against a 1.82% sample average, so leverage costs more now. Freed capital to AVEM 4->6, since the CAPE driving the equity drag is US and the ex-US sleeves are cheaper. Accepts a worse drawdown tail in exchange: gold was doing that work.",
     "fwd_fac": "The same forward-conditioned rebuild applied to target_fac, keeping the GLOBAL levered sleeve (SC2X 7) instead of the US-only one - so it pairs with fwd_fac_cl2 to separate the effect of the conditioning from the effect of the leverage vehicle.",
+    "fwd_core_cl2": "Forward-conditioned like fwd_fac_cl2 but taking the bond exposure through the CORE instead of a standalone long-duration ETF: NTSG 35 (whose 60% treasury-futures overlay is 21 points of notional bonds) and no X25E. Better reasoned than the X25E route it replaces on two counts. The duration is intermediate rather than 25+ years, so the same forward-yield argument is harvested at a fraction of the rate risk - X25E realised -11.8%/yr over its 5.2 real years, -40.8% in 2022 alone and a -51% drawdown, and was still falling in 2025. And the bond leg arrives capital-efficiently with equity attached rather than consuming a slot of its own. Gold 10 (the conditional cut), levered sleeve kept at 10, AVWS 10 / AVEM 5.",
+    "fwd_core": "The same core-duration construction with the GLOBAL levered sleeve (SC2X 10) rather than the US-only CL2, so the pair isolates the leverage vehicle from everything else.",
+    "fwd_core_sc2x": "fwd_core with the levered sleeve cut 10 to 7 and the freed capital moved into the diversifiers (trend 15 to 17, carry 5 to 6). The point is to buy back the drawdown that fwd_core gave up without returning to long duration: trend is the crisis-alpha leg, and a smaller levered sleeve also pays less of the higher financing cost. GLOBAL leverage (SC2X) rather than US-only.",
+    "fwd_core_cl7": "fwd_core_sc2x with the levered sleeve swapped SC2X -> CL2 at the same 7: the matched pair that isolates the leverage VEHICLE with nothing else moving. CL2 is 2x MSCI USA (100% US, TER 0.50%, ~5 years of real history) against SC2X's 2x ACWI (global, TER 1.40%, launched July 2026). Cheaper and far less synthetic, paid for with US concentration in the levered sleeve.",
+    "fwd_core_div": "The diversifier-maximal version: trend 20, carry 8, gold 8 - 36 points of non-equity diversifiers against 30 in fwd_core - funded from the levered sleeve and a point off each factor leg. READ ITS CARRY WITH SUSPICION: UEQC's pre-inception history is a vendored SIMULATED index that tracks the real fund's total return well but at roughly half its volatility and 0.39 correlation, so any carry-heavy portfolio's Sharpe here is flattered. That is exactly why carry was capped at 5 in the first place, and this variant deliberately tests the boundary.",
     "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
     "bench_eq100": "Benchmark: 100% world equity (MSCI World). Equity-risk reference: low Sharpe, drawdown -52%.",
     "bench_6040": "Benchmark 60/40: 60% MSCI World + 40% aggregate bond (EUR hedged).",
@@ -435,23 +440,35 @@ def _risk_matrix(ws, row, portfolios) -> int:
     return row + 1
 
 
-# The portfolios under active consideration: pinned to the top of the Summary,
-# given a Monte-Carlo fan chart and drawn heavy on the growth chart. Everything
-# else is ranked below them. target_fac_cl2 is the one currently written into
-# input/targets_per_holding.csv (the live rebalancing target); the others stay
-# starred because they remain in the running.
-# A TUPLE, not a set: the order is meaningful. The first entry is the allocation
-# currently written into input/targets_per_holding.csv, and the Method sheet's
-# worked example follows this order so it documents the live target rather than
-# whichever name a set happened to yield first.
-_TARGETS = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040")
+# The target pair under active consideration: pinned to the top of the Summary,
+# given a Monte-Carlo fan chart and drawn heavy on the growth chart. A TUPLE, not
+# a set, because the order is meaningful — the Method sheet's worked example
+# follows it, so the first entry is the one documented sleeve by sleeve.
+#
+# fwd_core_cl7 and fwd_core_sc2x are the matched pair that differs ONLY in the
+# leverage vehicle (2x USA vs 2x ACWI, both at 7), so starring both keeps that
+# one open question visible instead of hiding it behind a single choice.
+#
+# CAVEAT: input/targets_per_holding.csv — the live rebalancing target the
+# newsletter measures drift against — still holds target_fac_cl2. These stars are
+# the analysis's answer, not the executed allocation, until that file is changed.
+_TARGETS = ("fwd_core_cl7", "fwd_core_sc2x")
 
 # Candidates: not the live allocation, but built to become one — pinned with a
 # different mark so the two tiers never get read as the same thing, and ranked
 # straight after the targets rather than mixed into the field. Promoting one is
 # a matter of moving its name into _TARGETS, which is also what earns it a
 # Monte-Carlo fan chart.
-_CANDIDATES = ("fwd_fac_cl2", "fwd_fac")
+# Secondary: kept in the comparison and pinned with a diamond, but no longer the
+# answer. The former targets sit here now — they still win on BACKTESTED return,
+# which is exactly why they are worth keeping in view rather than deleting.
+#
+# NOTE on the names: the suffix is not consistent across this family — _cl2 and
+# plain _core carry the levered sleeve at 10, while _sc2x and _cl7 carry it at 7.
+# Left as-is because these names are already in use in the analysis.
+_CANDIDATES = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040",
+               "fwd_fac_cl2", "fwd_fac", "fwd_core_cl2", "fwd_core",
+               "fwd_core_div")
 
 
 def _pin(name: str) -> str:
@@ -723,7 +740,7 @@ def _summary_sheet(wb, portfolios) -> None:
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
     t = ws.cell(row=1, column=1, value=("SUMMARY — all portfolios · full KPI set per window "
-                                          "(\u2605 = live target, \u25c6 = candidate)"))
+                                          "(\u2605 = target pair, \u25c6 = secondary)"))
     t.font = _font(15, bold=True, color=_C["white"]); t.fill = _fill(_C["header"])
     ws.row_dimensions[1].height = 26
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
@@ -756,8 +773,10 @@ def _summary_sheet(wb, portfolios) -> None:
         "and 5th-pct annualised return over all historical rolling 5/10/15y holds (15y windows "
         "few & overlapping → thin, prefer MC15y). Eq/Bond/Gold/Trend/Comm = notional %% of "
         "capital; USA/DevexUS/EMU/JP/EM = %% of the equity sleeve. "
-        "ROWS: live targets (\u2605) first, then candidates (\u25c6), then the field, each tier "
-        "ranked by MC15y median descending with the narrower MC band breaking ties."
+        "ROWS: the target pair (\u2605) first, then the secondaries (\u25c6), then the field, each "
+        "tier ranked by MC15y median descending with the narrower MC band breaking ties. NB the "
+        "stars are this analysis's answer, not the executed allocation: the live per-holding target "
+        "file still holds target_fac_cl2."
     )).font = _font(8, italic=True, color=_C["muted"])
 
     gr, hr = 3, 4                                   # group-header row, metric-label row
