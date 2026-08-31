@@ -264,6 +264,12 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                     # horizons (1/3/5/10/15y) — one source for the CLI report
                     # and the Excel Summary's MC / rolling columns.
                     "horizons": rob.multi_horizon(nav, rf_annual=rf),
+                    # Drawdown-tail stress at the planning horizon. The block
+                    # bootstrap draws months independently and so cannot build a
+                    # persistent high-vol regime, which is what deep drawdowns
+                    # are made of; a GARCH fit with resampled residuals can.
+                    # Quote its drawdown tail, not its CAGR (see garch_stress).
+                    "mc_stress": rob.garch_stress(nav, rf_annual=rf),
                 }
 
     proxy_data.set_target_currency(default_ccy)
