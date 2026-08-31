@@ -469,13 +469,18 @@ def rf_annual_pct(rf_daily) -> float | None:
     return float(rf_daily)
 
 
-def compute_sharpe_tv(daily_returns: pd.Series, rf_daily) -> float:
-    """Annualised Sharpe from a TIME-VARYING daily risk-free path.
+def compute_sharpe_tv(daily_returns: pd.Series, rf_daily, *,
+                      periods: int = TRADING_DAYS) -> float:
+    """Annualised Sharpe from a TIME-VARYING risk-free path.
 
-    Builds daily excess returns ``r_t − rf_t`` (each day charged its own
-    prevailing short rate) and annualises ``mean/std × √252``. This is the
+    Builds per-period excess returns ``r_t − rf_t`` (each period charged its own
+    prevailing short rate) and annualises ``mean/std × √periods``. This is the
     textbook excess-return Sharpe and is strictly more correct than using a
     single window-average rate when rates move a lot across the window.
+
+    ``periods`` is the number of observations per year: 252 for daily returns,
+    12 for monthly. Callers working on a reconstructed series should prefer
+    monthly (see :func:`tarzan.engine.robustness.full_metrics`).
     """
     if daily_returns is None or daily_returns.empty:
         return float("nan")
@@ -484,14 +489,16 @@ def compute_sharpe_tv(daily_returns: pd.Series, rf_daily) -> float:
     sd = float(excess.std())
     if excess.empty or sd <= 0:
         return float("nan")
-    return float(excess.mean()) / sd * np.sqrt(TRADING_DAYS)
+    return float(excess.mean()) / sd * np.sqrt(periods)
 
 
-def compute_sortino_tv(daily_returns: pd.Series, rf_daily) -> float:
-    """Sortino with a TIME-VARYING daily risk-free target. Downside deviation
-    is the RMS shortfall of daily excess returns below zero (i.e. below the
-    prevailing daily risk-free), annualised — the target-semideviation form,
-    consistent with ``compute_sortino`` but with a per-day target."""
+def compute_sortino_tv(daily_returns: pd.Series, rf_daily, *,
+                       periods: int = TRADING_DAYS) -> float:
+    """Sortino with a TIME-VARYING risk-free target. Downside deviation is the
+    RMS shortfall of per-period excess returns below zero (i.e. below the
+    prevailing risk-free), annualised — the target-semideviation form,
+    consistent with ``compute_sortino`` but with a per-period target.
+    ``periods`` = observations per year (252 daily, 12 monthly)."""
     if daily_returns is None or daily_returns.empty:
         return float("nan")
     rf = _align_rf_daily(daily_returns, rf_daily)
@@ -499,14 +506,15 @@ def compute_sortino_tv(daily_returns: pd.Series, rf_daily) -> float:
     if excess.empty:
         return float("nan")
     downside = excess.clip(upper=0.0)
-    dd = float((downside ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS)
+    dd = float((downside ** 2).mean()) ** 0.5 * np.sqrt(periods)
     if dd <= 0:
         return float("nan")
-    return float(excess.mean()) * TRADING_DAYS / dd
+    return float(excess.mean()) * periods / dd
 
 
 def compute_sortino(daily_returns: pd.Series, annual_return: float,
-                    risk_free: float | None = None) -> float:
+                    risk_free: float | None = None, *,
+                    periods: int = TRADING_DAYS) -> float:
     """Sortino ratio using the textbook *target downside deviation*.
 
     The downside deviation is the root-mean-square shortfall below the
@@ -519,9 +527,9 @@ def compute_sortino(daily_returns: pd.Series, annual_return: float,
     if daily_returns is None or daily_returns.empty:
         return float("nan")
     rf = RISK_FREE_RATE if risk_free is None else risk_free
-    target_daily = rf / 100.0 / TRADING_DAYS
+    target_daily = rf / 100.0 / periods
     shortfall = (daily_returns - target_daily).clip(upper=0.0)
-    downside_std = float((shortfall ** 2).mean()) ** 0.5 * np.sqrt(TRADING_DAYS) * 100
+    downside_std = float((shortfall ** 2).mean()) ** 0.5 * np.sqrt(periods) * 100
     if downside_std <= 0:
         return float("nan")
     return (annual_return - rf) / downside_std

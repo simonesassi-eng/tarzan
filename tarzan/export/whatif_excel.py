@@ -455,11 +455,13 @@ def _clean_num(v):
     return None if (v is None or (isinstance(v, float) and v != v)) else v
 
 
-def _mc_fan_png(nav, name, *, years=15, n_sims=1000, block=21, anchor=100_000):
+def _mc_fan_png(nav, name, *, years=15, n_sims=1000, block=1, anchor=100_000):
     """Monte-Carlo fan chart (block-bootstrap) of €``anchor`` over ``years``: the
     5/25/50/75/95th-percentile cone of terminal wealth across ``n_sims`` reshuffled
-    paths of the portfolio's own daily returns — same engine as the MC15y KPI.
-    Returns a PNG BytesIO (or None if the history is too short)."""
+    paths of the portfolio's own MONTHLY returns — the same frequency and block
+    size as the MC15y KPI (:func:`tarzan.engine.robustness.block_bootstrap`), so
+    the picture and the column cannot tell different stories. ``block`` is in
+    MONTHS. Returns a PNG BytesIO (or None if the history is too short)."""
     try:
         import numpy as np
         import matplotlib
@@ -470,18 +472,19 @@ def _mc_fan_png(nav, name, *, years=15, n_sims=1000, block=21, anchor=100_000):
         return None
     if nav is None or getattr(nav, "empty", True):
         return None
-    r = nav.pct_change().replace([np.inf, -np.inf], np.nan).dropna().values
-    days, n = int(years * 252), len(r)
-    if n < block * 3:
+    r_d = nav.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    r = ((1.0 + r_d).resample("ME").prod() - 1.0).dropna().values
+    months, n = int(years * 12), len(r)
+    if n < max(block * 3, 24):
         return None
-    nb = int(np.ceil(days / block))
+    nb = int(np.ceil(months / block))
     rng = np.random.default_rng(12345)                 # fixed seed → reproducible
-    paths = np.empty((n_sims, days))
+    paths = np.empty((n_sims, months))
     for i in range(n_sims):
-        starts = rng.integers(0, n - block, size=nb)
-        seq = np.concatenate([r[s:s + block] for s in starts])[:days]
+        starts = rng.integers(0, max(1, n - block), size=nb)
+        seq = np.concatenate([r[s:s + block] for s in starts])[:months]
         paths[i] = anchor * np.cumprod(1.0 + seq)
-    t = np.arange(1, days + 1) / 252.0
+    t = np.arange(1, months + 1) / 12.0
     pc = {q: np.percentile(paths, q, axis=0) for q in (5, 25, 50, 75, 95)}
     fig, ax = plt.subplots(figsize=(6.2, 3.5), dpi=130)
     fig.subplots_adjust(left=0.13, right=0.99, top=0.86, bottom=0.13)
@@ -491,7 +494,7 @@ def _mc_fan_png(nav, name, *, years=15, n_sims=1000, block=21, anchor=100_000):
     ax.axhline(anchor, color="#94A3B8", lw=0.8, ls=":")
     _ink, _mut, _bnd = f"#{_C['text']}", f"#{_C['muted']}", f"#{_C['band']}"
     ax.set_yscale("log")
-    ax.set_title(f"Monte-Carlo {years}y — {name}  (€{anchor // 1000}k, block-bootstrap)",
+    ax.set_title(f"Monte-Carlo {years}y — {name}  (€{anchor // 1000}k, monthly block-bootstrap)",
                  fontsize=10, fontweight="bold", color=_ink, loc="left")
     ax.set_xlabel("years", fontsize=8, color=_mut)
     ax.grid(alpha=0.3, which="both")
@@ -697,8 +700,16 @@ def _summary_sheet(wb, portfolios) -> None:
     ws.cell(row=2, column=1, value=(
         "Per window (FULL 2000-26, 2011-26, 2020-26, 2026-YTD): CAGR·Vol·Sharpe·Sortino·"
         "MaxDD·Calmar (EUR, Calmar=CAGR/|MaxDD|), β/α vs MSCI ACWI (α annualised, Jensen rf-tv). "
+        "Vol/Sharpe/Sortino are measured on MONTHLY returns: on the reconstructed history the "
+        "daily frequency carries non-synchronous pricing noise that inflated vol by ~1.4x (and so "
+        "depressed Sharpe by ~30%), worse the more diversified the portfolio. MaxDD stays on the "
+        "daily path (a month-end one would erase intra-month crashes) and β/α stay daily (the "
+        "noise is common to portfolio and benchmark, so it cancels in the ratio). "
         "NB: 2026-YTD is only ~8 months → annualised figures are noisy. "
-        "MC15y med/p5/band = Monte-Carlo 15-year CAGR median, 5th-pct (bad case) and band "
+        "MC15y med/p5/band = Monte-Carlo 15-year CAGR median, 5th-pct (bad case) and band, "
+        "resampled on MONTHLY returns (daily resampling inflated the band with non-synchronous "
+        "pricing noise and made it depend on the block length); any MC drawdown is therefore a "
+        "MONTH-END one, shallower than and not comparable to the realised daily MaxDD above. "
         "(p95−p5 = OUTCOME DISPERSION; narrower = more reliable, less path-dependent). €100k→15y "
         "= €100k compounded 15y at the MC median (your horizon). R5y/R10y/R15y med & p5 = median "
         "and 5th-pct annualised return over all historical rolling 5/10/15y holds (15y windows "
