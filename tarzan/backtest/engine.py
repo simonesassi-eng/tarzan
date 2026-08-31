@@ -228,16 +228,50 @@ def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
     years = len(monthly) / 12.0
     realised = {c: (float((1.0 + monthly[c]).prod()) ** (1.0 / years) - 1.0) * 100.0
                 for c in monthly.columns}
-    shifts = rob.conditional_drift(
-        state, exposures, realised, sample_years=years,
-        leverage_borrowed=max(0.0, p.leverage - 1.0))
+    borrowed = max(0.0, p.leverage - 1.0)
+    shifts = rob.conditional_drift(state, exposures, realised, sample_years=years,
+                                   leverage_borrowed=borrowed)
     if not shifts:
         return {}
     out = rob.joint_bootstrap(df, w, rebalance=rebalance, n_sims=400,
                               drift_shift=shifts, rf_annual=rf)
-    if out:
-        out["realised"] = realised
-        out["state"] = dict(state)
+    if not out:
+        return {}
+    out["realised"] = realised
+    out["state"] = dict(state)
+    # Exactly additive attribution: each class shift times the portfolio's
+    # exposure to it. This is what makes the conditional number auditable —
+    # without it "4.8% instead of 8.4%" is a number nobody can argue with.
+    comp = rob.conditional_drift_components(state, sample_years=years,
+                                           leverage_borrowed=borrowed)
+    wts = {t: float(w.get(t, 0.0)) for t in exposures}
+
+    def _expo(cls: str) -> float:
+        return sum(wts[t] * (exposures[t].get(cls) or 0.0) for t in exposures)
+
+    gold_delta = sum(
+        wts[t] * (exposures[t].get("Gold") or 0.0)
+        * ((comp["gold_target"] or 0.0) - realised[t])
+        for t in exposures if exposures[t].get("Gold") and t in realised)
+    drivers = {
+        "equity_valuation": (comp["equity"] or 0.0) * _expo("Equities"),
+        "bond_yield": (comp["fixed_income"] or 0.0) * _expo("Fixed Income"),
+        "gold": gold_delta,
+        "financing": (comp["financing"] or 0.0) * sum(wts.values()),
+    }
+    out["drivers"] = drivers
+    out["drivers_total"] = sum(drivers.values())
+    out["components"] = comp
+    out["exposure"] = {"Equities": _expo("Equities"),
+                       "Fixed Income": _expo("Fixed Income"),
+                       "Gold": _expo("Gold")}
+    # Kept so the workbook can show the arithmetic sleeve by sleeve rather than
+    # only the aggregate: a reader who cannot reproduce the number cannot
+    # disagree with it.
+    out["sleeve_exposures"] = exposures
+    out["weights"] = wts
+    out["sample_years"] = years
+    out["leverage_borrowed"] = borrowed
     return out
 
 
