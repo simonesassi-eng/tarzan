@@ -146,6 +146,69 @@ class TestVolatilityFrequency:
             nav.pct_change().dropna().std() * np.sqrt(TRADING_DAYS) * 100)
 
 
+class TestGarchStress:
+    """The stress generator exists to reach drawdowns the bootstrap cannot."""
+
+    @staticmethod
+    def _garch_nav(n=3000, seed=11, omega=2e-6, alpha=0.12, beta=0.85):
+        """A series drawn FROM a GARCH(1,1) process, so the fit is well specified."""
+        rng = np.random.default_rng(seed)
+        s2 = omega / (1 - alpha - beta)
+        r = np.empty(n)
+        e = 0.0
+        for t in range(n):
+            s2 = omega + alpha * e ** 2 + beta * s2
+            e = np.sqrt(s2) * rng.normal()
+            r[t] = 0.0004 + e
+        return pd.Series(1.0 + r, index=pd.bdate_range("2005-01-03", periods=n)).cumprod()
+
+    def test_finds_a_deeper_drawdown_tail_than_the_bootstrap(self):
+        """The whole reason it exists: the bootstrap draws months independently
+        and cannot build the persistent high-vol runs that deep drawdowns are
+        made of."""
+        nav = self._garch_nav()
+        boot = rob.block_bootstrap(nav, n_sims=1500, horizon_days=15 * TRADING_DAYS)
+        stress = rob.garch_stress(nav, n_sims=1500)
+        assert stress, "fit must succeed on a GARCH series"
+        assert stress["max_drawdown"]["p05"] < boot["max_drawdown"]["p05"], (
+            f"stress tail {stress['max_drawdown']['p05']:.1f} should be deeper than "
+            f"bootstrap {boot['max_drawdown']['p05']:.1f}")
+
+    def test_leaves_the_return_distribution_alone(self):
+        """It is a drawdown stress, not a competing view of expected return: the
+        CAGR fields must stay in the bootstrap's neighbourhood or the framing is
+        wrong.
+
+        The bound is loose (20% relative, fixed seed for determinism) because on
+        a single synthetic realisation the sampling noise dominates — it ranged
+        0.3% to 15% across seeds. The substantive evidence is the real
+        portfolios, where the two medians agree to 0.02-0.14 percentage points
+        (8.41 vs 8.43 on the lead target). A small negative gap is EXPECTED and
+        not a defect: clustering raises the variance of the cumulative return,
+        and more variance at the same mean means a lower median compound return.
+        """
+        nav = self._garch_nav()
+        boot = rob.block_bootstrap(nav, n_sims=2000, horizon_days=15 * TRADING_DAYS)
+        stress = rob.garch_stress(nav, n_sims=2000)
+        ref = abs(boot["cagr"]["median"])
+        assert abs(stress["cagr"]["median"] - boot["cagr"]["median"]) < 0.20 * ref
+
+    def test_a_price_never_goes_negative(self):
+        """A resampled shock can exceed -100%; the month floors at total loss."""
+        nav = self._garch_nav(omega=4e-5, alpha=0.20, beta=0.70)   # violent vol
+        out = rob.garch_stress(nav, n_sims=1000)
+        assert out["cagr"]["p05"] >= -100.0
+        assert out["max_drawdown"]["p05"] >= -100.0
+
+    def test_fit_is_stationary_and_reported(self):
+        p = rob.garch_stress(self._garch_nav(), n_sims=500)["params"]
+        assert 0.0 < p["persistence"] < 0.995
+        assert p["alpha"] > 0 and p["beta"] > 0
+
+    def test_short_history_returns_empty(self):
+        assert rob.garch_stress(_nav(n=400), n_sims=100) == {}
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))
