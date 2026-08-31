@@ -206,6 +206,41 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
     return syn.combine_returns(df, pd.Series(weights), rebalance)
 
 
+def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
+    """Forward simulation started from today's yields and valuations.
+
+    Bridges the two halves: the exposures and realised returns live on the
+    Portfolio, the anchors live in ``state``, and ``rob.conditional_drift`` turns
+    the gap into a per-sleeve drift that ``rob.joint_bootstrap`` applies. Returns
+    ``{}`` when the sleeve frame or the state is unavailable, so a scenario is
+    absent rather than silently unconditioned.
+    """
+    df, w = p.sleeve_returns, p.sleeve_weights
+    if df is None or getattr(df, "empty", True) or w is None or not state:
+        return {}
+    # Exposure per unit of each fund's OWN NAV, so a levered sleeve takes a
+    # proportionally larger shift (see rob.conditional_drift).
+    exposures = {it.bare: {k: v / 100.0 for k, v in (it.comp_notional or {}).items()}
+                 for it in p.items if it.bare in df.columns}
+    monthly = ((1.0 + df).resample("ME").prod() - 1.0).dropna(how="any")
+    if monthly.empty:
+        return {}
+    years = len(monthly) / 12.0
+    realised = {c: (float((1.0 + monthly[c]).prod()) ** (1.0 / years) - 1.0) * 100.0
+                for c in monthly.columns}
+    shifts = rob.conditional_drift(
+        state, exposures, realised, sample_years=years,
+        leverage_borrowed=max(0.0, p.leverage - 1.0))
+    if not shifts:
+        return {}
+    out = rob.joint_bootstrap(df, w, rebalance=rebalance, n_sims=400,
+                              drift_shift=shifts, rf_annual=rf)
+    if out:
+        out["realised"] = realised
+        out["state"] = dict(state)
+    return out
+
+
 def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                        rebalance: str = "quarterly") -> None:
     """Build ONE aligned history per portfolio and compute the merged
@@ -246,6 +281,12 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
 
         rf = proxy_data.risk_free_annual(common_start, common_end)
         rf_daily = proxy_data.risk_free_daily(common_start, common_end)
+        # Today's starting point vs the sample's average one, for the conditional
+        # scenario. Measured once per window, not per portfolio.
+        try:
+            state = proxy_data.market_state(common_start, common_end)
+        except Exception:  # noqa: BLE001 — a missing state just drops the scenario
+            state = {}
 
         for p in portfolios:
             nav_full = synth.get(p.name)
@@ -288,6 +329,10 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
                     "mc_joint_corr1": rob.joint_bootstrap(
                         p.sleeve_returns, p.sleeve_weights, rebalance=rebalance,
                         n_sims=400, corr_shift=1.0, rf_annual=rf),
+                    # Same engine again, but starting from TODAY rather than from
+                    # the sample's average day: current yields and valuations
+                    # instead of the ones that happened to prevail.
+                    "mc_conditional": _conditional_run(p, state, rebalance, rf),
                 }
 
     proxy_data.set_target_currency(default_ccy)

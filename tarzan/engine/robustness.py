@@ -451,7 +451,8 @@ def garch_stress(nav: pd.Series, *, n_sims: int = 2000, horizon_days: int = 15 *
 def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
                     rebalance: str = "quarterly", n_sims: int = 1000,
                     horizon_days: int = 15 * 252, seed: int = 42,
-                    corr_shift: float | None = None, rf_annual=None) -> dict:
+                    corr_shift: float | None = None, drift_shift: dict | None = None,
+                    rf_annual=None) -> dict:
     """Resample the SLEEVES jointly instead of the blended portfolio series.
 
     Bootstrapping the blended NAV answers only "what if this portfolio's own
@@ -473,9 +474,15 @@ def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
     standing objection to leaning on a stock/bond correlation that held in the
     sample but has no law behind it.
 
-    Same units and shape as :func:`block_bootstrap`, plus ``rebalance`` and the
-    realised mean pairwise correlation actually simulated, so the caller can
-    check what it got rather than trusting the knob.
+    ``drift_shift`` maps sleeve ticker to an annual return adjustment in
+    PERCENTAGE POINTS, applied to every resampled month of that sleeve. It is how
+    a forward view enters — today's yields and valuations are not the sample's,
+    so :func:`conditional_drift` derives the shifts and this applies them. Only
+    the mean moves: volatilities, correlations and tail shapes stay empirical.
+
+    Same units and shape as :func:`block_bootstrap`, plus ``rebalance``, the
+    realised mean pairwise correlation actually simulated and the drift applied,
+    so the caller can check what it got rather than trusting the knobs.
     """
     if (sleeve_returns is None or getattr(sleeve_returns, "empty", True)
             or weights is None or len(weights) == 0):
@@ -496,6 +503,14 @@ def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
     n_obs, k = arr.shape
     horizon_years = horizon_days / TRADING_DAYS
     rf = RISK_FREE_RATE if rf_annual is None else float(rf_annual)
+
+    # Monthly mean adjustment per sleeve, from annual percentage points.
+    shift_m = np.zeros(m.shape[1])
+    if drift_shift:
+        for j, col in enumerate(df.columns):
+            pp = drift_shift.get(col)
+            if pp is not None and np.isfinite(pp):
+                shift_m[j] = (1.0 + float(pp) / 100.0) ** (1.0 / 12.0) - 1.0
 
     if corr_shift is None:
         def _draw():                                 # joint months, kept intact
@@ -530,7 +545,7 @@ def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
     sharpes = np.empty(n_sims)
     corrs = np.empty(n_sims)
     for i in range(n_sims):
-        path = _draw()
+        path = _draw() + shift_m
         idx = pd.date_range("2000-01-31", periods=horizon_months, freq="ME")
         blended = combine_returns(pd.DataFrame(path, columns=df.columns, index=idx),
                                   w, rebalance)
@@ -554,12 +569,127 @@ def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
         "n_sims": n_sims,
         "rebalance": rebalance,
         "corr_shift": corr_shift,
+        "drift_shift": dict(drift_shift) if drift_shift else None,
         "mean_pair_corr": float(np.nanmean(corrs)),
         "cagr": _ci(cagrs * 100.0),
         "sharpe": _ci(sharpes),
         "max_drawdown": _ci(mdds * 100.0),
         "prob_loss": float((cagrs[np.isfinite(cagrs)] < 0).mean() * 100.0),
     }
+
+
+def conditional_drift(state: dict, sleeve_exposures: dict, realised: dict, *,
+                      horizon_years: float = 15.0, sample_years: float = 25.0,
+                      gold_real_return: float = 1.0, inflation: float = 2.0,
+                      leverage_borrowed: float = 0.0,
+                      cape_anchor: str = "sample_avg") -> dict:
+    """Per-sleeve annual return shifts implied by TODAY's starting point.
+
+    A backtest silently assumes the next 15 years are drawn from its own window.
+    That is only right if today looks like an average day in it, and on three
+    measurable inputs it does not. This turns the gap into an explicit shift per
+    sleeve, in percentage points per year, to be fed to
+    :func:`joint_bootstrap`'s ``drift_shift``.
+
+    THIS IS NOT A FORECAST and the output should never be presented as one. It is
+    a bridge with named assumptions, each of which a caller owns:
+
+    * EQUITY — valuations. The sample's realised return already contains whatever
+      the valuation multiple did inside it; the forward one contains whatever it
+      does next. Both legs are computed, and the shift is the difference, so a
+      sample that STARTED expensive is not double-counted. On the 2000-2026
+      window that matters: CAPE went 41.9 to 35.2, so the sample carries a
+      valuation DRAG of about -0.7%/yr, not the tailwind people assume. Reverting
+      to the sample average over the horizon gives about -1.7%/yr, hence a shift
+      near -1.0. ``cape_anchor`` picks the reversion target: ``sample_avg``,
+      ``none`` (valuations stay put, shift removes only the sample's own drag) or
+      ``long_run`` (the full 1900+ mean, the most punitive).
+    * FIXED INCOME — the starting yield is the single best anchor for a long
+      bond's return over its duration, so the shift is today's long yield minus
+      the yield that prevailed on average through the sample.
+    * GOLD — no cash flow, so no valuation anchor exists and the sample's
+      realised rate is not an expectation. The default assumes a long-run REAL
+      return of ``gold_real_return`` plus ``inflation``, which on this window
+      cuts a realised 10%+ down by several points. The single most consequential
+      assumption here, and the one to argue with first.
+    * TREND / CARRY / CASH — no valuation state to condition on; left at zero,
+      which is an assumption too (that their sample premium is their premium).
+
+    ``leverage_borrowed`` (the notional financed, e.g. 0.26 for a 1.26x
+    portfolio) charges the rise in the short rate against every sleeve pro rata:
+    the backtest financed leverage at the rate that prevailed then, and it is
+    higher now.
+
+    ``sleeve_exposures`` maps ticker to ``{asset class: exposure per unit of the
+    fund's own NAV}`` — NOT normalised to 1, because that is the whole point for a
+    levered sleeve: an efficient-core fund holding 90% equity and 60% bond
+    futures takes 0.9 of the equity shift and 0.6 of the bond shift, and a 2x
+    equity ETF takes twice the equity shift. Collapsing each fund to a single
+    dominant class would understate both. ``realised`` gives each sleeve's
+    annualised return over the sample, in percent — needed because gold's
+    assumption is an absolute level rather than a delta, and every shift returned
+    here is a delta so that one code path applies them all.
+
+    Returns ``{ticker: pp_per_year}``; sleeves whose inputs are missing are simply
+    absent rather than zeroed, so the caller can tell "no adjustment" from "could
+    not compute".
+    """
+    shifts: dict[str, float] = {}
+    cape_now = state.get("cape_now")
+    cape_avg = state.get("cape_avg")
+    cape_start = state.get("cape_at_sample_start")
+    long_now, long_avg = state.get("long_yield_now"), state.get("long_yield_avg")
+    sr_now, sr_avg = state.get("short_rate_now"), state.get("short_rate_avg")
+
+    eq_shift = None
+    if cape_now and cape_start and sample_years > 0:
+        in_sample = ((cape_now / cape_start) ** (1.0 / sample_years) - 1.0) * 100.0
+        if cape_anchor == "none":
+            forward = 0.0
+        elif cape_anchor == "long_run":
+            target = state.get("cape_long_run_avg") or cape_avg
+            forward = (((target / cape_now) ** (1.0 / horizon_years) - 1.0) * 100.0
+                       if target else None)
+        else:
+            forward = (((cape_avg / cape_now) ** (1.0 / horizon_years) - 1.0) * 100.0
+                       if cape_avg else None)
+        if forward is not None:
+            eq_shift = forward - in_sample
+
+    fi_shift = (long_now - long_avg) if (long_now is not None and long_avg is not None) else None
+    # Financing: the rise in the short rate, charged on the borrowed notional.
+    fin_drag = (-(sr_now - sr_avg) * float(leverage_borrowed)
+                if (sr_now is not None and sr_avg is not None) else 0.0)
+
+    per_class = {"Equities": eq_shift, "Fixed Income": fi_shift}
+    for ticker, exposures in (sleeve_exposures or {}).items():
+        total, seen = 0.0, False
+        for cls, expo in (exposures or {}).items():
+            if not expo:
+                continue
+            if cls == "Gold":
+                # Gold's assumption is an absolute expectation, so express it as
+                # the delta against what the sample actually delivered.
+                have = realised.get(ticker) if realised else None
+                if have is None:
+                    continue
+                total += expo * ((gold_real_return + inflation) - have)
+                seen = True
+                continue
+            adj = per_class.get(cls)
+            if adj is None:
+                continue          # Alternative / Commodities / Cash: no anchor
+            total += expo * adj
+            seen = True
+        # The financing charge is a PORTFOLIO cost every sleeve's return has to
+        # clear, so it applies even where no valuation anchor exists — otherwise
+        # a trend or commodity sleeve would dodge the higher cost of the leverage
+        # that funds it. A shift of exactly fin_drag therefore reads as "no
+        # valuation view, financing only"; with no leverage those sleeves stay
+        # absent, which is what distinguishes "no adjustment" from "unknown".
+        if seen or fin_drag:
+            shifts[ticker] = total + fin_drag
+    return shifts
 
 
 # Investor-facing horizons (years) shared by the multi-horizon view.
