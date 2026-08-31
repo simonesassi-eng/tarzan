@@ -209,6 +209,60 @@ class TestGarchStress:
         assert rob.garch_stress(_nav(n=400), n_sims=100) == {}
 
 
+class TestJointBootstrap:
+    """Sleeve-level simulation: rebalancing becomes real, correlations become a knob."""
+
+    @staticmethod
+    def _sleeves(n=3000, seed=7, rho=0.2):
+        """Three sleeves with a known pairwise correlation and DIFFERENT vols.
+
+        Heterogeneity is the point: with interchangeable sleeves rebalancing has
+        nothing to do, and the whole question is what weight drift costs.
+        """
+        rng = np.random.default_rng(seed)
+        c = np.full((3, 3), rho); np.fill_diagonal(c, 1.0)
+        z = rng.multivariate_normal(np.zeros(3), c, n)
+        z = z * np.array([0.020, 0.009, 0.004]) + 0.0004      # racy / mid / calm
+        idx = pd.bdate_range("2005-01-03", periods=n)
+        df = pd.DataFrame(z, columns=["A", "B", "C"], index=idx)
+        return df, pd.Series({"A": 0.5, "B": 0.3, "C": 0.2})
+
+    def test_rebalancing_narrows_the_outcome_of_unequal_sleeves(self):
+        """Left alone, the raciest sleeve compounds into a bigger and bigger share
+        of the portfolio, so the 15y outcome disperses more. Rebalancing keeps the
+        risk profile it was designed with — the effect the blended-NAV bootstrap
+        cannot show at all, since there are no sleeves left in it to drift."""
+        df, w = self._sleeves()
+        hold = rob.joint_bootstrap(df, w, rebalance="none", n_sims=400)
+        rebal = rob.joint_bootstrap(df, w, rebalance="annual", n_sims=400)
+
+        def band(d):
+            return d["cagr"]["p95"] - d["cagr"]["p05"]
+
+        assert band(rebal) < band(hold), f"{band(rebal):.2f} vs {band(hold):.2f}"
+        assert rebal["max_drawdown"]["p05"] > hold["max_drawdown"]["p05"]
+
+    def test_breaking_correlations_deepens_the_drawdown_tail(self):
+        df, w = self._sleeves()
+        base = rob.joint_bootstrap(df, w, n_sims=300)
+        broken = rob.joint_bootstrap(df, w, n_sims=300, corr_shift=1.0)
+        assert broken["mean_pair_corr"] > base["mean_pair_corr"] + 0.4
+        assert broken["max_drawdown"]["p05"] < base["max_drawdown"]["p05"]
+
+    def test_copula_at_zero_shift_reproduces_historical_correlation(self):
+        """The knob must be calibrated: shift 0 has to land on the sample."""
+        df, w = self._sleeves(rho=0.35)
+        target = ((1 + df).resample("ME").prod() - 1).corr().values
+        target = target[np.triu_indices(3, 1)].mean()
+        out = rob.joint_bootstrap(df, w, n_sims=300, corr_shift=0.0)
+        assert abs(out["mean_pair_corr"] - target) < 0.08
+
+    def test_needs_at_least_two_sleeves_and_enough_months(self):
+        df, w = self._sleeves()
+        assert rob.joint_bootstrap(df[["A"]], w[["A"]], n_sims=50) == {}
+        assert rob.joint_bootstrap(df.iloc[:200], w, n_sims=50) == {}
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))

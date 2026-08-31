@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from tarzan.engine.synthetic import combine_returns
 from tarzan.engine.stats import (
     RISK_FREE_RATE,
     TRADING_DAYS,
@@ -444,6 +445,120 @@ def garch_stress(nav: pd.Series, *, n_sims: int = 2000, horizon_days: int = 15 *
         "max_drawdown": _ci(mdds * 100.0),
         "prob_loss": float((cagrs[np.isfinite(cagrs)] < 0).mean() * 100.0),
         "params": {"omega": w, "alpha": a, "beta": b, "persistence": a + b},
+    }
+
+
+def joint_bootstrap(sleeve_returns: pd.DataFrame, weights: pd.Series, *,
+                    rebalance: str = "quarterly", n_sims: int = 1000,
+                    horizon_days: int = 15 * 252, seed: int = 42,
+                    corr_shift: float | None = None, rf_annual=None) -> dict:
+    """Resample the SLEEVES jointly instead of the blended portfolio series.
+
+    Bootstrapping the blended NAV answers only "what if this portfolio's own
+    months came in a different order". Two things are frozen inside it: the
+    cross-sleeve correlations as they happened, and the rebalancing policy,
+    which cannot pay off in a simulation where the sleeves no longer exist
+    separately. Resampling whole months of the sleeve MATRIX (the same month for
+    every sleeve, so that month's cross-section is kept intact) and then
+    re-blending under ``rebalance`` puts both back in play.
+
+    ``corr_shift`` opens the question the blended version cannot ask. Left at
+    ``None`` the resampling is non-parametric and the historical correlations
+    are reproduced exactly, fat tails included. Given a number in (0, 1], the
+    simulation switches to a Gaussian-copula path: each sleeve keeps its own
+    EMPIRICAL monthly marginal (mapped through its quantile function, so tails
+    survive) while the correlation matrix is pushed that fraction of the way
+    toward all-ones. ``corr_shift=1.0`` is the degenerate case where everything
+    moves together — the scenario where diversification stops working, i.e. the
+    standing objection to leaning on a stock/bond correlation that held in the
+    sample but has no law behind it.
+
+    Same units and shape as :func:`block_bootstrap`, plus ``rebalance`` and the
+    realised mean pairwise correlation actually simulated, so the caller can
+    check what it got rather than trusting the knob.
+    """
+    if (sleeve_returns is None or getattr(sleeve_returns, "empty", True)
+            or weights is None or len(weights) == 0):
+        return {}
+    df = sleeve_returns.dropna(how="any")
+    w = weights.reindex(df.columns).astype(float)
+    if df.empty or not np.isfinite(w.values).all() or w.sum() <= 0:
+        return {}
+    w = w / w.sum()
+    # Monthly, for the same reason the blended bootstrap is monthly: the daily
+    # frequency of a reconstructed series is mostly non-synchronous noise.
+    m = ((1.0 + df).resample("ME").prod() - 1.0).dropna(how="any")
+    horizon_months = max(1, int(round(horizon_days / 21)))
+    if len(m) < 60 or m.shape[1] < 2:
+        return {}
+    rng = np.random.default_rng(seed)
+    arr = m.values                                   # (months, sleeves)
+    n_obs, k = arr.shape
+    horizon_years = horizon_days / TRADING_DAYS
+    rf = RISK_FREE_RATE if rf_annual is None else float(rf_annual)
+
+    if corr_shift is None:
+        def _draw():                                 # joint months, kept intact
+            return arr[rng.integers(0, n_obs, horizon_months)]
+    else:
+        try:
+            from scipy.special import erf
+        except Exception:  # noqa: BLE001 — no scipy → no copula path
+            return {}
+        shift = float(np.clip(corr_shift, 0.0, 1.0))
+        c = np.corrcoef(arr, rowvar=False)
+        c = np.nan_to_num(c, nan=0.0)
+        target = c + shift * (np.ones_like(c) - c)   # slide toward all-ones
+        np.fill_diagonal(target, 1.0)
+        # Nearest PSD: clip the eigenvalues, then renormalise to a correlation.
+        vals, vecs = np.linalg.eigh(target)
+        psd = vecs @ np.diag(np.clip(vals, 1e-8, None)) @ vecs.T
+        d = np.sqrt(np.clip(np.diag(psd), 1e-12, None))
+        target = psd / np.outer(d, d)
+        chol = np.linalg.cholesky(target + 1e-10 * np.eye(k))
+        order = np.argsort(arr, axis=0)              # empirical quantiles per sleeve
+        srt = np.take_along_axis(arr, order, axis=0)
+
+        def _draw():
+            z = rng.standard_normal((horizon_months, k)) @ chol.T
+            u = 0.5 * (1.0 + erf(z / np.sqrt(2.0)))  # normal CDF → uniform
+            idx = np.clip((u * n_obs).astype(int), 0, n_obs - 1)
+            return np.take_along_axis(srt, idx, axis=0)
+
+    cagrs = np.empty(n_sims)
+    mdds = np.empty(n_sims)
+    sharpes = np.empty(n_sims)
+    corrs = np.empty(n_sims)
+    for i in range(n_sims):
+        path = _draw()
+        idx = pd.date_range("2000-01-31", periods=horizon_months, freq="ME")
+        blended = combine_returns(pd.DataFrame(path, columns=df.columns, index=idx),
+                                  w, rebalance)
+        price = np.cumprod(1.0 + blended.values)
+        cagrs[i] = price[-1] ** (1.0 / horizon_years) - 1.0 if price[-1] > 0 else -1.0
+        peak = np.maximum.accumulate(price)
+        mdds[i] = (price / peak - 1.0).min()
+        vol = float(blended.std()) * np.sqrt(12.0)
+        sharpes[i] = (cagrs[i] * 100.0 - rf) / (vol * 100.0) if vol > 0 else np.nan
+        cm = np.corrcoef(path, rowvar=False)
+        corrs[i] = float(np.nanmean(cm[np.triu_indices(k, 1)])) if k > 1 else np.nan
+
+    def _ci(v):
+        f = v[np.isfinite(v)]
+        return {"p05": float(np.percentile(f, 5)), "p25": float(np.percentile(f, 25)),
+                "median": float(np.median(f)), "p75": float(np.percentile(f, 75)),
+                "p95": float(np.percentile(f, 95))}
+
+    return {
+        "horizon_years": round(horizon_years, 2),
+        "n_sims": n_sims,
+        "rebalance": rebalance,
+        "corr_shift": corr_shift,
+        "mean_pair_corr": float(np.nanmean(corrs)),
+        "cagr": _ci(cagrs * 100.0),
+        "sharpe": _ci(sharpes),
+        "max_drawdown": _ci(mdds * 100.0),
+        "prob_loss": float((cagrs[np.isfinite(cagrs)] < 0).mean() * 100.0),
     }
 
 
