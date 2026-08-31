@@ -118,6 +118,8 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "mom_6040": "target_fac rebuilt at the classic 60/40 VALUE/MOMENTUM split of the factor sleeve (value 14 = AVWC 5 / AVWS 6 / AVEM 3, momentum 9 = XDEM). Rationale is diversification, not return: a value tilt implicitly shorts momentum, and the pairing is worth holding even at zero momentum premium. Return-neutral to slightly negative, best drawdown of the momentum set.",
     "target_fac_cl2": "target_fac with the levered sleeve SWAPPED from SC2X to CL2. Motivation: SC2X launched in July 2026 (19 days of real history, TER 1.40%), CL2 has ~5 years and costs 0.50%. The trade-off is geographic, not statistical: CL2 is 2x MSCI USA (100% US) where SC2X is 2x ACWI, so the whole leveraged sleeve concentrates in the US.",
     "target_mix_cl2": "target_mix (NTSG 35) with the same SC2X to CL2 swap: cheaper and far less synthetic, at the cost of a US-only leveraged sleeve.",
+    "fwd_fac_cl2": "target_fac_cl2 rebuilt for the FORWARD state rather than the sample average, changing only what the conditional analysis actually implies. Gold 15->10 because it realised 10.3%/yr in this window, has no valuation anchor and was 30% of the whole conditional drag. Long duration BACK IN at 6 (X25E), reversing the earlier removal: bonds are the ONE class where today's starting point beats the sample average, and unlike the gold cut that is derived from a yield rather than assumed. Levered sleeve 10->7 because the short rate financing it is 3.68% against a 1.82% sample average, so leverage costs more now. Freed capital to AVEM 4->6, since the CAPE driving the equity drag is US and the ex-US sleeves are cheaper. Accepts a worse drawdown tail in exchange: gold was doing that work.",
+    "fwd_fac": "The same forward-conditioned rebuild applied to target_fac, keeping the GLOBAL levered sleeve (SC2X 7) instead of the US-only one - so it pairs with fwd_fac_cl2 to separate the effect of the conditioning from the effect of the leverage vehicle.",
     "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
     "bench_eq100": "Benchmark: 100% world equity (MSCI World). Equity-risk reference: low Sharpe, drawdown -52%.",
     "bench_6040": "Benchmark 60/40: 60% MSCI World + 40% aggregate bond (EUR hedged).",
@@ -444,6 +446,27 @@ def _risk_matrix(ws, row, portfolios) -> int:
 # whichever name a set happened to yield first.
 _TARGETS = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040")
 
+# Candidates: not the live allocation, but built to become one — pinned with a
+# different mark so the two tiers never get read as the same thing, and ranked
+# straight after the targets rather than mixed into the field. Promoting one is
+# a matter of moving its name into _TARGETS, which is also what earns it a
+# Monte-Carlo fan chart.
+_CANDIDATES = ("fwd_fac_cl2", "fwd_fac")
+
+
+def _pin(name: str) -> str:
+    """Leading mark for a portfolio name: star = live target, diamond = candidate."""
+    if name in _TARGETS:
+        return "\u2605 "
+    if name in _CANDIDATES:
+        return "\u25c6 "
+    return ""
+
+
+def _tier(name: str) -> int:
+    """Sort tier: targets, then candidates, then everything else."""
+    return 0 if name in _TARGETS else (1 if name in _CANDIDATES else 2)
+
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
                     ("2020-26", "2020-01-01"), ("2026 YTD", "2026-01-01"))
@@ -699,7 +722,8 @@ def _summary_sheet(wb, portfolios) -> None:
     ncol = len(widths)
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    t = ws.cell(row=1, column=1, value="SUMMARY — all portfolios · full KPI set per window (★ = target)")
+    t = ws.cell(row=1, column=1, value=("SUMMARY — all portfolios · full KPI set per window "
+                                          "(\u2605 = live target, \u25c6 = candidate)"))
     t.font = _font(15, bold=True, color=_C["white"]); t.fill = _fill(_C["header"])
     ws.row_dimensions[1].height = 26
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
@@ -732,8 +756,8 @@ def _summary_sheet(wb, portfolios) -> None:
         "and 5th-pct annualised return over all historical rolling 5/10/15y holds (15y windows "
         "few & overlapping → thin, prefer MC15y). Eq/Bond/Gold/Trend/Comm = notional %% of "
         "capital; USA/DevexUS/EMU/JP/EM = %% of the equity sleeve. "
-        "ROWS: targets (★) first, then ranked by MC15y median descending, ties broken by "
-        "the narrower MC band."
+        "ROWS: live targets (\u2605) first, then candidates (\u25c6), then the field, each tier "
+        "ranked by MC15y median descending with the narrower MC band breaking ties."
     )).font = _font(8, italic=True, color=_C["muted"])
 
     gr, hr = 3, 4                                   # group-header row, metric-label row
@@ -777,15 +801,15 @@ def _summary_sheet(wb, portfolios) -> None:
                 .get("mc", {}).get("cagr", {}) or {})
 
     def _rank_key(p):
-        """Targets first, then everything else; within each group MC median
-        descending, ties broken by the narrower MC band."""
+        """Live targets first, then candidates, then the field; within each tier MC
+        median descending, ties broken by the narrower MC band."""
         mc = _mc_cagr(p)
         med = _clean_num(mc.get("median"))
         p5, p95 = _clean_num(mc.get("p05")), _clean_num(mc.get("p95"))
         band = (p95 - p5) if (p5 is not None and p95 is not None) else None
         # -med sorts descending; +band sorts ascending (tighter dispersion wins a
         # tie). Missing values sink to the bottom rather than poisoning the sort.
-        return (0 if p.name in targets else 1,
+        return (_tier(p.name),
                 -(med if med is not None else -1e9),
                 band if band is not None else 1e9)
 
@@ -796,7 +820,8 @@ def _summary_sheet(wb, portfolios) -> None:
         # No dark row-fill: the per-column colour scale below owns the data cells,
         # so text stays dark/readable; targets are marked by the ★ + bold name.
         bg = _C["alt"] if i % 2 else _C["white"]
-        namecolor = _C["band"] if is_t else _C["text"]
+        namecolor = (_C["band"] if is_t
+                     else _C["amber"] if p.name in _CANDIDATES else _C["text"])
         mccg = _mc_cagr(p)
         mc_med = _clean_num(mccg.get("median"))
         mc_p5 = _clean_num(mccg.get("p05")); mc_p95 = _clean_num(mccg.get("p95"))
@@ -804,7 +829,7 @@ def _summary_sheet(wb, portfolios) -> None:
         fv = 100_000 * (1.0 + mc_med / 100.0) ** 15 if mc_med is not None else None
         comp = " · ".join(f"{tk} {w:.0f}" for tk, w in
                           sorted(p.weights().items(), key=lambda kv: -kv[1]))
-        vals = [("★ " if is_t else "") + p.name.replace("_", " ")]
+        vals = [_pin(p.name) + p.name.replace("_", " ")]
         # Decision block: MC projection, €100k outcome, rolling holds, allocation.
         vals.append((mc_med, "0.0")); vals.append((mc_p5, "0.0"))
         vals.append((mc_band, "0.0"))
@@ -1356,8 +1381,9 @@ def _method_sheet(wb, portfolios) -> None:
     first_data = r
     ordered = sorted(
         portfolios,
-        key=lambda q: -((((q.rob or {}).get("mc_conditional", {}) or {})
-                         .get("cagr", {}) or {}).get("median") or -1e9))
+        key=lambda q: (_tier(q.name),
+                       -((((q.rob or {}).get("mc_conditional", {}) or {})
+                          .get("cagr", {}) or {}).get("median") or -1e9)))
     for i, p in enumerate(ordered):
         cond = ((p.rob or {}).get("mc_conditional", {}) or {})
         dr = cond.get("drivers") or {}
@@ -1367,7 +1393,7 @@ def _method_sheet(wb, portfolios) -> None:
               .get("mc", {}).get("cagr", {}) or {}).get("median")
         gross = sum(abs(v) for v in dr.values()) or 1.0
         bg = _C["alt"] if i % 2 else _C["white"]
-        vals = [("★ " if p.name in _TARGETS else "") + p.name.replace("_", " "),
+        vals = [_pin(p.name) + p.name.replace("_", " "),
                 (_clean_num(mc), "0.00"),
                 (_clean_num((cond.get("cagr", {}) or {}).get("median")), "0.00"),
                 (_clean_num(cond.get("drivers_total")), "0.00"),
@@ -1380,7 +1406,8 @@ def _method_sheet(wb, portfolios) -> None:
         for j, item in enumerate(vals):
             if j == 0:
                 c = ws.cell(row=r, column=1, value=item)
-                c.font = _font(9, bold=p.name in _TARGETS, color=_C["text"])
+                c.font = _font(9, bold=p.name in _TARGETS,
+                               color=(_C["amber"] if p.name in _CANDIDATES else _C["text"]))
                 c.alignment = _align("left")
             else:
                 v, fmt = item
