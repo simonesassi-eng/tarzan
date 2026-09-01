@@ -694,17 +694,26 @@ class TestTheGateVerifiesTheOneDayPanelToo:
 
 
 class TestTheTargetsOwnSleevesAreRequestedIntraday:
-    """The gap a real run exposed and no fixture could.
+    """A guard on a latent coupling, and it is a GUARD — not a fix for a bug.
 
-    ``_live_1d`` built its request from ``holding_performance``, which carries what
-    is HELD. A target routinely names instruments not owned yet — four of eight on
-    the reference book — and the 1D target line demands FULL coverage, so those four
-    silently withheld it on every real send. The panel was correct; the bars were
-    never asked for.
+    ``_live_1d`` built its request from ``holding_performance``. That frame carries
+    the tracked BENCHMARKS alongside the holdings, and on the reference book every
+    target sleeve happens to be one, so all of them were already requested: the
+    union added zero symbols and the 1D target line was drawing all along (verified
+    live against the real book — 5 of 5 sleeves with bars, drawn=[twror, target,
+    acwi]). An earlier reading of this said four sleeves were missing and the line
+    was withheld; that was wrong, inferred from the false premise that a rebalance
+    seed cannot appear in the performance frame.
 
-    Ordering matters here: ``_live_1d`` runs BEFORE ``_target_history``, so the
-    weights cannot be read out of ``ctx``. Both computers read
-    ``_target_policy_weights`` instead.
+    What the union removes is the dependency on that coincidence. A target weight on
+    an instrument that is not a tracked benchmark would be absent from the request,
+    and the 1D blend refuses partial coverage, so the target's session would vanish
+    with nothing said — the silent-failure shape this codebase spends its comments
+    fighting.
+
+    Ordering matters: ``_live_1d`` runs BEFORE ``_target_history``, so the weights
+    cannot be read out of ``ctx`` — the first attempt at this was a silent no-op for
+    exactly that reason. Both computers read ``_target_policy_weights`` instead.
     """
 
     @staticmethod

@@ -1384,15 +1384,18 @@ class MetricsEngine:
             return
 
         keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
-        # The TARGET's own sleeves too, seeds included. ``holding_performance``
-        # carries what is HELD, and a target routinely names instruments not owned
-        # yet -- four of eight on this book. The newsletter's 1D panel blends the
-        # target's session from these bars and refuses partial coverage (a blend
-        # over the owned part of an allocation is a different portfolio under its
-        # name), so a seed absent from the request silently withheld the line. They
-        # already have their DAILY history requested, which is how ``target_history``
-        # is built; this is the same set at intraday resolution, and it rides the
-        # existing batch rather than adding a call.
+        # The TARGET's own sleeves too, seeds included -- a GUARD, not a fix for an
+        # observed gap. Measured on the reference book: all of them are already here,
+        # because ``holding_performance`` carries the tracked benchmarks alongside the
+        # holdings and every target sleeve happens to be one, so this union adds zero
+        # symbols (76 stayed 76). What it removes is the silent dependency on that
+        # coincidence: a target weight on an instrument that is NOT a tracked
+        # benchmark would be absent from the request, and the newsletter's 1D panel
+        # refuses partial coverage (a blend over part of an allocation is a different
+        # portfolio under its name), so the target's session would vanish with
+        # nothing said. The sleeves already have their DAILY history requested --
+        # that is how ``target_history`` is built -- and this rides the existing
+        # batch rather than adding a call.
         #
         # Read from ``_target_policy_weights`` rather than ``ctx``: this computer
         # runs BEFORE ``_target_history``, so the ctx entry does not exist yet.
