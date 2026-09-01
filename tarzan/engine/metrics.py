@@ -1348,6 +1348,28 @@ class MetricsEngine:
             logger.info(
                 "Stamped a current point onto %d benchmark series", len(stamped))
 
+    def _target_policy_weights(self) -> dict[str, float]:
+        """``{canonical ticker or ISIN: weight %}`` for every sleeve the target
+        names, seeds included, before any availability filtering.
+
+        One definition, two readers: ``_live_1d`` needs it to request the sleeves'
+        intraday bars, and ``_target_history`` needs it to blend their daily ones.
+        ``_live_1d`` runs FIRST, so neither can read it out of ``ctx`` — deriving it
+        twice from ``self`` is what a second copy of this loop would be.
+        """
+        # ``getattr``, because ``_live_1d`` is exercised on engines built without the
+        # target machinery at all (a session-hours probe needs holdings and a clock,
+        # nothing else) and requesting intraday must not depend on it.
+        out: dict[str, float] = {}
+        for h in (list(getattr(self, "holdings", None) or [])
+                  + list(getattr(self, "rebalance_seeds", None) or [])):
+            weight = float(getattr(h, "target_portfolio", 0.0) or 0.0)
+            if weight <= 0:
+                continue
+            out[str(getattr(h, "ticker", "") or getattr(h, "isin", ""))] = weight
+        out.pop("", None)
+        return out
+
     def _live_1d(self, ctx: dict) -> None:
         """Resolve each run's intraday feed once and project broker-style 1D.
 
@@ -1362,6 +1384,22 @@ class MetricsEngine:
             return
 
         keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
+        # The TARGET's own sleeves too, seeds included. ``holding_performance``
+        # carries what is HELD, and a target routinely names instruments not owned
+        # yet -- four of eight on this book. The newsletter's 1D panel blends the
+        # target's session from these bars and refuses partial coverage (a blend
+        # over the owned part of an allocation is a different portfolio under its
+        # name), so a seed absent from the request silently withheld the line. They
+        # already have their DAILY history requested, which is how ``target_history``
+        # is built; this is the same set at intraday resolution, and it rides the
+        # existing batch rather than adding a call.
+        #
+        # Read from ``_target_policy_weights`` rather than ``ctx``: this computer
+        # runs BEFORE ``_target_history``, so the ctx entry does not exist yet.
+        for ticker in self._target_policy_weights():
+            ticker = str(ticker)
+            if ticker and ticker not in keys:
+                keys.append(ticker)
         ctx["intraday_requested_tickers"] = tuple(keys)
         ctx["intraday_quotes"] = {}
 
@@ -1649,28 +1687,26 @@ class MetricsEngine:
 
         unavailable = set(ctx.get("_order_history_unavailable", []))
         weights, prices, missing = {}, {}, []
-        # The POLICY, before any availability filtering: every instrument the
-        # target names and its weight, keyed the way the intraday quote catalog is
-        # (canonical ticker, ISIN when there is no ticker). Exported because this
-        # is the only scope holding both the book and the rebalance seeds, and the
-        # newsletter's 1D panel weights intraday bars by exactly these numbers.
-        # Kept separate from ``weights`` below on purpose: whether the target has a
-        # daily HISTORY and whether it has a SESSION are different questions, and a
-        # consumer of one must not inherit the other's verdict.
-        policy: dict[str, float] = {}
+        # The POLICY, before any availability filtering — see
+        # ``_target_policy_weights``, which ``_live_1d`` also reads to request these
+        # sleeves' intraday bars. Exported because this is the only scope holding
+        # both the book and the rebalance seeds, and the newsletter's 1D panel
+        # weights intraday bars by exactly these numbers. Kept separate from
+        # ``weights`` below on purpose: whether the target has a daily HISTORY and
+        # whether it has a SESSION are different questions, and a consumer of one
+        # must not inherit the other's verdict.
+        ctx["target_weights"] = self._target_policy_weights()
         for h in list(self.holdings) + list(self.rebalance_seeds):
             weight = float(getattr(h, "target_portfolio", 0.0) or 0.0)
             if weight <= 0:
                 continue
             key = h.ticker or h.isin
-            policy[str(key)] = weight
             ph = h.price_history
             if h.isin in unavailable or ph is None or len(ph) < 2:
                 missing.append(str(key))
                 continue
             weights[key] = weight
             prices[key] = normalize_index(ph, drop_duplicates=True)
-        ctx["target_weights"] = policy
         if not weights:
             return
         if missing:

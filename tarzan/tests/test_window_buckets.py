@@ -691,3 +691,146 @@ class TestTheGateVerifiesTheOneDayPanelToo:
 
         assert audit2["performance_windows"]["1d"]["drawn"] == ["twror", "acwi"]
         assert self._errors(m2, audit2, html2) == []
+
+
+class TestTheTargetsOwnSleevesAreRequestedIntraday:
+    """The gap a real run exposed and no fixture could.
+
+    ``_live_1d`` built its request from ``holding_performance``, which carries what
+    is HELD. A target routinely names instruments not owned yet — four of eight on
+    the reference book — and the 1D target line demands FULL coverage, so those four
+    silently withheld it on every real send. The panel was correct; the bars were
+    never asked for.
+
+    Ordering matters here: ``_live_1d`` runs BEFORE ``_target_history``, so the
+    weights cannot be read out of ``ctx``. Both computers read
+    ``_target_policy_weights`` instead.
+    """
+
+    @staticmethod
+    def _engine(holdings, seeds):
+        from tarzan.engine.metrics import MetricsEngine
+
+        engine = MetricsEngine.__new__(MetricsEngine)
+        engine.holdings = list(holdings)
+        engine.rebalance_seeds = list(seeds)
+        return engine
+
+    @staticmethod
+    def _h(ticker, isin, weight):
+        class _H:
+            pass
+        h = _H()
+        h.ticker, h.isin, h.target_portfolio = ticker, isin, weight
+        h.price_history = None
+        return h
+
+    def test_a_seed_that_is_not_held_is_still_requested(self, monkeypatch):
+        import tarzan.runtime as rt
+
+        engine = self._engine(
+            [self._h("AAA.MI", "IE00AAA", 60.0)],
+            [self._h("SEED.MI", "IE00SEED", 40.0)])
+        ctx = {"holding_performance": pd.DataFrame([{"ticker": "AAA.MI"}])}
+        monkeypatch.setattr(rt, "allows_live_transport", lambda: False)
+
+        engine._live_1d(ctx)
+
+        assert set(ctx["intraday_requested_tickers"]) == {"AAA.MI", "SEED.MI"}
+
+    def test_a_held_instrument_is_not_requested_twice(self, monkeypatch):
+        import tarzan.runtime as rt
+
+        engine = self._engine([self._h("AAA.MI", "IE00AAA", 60.0)], [])
+        ctx = {"holding_performance": pd.DataFrame([{"ticker": "AAA.MI"}])}
+        monkeypatch.setattr(rt, "allows_live_transport", lambda: False)
+
+        engine._live_1d(ctx)
+
+        requested = ctx["intraday_requested_tickers"]
+        assert requested == ("AAA.MI",), requested
+
+    def test_an_untargeted_holding_is_unaffected(self, monkeypatch):
+        import tarzan.runtime as rt
+
+        engine = self._engine([self._h("AAA.MI", "IE00AAA", 0.0)], [])
+        ctx = {"holding_performance": pd.DataFrame([{"ticker": "AAA.MI"}])}
+        monkeypatch.setattr(rt, "allows_live_transport", lambda: False)
+
+        engine._live_1d(ctx)
+
+        assert ctx["intraday_requested_tickers"] == ("AAA.MI",)
+
+    def test_the_weights_survive_an_engine_without_target_machinery(self):
+        """``_live_1d`` is exercised on engines built with holdings and a clock and
+        nothing else — a session-hours probe. Requesting intraday must not depend on
+        the target existing."""
+        from tarzan.engine.metrics import MetricsEngine
+
+        bare = MetricsEngine.__new__(MetricsEngine)
+
+        assert bare._target_policy_weights() == {}
+
+    def test_the_gate_expects_the_target_sleeves_too(self):
+        """The request set is contract-checked. Widening it without widening the
+        expectation would fail every run on "candidates differ" — a delivery block,
+        not a cosmetic error."""
+        from tarzan.export.newsletter._semantic import (
+            validate_newsletter_semantics,
+        )
+
+        class _M:
+            benchmark_tickers = {"B": "BENCH.MI"}
+            benchmark_resolution_errors = ()
+            holding_performance = pd.DataFrame([{"ticker": "AAA.MI"}])
+            holdings_df = pd.DataFrame([{"ticker": "AAA.MI"}])
+            target_weights = {"AAA.MI": 60.0, "SEED.MI": 40.0}
+            intraday_requested_tickers = ("AAA.MI", "SEED.MI")
+            intraday_quotes = {
+                "AAA.MI": {"intraday_source_ticker": "AAA.MI",
+                           "intraday_series": [1.0, 2.0],
+                           "intraday_baseline": 1.0},
+                "SEED.MI": {"intraday_source_ticker": "SEED.MI",
+                            "intraday_series": [1.0, 2.0],
+                            "intraday_baseline": 1.0}}
+            actual_value_series = None
+
+        audit = {"performance_intraday": {
+            "origin": "metrics_preprocessing",
+            "requested_tickers": ("AAA.MI", "SEED.MI"),
+            "returned_tickers": ("AAA.MI", "SEED.MI"),
+            "source_tickers": {"AAA.MI": "AAA.MI", "SEED.MI": "SEED.MI"}}}
+
+        errors = [e for e in validate_newsletter_semantics(_M(), audit, "")
+                  if "candidates differ" in e]
+
+        assert errors == [], errors
+
+    def test_the_gate_keeps_its_teeth_on_a_dropped_target_sleeve(self):
+        """Widening the expectation must not turn it into "anything goes"."""
+        from tarzan.export.newsletter._semantic import (
+            validate_newsletter_semantics,
+        )
+
+        class _M:
+            benchmark_tickers = {"B": "BENCH.MI"}
+            benchmark_resolution_errors = ()
+            holding_performance = pd.DataFrame([{"ticker": "AAA.MI"}])
+            holdings_df = pd.DataFrame([{"ticker": "AAA.MI"}])
+            target_weights = {"AAA.MI": 60.0, "SEED.MI": 40.0}
+            intraday_requested_tickers = ("AAA.MI",)      # SEED.MI dropped
+            intraday_quotes = {"AAA.MI": {"intraday_source_ticker": "AAA.MI",
+                                          "intraday_series": [1.0, 2.0],
+                                          "intraday_baseline": 1.0}}
+            actual_value_series = None
+
+        audit = {"performance_intraday": {
+            "origin": "metrics_preprocessing",
+            "requested_tickers": ("AAA.MI",),
+            "returned_tickers": ("AAA.MI",),
+            "source_tickers": {"AAA.MI": "AAA.MI"}}}
+
+        errors = [e for e in validate_newsletter_semantics(_M(), audit, "")
+                  if "candidates differ" in e]
+
+        assert errors, "the gate went blind to a dropped target sleeve"
