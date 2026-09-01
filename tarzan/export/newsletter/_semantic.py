@@ -364,32 +364,60 @@ def validate_newsletter_semantics(
     if rendered_sources != expected_sources:
         errors.append("renderer intraday sources differ from preprocessing provenance")
 
-    # Recompute the 30-day endpoint independently from the raw metrics, then
-    # compare it with both the renderer's endpoint and the visible rounded
-    # label. This catches a label sourced from a generic 1M bucket while the
-    # line ends on a different shared close.
+    # Recompute EVERY window panel independently from the raw metrics, then
+    # compare each with the renderer's endpoint and its visible rounded label.
+    # This catches a label sourced from a generic return bucket while the line
+    # ends on a different shared close -- the failure this gate was built for,
+    # now applied to all six windows rather than only the 30-day one.
     if getattr(metrics, "actual_value_series", None) is not None:
         from tarzan.export._perf_series import _perf_window
 
         geo_name = cfg.benchmark_geo_allocation()
-        expected_window = _perf_window(metrics, 30, geo_name)
-        perf_audit = audit.get("performance_30d", {})
-        if expected_window is None:
-            errors.append("30-day performance window is unavailable")
-        elif not isinstance(perf_audit, Mapping):
-            errors.append("30-day performance render audit is missing")
-        else:
+        #: The lines a window panel is DESIGNED to draw. Kept here as well as in
+        #: the renderer on purpose: the check that the drawn set EQUALS the
+        #: resolvable set is what stops a line from quietly disappearing, and a
+        #: gate reading its expectation out of the audit it is checking would
+        #: verify nothing. Total and Unrealized P&L are absent by design -- they
+        #: live in the matrix, which the money-figure checks above cover.
+        panel_keys = ("twror", "target", "acwi")
+        window_audit = audit.get("performance_windows")
+        if not isinstance(window_audit, Mapping):
+            # Fall back to the single-window entry so an older audit shape is
+            # reported as a missing audit rather than silently passing.
+            window_audit = {"1m": audit.get("performance_30d", {})}
+        for bucket in ("1d", "5d", "1m", "3m", "ytd", "1y"):
+            if bucket == "1d":
+                continue          # figures, not a plot: no line to verify
+            expected_window = _perf_window(metrics, 30, geo_name, bucket=bucket)
+            panel_audit = window_audit.get(bucket)
+            if expected_window is None:
+                # The book does not reach back that far. The renderer must not
+                # have drawn a panel for it either.
+                if panel_audit:
+                    errors.append(
+                        f"{bucket} panel was rendered for an unavailable window")
+                continue
             expected_endpoints = expected_window.get("endpoints", {})
-            rendered_endpoints = perf_audit.get("endpoints", {})
-            legend_values = perf_audit.get("legend_values", {})
-            legend_labels = perf_audit.get("legend_labels", {})
-            # Every line the 30-day chart can draw is audited here. A line
-            # absent from this tuple renders unverified, which is the one
-            # failure mode the gate exists to prevent.
-            for key in ("twror", "pnl_pct", "unreal_pct", "target", "acwi"):
+            resolvable = {k for k in panel_keys
+                          if expected_endpoints.get(k) is not None}
+            if not resolvable:
+                continue
+            if bucket == "1m" and not isinstance(panel_audit, Mapping):
+                errors.append("30-day performance render audit is missing")
+                continue
+            if not isinstance(panel_audit, Mapping):
+                errors.append(f"{bucket} performance render audit is missing")
+                continue
+            drawn = set(panel_audit.get("drawn") or ())
+            if drawn != resolvable:
+                errors.append(
+                    f"{bucket} panel drew {sorted(drawn)} where "
+                    f"{sorted(resolvable)} resolved")
+            rendered_endpoints = panel_audit.get("endpoints", {})
+            legend_values = panel_audit.get("legend_values", {})
+            legend_labels = panel_audit.get("legend_labels", {})
+            for key in sorted(resolvable):
                 expected_value = expected_endpoints.get(key)
-                if expected_value is None:
-                    continue
                 rendered_value = rendered_endpoints.get(key)
                 label_value = legend_values.get(key)
                 label = _text(legend_labels.get(key))
@@ -397,21 +425,23 @@ def validate_newsletter_semantics(
                     float(rendered_value), float(expected_value), abs_tol=1e-9
                 ):
                     errors.append(
-                        f"30-day {key} line endpoint differs from the shared-close endpoint"
+                        f"{bucket} {key} line endpoint differs from the "
+                        f"shared-close endpoint"
                     )
                 if label_value is None or not math.isclose(
                     float(label_value), float(expected_value), abs_tol=1e-9
                 ):
-                    errors.append(f"30-day {key} legend uses a different endpoint")
+                    errors.append(f"{bucket} {key} legend uses a different endpoint")
                 displayed = _displayed_percent(label)
                 if displayed is None or not math.isclose(
                     displayed, float(expected_value), abs_tol=0.0051
                 ):
                     errors.append(
-                        f"30-day {key} visible label {label!r} disagrees with "
+                        f"{bucket} {key} visible label {label!r} disagrees with "
                         f"endpoint {float(expected_value):+.6f}%"
                     )
                 if label and label not in newsletter_html:
-                    errors.append(f"30-day {key} audited label is absent from rendered HTML")
+                    errors.append(
+                        f"{bucket} {key} audited label is absent from rendered HTML")
 
     return tuple(errors)

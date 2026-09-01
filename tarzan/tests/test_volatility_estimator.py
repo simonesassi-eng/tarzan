@@ -289,19 +289,22 @@ class TestTheThreeLinesAreComparedOverOnePeriod:
     def test_the_key_prints_the_span_figure_beside_every_name(self):
         import re
         html = TestTheSinceInceptionPanelIsRendered._section()["vs_market_html"]
-        si_key = re.findall(r'margin:7px 0 0;">(.*?)</div>', html, re.S)[1]
+        # Fourth key now, not second: the section leads with the two by-window
+        # grids (return, volatility) and the since-inception pair follows.
+        si_key = re.findall(r'margin:7px 0 0;">(.*?)</div>', html, re.S)[3]
         names = re.findall(r'<span style="color:#8FA3BC;">([^<]+)</span>', si_key)
         assert len(names) == 3
         for n in names:
             assert re.search(r'\d+\.\d+%$', n), f"{n!r} carries no span figure"
 
-    def test_the_thirty_day_key_stays_bare(self):
-        """Only the since-inception key carries the span figure. On the 30-day
-        panel a whole-life σ would name a period the panel does not draw."""
+    def test_the_by_window_key_stays_bare(self):
+        """Only the since-inception key carries the span figure. Over the window
+        grid a whole-life σ would name a period NONE of the six panels draws — and
+        one figure printed above six different windows is worse than none."""
         import re
         html = TestTheSinceInceptionPanelIsRendered._section()["vs_market_html"]
         keys = re.findall(r'margin:7px 0 0;">(.*?)</div>', html, re.S)
-        names = re.findall(r'<span style="color:#8FA3BC;">([^<]+)</span>', keys[3])
+        names = re.findall(r'<span style="color:#8FA3BC;">([^<]+)</span>', keys[1])
         assert names and not any(re.search(r'\d+\.\d+%$', n) for n in names), names
 
 
@@ -325,28 +328,61 @@ class TestTheSinceInceptionPanelIsRendered:
         return _build_performance30(_NewsletterContext(
             metrics=m, config=InvestorConfig(), benchmark_geo="B"))
 
-    def test_there_are_two_volatility_panels_and_two_return_panels(self):
+    def test_the_two_by_window_grids_lead_and_the_lifetime_pair_follows(self):
         import re
         html = self._section()["vs_market_html"]
         caps = re.findall(r'margin-bottom:5px;">([^<]+)</div>', html)
-        assert caps == ["Return · since inception",
-                        'Volatility · since inception (line: rolling 21 sessions · key: whole span, annualized)',
-                        "Return · last 30 days",
-                        "Volatility · last 30 days"]
+        assert caps == [
+            "Return · by window",
+            "Volatility · by window (annualized · line: rolling 21 sessions · σ: over the window)",
+            "Return · since inception",
+            'Volatility · since inception (line: rolling 21 sessions · key: whole span, annualized)']
+
+    def test_both_grids_carry_the_same_six_windows_in_the_same_order(self):
+        """The point of the grids: one vocabulary of windows, so a reader who
+        found "3M" on the return grid finds it in the same place on the risk one.
+        A drifting pair of orders would put a 3M return above a YTD sigma."""
+        import re
+        html = self._section()["vs_market_html"]
+        cells = re.findall(
+            r'letter-spacing:.04em;margin-bottom:3px;">([^<]*)', html)
+        six = ["1D", "5D", "1M", "3M", "YTD", "1Y"]
+        assert cells == six + six, cells
+
+    def test_a_window_span_is_labelled_in_days_not_sessions(self):
+        """The plotted index is ``actual_value_series``, which is calendar-daily
+        with weekends carried flat. Its length counts DAYS, so calling them
+        sessions printed ~364 beside a 1Y window that holds about 252."""
+        import re
+        html = self._section()["vs_market_html"]
+        assert "sessions</span>" not in html.split("Volatility", 1)[0]
+        spans = re.findall(r'letter-spacing:0;"> · (\d+) days</span>', html)
+        assert spans, html[:400]
+        # Monotonic: a longer window spans more days than a shorter one.
+        assert spans == sorted(spans, key=int), spans
 
     def test_the_since_inception_volatility_sits_under_its_return_chart(self):
+        """Each measure's lifetime panel directly under its own, whatever precedes
+        them — asserted as adjacency rather than a fixed index, so adding a block
+        above cannot silently separate the pair."""
         import re
         html = self._section()["vs_market_html"]
         order = [m.group(1) for m in re.finditer(
             r'margin-bottom:5px;">([^<]+)</div>', html)]
-        assert order.index('Volatility · since inception (line: rolling 21 sessions · key: whole span, annualized)') == 1
+        ret = order.index("Return · since inception")
+        vol = order.index('Volatility · since inception (line: rolling 21 sessions · key: whole span, annualized)')
+        assert vol == ret + 1, order
 
-    def test_the_wide_panel_is_full_width(self):
+    def test_the_wide_panels_are_full_width_and_the_grid_cells_are_not(self):
         import re
         html = self._section()["vs_market_html"]
         widths = re.findall(r'<svg width="100%" viewBox="0 0 (\d+) ', html)
-        # since-inception return, since-inception volatility: both 580.
-        assert widths[:2] == ["580", "580"]
+        # The grid cells come first at 182px (five drawable return windows plus
+        # five volatility ones — 1D is figures, and its σ needs 21 sessions), then
+        # the two since-inception panels at the card's full 580.
+        assert widths[-2:] == ["580", "580"], widths
+        assert set(widths[:-2]) == {"182"}, widths
+        assert len(widths) == 12, widths
 
     def test_the_caption_separates_the_line_from_the_key(self):
         """Two different figures sit on this panel and a reader cannot tell them
