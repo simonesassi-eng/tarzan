@@ -542,3 +542,152 @@ class TestTheTargetPolicyIsExportedEvenWhenItsHistoryIsNot:
 
         assert ctx.get("target_history") is None, "history must be withheld"
         assert ctx.get("target_weights") == {"AAA.MI": 60.0, "BBB.MI": 40.0}
+
+
+class TestTheGateVerifiesTheOneDayPanelToo:
+    """1D used to be the one drawn panel the semantic gate could not see.
+
+    Its window does not come from ``_perf_window``, so the per-window loop skipped
+    it: the three end labels were correct by construction (read off the plotted
+    array) but nothing checked them against an independent recomputation, which is
+    the property the gate exists to enforce for every other line on the page.
+
+    ``_perf_intraday_window`` now returns the same shape ``_perf_window`` does, so
+    the gate recomputes 1D through the identical code path. These tests drive the
+    gate and then BREAK the audit, because a check that never fails is not a check.
+    """
+
+    @staticmethod
+    def _render(monkeypatch, *, with_intraday=True, weights=None):
+        import numpy as np
+
+        from tarzan import config as cfg
+        from tarzan.export.newsletter._constants import _NewsletterContext
+        from tarzan.export.newsletter._sections_perf import _build_performance30
+        from tarzan.models.investor_config import InvestorConfig
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        # The renderer reads ctx.benchmark_geo; the gate reads config. In production
+        # they are one value, so the test makes them agree.
+        monkeypatch.setattr(cfg, "benchmark_geo_allocation", lambda: "B")
+
+        idx = pd.date_range("2025-08-01", "2026-08-26", freq="B")
+        n = len(idx)
+        wob = 1 + 0.01 * np.sin(np.arange(n) / 5)
+        m = PortfolioMetrics(
+            total_value=6000.0, invested_value=6000.0,
+            holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0,
+                                       "ticker": "AAA.MI", "weight_pct": 60.0},
+                                      {"cost_basis_eur": 3000.0,
+                                       "ticker": "BBB.MI", "weight_pct": 40.0}]))
+        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wob, index=idx)
+        m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wob, index=idx)
+        m.portfolio_history = pd.Series(np.linspace(100, 114.5, n) * wob, index=idx)
+        m.benchmark_histories = {"B": pd.Series(
+            np.linspace(200, 230, n) * wob, index=idx)}
+        m.benchmark_tickers = {"B": "BENCH.MI"}
+        m.target_weights = dict(weights or {"AAA.MI": 60.0, "BBB.MI": 40.0})
+        if with_intraday:
+            stamps = pd.date_range("2026-08-26 09:05", periods=7, freq="1h",
+                                   tz="Europe/Rome")
+
+            def _bars(base, drift):
+                return {"intraday_series": pd.Series(
+                    base * (1 + drift * np.arange(len(stamps)) / 100.0),
+                    index=stamps), "intraday_baseline": base}
+
+            m.intraday_quotes = {"AAA.MI": _bars(100.0, 0.10),
+                                 "BBB.MI": _bars(50.0, -0.05),
+                                 "BENCH.MI": _bars(210.0, 0.04)}
+        audit: dict = {}
+        html = _build_performance30(_NewsletterContext(
+            metrics=m, config=InvestorConfig(), benchmark_geo="B",
+            semantic_audit=audit))["vs_market_html"]
+        return m, audit, html
+
+    @staticmethod
+    def _errors(m, audit, html):
+        from tarzan.export.newsletter._semantic import (
+            validate_newsletter_semantics,
+        )
+        return [e for e in validate_newsletter_semantics(m, audit, html)
+                if e.startswith("1d ")]
+
+    def test_a_faithful_render_raises_nothing(self, monkeypatch):
+        m, audit, html = self._render(monkeypatch)
+        assert audit["performance_windows"]["1d"]["drawn"] == [
+            "twror", "target", "acwi"]
+        assert self._errors(m, audit, html) == []
+
+    def test_an_endpoint_that_drifts_from_the_recomputation_is_caught(self, monkeypatch):
+        m, audit, html = self._render(monkeypatch)
+        audit["performance_windows"]["1d"]["endpoints"]["twror"] += 0.5
+
+        errors = self._errors(m, audit, html)
+
+        assert any("line endpoint differs" in e for e in errors), errors
+
+    def test_a_legend_value_that_disagrees_is_caught(self, monkeypatch):
+        m, audit, html = self._render(monkeypatch)
+        audit["performance_windows"]["1d"]["legend_values"]["acwi"] += 0.5
+
+        errors = self._errors(m, audit, html)
+
+        assert any("legend uses a different endpoint" in e for e in errors), errors
+
+    def test_a_visible_label_that_rounds_to_the_wrong_figure_is_caught(self, monkeypatch):
+        m, audit, html = self._render(monkeypatch)
+        audit["performance_windows"]["1d"]["legend_labels"]["target"] = "+9.99%"
+
+        errors = self._errors(m, audit, html)
+
+        assert any("disagrees with" in e for e in errors), errors
+
+    def test_a_label_missing_from_the_html_is_caught(self, monkeypatch):
+        """The audit may not describe a figure the reader cannot find."""
+        m, audit, html = self._render(monkeypatch)
+        label = audit["performance_windows"]["1d"]["legend_labels"]["twror"]
+
+        errors = self._errors(m, audit, html.replace(label, "+0.00%"))
+
+        assert any("absent from rendered HTML" in e for e in errors), errors
+
+    def test_a_line_dropped_from_the_panel_is_caught(self, monkeypatch):
+        """The teeth that stop a line vanishing quietly: the drawn set must EQUAL
+        the set that resolved, not merely be a subset of it."""
+        m, audit, html = self._render(monkeypatch)
+        audit["performance_windows"]["1d"]["drawn"] = ["twror", "acwi"]
+
+        errors = self._errors(m, audit, html)
+
+        assert any("drew" in e and "resolved" in e for e in errors), errors
+
+    def test_no_session_means_no_audit_and_no_complaint(self, monkeypatch):
+        """A pinned or offline run states the figures instead. There is no line, so
+        there is nothing to verify — and the gate must not invent a demand."""
+        m, audit, html = self._render(monkeypatch, with_intraday=False)
+
+        assert "1d" not in (audit.get("performance_windows") or {})
+        assert self._errors(m, audit, html) == []
+
+    def test_an_audit_claiming_a_panel_that_has_no_session_is_caught(self, monkeypatch):
+        m, audit, html = self._render(monkeypatch, with_intraday=False)
+        audit.setdefault("performance_windows", {})["1d"] = {
+            "endpoints": {"twror": 0.21}, "legend_values": {"twror": 0.21},
+            "legend_labels": {"twror": "+0.21%"}, "drawn": ["twror"]}
+
+        errors = self._errors(m, audit, html)
+
+        assert any("unavailable window" in e for e in errors), errors
+
+    def test_a_target_withheld_for_partial_coverage_is_not_demanded(self, monkeypatch):
+        """The gate recomputes through the same all-or-nothing rule, so a target
+        the renderer correctly refused is not reported as a dropped line."""
+        m, audit, html = self._render(monkeypatch)
+        m.intraday_quotes.pop("BBB.MI")           # half the target loses its bars
+        m2, audit2, html2 = self._render(
+            monkeypatch, weights={"AAA.MI": 60.0, "ZZZ.MI": 40.0})
+
+        assert audit2["performance_windows"]["1d"]["drawn"] == ["twror", "acwi"]
+        assert self._errors(m2, audit2, html2) == []

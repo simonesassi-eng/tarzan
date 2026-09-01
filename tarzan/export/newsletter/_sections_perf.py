@@ -686,111 +686,22 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 + "".join(out) + '</table>')
 
     # ── 1D: the intraday session, drawn ───────────────────────────────────────
-    # NOT a two-close window. A 1D window from DAILY bars opens on the previous
-    # session, so it spans at most two points -- and once truncated to the close
-    # boundary the portfolio and the benchmark share it can span none, because
-    # their tapes routinely end a session apart (measured: benchmark anchored
-    # 27 Aug against a NAV ending 26 Aug). That is why this cell does not go
-    # through ``_perf_window``.
-    #
-    # The session itself, though, is already fetched: preprocessing keeps a quote
-    # catalog of intraday bars (``metrics.intraday_quotes``) that the RETURNS
-    # table's 1D sparklines draw, and ``_portfolio_intraday_series`` already
-    # value-weights the holdings' bars into one portfolio path. This cell reuses
-    # both -- no new fetch, and the same numbers the 1D column shows.
-    #
-    # The TARGET gets its session too, weighted by ``metrics.target_weights`` --
-    # the allocation's own policy, seeds included -- and only when EVERY instrument
-    # it names has bars. Partial coverage is refused rather than renormalised: a
-    # path weighted over the part of the target that happened to trade is a
-    # different portfolio under the target's name. Same rule
-    # ``metrics._target_history`` applies to the daily line.
+    # The window itself is built by ``_perf_intraday_window`` at module level, in
+    # the same shape ``_perf_window`` returns and with the reasons documented
+    # there. It lives outside this function so the semantic gate can recompute it:
+    # one authority, called twice, exactly as the other five windows work.
     def _day_cell() -> str:
         from tarzan.engine.stats import compute_period_return
 
-        quotes = getattr(m, "intraday_quotes", {}) or {}
-
-        def _pct_path(quote) -> "pd.Series | None":
-            """One instrument's session as % against its own previous close."""
-            intra, feed_baseline = _intraday_quote_parts(quote)
-            if intra is None or len(intra) < 2:
-                return None
-            try:
-                base = float(feed_baseline)
-            except (TypeError, ValueError):
-                base = float("nan")
-            if not math.isfinite(base) or base == 0:
-                base = float(intra.iloc[0])
-            if not base:
-                return None
-            return (intra.astype(float) / base - 1.0) * 100.0
-
-        def _weighted_path(weights: dict) -> "pd.Series | None":
-            """A weighted blend of sessions, or None unless EVERY sleeve has one.
-
-            Weights need not sum to 100 (a target may be stated over a sleeve);
-            the blend divides by the weight it actually carries. What it may not do
-            is skip a sleeve — hence the all-or-nothing check.
-            """
-            if not weights:
-                return None
-            paths, total = [], 0.0
-            for key, weight in weights.items():
-                weight = float(weight or 0.0)
-                if weight <= 0:
-                    continue
-                path = _pct_path(quotes.get(str(key)))
-                if path is None:
-                    return None                      # partial ≠ the target
-                paths.append((weight, path))
-                total += weight
-            if not paths or total <= 0:
-                return None
-            axis = None
-            for _w, p in paths:
-                axis = p.index if axis is None else axis.union(p.index)
-            blend = None
-            for weight, p in paths:
-                aligned = p.reindex(axis).ffill().bfill() * weight
-                blend = aligned if blend is None else blend + aligned
-            return None if blend is None else blend / total
-
-        lines = []
-        # Portfolio: the value-weighted path the RETURNS table's own portfolio row
-        # draws, expressed as % (the helper returns a level based at 100).
-        pf = _portfolio_intraday_series(m)
-        if pf is not None and len(pf) >= 2:
-            lines.append((PORT, "TWROR", pf.astype(float) - 100.0, 2.2))
-        target_path = _weighted_path(getattr(m, "target_weights", {}) or {})
-        if target_path is not None and len(target_path) >= 2:
-            lines.append((TARGET, "Target", target_path, 1.6))
-        bench_ticker = str((getattr(m, "benchmark_tickers", {}) or {})
-                           .get(ctx.benchmark_geo) or "")
-        bench_path = _pct_path(quotes.get(bench_ticker))
-        if bench_path is not None:
-            lines.append((BENCH, bench_label, bench_path, 1.6))
-
-        if len(lines) >= 1:
-            # One shared time axis: the union of both feeds' stamps, forward
-            # filled. A reindex onto one feed's stamps alone would drop the
-            # other's prints, and the two venues do not tick together.
-            axis = None
-            for _c, _n, s, _w in lines:
-                axis = s.index if axis is None else axis.union(s.index)
-            series = []
-            for c, _n, s, wid in lines:
-                # Label the LAST PLOTTED value, not ``s.iloc[-1]``. The two agree
-                # here, but only by an argument about forward-fill — and the rule
-                # this section is built on is that the label is read off the exact
-                # array handed to the chart, so no argument is needed.
-                vals = list(s.reindex(axis).ffill().bfill().values.astype(float))
-                series.append({"values": vals, "color": c, "width": wid,
-                               "end_label": _pct(vals[-1], signed=True)})
-            chart = _charts.chart_pct_compact(
-                series, list(axis), include_zero=True, w=W_CELL, h=H_CELL,
-                date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL)
-            if chart:
-                return _cellcap("1D", "session") + chart
+        win1d = _perf_intraday_window(m, ctx.benchmark_geo)
+        if win1d is not None:
+            ser, leg = _panel(win1d, "1d")
+            if ser:
+                chart = _charts.chart_pct_compact(
+                    ser, win1d["dates"], include_zero=True, w=W_CELL, h=H_CELL,
+                    date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL)
+                if chart:
+                    return _cellcap("1D", "session") + chart
 
         # No bars at all -- a closed market whose vendor exposes no session, a
         # pinned/point-in-time run, or an offline one. The figures still exist and
@@ -963,6 +874,151 @@ def _intraday_quote_parts(quote) -> tuple[object, object]:
     if isinstance(quote, dict):
         return quote.get("intraday_series"), quote.get("intraday_baseline")
     return quote, None
+
+
+def _intraday_pct_path(quote):
+    """One instrument's session as % against its own previous close, or None.
+
+    The baseline is the previous close preprocessing retained from the SAME feed
+    as the bars. Falling back to the session's first print is for lightweight
+    fixtures: it makes the line open at 0% instead of at the real gap.
+    """
+    intra, feed_baseline = _intraday_quote_parts(quote)
+    if intra is None or len(intra) < 2:
+        return None
+    try:
+        base = float(feed_baseline)
+    except (TypeError, ValueError):
+        base = float("nan")
+    if not math.isfinite(base) or base == 0:
+        base = float(intra.iloc[0])
+    if not base:
+        return None
+    return (intra.astype(float) / base - 1.0) * 100.0
+
+
+def _intraday_weighted_path(quotes: dict, weights: dict):
+    """A weight-blended session, or None unless EVERY sleeve has one.
+
+    Weights need not sum to 100 — a target may be stated over one sleeve of the
+    book — so the blend divides by the weight it actually carries. What it may not
+    do is SKIP a sleeve: a path weighted over the part of an allocation that
+    happened to trade is a different portfolio under that allocation's name. Hence
+    the all-or-nothing return, the same rule ``metrics._target_history`` applies to
+    the daily line rather than renormalising what is left.
+    """
+    if not weights:
+        return None
+    paths, total = [], 0.0
+    for key, weight in weights.items():
+        try:
+            weight = float(weight or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if weight <= 0:
+            continue
+        path = _intraday_pct_path(quotes.get(str(key)))
+        if path is None:
+            return None                              # partial != the allocation
+        paths.append((weight, path))
+        total += weight
+    if not paths or total <= 0:
+        return None
+    axis = None
+    for _w, p in paths:
+        axis = p.index if axis is None else axis.union(p.index)
+    blend = None
+    for weight, p in paths:
+        aligned = p.reindex(axis).ffill().bfill() * weight
+        blend = aligned if blend is None else blend + aligned
+    return None if blend is None else blend / total
+
+
+#: The lines a 1D panel may draw, keyed as every other window's are, so one gate
+#: loop covers all six. Order is draw order: references after the portfolio.
+_INTRADAY_LINE_KEYS = ("twror", "target", "acwi")
+
+
+def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
+    """The 1D panel's window: today's SESSION, shaped like ``_perf_window``.
+
+    1D cannot come from daily bars. Such a window opens on the PREVIOUS session, so
+    it spans at most two closes — and once truncated to the boundary the portfolio
+    and the benchmark share it can span NONE, because their tapes routinely end a
+    session apart (measured: a benchmark anchored 27 Aug against a NAV ending
+    26 Aug, an empty window while both 1D returns existed and printed in the
+    matrix). Two points is a straight segment that looks like a trajectory.
+
+    So this reads the intraday bars instead — already fetched for the RETURNS
+    table's sparklines, so it costs no call and cannot disagree with the 1D column.
+    Each line is rebased on its own previous close and then sampled on ONE shared
+    clock axis: the union of every feed's stamps, forward filled. Reindexing onto a
+    single feed's stamps would drop the others' prints, and two venues do not tick
+    together.
+
+    Returns the same keys ``_perf_window`` does for the lines this panel draws, so
+    the semantic gate verifies 1D through the identical code path as 5D or 1Y.
+    ``None`` when no line can be built.
+
+    One authority, called twice: once by the renderer to draw, once by the gate to
+    check what was drawn.
+    """
+    quotes = dict(getattr(m, "intraday_quotes", {}) or {})
+    if not quotes:
+        return None
+
+    raw: dict[str, object] = {}
+    # Portfolio: the value-weighted path the RETURNS table's own portfolio row
+    # draws, as % (that helper returns a level based at 100).
+    pf = _portfolio_intraday_series(m)
+    if pf is not None and len(pf) >= 2:
+        raw["twror"] = pf.astype(float) - 100.0
+    target = _intraday_weighted_path(quotes, getattr(m, "target_weights", {}) or {})
+    if target is not None and len(target) >= 2:
+        raw["target"] = target
+    bench_ticker = str((getattr(m, "benchmark_tickers", {}) or {}).get(geo_name) or "")
+    bench = _intraday_pct_path(quotes.get(bench_ticker))
+    if bench is not None:
+        raw["acwi"] = bench
+    if not raw:
+        return None
+
+    axis = None
+    for key in _INTRADAY_LINE_KEYS:
+        s = raw.get(key)
+        if s is None:
+            continue
+        axis = s.index if axis is None else axis.union(s.index)
+    if axis is None or len(axis) < 2:
+        return None
+
+    out: dict[str, object] = {"dates": list(axis)}
+    endpoints: dict[str, Optional[float]] = {}
+    for key in _INTRADAY_LINE_KEYS:
+        s = raw.get(key)
+        vals = (list(s.reindex(axis).ffill().bfill().values.astype(float))
+                if s is not None else [])
+        # A line whose plotted end is not finite is NOT a line. Reporting it would
+        # make the semantic gate demand a panel that ``chart_pct_compact`` declines
+        # to draw (it returns "" when no series holds a finite point), so "resolved"
+        # has to mean "drawable" or the gate accuses the renderer of dropping a line
+        # it was never able to draw.
+        if not vals or not all(math.isfinite(v) for v in vals[-1:]):
+            out[key] = None
+            endpoints[key] = None
+            continue
+        out[key] = vals
+        # The endpoint is the LAST PLOTTED value, not ``s.iloc[-1]``. The two agree,
+        # but only by an argument about forward-fill, and the rule this section is
+        # built on is that a label is read off the exact array handed to the chart.
+        endpoints[key] = float(vals[-1])
+    if all(v is None for v in endpoints.values()):
+        return None
+    out["endpoints"] = endpoints
+    out["window_start"] = axis[0]
+    out["window_end"] = axis[-1]
+    out["source_end_dates"] = {"portfolio": axis[-1], "benchmark": axis[-1]}
+    return out
 
 
 def _shared_performance_intraday(ctx: _NewsletterContext) -> dict:
