@@ -208,8 +208,15 @@ def _target_line(m: PortfolioMetrics, idx) -> "list | None":
 
 
 def _perf_window(m: PortfolioMetrics, n_days: int = 30,
-                 geo_name: Optional[str] = None) -> Optional[dict]:
+                 geo_name: Optional[str] = None,
+                 bucket: str = "1m") -> Optional[dict]:
     """Comparable trailing performance window on one shared close boundary.
+
+    ``bucket`` names the window in the shared vocabulary every return table uses
+    ("1d", "5d", "1m", "3m", "ytd", "1y", …), so a panel and the column above it
+    open on the same observation. It defaults to "1m" — the window this built
+    before it could build any other — and ``n_days`` remains the fallback span
+    for when no anchor resolves.
 
     Portfolio value, TWROR, P&L and the geographic benchmark are all truncated
     to the latest date observed by both portfolio and benchmark before the
@@ -265,8 +272,15 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
     # the anchor bar is stamped at its venue's midnight, so a UTC trip moved a
     # European anchor to the previous calendar day and opened the window one
     # session early (see ``stats.normalize_index``).
-    start = window_anchor(acwi_raw if acwi_all is not None else val_raw, "1m")
+    start = window_anchor(acwi_raw if acwi_all is not None else val_raw, bucket)
     if start is None:
+        # The ``n_days`` fallback belongs to the DEFAULT window only. For a named
+        # bucket a missing anchor means the book does not reach back that far, and
+        # substituting a 30-day slice would draw one span under another's name — a
+        # 1Y panel showing a month, on an eight-month book, labelled "1Y". No
+        # window is the honest answer; the caller omits the panel.
+        if bucket != "1m":
+            return None
         start = val_all.index[-1] - pd.Timedelta(days=n_days)
     else:
         start = pd.Timestamp(start)
@@ -444,7 +458,8 @@ def _rolling_ann_vol(level: "pd.Series", window: int) -> "pd.Series":
 
 def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
                      n_days: Optional[int] = None, vol_window: int = 21,
-                     max_points: int = 180) -> Optional[dict]:
+                     max_points: int = 180,
+                     bucket: Optional[str] = None) -> Optional[dict]:
     """Rolling annualized volatility of the portfolio NAV vs the geo benchmark,
     on a common daily index. The twin of ``_perf_window`` / ``_perf_full_series``
     for the "You vs the market" box's second (risk) row.
@@ -453,15 +468,25 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     (downsampled to ``max_points``); ``n_days=30`` → the trailing window, whose
     lead-in already has a full window from earlier history.
 
+    ``bucket`` overrides both with a named window ("5d", "1m", "ytd", "1y", …),
+    resolved through the SAME ``window_anchor`` call ``_perf_window`` makes — on
+    the benchmark's own raw series when there is one, the NAV otherwise — so a
+    volatility panel and the return panel above it open on one observation. A
+    bucket the book does not reach back far enough for yields None (no panel)
+    rather than a shorter span wearing the bucket's name.
+
     Every series here is sampled on TRADING days (the order-derived NAV, the
     benchmark's own closes and the target's common window all are), so
     ``vol_window`` rows mean the same 21 sessions on each line and the √252
     scaling matches the sampling. A calendar-daily input would put ~29 calendar
     days in one line's window against 21 sessions in another's.
 
-    Returns ``{dates, port, acwi, target}`` (% lists; ANY line may be None — a
-    window that holds no estimate has no line, the portfolio's included), or None
-    when unavailable."""
+    Returns ``{dates, port, acwi, target, span, window_sigma}``. The three lines
+    are % lists and ANY of them may be None — a window that holds no estimate has
+    no line, the portfolio's included. ``span`` is one σ per series over the
+    portfolio's whole life; ``window_sigma`` is one σ per series over THIS window,
+    which is what a per-window caption states (the lines' end values are all
+    today's rolling σ, identical in every window). None when unavailable."""
     from tarzan.engine.stats import TRADING_DAYS
 
     nav_full = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
@@ -481,7 +506,18 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     if first is None:
         return None
     # Choose the display index (same convention as the return charts).
-    if n_days is None:
+    if bucket is not None:
+        from tarzan.engine.stats import window_anchor
+        start = window_anchor(acwi_raw if acwi_raw is not None else m.portfolio_history,
+                              bucket)
+        if start is None:
+            return None
+        start = pd.Timestamp(start)
+        if start.tz is not None:
+            start = start.tz_localize(None)
+        start = start.normalize()
+        idx = nav_full.index[(nav_full.index >= start) & (nav_full.index >= first)]
+    elif n_days is None:
         idx = nav_full.index[nav_full.index >= first]
         if len(idx) > max_points:
             pos = sorted({int(round(i * (len(idx) - 1) / (max_points - 1)))
@@ -527,18 +563,42 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     # holdings with ≥1Y of history (10.77% live on 26 Aug 2026 against this
     # 10.51%): a different construction over a different span, by explicit design
     # there. Two honest answers to two questions, not one number twice.
-    def _span_vol(full):
+    def _clipped_vol(full, lo, hi, floor: int):
+        """σ of ``full`` over ``[lo, hi]``, annualized, or None when the clip holds
+        too few returns to estimate one."""
         if full is None or len(full) < 3:
             return None
-        w = full[(full.index >= nav_full.index[0]) & (full.index <= nav_full.index[-1])]
+        w = full[(full.index >= lo) & (full.index <= hi)]
         rr = w.pct_change().dropna()
-        if len(rr) < vol_window:
+        if len(rr) < floor:
             return None
         return float(rr.std(ddof=1) * (TRADING_DAYS ** 0.5) * 100.0)
+
+    def _span_vol(full):
+        return _clipped_vol(full, nav_full.index[0], nav_full.index[-1],
+                            vol_window)
 
     span = {"port": _span_vol(nav_full), "acwi": _span_vol(acwi_full),
             "target": _span_vol(target_full),
             "from": nav_full.index[0], "to": nav_full.index[-1]}
+
+    # σ over THIS window, which is a different question from the line's end value.
+    # The line is a ROLLING 21-session estimate, so its last point is today's σ —
+    # the same number in every window, because every window ends today. Six panels
+    # whose end labels all read 6.47% say nothing about the windows. This is the
+    # per-window figure: one σ measured across the window's own returns, which
+    # differs panel to panel and answers "how rough was this stretch".
+    #
+    # The floor is 3 returns, not ``vol_window``: a 5-session window has five, and
+    # refusing to estimate there would blank the caption on the very panels a
+    # reader checks after a bad week. A σ off five returns is noisy and the caption
+    # names the window, so the span it covers is never in doubt.
+    _lo, _hi = idx[0], idx[-1]
+    window_sigma = {
+        "port": _clipped_vol(nav_full, _lo, _hi, 3),
+        "acwi": _clipped_vol(acwi_full, _lo, _hi, 3),
+        "target": _clipped_vol(target_full, _lo, _hi, 3),
+    }
 
     def _bench_vol(full):
         """A reference line's rolling vol over ``idx``, or None.
@@ -560,7 +620,8 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         return _line(v)
 
     return {"dates": list(idx), "port": port, "acwi": _bench_vol(acwi_full),
-            "target": _bench_vol(target_full), "span": span}
+            "target": _bench_vol(target_full), "span": span,
+            "window_sigma": window_sigma}
 
 
 def benchmark_gap_pp(m: PortfolioMetrics,

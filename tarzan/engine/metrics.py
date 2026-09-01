@@ -1649,17 +1649,28 @@ class MetricsEngine:
 
         unavailable = set(ctx.get("_order_history_unavailable", []))
         weights, prices, missing = {}, {}, []
+        # The POLICY, before any availability filtering: every instrument the
+        # target names and its weight, keyed the way the intraday quote catalog is
+        # (canonical ticker, ISIN when there is no ticker). Exported because this
+        # is the only scope holding both the book and the rebalance seeds, and the
+        # newsletter's 1D panel weights intraday bars by exactly these numbers.
+        # Kept separate from ``weights`` below on purpose: whether the target has a
+        # daily HISTORY and whether it has a SESSION are different questions, and a
+        # consumer of one must not inherit the other's verdict.
+        policy: dict[str, float] = {}
         for h in list(self.holdings) + list(self.rebalance_seeds):
             weight = float(getattr(h, "target_portfolio", 0.0) or 0.0)
             if weight <= 0:
                 continue
             key = h.ticker or h.isin
+            policy[str(key)] = weight
             ph = h.price_history
             if h.isin in unavailable or ph is None or len(ph) < 2:
                 missing.append(str(key))
                 continue
             weights[key] = weight
             prices[key] = normalize_index(ph, drop_duplicates=True)
+        ctx["target_weights"] = policy
         if not weights:
             return
         if missing:
@@ -1914,6 +1925,7 @@ class MetricsEngine:
             intraday_quotes=ctx.get("intraday_quotes", {}),
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
+            target_weights=ctx.get("target_weights") or {},
             ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),
             acwi_geo=ctx.get("acwi_geo", {}),

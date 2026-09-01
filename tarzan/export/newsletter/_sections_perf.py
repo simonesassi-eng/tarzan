@@ -429,74 +429,91 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
                 + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
 
-    # Last-30-day labels come from the exact arrays passed to the chart. The
-    # shared-close endpoint is therefore the only number that can describe a
-    # line; generic 1M return buckets are intentionally not consulted here.
-    endpoints = dict(win.get("endpoints") or {})
-    legend_values: dict[str, float] = {}
-    legend_labels: dict[str, str] = {}
+    # ── The six standard windows, the vocabulary a broker's app prints ────────
+    # One per panel, in this order. 1D is deliberately NOT a chart: from daily
+    # closes a session is two points, i.e. a straight segment that looks like
+    # data and carries none, so its cell renders the figures instead (the form
+    # a single headline number asks for).
+    WINDOWS = [("1d", "1D"), ("5d", "5D"), ("1m", "1M"),
+               ("3m", "3M"), ("ytd", "YTD"), ("1y", "1Y")]
 
-    def _window_label(key: str) -> str:
-        """The visible end label for a 30-day line: the signed percentage, and
-        nothing else.
+    #: Every line a window panel may draw, in draw order (references last, so the
+    #: portfolio is never hidden under one). Total and Unrealized P&L are NOT
+    #: here: five lines in a 182px cell is not a chart, and both keep their own
+    #: € and % columns in the matrix above, where the reader can compare them.
+    PANEL_LINES = (("twror", PORT, "TWROR", 2.2),
+                   ("target", TARGET, "Target", 1.6),
+                   ("acwi", BENCH, bench_label, 1.6))
 
-        It carried the series name too, but at half width the gutter that would
-        hold "Total P&L % -0.97%" leaves the plot 148px wide. The colours are
-        named in full in the key under each chart, so the mapping is established
-        once for the section. The audited string is this same string -- the gate
-        checks that what is drawn agrees with the endpoint, and it still does.
+    # Per-window audit, keyed by bucket. The gate recomputes each window from the
+    # raw metrics and compares, so a panel whose label drifts from the line it
+    # labels cannot ship — the same contract the single 30-day panel had, now
+    # carried by every window.
+    win_audit: dict[str, dict] = {}
 
-        The name used to be passed in and then ignored, which left a literal
-        "MSCI ACWI" at the call site for a line whose name comes from the
-        taxonomy. Dropped rather than wired up: nothing renders it.
+    def _panel(win: Optional[dict], bucket: str) -> tuple[list, list]:
+        """``(series, legend)`` for one window, recording the audit as it goes.
+
+        The end label is the endpoint of the exact array handed to the chart —
+        never a generic return bucket read separately — so what is drawn and what
+        is written are one number by construction.
         """
-        value = float(endpoints[key])
-        label = _pct(value, signed=True)
-        legend_values[key] = value
-        legend_labels[key] = label
-        return label
+        if not win:
+            return [], []
+        endpoints = dict(win.get("endpoints") or {})
+        series, legend = [], []
+        values: dict[str, float] = {}
+        labels: dict[str, str] = {}
+        for key, colour, name, width in PANEL_LINES:
+            line = win.get(key)
+            if line is None or endpoints.get(key) is None:
+                continue
+            value = float(endpoints[key])
+            label = _pct(value, signed=True)
+            values[key] = value
+            labels[key] = label
+            series.append({"values": line, "color": colour, "width": width,
+                           "end_label": label})
+            legend.append((colour, name))
+        if series:
+            win_audit[bucket] = {
+                "window_start": str(win.get("window_start") or ""),
+                "window_end": str(win.get("window_end") or ""),
+                "source_end_dates": {
+                    k: str(v or "")
+                    for k, v in (win.get("source_end_dates") or {}).items()},
+                "endpoints": endpoints,
+                "legend_values": values,
+                "legend_labels": labels,
+                "drawn": [k for k, _c, _n, _w in PANEL_LINES if k in values],
+            }
+        return series, legend
 
-    # The value is drawn at the end of each line; the line's NAME is in the
-    # colour key built alongside here and rendered under the caption. The
-    # audited string is the end-value %, unchanged, so the semantic gate still
-    # finds it verbatim in the rendered HTML -- it is inside the SVG now.
-    s30 = []
-    ret_leg = []
-    if win["twror"] is not None and endpoints.get("twror") is not None:
-        s30.append({"values": win["twror"], "color": PORT, "width": 2.2,
-                    "end_label": _window_label("twror")})
-        ret_leg.append((PORT, "TWROR"))
-    if win["pnl_pct"] is not None and endpoints.get("pnl_pct") is not None:
-        s30.append({"values": win["pnl_pct"], "color": PNL,
-                    "end_label": _window_label("pnl_pct")})
-        ret_leg.append((PNL, "Total P&amp;L"))
-    if win.get("unreal_pct") is not None and endpoints.get("unreal_pct") is not None:
-        s30.append({"values": win["unreal_pct"], "color": UNREAL,
-                    "end_label": _window_label("unreal_pct")})
-        ret_leg.append((UNREAL, "Unreal. P&amp;L"))
-    # The two references last and together — the section asks how the book did
-    # against the allocation it is steering toward AND against the market.
-    if win.get("target") is not None and endpoints.get("target") is not None:
-        s30.append({"values": win["target"], "color": TARGET,
-                    "end_label": _window_label("target")})
-        ret_leg.append((TARGET, "Target"))
-    if win["acwi"] is not None and endpoints.get("acwi") is not None:
-        s30.append({"values": win["acwi"], "color": BENCH,
-                    "end_label": _window_label("acwi")})
-        ret_leg.append((BENCH, bench_label))
+    # ``win`` (the 1M window, already built above for the matrix's anchor) is the
+    # one this reuses rather than rebuilding, so the 1M panel and every 1M figure
+    # on the page come from a single call.
+    ret_windows: dict[str, Optional[dict]] = {"1m": win}
+    for _b, _l in WINDOWS:
+        if _b in ret_windows or _b == "1d":
+            continue
+        ret_windows[_b] = _perf_window(m, 30, ctx.benchmark_geo, bucket=_b)
+
+    s30, ret_leg = _panel(win, "1m")
+
+    # Build the remaining panels. 1D is excluded above and handled as figures.
+    panels = {"1m": (s30, ret_leg)}
+    for _b, _l in WINDOWS:
+        if _b in panels or _b == "1d":
+            continue
+        panels[_b] = _panel(ret_windows.get(_b), _b)
 
     if ctx.semantic_audit is not None:
-        ctx.semantic_audit["performance_30d"] = {
-            "window_start": str(win.get("window_start") or ""),
-            "window_end": str(win.get("window_end") or ""),
-            "source_end_dates": {
-                key: str(value or "")
-                for key, value in (win.get("source_end_dates") or {}).items()
-            },
-            "endpoints": endpoints,
-            "legend_values": legend_values,
-            "legend_labels": legend_labels,
-        }
+        # Keyed by bucket now. ``performance_30d`` stays as an alias for the 1M
+        # window so the gate's existing entry point is unchanged; the per-window
+        # map is what makes every OTHER panel verified rather than merely drawn.
+        ctx.semantic_audit["performance_windows"] = win_audit
+        if "1m" in win_audit:
+            ctx.semantic_audit["performance_30d"] = win_audit["1m"]
 
     # Since inception (cumulative), over the WHOLE inception→today range — its
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
@@ -544,23 +561,26 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    volatility. Grey line = the benchmark, so the reader sees whether they
     #    run calmer or bumpier.
     VOL = "#B45309"  # amber-brown, distinct from the return lines
-    vol_30 = _perf_vol_series(m, ctx.benchmark_geo, n_days=30)
+    # One volatility panel per return panel, on the SAME bucket, so the two grids
+    # read on one vocabulary of windows instead of pairing a named return window
+    # with an unnamed 30-calendar-day volatility.
+    vol_windows = {b: _perf_vol_series(m, ctx.benchmark_geo, bucket=b)
+                   for b, _l in WINDOWS if b != "1d"}
     # ...and the same measure over the whole life, under the return chart it
-    # pairs with. 30 days of volatility says whether this month was calm; it
-    # cannot say whether the book has been calmer than its target and its
-    # benchmark all along, which is the section's question.
+    # pairs with. A named window says whether that stretch was calm; it cannot
+    # say whether the book has been calmer than its target and its benchmark all
+    # along, which is the section's question.
     vol_si = _perf_vol_series(m, ctx.benchmark_geo, n_days=None)
 
-    # Panel sizes. The card's content box is 580px wide; with the 8px gutter
-    # between the two half cells each of them gets 282px. These are passed
+    # Panel sizes. The card's content box is 580px wide. A 3-wide grid with 6px
+    # of padding either side of each cell leaves 182px per plot; these are passed
     # explicitly because the SVG carries its own width — putting a chart in a
     # wider table cell does not make the chart wider.
     W_WIDE, H_WIDE = 580, 166
-    W_HALF, H_HALF = 282, 138
-    # Room for the end labels: bare signed percentages on every chart now that
-    # the names live in the colour keys, so ~54px is enough on all three (the
-    # wide chart used to reserve 132px for "MSCI ACWI +14.16%").
-    G_WIDE, G_HALF = 54, 52
+    W_CELL, H_CELL = 182, 116
+    # Room for the end labels: bare signed percentages, three of them stacked at
+    # the line ends, so ~46px at cell width and 54px on the wide chart.
+    G_WIDE, G_CELL = 54, 46
     def _last_estimate(values):
         """The last FINITE value of a line, or None when it has none.
 
@@ -572,7 +592,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return next((v for v in reversed(values or ()) if math.isfinite(v)), None)
 
     def _vol_panel(vs, dates_, *, month_ticks, min_day_ticks,
-                   w=W_HALF, h=H_HALF, gutter=G_HALF) -> str:
+                   w=W_CELL, h=H_CELL, gutter=G_CELL) -> str:
         series = []
         if vs and vs.get("port"):
             series.append({"values": vs["port"], "color": VOL, "width": 2.2,
@@ -622,85 +642,279 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             out.append((colour, label))
         return out
 
+    # ── Grid plumbing ─────────────────────────────────────────────────────────
+    def _cellcap(label: str, note: str = "") -> str:
+        """A grid cell's own heading: the window in ink, its span beside it.
+
+        The window name has to be the loudest thing in the cell -- with six plots
+        on one grid, a reader locating "3M" does it from these labels and not from
+        the axes. So this is the one caption in the section at ink weight;
+        ``_colcap`` stays subtle for the grid titles above.
+        """
+        return (f'<div style="{TYPE["label"]}color:{P["ink"]};'
+                f'font-weight:600;letter-spacing:.04em;margin-bottom:3px;">'
+                f'{label}'
+                + (f'<span style="color:{P["subtle"]};font-weight:400;'
+                   f'letter-spacing:0;"> · {note}</span>' if note else "")
+                + '</div>')
+
+    def _empty_cell(label: str, why: str) -> str:
+        """A window the book cannot show, said out loud.
+
+        An omitted cell reads as "this window does not exist"; a reader who asked
+        for six windows and got four cannot tell which two are missing, or why. A
+        book younger than a year has no 1Y -- that is a fact about the book, and
+        printing it beats a hole in the grid.
+        """
+        return (_cellcap(label)
+                + f'<div style="{TYPE["data"]}color:{P["subtle"]};'
+                  f'text-align:center;padding:{max(0, (H_CELL // 2) - 8)}px 0;">'
+                  f'{why}</div>')
+
+    def _grid(cells: list) -> str:
+        """Six cells, three per row. Fixed columns, so a cell that cannot be drawn
+        keeps its slot and the windows stay in their reading order."""
+        out = []
+        for i in range(0, len(cells), 3):
+            tds = "".join(
+                f'<td width="33.3%" valign="top" '
+                f'style="padding:0 6px 12px 6px;">{c}</td>'
+                for c in cells[i:i + 3])
+            out.append(f'<tr>{tds}</tr>')
+        return ('<table role="presentation" width="100%" cellpadding="0" '
+                'cellspacing="0" border="0" style="table-layout:fixed;">'
+                + "".join(out) + '</table>')
+
+    # ── 1D: the intraday session, drawn ───────────────────────────────────────
+    # NOT a two-close window. A 1D window from DAILY bars opens on the previous
+    # session, so it spans at most two points -- and once truncated to the close
+    # boundary the portfolio and the benchmark share it can span none, because
+    # their tapes routinely end a session apart (measured: benchmark anchored
+    # 27 Aug against a NAV ending 26 Aug). That is why this cell does not go
+    # through ``_perf_window``.
+    #
+    # The session itself, though, is already fetched: preprocessing keeps a quote
+    # catalog of intraday bars (``metrics.intraday_quotes``) that the RETURNS
+    # table's 1D sparklines draw, and ``_portfolio_intraday_series`` already
+    # value-weights the holdings' bars into one portfolio path. This cell reuses
+    # both -- no new fetch, and the same numbers the 1D column shows.
+    #
+    # The TARGET gets its session too, weighted by ``metrics.target_weights`` --
+    # the allocation's own policy, seeds included -- and only when EVERY instrument
+    # it names has bars. Partial coverage is refused rather than renormalised: a
+    # path weighted over the part of the target that happened to trade is a
+    # different portfolio under the target's name. Same rule
+    # ``metrics._target_history`` applies to the daily line.
+    def _day_cell() -> str:
+        from tarzan.engine.stats import compute_period_return
+
+        quotes = getattr(m, "intraday_quotes", {}) or {}
+
+        def _pct_path(quote) -> "pd.Series | None":
+            """One instrument's session as % against its own previous close."""
+            intra, feed_baseline = _intraday_quote_parts(quote)
+            if intra is None or len(intra) < 2:
+                return None
+            try:
+                base = float(feed_baseline)
+            except (TypeError, ValueError):
+                base = float("nan")
+            if not math.isfinite(base) or base == 0:
+                base = float(intra.iloc[0])
+            if not base:
+                return None
+            return (intra.astype(float) / base - 1.0) * 100.0
+
+        def _weighted_path(weights: dict) -> "pd.Series | None":
+            """A weighted blend of sessions, or None unless EVERY sleeve has one.
+
+            Weights need not sum to 100 (a target may be stated over a sleeve);
+            the blend divides by the weight it actually carries. What it may not do
+            is skip a sleeve — hence the all-or-nothing check.
+            """
+            if not weights:
+                return None
+            paths, total = [], 0.0
+            for key, weight in weights.items():
+                weight = float(weight or 0.0)
+                if weight <= 0:
+                    continue
+                path = _pct_path(quotes.get(str(key)))
+                if path is None:
+                    return None                      # partial ≠ the target
+                paths.append((weight, path))
+                total += weight
+            if not paths or total <= 0:
+                return None
+            axis = None
+            for _w, p in paths:
+                axis = p.index if axis is None else axis.union(p.index)
+            blend = None
+            for weight, p in paths:
+                aligned = p.reindex(axis).ffill().bfill() * weight
+                blend = aligned if blend is None else blend + aligned
+            return None if blend is None else blend / total
+
+        lines = []
+        # Portfolio: the value-weighted path the RETURNS table's own portfolio row
+        # draws, expressed as % (the helper returns a level based at 100).
+        pf = _portfolio_intraday_series(m)
+        if pf is not None and len(pf) >= 2:
+            lines.append((PORT, "TWROR", pf.astype(float) - 100.0, 2.2))
+        target_path = _weighted_path(getattr(m, "target_weights", {}) or {})
+        if target_path is not None and len(target_path) >= 2:
+            lines.append((TARGET, "Target", target_path, 1.6))
+        bench_ticker = str((getattr(m, "benchmark_tickers", {}) or {})
+                           .get(ctx.benchmark_geo) or "")
+        bench_path = _pct_path(quotes.get(bench_ticker))
+        if bench_path is not None:
+            lines.append((BENCH, bench_label, bench_path, 1.6))
+
+        if len(lines) >= 1:
+            # One shared time axis: the union of both feeds' stamps, forward
+            # filled. A reindex onto one feed's stamps alone would drop the
+            # other's prints, and the two venues do not tick together.
+            axis = None
+            for _c, _n, s, _w in lines:
+                axis = s.index if axis is None else axis.union(s.index)
+            series = []
+            for c, _n, s, wid in lines:
+                # Label the LAST PLOTTED value, not ``s.iloc[-1]``. The two agree
+                # here, but only by an argument about forward-fill — and the rule
+                # this section is built on is that the label is read off the exact
+                # array handed to the chart, so no argument is needed.
+                vals = list(s.reindex(axis).ffill().bfill().values.astype(float))
+                series.append({"values": vals, "color": c, "width": wid,
+                               "end_label": _pct(vals[-1], signed=True)})
+            chart = _charts.chart_pct_compact(
+                series, list(axis), include_zero=True, w=W_CELL, h=H_CELL,
+                date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL)
+            if chart:
+                return _cellcap("1D", "session") + chart
+
+        # No bars at all -- a closed market whose vendor exposes no session, a
+        # pinned/point-in-time run, or an offline one. The figures still exist and
+        # the matrix already computed them, so the cell states them rather than
+        # going blank: a one-session comparison as three numbers.
+        rows = [(PORT, "TWROR", tw.get("1d"))]
+        traw = getattr(m, "target_history", None)
+        if traw is not None and len(traw) >= 2:
+            rows.append((TARGET, "Target",
+                         compute_period_return(_norm_series(traw).dropna(), "1d")))
+        braw = (m.benchmark_histories or {}).get(ctx.benchmark_geo)
+        if braw is not None and len(braw) >= 2:
+            rows.append((BENCH, bench_label,
+                         compute_period_return(braw.dropna(), "1d")))
+        if all(v is None for _c, _n, v in rows):
+            return _empty_cell("1D", "no completed session")
+        body = "".join(
+            f'<tr><td style="padding:2px 0;"><span style="display:inline-block;'
+            f'width:7px;height:7px;border-radius:2px;background:{c};'
+            f'margin-right:5px;"></span>'
+            f'<span style="{TYPE["data"]}color:{P["muted"]};">{n}</span></td>'
+            f'<td align="right" style="padding:2px 0;{TYPE["figure"]}'
+            f'color:{_sgn(v)};font-variant-numeric:tabular-nums;">'
+            f'{_pct(v, signed=True) if v is not None else "—"}</td></tr>'
+            for c, n, v in rows)
+        return (_cellcap("1D", "session · closes")
+                + f'<table role="presentation" width="100%" cellpadding="0" '
+                  f'cellspacing="0" border="0" style="margin-top:'
+                  f'{max(0, (H_CELL // 2) - 26)}px;">{body}</table>')
+
     parts = []
-    if s30 or ssi:
-        # Every chart reads the same way: a caption naming measure and window on
-        # top, the plot, then a colour key naming the lines at the bottom. The
-        # wide chart is the same measure as the left half panel over a longer
-        # window, so it is "Return · since inception" to the half panel's
-        # "Return · last 30 days".
-        # Each chart is hoisted before its caption: chart_pct_compact returns ""
-        # when no series holds a finite point, and concatenating unconditionally
-        # would leave a caption and a colour key introducing a plot that is not
-        # there \u2014 the same reason ``if vol_panel:`` below gates all three parts
-        # together.
+    if any(panels.get(b, ([], []))[0] for b, _l in WINDOWS) or ssi:
+        # Both grids read the same way: a subtle title naming the measure, then six
+        # cells each headed by its own window. Every plot is hoisted before its
+        # caption -- chart_pct_compact returns "" when no series holds a finite
+        # point, and concatenating unconditionally would leave a caption
+        # introducing a plot that is not there.
+        ret_cells, vol_cells = [], []
+        for _b, _label in WINDOWS:
+            if _b == "1d":
+                ret_cells.append(_day_cell())
+                # A rolling 21-session sigma cannot be plotted across one session
+                # for the same reason; its single current value is the RISK
+                # section's tile, not a new figure to invent here.
+                vol_cells.append(_empty_cell("1D", "σ needs 21 sessions"))
+                continue
+            _w = ret_windows.get(_b)
+            _ser = panels.get(_b, ([], []))[0]
+            _chart = (_charts.chart_pct_compact(
+                _ser, _w["dates"], include_zero=True, w=W_CELL, h=H_CELL,
+                min_day_ticks=0, end_gutter=G_CELL) if (_ser and _w) else "")
+            if _chart:
+                # DAYS, not sessions. The plotted index comes from
+                # ``actual_value_series``, which is calendar-daily with weekends
+                # carried flat, so its length counts calendar days: a 1Y window
+                # measures 364 of them and about 252 sessions. Calling them
+                # sessions printed a figure 40% too high beside every window.
+                _span_days = (pd.Timestamp(_w["window_end"])
+                              - pd.Timestamp(_w["window_start"])).days
+                ret_cells.append(_cellcap(_label, f'{_span_days} days') + _chart)
+            else:
+                ret_cells.append(_empty_cell(_label, "not enough history"))
+
+            _vs = vol_windows.get(_b)
+            _vchart = _vol_panel(_vs, _vs["dates"], month_ticks=False,
+                                 min_day_ticks=0) if _vs else ""
+            if _vchart:
+                # The caption carries THIS window's σ; the line carries the rolling
+                # 21-session one. Without it every cell's end label read the same
+                # figure — today's σ is today's σ whichever window you plot it over
+                # — so six panels differed in shape and in nothing a reader could
+                # quote. The grid title says which is which.
+                _sig = (_vs.get("window_sigma") or {}).get("port")
+                vol_cells.append(
+                    _cellcap(_label,
+                             f'σ {_pct(_sig, signed=False)}' if _sig is not None
+                             else "")
+                    + _vchart)
+            else:
+                vol_cells.append(_empty_cell(_label, "not enough history"))
+
+        # One colour key per grid, beneath it. With six plots sharing three
+        # colours, a key per cell would print the same three swatches six times.
+        _ret_leg_all = next((lg for _b, _l in WINDOWS
+                             for lg in [panels.get(_b, ([], []))[1]] if lg), [])
+        ret_grid = (_colcap("Return · by window") + _grid(ret_cells)
+                    + _mini_legend(_ret_leg_all))
+        # Two figures live on this grid and a reader cannot tell them apart from
+        # the picture, so the title names both — the same job the since-inception
+        # volatility caption does for its own pair.
+        vol_grid = (_colcap("Volatility · by window (annualized · "
+                            "line: rolling 21 sessions · σ: over the window)")
+                    + _grid(vol_cells)
+                    + _mini_legend(_vol_legend(
+                        next((v for v in vol_windows.values() if v), None))))
+
+        # The whole life, full width and on month ticks, kept BELOW the grids. It
+        # is the only place the lifetime trajectory lives, and the gap it draws is
+        # the number the masthead and the state tile quote. None of the six windows
+        # substitutes for it: 1Y is a window, inception is the book.
         _si_chart = _charts.chart_pct_compact(
             ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
             month_ticks=True, end_gutter=G_WIDE) if ssi else ""
-        left_ret = (_colcap("Return \u00b7 since inception")
+        si_panel = (_colcap("Return · since inception")
                     + _si_chart + _mini_legend(si_leg)) if _si_chart else ""
-        # Five date ticks, not twelve: at half width twelve rotated labels
-        # overlapped into a grey band, which is worse than no axis at all.
-        _30_chart = _charts.chart_pct_compact(
-            s30, dates, include_zero=True, w=W_HALF, h=H_HALF,
-            min_day_ticks=5, end_gutter=G_HALF) if s30 else ""
-        right_ret = (_colcap("Return \u00b7 last 30 days")
-                     + _30_chart + _mini_legend(ret_leg)) if _30_chart else ""
-        # The volatility panel shares the return panel's 30-day window and its
-        # five day-ticks, so the two half panels read on one x-axis. The caption
-        # names the measure (annualized volatility, same units as the risk tile)
-        # and the window, rather than the "rolling 1M" of the internal 21-day
-        # estimator, which named the window the reader could not see.
-        vol_panel = _vol_panel(vol_30, vol_30["dates"] if vol_30 else dates,
-                               month_ticks=False, min_day_ticks=5)
-        if vol_panel:
-            vol_panel = (_colcap("Volatility \u00b7 last 30 days")
-                         + vol_panel + _mini_legend(vol_30 and _vol_legend(vol_30)))
-        # The same measure over the whole life, full width and on month ticks, so
-        # it reads on the same x-axis as the return chart directly above it. Its
-        # own caption states the estimator's lookback: the line is a ROLLING
-        # 21-session figure plotted since inception, not one volatility measured
-        # over the whole history (that number is the RISK section's tile).
         vol_si_panel = _vol_panel(
             vol_si, vol_si["dates"] if vol_si else si_dates,
             month_ticks=True, min_day_ticks=0,
             w=W_WIDE, h=H_WIDE, gutter=G_WIDE)
         if vol_si_panel:
-            # The legend states each line's \u03c3 over the book's whole life, so the
+            # The legend states each line's σ over the book's whole life, so the
             # three are compared over one period. The figure beside each name is
             # NOT the line's endpoint (that is one 21-session window, drawn at the
-            # line's end) \u2014 the caption says which is which.
-            vol_si_panel = (_colcap("Volatility \u00b7 since inception "
-                                    "(line: rolling 21 sessions \u00b7 "
+            # line's end) — the caption says which is which.
+            vol_si_panel = (_colcap("Volatility · since inception "
+                                    "(line: rolling 21 sessions · "
                                     "key: whole span, annualized)")
                             + vol_si_panel
                             + _mini_legend(_vol_legend(vol_si, with_span=True)))
 
-        def _row(l, r):
-            return (f'<tr>'
-                    f'<td width="50%" valign="top" style="padding:0 8px 0 0;">{l}</td>'
-                    f'<td width="50%" valign="top" style="padding:0 0 0 8px;'
-                    f'border-left:1px solid {P["border"]};">{r}</td>'
-                    f'</tr>')
-
-        def _wide(cell):
-            return f'<tr><td colspan="2" valign="top">{cell}</td></tr>'
-
-        # Since-inception runs the full width: it is the chart that answers the
-        # section's question, and at half width its three series overlap into
-        # noise. The shorter window and the volatility share the row below.
-        rule = (f'<tr><td colspan="2" style="padding-top:12px;'
-                f'border-top:1px solid {P["border"]};"></td></tr>')
-        rows = _wide(left_ret) if left_ret else ""
-        if vol_si_panel:
-            rows += (rule if rows else "") + _wide(vol_si_panel)
-        if right_ret or vol_panel:
-            rows += (rule if rows else "") + _row(right_ret, vol_panel)
-        charts_tbl = (
-            f'<table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0" border="0" style="margin-top:12px;">'
-            + rows + '</table>'
-        )
+        _rule = (f'<div style="margin-top:12px;padding-top:12px;'
+                 f'border-top:1px solid {P["border"]};"></div>')
+        _blocks = [b for b in (ret_grid, vol_grid, si_panel, vol_si_panel) if b]
+        charts_tbl = f'<div style="margin-top:12px;">{_rule.join(_blocks)}</div>'
         # No "why you're diverging" block. The concept does not carry one, and
         # it restated the section: the gap is in the heading's subtitle, the
         # three lines are on the chart with their end values, and the beta is a

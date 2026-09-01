@@ -147,6 +147,13 @@ class PortfolioMetrics:
     # sleeve has a price. None when any sleeve lacks history, since a
     # renormalized subset would be a different portfolio under the same name.
     target_history: Optional[pd.Series] = None
+    # The target ALLOCATION itself: ``{canonical ticker or ISIN: weight %}`` for
+    # every instrument it names, seeds included, before any availability
+    # filtering. ``target_history`` above is what that allocation DID over a daily
+    # window; this is the policy, and it stays populated even when the history is
+    # withheld — the newsletter's 1D panel weights intraday bars by it, and having
+    # a session is a different question from having a history.
+    target_weights: dict[str, float] = field(default_factory=dict)
     # Canonical ticker decision audit, one record per ISIN (or exact ticker
     # when no ISIN exists). Rendered as the compact data-sources section at the
     # bottom of the newsletter and excluded from the narrow summary contract.

@@ -161,15 +161,31 @@ class TestBothPnlMeasuresAreDrawn:
     def test_both_return_charts_name_both_measures(self):
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         # One key entry per measure per chart: hero (with axis side), then the
-        # two return panels (bare names).
+        # since-inception panel (bare names).
         assert html.count("Total P&amp;L (%, right)") == 1
         assert html.count("Unreal. P&amp;L (%, right)") == 1
-        # Three now, not two: the two chart keys plus the hero STATE tile,
-        # whose label is escaped at its own markup boundary (it used to reach
-        # the document as a bare "&", which mail clients tolerate and no test
-        # noticed).
-        assert html.count(">Total P&amp;L<") == 3
-        assert html.count(">Unreal. P&amp;L<") == 2
+        # TWO, not three. The window grid replaced the single 30-day panel, and
+        # six 182px cells cannot carry five lines -- so the per-window panels draw
+        # TWROR, Target and the benchmark only, and both P&L measures keep their
+        # € and % columns in the matrix plus their line on the since-inception
+        # chart. The remaining two are that chart's key and the hero STATE tile.
+        assert html.count(">Total P&amp;L<") == 2
+        assert html.count(">Unreal. P&amp;L<") == 1
+
+    def test_the_window_grid_draws_three_lines_not_five(self):
+        """The cost of small multiples, pinned so it cannot drift back.
+
+        Five lines in a 182px cell is not a chart. Should someone re-add Total or
+        Unrealized P&L to ``PANEL_LINES``, this fails -- and so does the
+        legibility the grid was chosen for.
+        """
+        html = render_newsletter(_metrics(with_order_returns=True), _config())
+        assert "Return · by window" in html
+        # The grid's own key names exactly the three lines its cells draw.
+        grid = html.split("Return · by window", 1)[1].split("Volatility", 1)[0]
+        assert ">TWROR<" in grid
+        assert ">Total P&amp;L<" not in grid
+        assert ">Unreal. P&amp;L<" not in grid
 
 
 class TestRender:

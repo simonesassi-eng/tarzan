@@ -300,19 +300,23 @@ class TestAllThreePanelsCarryTheTarget:
     def test_every_panel_names_the_target_in_its_colour_key(self):
         sec = self._section()
         html = sec["vs_market_html"]
-        # One key per panel: return since inception, volatility since inception,
-        # return 30d, volatility 30d. The since-inception volatility key carries
-        # the like-for-like span figure too ("Target 11.10%"), so match the name
-        # rather than the exact label.
+        # Four keys — the return grid, the volatility grid, and the two
+        # since-inception panels — plus the 1D cell, which is figures rather than a
+        # plot and names its three measures itself. The since-inception volatility
+        # key carries the like-for-like span figure too ("Target 11.10%"), so match
+        # the name rather than the exact label.
         named = re.findall(r'>(Target(?: [\d.]+%)?)</span>', html)
-        assert len(named) == 4, named
+        assert len(named) == 5, named
 
     def test_the_target_is_a_line_not_only_a_legend_entry(self):
         from tarzan.export._palette import PALETTE
         html = self._section()["vs_market_html"]
         drawn = len(re.findall(
             rf'<polyline[^>]*stroke="{PALETTE["target"]}"', html))
-        assert drawn == 4, f"target polylines drawn: {drawn}"
+        # Ten grid cells (5D/1M/3M/YTD/1Y, once for return and once for
+        # volatility; 1D is figures on one grid and needs 21 sessions on the
+        # other) plus the two since-inception panels.
+        assert drawn == 12, f"target polylines drawn: {drawn}"
 
     def test_the_heading_names_the_target_and_the_benchmark_in_use(self):
         assert self._section()["vs_market_title"] == "Vs target &amp; Bench Index"

@@ -129,6 +129,35 @@ def _window_end(series_end, ticker: str = ""):
         return series_end
 
 
+def _ytd_anchor(series: pd.Series):
+    """The observation "YTD" is measured FROM, or None.
+
+    YTD is the one bucket that is not "N units back from today", so it cannot go
+    through the unit arithmetic below. It is also the one bucket that already had
+    a return function (:func:`compute_ytd_return`) before this module owned window
+    edges, so the rule here is transcribed from it rather than invented: the LAST
+    close of the prior year when the series has one, else the first in-year
+    observation (mid-year inception) provided at least two exist. Diverging by even
+    one session would make a YTD chart disagree with the YTD column beside it.
+
+    The year comes from the series' own last observation, NOT from
+    ``_window_end``. Rolling to the last session first is right for every trailing
+    bucket and wrong for this one: on Saturday 2 Jan the roll lands on 31 Dec of
+    the OLD year, which would anchor "year to date" in the year before last.
+    """
+    s = series.dropna()
+    if s.empty:
+        return None
+    current_year = s.index[-1].year
+    prior = s[s.index.year < current_year]
+    in_year = s[s.index.year == current_year]
+    if in_year.empty:
+        return None
+    if not prior.empty:
+        return prior.index[-1]
+    return in_year.index[0] if len(in_year) >= 2 else None
+
+
 def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
     """The observation a bucket is measured FROM, or None when the series does
     not reach back that far.
@@ -150,6 +179,8 @@ def window_anchor(series: pd.Series, bucket: str, ticker: Optional[str] = None):
     """
     if series is None or len(series) < 2:
         return None
+    if bucket == "ytd":
+        return _ytd_anchor(series)
     unit, span = PERIOD_WINDOWS.get(bucket, ("days", 0))
     if ticker is None:
         ticker = _series_ticker(series)
