@@ -308,6 +308,16 @@ def validate_newsletter_semantics(
         expected_intraday.update(
             _text(ticker) for ticker in hp_frame["ticker"].dropna() if _text(ticker)
         )
+    # Plus the TARGET's own sleeves, seeds included. The performance frame carries
+    # what is HELD, and a target routinely names instruments not owned yet — four of
+    # eight on the reference book — whose bars the 1D panel needs to blend the
+    # target's session at all. They are requested for that reason, so the expected
+    # set has to know it or every run fails on "candidates differ".
+    expected_intraday.update(
+        _text(ticker)
+        for ticker in (getattr(metrics, "target_weights", {}) or {})
+        if _text(ticker)
+    )
 
     if origin != "metrics_preprocessing":
         errors.append("performance intraday data did not originate in preprocessing")
