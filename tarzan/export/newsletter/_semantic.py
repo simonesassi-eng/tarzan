@@ -371,6 +371,12 @@ def validate_newsletter_semantics(
     # now applied to all six windows rather than only the 30-day one.
     if getattr(metrics, "actual_value_series", None) is not None:
         from tarzan.export._perf_series import _perf_window
+        # 1D is the SESSION, so its window comes from the intraday bars rather than
+        # from daily closes (see ``_perf_intraday_window`` for why a 1D daily window
+        # is degenerate). It returns the same shape, so the loop below verifies it
+        # through the identical code path as every other bucket -- the endpoint, the
+        # legend value, the visible rounded label and its presence in the HTML.
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
 
         geo_name = cfg.benchmark_geo_allocation()
         #: The lines a window panel is DESIGNED to draw. Kept here as well as in
@@ -386,13 +392,14 @@ def validate_newsletter_semantics(
             # reported as a missing audit rather than silently passing.
             window_audit = {"1m": audit.get("performance_30d", {})}
         for bucket in ("1d", "5d", "1m", "3m", "ytd", "1y"):
-            if bucket == "1d":
-                continue          # figures, not a plot: no line to verify
-            expected_window = _perf_window(metrics, 30, geo_name, bucket=bucket)
+            expected_window = (
+                _perf_intraday_window(metrics, geo_name) if bucket == "1d"
+                else _perf_window(metrics, 30, geo_name, bucket=bucket))
             panel_audit = window_audit.get(bucket)
             if expected_window is None:
-                # The book does not reach back that far. The renderer must not
-                # have drawn a panel for it either.
+                # No session (1D) or the book does not reach back that far. Either
+                # way the renderer must not have drawn a panel for it -- for 1D it
+                # states the figures instead, which carry no audited line.
                 if panel_audit:
                     errors.append(
                         f"{bucket} panel was rendered for an unavailable window")
