@@ -1119,6 +1119,19 @@ def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
             stamp = pd.Timestamp(int(observed), unit="s", tz="UTC")
         except (TypeError, ValueError, OverflowError):
             stamp = None
+        # A price from ANOTHER session cannot be this session's end. Yahoo keeps
+        # dormant records and answers them: measured on a real holding, one listing
+        # returned ``regularMarketTime`` 326 days old with a price 10.9% away from
+        # the truth, no error and no flag. The valuation is safe from it because
+        # ``current_session.pick_quote`` tests price coherence against the
+        # instrument's own last close -- but this function reads the raw quote and
+        # would happily stamp a year-old price onto today's bars. So the observation
+        # has to fall on the SAME session as the bars it is extending.
+        if stamp is not None:
+            bars_day = _observed_day(last_ts, _exchange_tz(ticker))
+            stamp_day = _observed_day(stamp, _exchange_tz(ticker))
+            if bars_day and stamp_day and stamp_day != bars_day:
+                return intra
     if stamp is None:
         # No observation instant. The close is the honest place for a settled
         # session; while one is still running, "now" is.
