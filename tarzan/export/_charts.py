@@ -101,10 +101,18 @@ def fmt_pct_tick(v: float) -> str:
 def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
                       fs=TYPE_PX["label"],
                       date_fmt="%b %d", month_ticks=False, min_day_ticks=0,
-                      end_gutter: int = 0) -> str:
+                      end_gutter: int = 0, x_span=None) -> str:
     """A compact multi-line % chart for side-by-side use, tuned so the axis
     labels stay legible at ~half width. ``series``: list of
     ``{values, color, dash?}``. ``date_fmt`` sets the x-axis tick format.
+
+    ``x_span=(start, end)`` places each point at its REAL position in that window
+    instead of spreading the points evenly by index. Without it a chart of one
+    trading session fills its whole width whatever the hour, so a day that is 46%
+    done looks complete — the same defect ``_intraday_spark`` was built to avoid,
+    and the reason that function exists beside this one. With it the drawn extent is
+    the elapsed extent, and the axis carries a label at ``end`` so the reader can see
+    where the session finishes. Points outside the window are clamped to its edges.
 
     X-axis density:
       * ``month_ticks=True`` — label EVERY month boundary (year shown when it
@@ -144,7 +152,23 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
     vmin, vmax, ticks = nice_ticks(dlo, dhi, 4)
     n = len(dates)
 
+    # Fractional x position per point: real elapsed time when a span is given,
+    # otherwise the even index spread this chart has always used.
+    _fracs = None
+    if x_span:
+        try:
+            _s, _e = pd.Timestamp(x_span[0]), pd.Timestamp(x_span[1])
+            _width = (_e - _s).total_seconds()
+            if _width > 0:
+                _fracs = [max(0.0, min(1.0,
+                                       (pd.Timestamp(d) - _s).total_seconds() / _width))
+                          for d in dates]
+        except Exception:  # noqa: BLE001 — tz mismatch or unorderable index
+            _fracs = None
+
     def X(i):
+        if _fracs is not None:
+            return ml + _fracs[i] * pw
         return ml + (i / (n - 1) * pw if n > 1 else 0)
 
     def Y(v):
@@ -236,6 +260,24 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
     else:
         for k in sorted({0, n - 1}):
             _xlabel(k, pd.Timestamp(dates[k]).strftime(date_fmt))
+
+    # On a session axis, name where the session ENDS. The plot area now extends past
+    # the data on purpose, and an axis whose last label is the last print would leave
+    # the empty stretch unexplained -- the reader has to be able to tell "the day is
+    # not over" from "the feed stopped".
+    if _fracs is not None:
+        try:
+            _end_x = ml + pw
+            _end_txt = pd.Timestamp(x_span[1]).strftime(date_fmt)
+            out.append(f'<line x1="{_end_x:.1f}" y1="{mt}" x2="{_end_x:.1f}" '
+                       f'y2="{mt + ph}" stroke="{BORDER}" stroke-width="1"/>')
+            _ey = mt + ph + 10
+            out.append(f'<text x="{_end_x:.1f}" y="{_ey:.1f}" text-anchor="end" '
+                       f'font-size="{fs}" fill="{SUBTLE}" '
+                       f'transform="rotate(-35 {_end_x:.1f} {_ey:.1f})">'
+                       f'{_end_txt}</text>')
+        except Exception:  # noqa: BLE001 — an unformattable span simply gets no label
+            pass
     _end_labels: list[tuple] = []
     for s in series:
         # One polyline per contiguous run of FINITE points, each point kept on its
