@@ -210,10 +210,13 @@ class TestTheResolverStampsWhatItHandsOut:
         got = mq.intraday_feeds(["EXUS.MI"])["EXUS.MI"]
         series = got["intraday_series"]
 
-        assert float(series.iloc[-1]) == pytest.approx(40.815)
-        assert len(series) == len(bars) + 1
+        # TWO points added, not one: the bell at the front on the previous close, the
+        # official price at the back. Both ends of the session, from the two helpers.
+        assert len(series) == len(bars) + 2
+        assert float(series.iloc[0]) == pytest.approx(40.81)     # opens at 0%
+        assert float(series.iloc[-1]) == pytest.approx(40.815)   # ends on the price
         # The baseline is untouched: it answers "what was the previous close", which
-        # the stamp has no business restating.
+        # neither helper has any business restating.
         assert float(got["intraday_baseline"]) == pytest.approx(40.81)
 
     def test_the_observation_timestamp_still_describes_the_bars(self, monkeypatch):
@@ -381,3 +384,111 @@ class TestASessionChartDrawsOnlyTheElapsedSession:
         svg, _ = self._svg(x_span=(one, one))
         plot_right = 182 - 46 - 8
         assert self._last_x(svg) >= plot_right - 1
+
+
+class TestASessionOpensOnTheBell:
+    """One bar is enough, and every line starts at 0%.
+
+    A session line is a path away from the previous close, so at the bell its value
+    IS that close. The bars do not say so — the first one already carries the opening
+    gap, and a thin instrument's first print can be an hour in — and two things
+    followed on the real book:
+
+    *   a sleeve with a SINGLE bar had no drawable line at all, because every
+        consumer floors at two points. The RETURNS and Watchlist rows fell back to a
+        dashed placeholder, and the 1D panel's target blend (which demands full
+        coverage) withheld its line for the first stretch of the day.
+    *   a line whose first print is LATE opened mid-morning, missing the first hour of
+        the session it claimed to draw.
+
+    It does NOT force every line to 0%: where a bar already sits at the bell — 54 of
+    63 series on the reference book — that bar is the opening and carries the gap.
+    Nine were opening late and now do not.
+
+    The point added is the series' own denominator, placed at the venue's open — the
+    close-to-open convention, under which the overnight gap reads as the first
+    segment, where it happened.
+    """
+
+    OPEN = pd.Timestamp("2026-09-01 07:00", tz="UTC")     # 09:00 Rome
+    CLOSE = pd.Timestamp("2026-09-01 15:30", tz="UTC")    # 17:30 Rome
+
+    @pytest.fixture(autouse=True)
+    def _span(self, monkeypatch):
+        monkeypatch.setattr(mq, "session_span",
+                            lambda t, now=None: (self.OPEN, self.CLOSE))
+
+    @staticmethod
+    def _open(intra, baseline, ticker="AAA.MI"):
+        return mq._prepend_session_open(
+            intra, baseline, ticker=ticker,
+            now=pd.Timestamp("2026-09-01 12:00", tz="UTC"))
+
+    def test_a_single_bar_becomes_a_drawable_session(self):
+        """The case that produced nothing at all before."""
+        intra = _bars([31.05], start="09:00")
+
+        out = self._open(intra, 31.19)
+
+        assert len(out) == 2
+        assert out.index[0] == self.OPEN
+        assert float(out.iloc[0]) == pytest.approx(31.19)
+
+    def test_a_line_whose_first_print_is_late_opens_on_the_previous_close(self):
+        """The bell is 07:00 UTC here and the first bar 09:00, so two hours of session
+        were missing from the drawing."""
+        intra = _bars([31.05, 30.96], start="09:00")
+
+        out = self._open(intra, 31.19)
+
+        assert (float(out.iloc[0]) / 31.19 - 1) == pytest.approx(0.0, abs=1e-12)
+
+    def test_the_bars_are_untouched(self):
+        intra = _bars([31.05, 30.96], start="09:00")
+
+        out = self._open(intra, 31.19)
+
+        assert list(out.iloc[1:].values) == list(intra.values)
+        assert list(out.index[1:]) == list(intra.index)
+
+    def test_a_bar_at_or_before_the_open_is_not_displaced(self):
+        """Pre-market prints exist. Inserting the bell after them would put the
+        opening reference in the middle of the session."""
+        intra = _bars([31.10, 31.05], start="06:30")      # first bar before the bell
+
+        out = self._open(intra, 31.19)
+
+        assert out is intra
+
+    def test_no_modelled_session_means_no_bell(self, monkeypatch):
+        """A continuously traded instrument (FX, futures) has no open to anchor on,
+        and inventing one would draw a gap where trading never stopped."""
+        monkeypatch.setattr(mq, "session_span", lambda t, now=None: None)
+        intra = _bars([31.05], start="09:00")
+
+        assert self._open(intra, 31.19) is intra
+
+    @pytest.mark.parametrize("baseline", [None, 0.0, -1.0, "n/a"])
+    def test_an_unusable_baseline_adds_nothing(self, baseline):
+        intra = _bars([31.05], start="09:00")
+        assert self._open(intra, baseline) is intra
+
+    def test_an_empty_series_stays_empty(self):
+        assert self._open(None, 31.19) is None
+
+    def test_both_ends_together_make_a_full_session(self):
+        """The two helpers compose: bell, the bars, then the official price."""
+        intra = _bars([31.05], start="09:00")
+        opened = self._open(intra, 31.19)
+
+        full = mq._stamp_session_close(
+            opened, {"price": 31.105,
+                     "time": int(pd.Timestamp("2026-09-01 15:30",
+                                              tz="UTC").timestamp())},
+            own_feed=True, ticker="AAA.MI",
+            now=pd.Timestamp("2026-09-01 18:00", tz="UTC"))
+
+        assert len(full) == 3
+        assert float(full.iloc[0]) == pytest.approx(31.19)      # 0% at the bell
+        assert float(full.iloc[-1]) == pytest.approx(31.105)    # the close
+        assert full.index[0] == self.OPEN and full.index[-1] == self.CLOSE

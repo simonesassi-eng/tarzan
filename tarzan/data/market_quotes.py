@@ -1079,6 +1079,67 @@ def official_quotes(symbols: list[str]) -> dict:
             if s and _quote_memo.get(s)}
 
 
+def _prepend_session_open(intra, baseline, *, ticker: str, now):
+    """Open the series at the session's bell, on the previous close.
+
+    A session line is a path away from the previous close, so at the bell its value
+    is that close by definition -- and the bars alone do not say so: the first one
+    already carries the opening gap, and a thinly traded instrument's first bar can
+    be an hour in. Two consequences, both measured on the real book:
+
+    * a sleeve with a SINGLE bar had no drawable line at all (every consumer floors
+      at two points), so the RETURNS and Watchlist rows fell back to a dashed
+      placeholder and the 1D panel's target blend -- which demands full coverage --
+      withheld its line for the whole first stretch of the day;
+    * a line whose first print is LATE opened mid-morning, so the drawn session was
+      missing its first hour and its start height was an arbitrary bar rather than
+      the reference the percentage is measured from.
+
+    Note what this does NOT do: force every line to 0%. Where a bar already sits at
+    the bell -- measured, 54 of 63 series on this book -- that bar IS the opening and
+    carries the overnight gap, and inserting the previous close at the same instant
+    would collide with it. Nine series were opening late and now do not.
+
+    The point added is a real observation: the previous close, which is already this
+    series' denominator. It is placed at the venue's OPEN, which is the close-to-open
+    convention every session chart uses -- where it applies, the overnight gap then
+    reads as the first segment, where it happened. Never placed at or after the first
+    bar (pre-market prints exist, and the bell must not land mid-session), and skipped
+    when no cash session is modelled: a continuously traded instrument has no bell.
+    """
+    import pandas as pd
+
+    if intra is None or len(intra) < 1:
+        return intra
+    try:
+        base = float(baseline)
+    except (TypeError, ValueError):
+        return intra
+    if not (base > 0):
+        return intra
+    span = session_span(ticker, now)
+    if not span:
+        return intra
+
+    first_ts = pd.Timestamp(intra.index[0])
+    opened = pd.Timestamp(span[0])
+    tz = getattr(first_ts, "tz", None)
+    try:
+        if tz is not None:
+            opened = (opened.tz_convert(tz) if opened.tzinfo is not None
+                      else opened.tz_localize(tz))
+        elif opened.tzinfo is not None:
+            opened = opened.tz_convert("UTC").tz_localize(None)
+    except (TypeError, ValueError):
+        return intra
+    if opened >= first_ts:
+        return intra
+
+    out = intra.copy()
+    out.loc[opened] = base
+    return out.sort_index()
+
+
 def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
     """Append the official price as the intraday series' last point.
 
@@ -1385,7 +1446,11 @@ def intraday_feeds(
         q_prev = (official.get(tk) or {}).get("prev_close")
         now_ref = _intraday_reference_now()
 
-        if intra is None or len(intra) < 2:
+        # ONE bar is now enough, because the session's opening reference is added
+        # below: a thinly traded instrument prints its second bar hours into the day,
+        # and until then every consumer of this series fell back to a dashed
+        # placeholder. Only a series with nothing at all is empty.
+        if intra is None or len(intra) < 1:
             # No bars to draw. The published previous close is still worth
             # carrying: it is the baseline for the row's pill, and its presence
             # is what tells the caller a live quote exists for this instrument.
@@ -1445,6 +1510,10 @@ def intraday_feeds(
         # observation instant, the baseline's day -- is deliberately computed from the
         # BARS, before this: those answer "what did the feed print and when", which
         # the stamp must not restate. Only the series a consumer plots is extended.
+        # ...and its BEGINNING, on the bell, before that: a single-bar series only
+        # becomes a drawable two-point session once it has an opening reference, and
+        # with one every line starts at 0% so the panel's zero belongs to all of them.
+        intra = _prepend_session_open(intra, baseline, ticker=src, now=now_ref)
         intra = _stamp_session_close(intra, official.get(tk),
                                      own_feed=(src == tk), ticker=src, now=now_ref)
 
