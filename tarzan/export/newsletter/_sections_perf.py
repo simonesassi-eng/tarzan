@@ -699,7 +699,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             if ser:
                 chart = _charts.chart_pct_compact(
                     ser, win1d["dates"], include_zero=True, w=W_CELL, h=H_CELL,
-                    date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL)
+                    date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL,
+                    x_span=win1d.get("session_span"))
                 if chart:
                     return _cellcap("1D", "session") + chart
 
@@ -1018,6 +1019,25 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     out["window_start"] = axis[0]
     out["window_end"] = axis[-1]
     out["source_end_dates"] = {"portfolio": axis[-1], "benchmark": axis[-1]}
+    # The session the panel's x-axis must span, so a day that is half done draws
+    # half a chart. Without it the plot spreads its points evenly over the full
+    # width whatever the hour, and a running session looks finished. Taken from the
+    # venue that produced the most heavily weighted path -- the holdings' own -- and
+    # None when no cash session is modelled (a continuously traded book), which
+    # leaves the caller on the even spread it has always used.
+    from tarzan.data.market_quotes import session_span
+    span = None
+    try:
+        first = next((str(t) for t in (m.holdings_df["ticker"]
+                                       if getattr(m, "holdings_df", None) is not None
+                                       and "ticker" in m.holdings_df else [])
+                      if str(t) in quotes), "")
+        if first:
+            src = str((quotes.get(first) or {}).get("intraday_source_ticker") or first)
+            span = session_span(src)
+    except Exception:  # noqa: BLE001 — no venue is not an error, only no span
+        span = None
+    out["session_span"] = span
     return out
 
 

@@ -286,3 +286,98 @@ class TestAQuoteFromAnotherSessionIsRefused:
         stale = int(pd.Timestamp("2025-10-10 15:35", tz="UTC").timestamp())
 
         assert _stamp(intra, {"price": 25.515, "time": stale}) is intra
+
+
+class TestASessionChartDrawsOnlyTheElapsedSession:
+    """A running session must not fill the width.
+
+    ``chart_pct_compact`` spreads its points evenly BY INDEX, which is right for a
+    month of closes and wrong for one trading day: a session 47% done filled the
+    whole panel, so the 1D cell said the day was over while it was lunchtime. That
+    is precisely the defect ``_intraday_spark`` was written to avoid, and the 1D
+    grid cell reused the generic chart without inheriting the cure.
+
+    ``x_span`` places every point at its real position in the venue's session, and
+    labels where that session ends so the empty stretch reads as "not over yet"
+    rather than "the feed stopped".
+    """
+
+    OPEN = "2026-09-02 09:00"
+    CLOSE = "2026-09-02 17:30"
+
+    @staticmethod
+    def _svg(**kw):
+        import pandas as pd
+
+        from tarzan.export import _charts
+
+        dates = pd.date_range("2026-09-02 09:00", "2026-09-02 13:00",
+                              freq="30min", tz="Europe/Rome")
+        series = [{"values": [0.0, 0.2, -0.1, 0.3, -0.2, 0.1, 0.0, 0.15, -0.05],
+                   "color": "#E6EDF6", "width": 2.2, "end_label": "-0.05%"}]
+        return _charts.chart_pct_compact(
+            series, list(dates), w=182, h=116, date_fmt="%H:%M",
+            min_day_ticks=3, end_gutter=46, **kw), dates
+
+    @staticmethod
+    def _last_x(svg):
+        import re
+
+        pts = re.findall(r'points="([^"]+)"', svg)
+        assert pts, svg[:200]
+        return max(float(p.split(",")[0]) for p in pts[-1].split())
+
+    def _span(self):
+        import pandas as pd
+
+        return (pd.Timestamp(self.OPEN, tz="Europe/Rome"),
+                pd.Timestamp(self.CLOSE, tz="Europe/Rome"))
+
+    def test_without_a_span_the_line_still_fills_the_width(self):
+        """The old behaviour, kept for every other panel: a month of closes SHOULD
+        span its plot. This is the contrast the next test is measured against."""
+        svg, _ = self._svg()
+        plot_right = 182 - 46 - 8          # w - end_gutter - right margin
+        assert self._last_x(svg) >= plot_right - 1
+
+    def test_with_a_span_the_line_stops_where_the_day_has_got_to(self):
+        svg, _ = self._svg(x_span=self._span())
+        plot_right = 182 - 46 - 8
+        # 09:00 -> 13:00 of an 09:00-17:30 session is 4h of 8.5h.
+        expected = 30 + (4 / 8.5) * (plot_right - 30)
+        assert self._last_x(svg) == pytest.approx(expected, abs=1.0)
+        assert self._last_x(svg) < plot_right - 20
+
+    def test_the_axis_names_where_the_session_ends(self):
+        import re
+
+        svg, _ = self._svg(x_span=self._span())
+        assert "17:30" in re.findall(r'>(\d\d:\d\d)<', svg)
+
+    def test_a_point_past_the_close_is_clamped_not_overflowed(self):
+        """A venue can quote past its modelled close; the line must end at the edge
+        rather than run off the chart."""
+        import pandas as pd
+
+        from tarzan.export import _charts
+
+        dates = list(pd.date_range("2026-09-02 09:00", periods=3, freq="4h",
+                                   tz="Europe/Rome"))     # 09:00, 13:00, 17:00
+        dates.append(pd.Timestamp("2026-09-02 21:00", tz="Europe/Rome"))
+        series = [{"values": [0.0, 0.2, -0.1, 0.3], "color": "#E6EDF6"}]
+        svg = _charts.chart_pct_compact(
+            series, dates, w=182, h=116, date_fmt="%H:%M", end_gutter=46,
+            x_span=self._span())
+
+        plot_right = 182 - 46 - 8
+        assert self._last_x(svg) == pytest.approx(plot_right, abs=0.5)
+
+    def test_a_degenerate_span_falls_back_to_the_even_spread(self):
+        """Zero width, or a span the timestamps cannot be compared against, must not
+        collapse every point onto one x."""
+        import pandas as pd
+
+        one = pd.Timestamp(self.OPEN, tz="Europe/Rome")
+        svg, _ = self._svg(x_span=(one, one))
+        plot_right = 182 - 46 - 8
+        assert self._last_x(svg) >= plot_right - 1
