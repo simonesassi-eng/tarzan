@@ -235,3 +235,54 @@ class TestTheResolverStampsWhatItHandsOut:
         got = mq.intraday_feeds(["EXUS.MI"])["EXUS.MI"]
 
         assert pd.Timestamp(got["intraday_observation_timestamp"]) == bars.index[-1]
+
+
+class TestAQuoteFromAnotherSessionIsRefused:
+    """The gap the ``stamp <= last_ts`` rule does NOT cover.
+
+    ``_stamp_session_close`` reads the RAW official quote, bypassing
+    ``current_session.pick_quote`` — the price-coherence gate that keeps a rotten
+    quote out of the valuation. Yahoo keeps dormant records and answers them: on a
+    real holding one listing returned ``regularMarketTime`` 326 days old with a
+    price 10.9% away from the truth, no error and no flag.
+
+    A quote OLDER than the last bar was already refused, by the rule that a series
+    already carrying the latest price is left alone — so the year-stale case was
+    covered before this guard existed, and tests asserting it prove nothing.
+
+    What was NOT covered is the opposite pairing: a stale intraday FEED (yesterday's
+    bars, which the resolver's own staleness gate can still admit close to a session
+    boundary) beside a CURRENT quote. There the quote is newer than the last bar, so
+    the old rule waves it through and a two-day "session" gets drawn. The guard asks
+    whether both belong to the same session, not merely which came first.
+    """
+
+    def test_todays_quote_does_not_extend_yesterdays_bars(self):
+        """The case the ordering rule misses: newer, but a different session."""
+        intra = _bars([31.20, 30.96], day="2026-09-01", start="08:00")
+        today = int(pd.Timestamp("2026-09-02 09:41", tz="UTC").timestamp())
+
+        out = _stamp(intra, {"price": 31.105, "time": today})
+
+        assert out is intra, (
+            "a current price was appended to a previous session's bars, drawing a "
+            "line that spans two days")
+
+    def test_a_quote_from_the_same_session_still_lands(self):
+        """The guard must not refuse the normal case. Mid-session the quote is
+        minutes old and belongs to exactly the session being drawn."""
+        intra = _bars([31.20, 30.96], day="2026-09-01", start="08:00")
+        same = int(pd.Timestamp("2026-09-01 09:41", tz="UTC").timestamp())
+
+        out = _stamp(intra, {"price": 31.105, "time": same})
+
+        assert len(out) == len(intra) + 1
+        assert float(out.iloc[-1]) == pytest.approx(31.105)
+
+    def test_a_year_old_quote_is_refused_either_way(self):
+        """Belt and braces, and labelled as such: this passes with or without the
+        guard, because such a quote is also older than the last bar."""
+        intra = _bars([31.20, 31.05, 30.96])
+        stale = int(pd.Timestamp("2025-10-10 15:35", tz="UTC").timestamp())
+
+        assert _stamp(intra, {"price": 25.515, "time": stale}) is intra
