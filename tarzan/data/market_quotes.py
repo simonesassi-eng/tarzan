@@ -1079,6 +1079,73 @@ def official_quotes(symbols: list[str]) -> dict:
             if s and _quote_memo.get(s)}
 
 
+def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
+    """Append the official price as the intraday series' last point.
+
+    The bars are a record of TRADES, so on a thinly traded instrument the last one
+    can sit an hour or more before the session's end. Measured across a 16-instrument
+    portfolio on 1 Sep 2026: the worst case's last hourly bar was 16:00 Rome against a
+    17:35 close, so reading it as "now" put the drawn session 0.47% away from the
+    official close every other 1D figure on the page uses. Eleven of the sixteen
+    disagreed that way, up to 0.72pp; the five that agreed to the cent were the ones
+    printing right up to the close, and the previous close was identical in every
+    case. The bars carry the SHAPE of the session; this gives them its END.
+
+    Only for a series from the instrument's OWN listing. When the bars came from a
+    sibling venue the two prices belong to different order books and the baseline is
+    that sibling's too, so appending the canonical's price would draw a step no
+    market made -- a separate problem, not this one.
+
+    The stamp goes at a REAL instant: the quote's own observation time, else the
+    venue's close once the session is over, else now. Never after a series that is
+    already current -- a stamp at or before the last bar is simply skipped.
+    """
+    import pandas as pd          # module-local, as everywhere else in this file
+
+    if not own_feed or intra is None or len(intra) < 1:
+        return intra
+    try:
+        price = float((quote or {}).get("price"))
+    except (TypeError, ValueError):
+        return intra
+    if not (price > 0):
+        return intra
+
+    last_ts = pd.Timestamp(intra.index[-1])
+    stamp = None
+    observed = (quote or {}).get("time")
+    if observed:
+        try:
+            stamp = pd.Timestamp(int(observed), unit="s", tz="UTC")
+        except (TypeError, ValueError, OverflowError):
+            stamp = None
+    if stamp is None:
+        # No observation instant. The close is the honest place for a settled
+        # session; while one is still running, "now" is.
+        span = session_span(ticker, now)
+        close = pd.Timestamp(span[1]) if span else None
+        stamp = close if (close is not None and now is not None
+                          and pd.Timestamp(now) >= close) else pd.Timestamp(now)
+    if stamp is None:
+        return intra
+
+    tz = getattr(last_ts, "tz", None)
+    try:
+        if tz is not None:
+            stamp = (stamp.tz_convert(tz) if stamp.tzinfo is not None
+                     else stamp.tz_localize(tz))
+        elif stamp.tzinfo is not None:
+            stamp = stamp.tz_convert("UTC").tz_localize(None)
+    except (TypeError, ValueError):
+        return intra
+    if stamp <= last_ts:
+        return intra
+
+    stamped = intra.copy()
+    stamped.loc[stamp] = price
+    return stamped.sort_index()
+
+
 def _fetch_official_quotes(symbols: list[str]) -> dict:
     """One batched Yahoo v7 quote call → ``{symbol: {"price", "prev_close"}}``
     (positive floats only; either key may be absent).
@@ -1360,6 +1427,13 @@ def intraday_feeds(
         feed_prev = _previous_close_before(_fetch_history, src, iday)
         baseline = (q_prev if (src == tk and q_prev)
                     else (feed_prev or float(intra.iloc[0])))
+
+        # The drawn series gets the session's END. Everything above -- liveness, the
+        # observation instant, the baseline's day -- is deliberately computed from the
+        # BARS, before this: those answer "what did the feed print and when", which
+        # the stamp must not restate. Only the series a consumer plots is extended.
+        intra = _stamp_session_close(intra, official.get(tk),
+                                     own_feed=(src == tk), ticker=src, now=now_ref)
 
         out[tk] = {
             "live": bool(is_live),
