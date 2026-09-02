@@ -578,9 +578,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # wider table cell does not make the chart wider.
     W_WIDE, H_WIDE = 580, 166
     W_CELL, H_CELL = 182, 116
+    # The volatility pair sits two-up: 580px content box less the 8px gutter either
+    # side of the divider leaves 282px each.
+    W_HALF, H_HALF = 282, 138
     # Room for the end labels: bare signed percentages, three of them stacked at
     # the line ends, so ~46px at cell width and 54px on the wide chart.
-    G_WIDE, G_CELL = 54, 46
+    G_WIDE, G_CELL, G_HALF = 54, 46, 52
     def _last_estimate(values):
         """The last FINITE value of a line, or None when it has none.
 
@@ -740,14 +743,10 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # caption -- chart_pct_compact returns "" when no series holds a finite
         # point, and concatenating unconditionally would leave a caption
         # introducing a plot that is not there.
-        ret_cells, vol_cells = [], []
+        ret_cells = []
         for _b, _label in WINDOWS:
             if _b == "1d":
                 ret_cells.append(_day_cell())
-                # A rolling 21-session sigma cannot be plotted across one session
-                # for the same reason; its single current value is the RISK
-                # section's tile, not a new figure to invent here.
-                vol_cells.append(_empty_cell("1D", "σ needs 21 sessions"))
                 continue
             _w = ret_windows.get(_b)
             _ser = panels.get(_b, ([], []))[0]
@@ -766,23 +765,6 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             else:
                 ret_cells.append(_empty_cell(_label, "not enough history"))
 
-            _vs = vol_windows.get(_b)
-            _vchart = _vol_panel(_vs, _vs["dates"], month_ticks=False,
-                                 min_day_ticks=0) if _vs else ""
-            if _vchart:
-                # The caption carries THIS window's σ; the line carries the rolling
-                # 21-session one. Without it every cell's end label read the same
-                # figure — today's σ is today's σ whichever window you plot it over
-                # — so six panels differed in shape and in nothing a reader could
-                # quote. The grid title says which is which.
-                _sig = (_vs.get("window_sigma") or {}).get("port")
-                vol_cells.append(
-                    _cellcap(_label,
-                             f'σ {_pct(_sig, signed=False)}' if _sig is not None
-                             else "")
-                    + _vchart)
-            else:
-                vol_cells.append(_empty_cell(_label, "not enough history"))
 
         # One colour key per grid, beneath it. With six plots sharing three
         # colours, a key per cell would print the same three swatches six times.
@@ -790,42 +772,65 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                              for lg in [panels.get(_b, ([], []))[1]] if lg), [])
         ret_grid = (_colcap("Return · by window") + _grid(ret_cells)
                     + _mini_legend(_ret_leg_all))
-        # Two figures live on this grid and a reader cannot tell them apart from
-        # the picture, so the title names both — the same job the since-inception
-        # volatility caption does for its own pair.
-        vol_grid = (_colcap("Volatility · by window (annualized · "
-                            "line: rolling 21 sessions · σ: over the window)")
-                    + _grid(vol_cells)
-                    + _mini_legend(_vol_legend(
-                        next((v for v in vol_windows.values() if v), None))))
 
-        # The whole life, full width and on month ticks, kept BELOW the grids. It
-        # is the only place the lifetime trajectory lives, and the gap it draws is
-        # the number the masthead and the state tile quote. None of the six windows
+        # The whole life, full width and on month ticks, under the grid. It is the
+        # only place the lifetime trajectory lives, and the gap it draws is the
+        # number the masthead and the state tile quote. None of the six windows
         # substitutes for it: 1Y is a window, inception is the book.
         _si_chart = _charts.chart_pct_compact(
             ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
             month_ticks=True, end_gutter=G_WIDE) if ssi else ""
         si_panel = (_colcap("Return · since inception")
                     + _si_chart + _mini_legend(si_leg)) if _si_chart else ""
+
+        # ── Volatility: two panels, not six ───────────────────────────────────
+        # The by-window grid is gone. Six volatility plots restated one fact the
+        # RISK section already carries a tile for, and their per-window sigmas
+        # ranged 8.74-10.99% on the reference book — a spread no reader acts on.
+        # What survives is the pair that answers a question the tile cannot: was
+        # the last quarter rougher than the book has been all along.
+        vol_3m = _vol_panel(vol_windows.get("3m"),
+                            (vol_windows.get("3m") or {}).get("dates") or si_dates,
+                            month_ticks=True, min_day_ticks=0,
+                            w=W_HALF, h=H_HALF, gutter=G_HALF)
+        if vol_3m:
+            _s3 = ((vol_windows.get("3m") or {}).get("window_sigma") or {}).get("port")
+            vol_3m = (_colcap("Volatility · 3M"
+                              + (f" · σ {_pct(_s3, signed=False)}" if _s3 is not None
+                                 else ""))
+                      + vol_3m + _mini_legend(_vol_legend(vol_windows.get("3m"))))
         vol_si_panel = _vol_panel(
             vol_si, vol_si["dates"] if vol_si else si_dates,
             month_ticks=True, min_day_ticks=0,
-            w=W_WIDE, h=H_WIDE, gutter=G_WIDE)
+            w=W_HALF, h=H_HALF, gutter=G_HALF)
         if vol_si_panel:
             # The legend states each line's σ over the book's whole life, so the
             # three are compared over one period. The figure beside each name is
             # NOT the line's endpoint (that is one 21-session window, drawn at the
-            # line's end) — the caption says which is which.
-            vol_si_panel = (_colcap("Volatility · since inception "
-                                    "(line: rolling 21 sessions · "
-                                    "key: whole span, annualized)")
+            # line's end) — the note under the row says which is which.
+            vol_si_panel = (_colcap("Volatility · since inception")
                             + vol_si_panel
                             + _mini_legend(_vol_legend(vol_si, with_span=True)))
+        vol_row = ""
+        if vol_3m or vol_si_panel:
+            # One note for the pair rather than a caption each: at half width the
+            # estimator's description does not fit beside the window's name, and it
+            # is the same sentence twice.
+            vol_row = (
+                f'<table role="presentation" width="100%" cellpadding="0" '
+                f'cellspacing="0" border="0"><tr>'
+                f'<td width="50%" valign="top" style="padding:0 8px 0 0;">'
+                f'{vol_3m}</td>'
+                f'<td width="50%" valign="top" style="padding:0 0 0 8px;'
+                f'border-left:1px solid {P["border"]};">{vol_si_panel}</td>'
+                f'</tr></table>'
+                f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
+                f'Annualized. Line: rolling 21 sessions. '
+                f'Figures in the keys: σ over the panel’s own span.</div>')
 
         _rule = (f'<div style="margin-top:12px;padding-top:12px;'
                  f'border-top:1px solid {P["border"]};"></div>')
-        _blocks = [b for b in (ret_grid, vol_grid, si_panel, vol_si_panel) if b]
+        _blocks = [b for b in (ret_grid, si_panel, vol_row) if b]
         charts_tbl = f'<div style="margin-top:12px;">{_rule.join(_blocks)}</div>'
         # No "why you're diverging" block. The concept does not carry one, and
         # it restated the section: the gap is in the heading's subtitle, the

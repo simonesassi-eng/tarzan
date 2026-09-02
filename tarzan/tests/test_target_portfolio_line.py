@@ -300,11 +300,11 @@ class TestAllThreePanelsCarryTheTarget:
     def test_every_panel_names_the_target_in_its_colour_key(self):
         sec = self._section()
         html = sec["vs_market_html"]
-        # Four keys — the return grid, the volatility grid, and the two
-        # since-inception panels — plus the 1D cell, which is figures rather than a
-        # plot and names its three measures itself. The since-inception volatility
-        # key carries the like-for-like span figure too ("Target 11.10%"), so match
-        # the name rather than the exact label.
+        # Four keys — the return grid, the lifetime return, and the two volatility
+        # panels — plus the 1D cell, which is figures rather than a plot and names
+        # its three measures itself. The lifetime volatility key carries the
+        # like-for-like span figure too ("Target 11.10%"), so match the name rather
+        # than the exact label.
         named = re.findall(r'>(Target(?: [\d.]+%)?)</span>', html)
         assert len(named) == 5, named
 
@@ -313,10 +313,9 @@ class TestAllThreePanelsCarryTheTarget:
         html = self._section()["vs_market_html"]
         drawn = len(re.findall(
             rf'<polyline[^>]*stroke="{PALETTE["target"]}"', html))
-        # Ten grid cells (5D/1M/3M/YTD/1Y, once for return and once for
-        # volatility; 1D is figures on one grid and needs 21 sessions on the
-        # other) plus the two since-inception panels.
-        assert drawn == 12, f"target polylines drawn: {drawn}"
+        # Five return-grid cells (5D/1M/3M/YTD/1Y — 1D is figures, not a plot),
+        # the lifetime return, and the volatility pair (3M + lifetime).
+        assert drawn == 8, f"target polylines drawn: {drawn}"
 
     def test_the_heading_names_the_target_and_the_benchmark_in_use(self):
         assert self._section()["vs_market_title"] == "Vs target &amp; Bench Index"

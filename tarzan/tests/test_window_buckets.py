@@ -270,21 +270,23 @@ class TestTheWindowSigmaIsNotTheLinesEndValue:
         assert vs["window_sigma"]["port"] is not None
 
     def test_the_caption_prints_it_beside_the_window_name(self):
-        import re
-
+        """The by-window volatility grid is gone, so the per-window σ now appears on
+        the one volatility panel that names a window: 3M. It still has to be the
+        WINDOW's σ and not the line's end value, which is why ``window_sigma``
+        exists — the two tests above pin that distinction directly."""
         from tarzan.export.newsletter._constants import _NewsletterContext
         from tarzan.export.newsletter._sections_perf import _build_performance30
         from tarzan.models.investor_config import InvestorConfig
+        from tarzan.export._perf_series import _perf_vol_series
+        from tarzan.export.newsletter._format import _pct
 
+        m = self._metrics()
         sec = _build_performance30(_NewsletterContext(
-            metrics=self._metrics(), config=InvestorConfig(), benchmark_geo="B"))
+            metrics=m, config=InvestorConfig(), benchmark_geo="B"))
         html = sec["vs_market_html"]
-        vol_part = html.split("Volatility · by window", 1)[1].split(
-            "Return · since inception", 1)[0]
-        sigmas = re.findall(r'letter-spacing:0;"> · σ ([\d.]+)%</span>', vol_part)
 
-        assert len(sigmas) >= 4, sigmas
-        assert len(set(sigmas)) > 1, f"every window printed the same σ: {sigmas}"
+        expected = _perf_vol_series(m, "B", bucket="3m")["window_sigma"]["port"]
+        assert f"Volatility · 3M · σ {_pct(expected, signed=False)}" in html
 
 
 class TestTheOneDayCellDrawsTheSession:

@@ -181,8 +181,12 @@ class TestBothPnlMeasuresAreDrawn:
         """
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         assert "Return · by window" in html
-        # The grid's own key names exactly the three lines its cells draw.
-        grid = html.split("Return · by window", 1)[1].split("Volatility", 1)[0]
+        # The grid's own key names exactly the three lines its cells draw. The
+        # boundary is the LIFETIME return panel, which follows the grid directly now
+        # that the volatility grid is gone — and which does draw both P&L measures,
+        # so slicing past it would find them and pass for the wrong reason.
+        grid = html.split("Return · by window", 1)[1].split(
+            "Return · since inception", 1)[0]
         assert ">TWROR<" in grid
         assert ">Total P&amp;L<" not in grid
         assert ">Unreal. P&amp;L<" not in grid
