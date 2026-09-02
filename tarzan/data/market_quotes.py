@@ -1440,6 +1440,15 @@ def intraday_feeds(
         allow_sibling_fallback=allow_sibling_fallback,
     )
     official = _fetch_official_quotes(uniq)
+    # A sibling-served listing needs the SIBLING's own published pair, not the
+    # canonical's: that is the pair the baseline and the closing stamp below read,
+    # and the canonical's can be dormant (measured: one listing answered with a
+    # 327-day-old price while its sibling quoted live). One extra batched symbol per
+    # fallback -- one of 63 on the reference book.
+    _sib = sorted({src for _i, src in resolved.values()
+                   if src and src not in official})
+    if _sib:
+        official.update(_fetch_official_quotes(_sib))
     out: dict = {}
     for tk in uniq:
         intra, src = resolved.get(tk, (None, tk))
@@ -1496,15 +1505,33 @@ def intraday_feeds(
         else:
             is_live = bool(mkt_open)
 
-        # The bars' own previous close. Dated in the SOURCE VENUE's timezone:
-        # the daily history this indexes into is keyed by exchange-local dates,
-        # so a UTC read would look up the wrong session for any venue east of
-        # UTC. The canonical listing's published pair wins when the bars are its
-        # own, so the pill and the line share one reference.
+        # The bars' own previous close, from the PUBLISHED pair of the venue that
+        # produced them. Dated in the SOURCE VENUE's timezone for the history
+        # fallback: the daily frame is keyed by exchange-local dates, so a UTC read
+        # would look up the wrong session for any venue east of UTC.
+        #
+        # The published pair wins over the daily history for the SIBLING case too,
+        # and that is the whole residual gap this used to leave. Yahoo's daily frame
+        # can skip a session outright (measured: 1 Sep 2026 absent from BOTH the
+        # Milan and the Xetra listings of one instrument), so
+        # ``_previous_close_before`` reached back another session and rebased the
+        # drawn line on a close two days old: -0.43% against the -0.07% every figure
+        # on the page showed, from the same venue's own bars. The published
+        # ``prev_close`` does not have holes.
+        #
+        # Not "splicing two order books", which is what withholding this looked like
+        # protecting against: when the bars come from a sibling the TAPE is already
+        # using that sibling's prices, because ``current_session.pick_quote`` accepts
+        # a sibling quote that agrees with the instrument's own last close. Reading
+        # the sibling's published pair here aligns the line with what the page
+        # already prints.
         iday = _observed_day(last_ts, _exchange_tz(src))
         feed_prev = _previous_close_before(_fetch_history, src, iday)
-        baseline = (q_prev if (src == tk and q_prev)
-                    else (feed_prev or float(intra.iloc[0])))
+        src_quote = official.get(src) or {}
+        baseline = ((q_prev if (src == tk and q_prev) else None)
+                    or src_quote.get("prev_close")
+                    or feed_prev
+                    or float(intra.iloc[0]))
 
         # The drawn series gets the session's END. Everything above -- liveness, the
         # observation instant, the baseline's day -- is deliberately computed from the
@@ -1514,8 +1541,13 @@ def intraday_feeds(
         # becomes a drawable two-point session once it has an opening reference, and
         # with one every line starts at 0% so the panel's zero belongs to all of them.
         intra = _prepend_session_open(intra, baseline, ticker=src, now=now_ref)
-        intra = _stamp_session_close(intra, official.get(tk),
-                                     own_feed=(src == tk), ticker=src, now=now_ref)
+        # The END comes from the SAME venue as the bars, so a sibling-served series is
+        # stamped from the sibling's quote rather than skipped. With the baseline now
+        # also that venue's published previous close, both ends of the drawn line and
+        # its denominator come from one order book -- which is the one the tape is
+        # already valuing this instrument with.
+        intra = _stamp_session_close(intra, src_quote, own_feed=True,
+                                     ticker=src, now=now_ref)
 
         out[tk] = {
             "live": bool(is_live),
