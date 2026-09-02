@@ -100,18 +100,18 @@ class TestASeriesAlreadyCurrentIsLeftAlone:
         assert out is intra
 
 
-class TestASiblingVenuesBarsAreNotStamped:
-    """The shape where a listing has no bars of its own and a sibling venue supplied
-    them.
+class TestTheOwnFeedFlagStillGuardsTheHelper:
+    """``own_feed=False`` is still a hard skip in the helper.
 
-    The baseline is that sibling's previous close too, so the drawn percentage is
-    internally consistent within ITS order book. Appending the canonical listing's
-    price would splice two order books into one line and draw a step no market made.
-    That instrument's remaining disagreement is a different problem — which venue the
-    bars belong to — and this rule refuses to hide it.
+    The CALL SITE no longer passes False — a sibling-served series is now stamped
+    from that sibling's own quote, see
+    ``TestASiblingSeriesIsMeasuredAgainstItsOwnVenue`` for why that is not splicing
+    two order books. The flag stays because the helper must refuse to stamp a price
+    it was not told belongs to the series' venue, and a future caller can still say
+    so.
     """
 
-    def test_a_fallback_series_is_returned_unchanged(self):
+    def test_a_series_marked_foreign_is_returned_unchanged(self):
         intra = _bars([28.75, 28.715])
         out = _stamp(intra, {"price": 28.650}, own_feed=False)
         assert out is intra
@@ -492,3 +492,106 @@ class TestASessionOpensOnTheBell:
         assert float(full.iloc[0]) == pytest.approx(31.19)      # 0% at the bell
         assert float(full.iloc[-1]) == pytest.approx(31.105)    # the close
         assert full.index[0] == self.OPEN and full.index[-1] == self.CLOSE
+
+
+class TestASiblingSeriesIsMeasuredAgainstItsOwnVenue:
+    """The residual gap, and that it was never about two order books.
+
+    A listing Yahoo never quotes intraday is served a price-coherent sibling's bars.
+    Those bars were then rebased on a previous close taken from the sibling's DAILY
+    frame — and Yahoo's daily frame can skip a session outright. Measured 2 Sep 2026:
+    1 Sep was absent from both the Milan and the Xetra listing of one instrument, so
+    the lookup reached back two days and the drawn line read −0.43% where every figure
+    on the page showed −0.07%, off the very same venue's bars.
+
+        baseline from the daily frame : 28.755  -> −0.4347%
+        baseline from the published pair: 28.650 -> −0.0698%   (= the tape, = Yahoo)
+
+    Withholding this looked like it was protecting against splicing two order books.
+    It was not: when the bars come from a sibling, the TAPE is already valuing the
+    instrument with that sibling's prices, because ``current_session.pick_quote``
+    accepts a sibling quote agreeing with the instrument's own last close. Reading the
+    sibling's published pair aligns the line with what the page already prints.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _pin(self, monkeypatch):
+        pinned = pd.Timestamp("2026-09-02 12:00", tz="Europe/Rome")
+        monkeypatch.setattr(mq, "_intraday_reference_now", lambda tzinfo=None: pinned)
+        monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
+        monkeypatch.setattr(
+            "tarzan.runtime.today",
+            lambda: __import__("datetime").date(2026, 9, 2))
+
+    @staticmethod
+    def _feeds(monkeypatch, *, sibling_quote):
+        """AAA.MI has no bars of its own; AAA.DE supplies them. The daily frame is
+        missing the previous session, so its "previous close" is two days old."""
+        bars = _bars([28.80, 28.63], day="2026-09-02", start="08:00")
+        monkeypatch.setattr(mq, "_resolve_intraday",
+                            lambda syms, allow_sibling_fallback=True:
+                            {"AAA.MI": (bars, "AAA.DE")})
+        monkeypatch.setattr(
+            "tarzan.data.enricher._fetch_history",
+            lambda s: pd.DataFrame(
+                {"Close": [29.0, 28.755]},
+                index=pd.to_datetime(["2026-08-28", "2026-08-31"])))
+
+        def _quotes(syms):
+            out = {}
+            for s in syms:
+                if s == "AAA.MI":       # the dormant canonical listing
+                    out[s] = {"price": 25.515, "prev_close": 25.805}
+                elif s == "AAA.DE" and sibling_quote:
+                    out[s] = dict(sibling_quote)
+            return out
+
+        monkeypatch.setattr(mq, "_fetch_official_quotes", _quotes)
+        return mq.intraday_feeds(["AAA.MI"])["AAA.MI"]
+
+    def test_the_baseline_is_the_siblings_published_previous_close(self, monkeypatch):
+        got = self._feeds(monkeypatch,
+                          sibling_quote={"price": 28.63, "prev_close": 28.65})
+
+        assert float(got["intraday_baseline"]) == pytest.approx(28.65)
+        assert got["intraday_source_ticker"] == "AAA.DE"
+
+    def test_the_drawn_move_then_equals_the_published_one(self, monkeypatch):
+        got = self._feeds(monkeypatch,
+                          sibling_quote={"price": 28.63, "prev_close": 28.65})
+        s = got["intraday_series"]
+        base = float(got["intraday_baseline"])
+
+        drawn = (float(s.iloc[-1]) / base - 1) * 100
+        published = (28.63 / 28.65 - 1) * 100
+
+        assert drawn == pytest.approx(published, abs=1e-9)
+        # ...and NOT the two-day-old reading the daily frame produced.
+        assert abs(drawn - (28.63 / 28.755 - 1) * 100) > 0.3
+
+    def test_the_canonical_listings_dormant_pair_is_not_used(self, monkeypatch):
+        """25.805 is 10% away from the truth; reading it would put the line off by
+        that much for the whole session."""
+        got = self._feeds(monkeypatch,
+                          sibling_quote={"price": 28.63, "prev_close": 28.65})
+        assert float(got["intraday_baseline"]) != pytest.approx(25.805)
+
+    def test_without_a_sibling_quote_the_daily_frame_is_still_the_fallback(
+            self, monkeypatch):
+        """The published pair is preferred, not required: an unquotable sibling keeps
+        the previous behaviour rather than losing its line."""
+        got = self._feeds(monkeypatch, sibling_quote=None)
+
+        assert float(got["intraday_baseline"]) == pytest.approx(28.755)
+
+    def test_the_series_is_stamped_from_the_sibling_too(self, monkeypatch):
+        """Both ends and the denominator from one order book. The stamp lands at the
+        sibling's observation instant, so a thin sibling still reaches its own end."""
+        when = int(pd.Timestamp("2026-09-02 09:30", tz="UTC").timestamp())
+        got = self._feeds(monkeypatch,
+                          sibling_quote={"price": 28.61, "prev_close": 28.65,
+                                         "time": when})
+        s = got["intraday_series"]
+
+        assert float(s.iloc[-1]) == pytest.approx(28.61)
+        assert pd.Timestamp(s.index[-1]) == pd.Timestamp("2026-09-02 09:30", tz="UTC")
