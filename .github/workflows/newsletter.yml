@@ -40,7 +40,12 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install immutable dependencies
-        run: python -m pip install --require-hashes -r requirements.txt
+        # --retries/--timeout, because a lost download costs a whole issue. Measured
+        # on run 33767975536: validate pulled all 48 wheels in 13s while send died on
+        # the 4th after 41s of silence, same commit and same pinned hashes, and
+        # `set -euo pipefail` turned that into no email at all. Retrying changes
+        # nothing about WHAT is installed -- --require-hashes still pins every wheel.
+        run: python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt
 
       - name: Compile positive Tarzan scopes
         run: python -m compileall -q tarzan scripts
@@ -89,7 +94,12 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install immutable dependencies
-        run: python -m pip install --require-hashes -r requirements.txt
+        # --retries/--timeout, because a lost download costs a whole issue. Measured
+        # on run 33767975536: validate pulled all 48 wheels in 13s while send died on
+        # the 4th after 41s of silence, same commit and same pinned hashes, and
+        # `set -euo pipefail` turned that into no email at all. Retrying changes
+        # nothing about WHAT is installed -- --require-hashes still pins every wheel.
+        run: python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt
 
       - name: Compute cache date
         id: cachedate

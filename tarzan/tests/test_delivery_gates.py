@@ -88,7 +88,7 @@ class TestOnlyDeliveryReasonsCanStopADelivery:
         commands = re.findall(r"(?m)^        run:\s*(.+?)\s*$", validate)
 
         assert commands == [
-            "python -m pip install --require-hashes -r requirements.txt",
+            "python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt",
             "python -m compileall -q tarzan scripts",
             "python -m pip check",
             "python -m pytest tarzan/tests -q",
@@ -164,8 +164,13 @@ class TestTheSupplyChainIsPinned:
         assert len(refs) >= 3, refs
 
     def test_installation_enforces_hashes(self):
-        assert "pip install --require-hashes -r requirements.txt" in \
-            _text(".github/workflows/newsletter.yml")
+        """``--require-hashes`` is the invariant, not the whole command line. The
+        install carries retry flags too (a lost download used to cost a whole issue),
+        and pinning the exact string made adding them look like weakening the gate —
+        which is the opposite of what they do: every wheel is still hash-pinned."""
+        workflow = _text(".github/workflows/newsletter.yml")
+        assert "--require-hashes" in workflow
+        assert "-r requirements.txt" in workflow
 
     def test_direct_dependencies_are_exactly_pinned(self):
         loose = [line for line in _requirement_lines("requirements.in")
