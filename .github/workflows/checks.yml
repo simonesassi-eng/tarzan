@@ -39,7 +39,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install immutable dependencies
-        run: python -m pip install --require-hashes -r requirements.txt
+        # --retries/--timeout for the same reason as newsletter.yml: a lost
+        # download is a failed run, and retrying changes nothing about WHAT is
+        # installed -- --require-hashes still pins every wheel.
+        run: python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt
 
       - name: Compile positive Tarzan scopes
         run: python -m compileall -q tarzan scripts
