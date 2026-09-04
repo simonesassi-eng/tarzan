@@ -60,6 +60,24 @@ def _tilt_mode() -> str:
     result. Read per call so a single process can compare both."""
     return os.environ.get("TARZAN_TILT_MODE", "fit").strip().lower()
 
+# EUR-hedged share classes: they do not earn the currency move, so their base is
+# rebuilt via covered interest parity (see synthetic.replicate_portfolio_returns).
+#
+# An EXPLICIT list, like _CARRY_TICKERS above, because both obvious heuristics
+# fail. Sniffing name+description matches eleven instruments — "hedged equity"
+# strategies and tail-risk funds have nothing to do with currency. Sniffing the
+# provider name for "EUR Hedged" matches none of the right ones: MFEH comes back
+# from the provider as "iMGP DBi Managed Futures R EUR HP UCITS ETF", where the
+# hedge is the silent "HP". A heuristic that quietly finds nothing is worse than
+# a list that has to be maintained.
+_HEDGED_TICKERS = {"AGGH", "XS5E", "XGIN", "MFEH"}
+
+
+def is_currency_hedged(it: "WhatIfItem") -> bool:
+    """True if this instrument is a EUR-hedged share class."""
+    return it.bare.upper() in _HEDGED_TICKERS
+
+
 # Name/description keywords that identify a FACTOR equity ETF. Only these get
 # the factor-aware backfill; plain market / leveraged-market equity funds keep
 # the naive splice, so tracking noise is never mis-fit as a factor tilt.
@@ -134,7 +152,8 @@ def _real_daily_returns(holding) -> Optional[pd.Series]:
 def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
                            backfill: str = "naive",
                            rebalance: str = "quarterly",
-                           factors=None, em_factors=None) -> pd.Series:
+                           factors=None, em_factors=None,
+                           hedge_legs=(None, None)) -> pd.Series:
     """Portfolio long-history daily returns from PER-INSTRUMENT spliced series.
 
     Each instrument gets a long base (its composition replicated on index
@@ -147,8 +166,10 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
     cols: dict[str, pd.Series] = {}
     weights: dict[str, float] = {}
     for i, it in enumerate(p.items):
+        hf, hc = (hedge_legs if is_currency_hedged(it) else (None, None))
         base = syn.replicate_portfolio_returns(
-            instrument_exposures(it), proxies, financing_daily=fin, spread_annual=0.005)
+            instrument_exposures(it), proxies, financing_daily=fin, spread_annual=0.005,
+            hedge_fx=hf, hedge_carry=hc)
         if base is not None and not base.empty:
             base = base - (instrument_ter(it) / 100.0) / TRADING_DAYS
         real = _real_daily_returns(it.holding)
@@ -296,10 +317,14 @@ def compute_robustness(portfolios: list["Portfolio"], backfill: str = "naive",
         logger.info("Fetching %d proxy series for the aligned backtest (%s)...",
                     len(needed), ccy)
         proxies, fin = proxy_data.proxy_returns_for(needed)
+        # FX and rate-differential legs for EUR-hedged share classes. Fetched
+        # once per currency run; (None, None) outside EUR, which leaves every
+        # instrument unhedged rather than mis-hedging it.
+        hedge_legs = proxy_data.currency_hedge_legs()
 
         synth = {p.name: syn.returns_to_price(
                     portfolio_long_returns(p, proxies, fin, backfill, rebalance,
-                                           factors, em_factors))
+                                           factors, em_factors, hedge_legs))
                  for p in portfolios}
 
         navs = [n for n in synth.values() if n is not None and not n.empty]

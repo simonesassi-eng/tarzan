@@ -277,7 +277,8 @@ def factor_splice_monthly(long_ret: pd.Series, short_ret: pd.Series,
 
 def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
                                 financing_daily=None,
-                                spread_annual: float = 0.0) -> pd.Series:
+                                spread_annual: float = 0.0,
+                                hedge_fx=None, hedge_carry=None) -> pd.Series:
     """Synthetic daily returns from exposure weights × proxy index returns.
 
     ``exposures`` maps a proxy key → exposure as a fraction of capital
@@ -285,6 +286,16 @@ def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
     daily-return Series. The financed portion (gross − 1) is charged the
     financing rate + spread, so the leverage carries a realistic cost.
     Computed over the window common to all used proxies.
+
+    ``hedge_fx`` / ``hedge_carry`` turn the result into a CURRENCY-HEDGED share
+    class: the proxies arrive already converted into the reporting currency, so
+    the currency move is divided back out and the interest differential added in
+    its place — covered interest parity, which is what a hedged class actually
+    earns. Pass both or neither (see ``proxy_data.currency_hedge_legs``). The
+    hedge is applied to the WHOLE exposure, which is exact for a single-currency
+    underlying such as a USD trend strategy or an S&P 500 tracker and only
+    approximate for a multi-currency one like a global aggregate bond fund, where
+    the share already in the reporting currency was never exposed.
     """
     keys = [k for k in exposures
             if k in proxy_returns and proxy_returns[k] is not None
@@ -305,6 +316,10 @@ def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
         else:
             fin = financing_daily.reindex(df.index).ffill().fillna(0.0)
         s = s - (gross - 1.0) * (fin + spread_annual / TRADING_DAYS)
+    if hedge_fx is not None and hedge_carry is not None:
+        fxr = hedge_fx.reindex(s.index).fillna(0.0)
+        car = hedge_carry.reindex(s.index).fillna(0.0)
+        s = (1.0 + s) / (1.0 + fxr) - 1.0 + car
     return s.dropna()
 
 

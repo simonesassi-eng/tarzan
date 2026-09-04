@@ -123,6 +123,10 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "fwd_core_cl2": "Forward-conditioned like fwd_fac_cl2 but taking the bond exposure through the CORE instead of a standalone long-duration ETF: NTSG 35 (whose 60% treasury-futures overlay is 21 points of notional bonds) and no X25E. Better reasoned than the X25E route it replaces on two counts. The duration is intermediate rather than 25+ years, so the same forward-yield argument is harvested at a fraction of the rate risk - X25E realised -11.8%/yr over its 5.2 real years, -40.8% in 2022 alone and a -51% drawdown, and was still falling in 2025. And the bond leg arrives capital-efficiently with equity attached rather than consuming a slot of its own. Gold 10 (the conditional cut), levered sleeve kept at 10, AVWS 10 / AVEM 5.",
     "fwd_core": "The same core-duration construction with the GLOBAL levered sleeve (SC2X 10) rather than the US-only CL2, so the pair isolates the leverage vehicle from everything else.",
     "fwd_core_sc2x": "fwd_core with the levered sleeve cut 10 to 7 and the freed capital moved into the diversifiers (trend 15 to 17, carry 5 to 6). The point is to buy back the drawdown that fwd_core gave up without returning to long duration: trend is the crisis-alpha leg, and a smaller levered sleeve also pays less of the higher financing cost. GLOBAL leverage (SC2X) rather than US-only.",
+    "fwd_em_cl8": "THE CHOSEN ALLOCATION, and what input/targets_per_holding.csv now holds. Reached by trimming the levered sleeve to 8 from fwd_core_cl10 and moving the freed 2 points into AVEM (5 to 7), the destination that won on the forward view: best conditional CAGR of the six tested and the lowest US share (69%). The test that settled it also produced a result worth remembering - EVERY destination for those 2 points beat leaving them in leverage, on Sharpe, Sortino, drawdown, dispersion and tail alike, even putting them in the gold the conditional analysis penalises. The levered sleeve is the expensive part of this portfolio, measured three separate ways. The honest caveat: AVEM over gold is the choice that REQUIRES believing in valuation reversion, the most contested of the three conditional assumptions; gold 10 to 12 won on every measured metric instead and cost only 0.09 of conditional CAGR.",
+    "fwd_em_sc8": "The mirror of fwd_em_cl8 with the GLOBAL levered sleeve (SC2X 8) instead of the US-only CL2, the single open question left in the construction. CL2 is cheaper (0.50% vs 1.40%) and has ~5 years of real history against SC2X's few weeks; SC2X spreads the leverage across ACWI instead of concentrating it in the US.",
+    "fwd_core_cl10": "fwd_core_cl7 fine-tuned: the levered sleeve back to 10, funded 1 from carry (6 to 5) and 2 from trend (17 to 15), and the trend sleeve then SPLIT 50/50 between DBMFE and MFEH for currency hedging. Read the split with care - the backtest CANNOT price it. Both tickers map to the same Alternative proxy with the same 0.75% TER, so their synthetic bases are byte-identical (+4.98% CAGR each) and the hedged-vs-unhedged distinction that is the entire point of MFEH is invisible here. Two things to weigh outside the model: hedging a collateral-plus-trend strategy is roughly expectation-neutral (it swaps the USD cash rate for the EUR one) while removing FX variance, which argues for it; and MFEH has 0.3 years of real history, which is the same too-new objection that moved this family off SC2X in the first place.",
+    "fwd_core_sc10": "The same fine-tune with the GLOBAL levered sleeve (SC2X 10) instead of the US-only one.",
     "fwd_core_cl7": "fwd_core_sc2x with the levered sleeve swapped SC2X -> CL2 at the same 7: the matched pair that isolates the leverage VEHICLE with nothing else moving. CL2 is 2x MSCI USA (100% US, TER 0.50%, ~5 years of real history) against SC2X's 2x ACWI (global, TER 1.40%, launched July 2026). Cheaper and far less synthetic, paid for with US concentration in the levered sleeve.",
     "fwd_core_div": "The diversifier-maximal version: trend 20, carry 8, gold 8 - 36 points of non-equity diversifiers against 30 in fwd_core - funded from the levered sleeve and a point off each factor leg. READ ITS CARRY WITH SUSPICION: UEQC's pre-inception history is a vendored SIMULATED index that tracks the real fund's total return well but at roughly half its volatility and 0.39 correlation, so any carry-heavy portfolio's Sharpe here is flattered. That is exactly why carry was capped at 5 in the first place, and this variant deliberately tests the boundary.",
     "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
@@ -440,31 +444,28 @@ def _risk_matrix(ws, row, portfolios) -> int:
     return row + 1
 
 
-# The target pair under active consideration: pinned to the top of the Summary,
-# given a Monte-Carlo fan chart and drawn heavy on the growth chart. A TUPLE, not
-# a set, because the order is meaningful — the Method sheet's worked example
-# follows it, so the first entry is the one documented sleeve by sleeve.
+# Three display tiers, most-decided first. A TUPLE each, because order is
+# meaningful: the Method sheet's worked example and the fan charts follow
+# _CHOSEN's order, so its first entry is the one documented sleeve by sleeve.
 #
-# fwd_core_cl7 and fwd_core_sc2x are the matched pair that differs ONLY in the
-# leverage vehicle (2x USA vs 2x ACWI, both at 7), so starring both keeps that
-# one open question visible instead of hiding it behind a single choice.
-#
-# CAVEAT: input/targets_per_holding.csv — the live rebalancing target the
-# newsletter measures drift against — still holds target_fac_cl2. These stars are
-# the analysis's answer, not the executed allocation, until that file is changed.
-_TARGETS = ("fwd_core_cl7", "fwd_core_sc2x")
+# _CHOSEN is the allocation actually settled on. fwd_em_cl8 is what
+# input/targets_per_holding.csv now holds — the live rebalancing target the
+# newsletter measures drift against — and fwd_em_sc8 is its mirror, differing
+# ONLY in the leverage vehicle (2x USA vs 2x ACWI), kept starred so that single
+# open question stays visible instead of being buried by the choice.
+_CHOSEN = ("fwd_em_cl8", "fwd_em_sc8")
 
-# Candidates: not the live allocation, but built to become one — pinned with a
-# different mark so the two tiers never get read as the same thing, and ranked
-# straight after the targets rather than mixed into the field. Promoting one is
-# a matter of moving its name into _TARGETS, which is also what earns it a
-# Monte-Carlo fan chart.
-# Secondary: kept in the comparison and pinned with a diamond, but no longer the
-# answer. The former targets sit here now — they still win on BACKTESTED return,
-# which is exactly why they are worth keeping in view rather than deleting.
+# _TARGETS: the pair that held the top spot before AVEM went to 7 and the
+# levered sleeve to 8. Kept a tier of its own rather than demoted into the field,
+# because the step from it to _CHOSEN is small and worth being able to re-read.
+_TARGETS = ("fwd_core_cl10", "fwd_core_sc10", "fwd_core_cl7", "fwd_core_sc2x")
+
+# Secondary: still in the comparison, no longer in contention. The original
+# target_* family sits here and still wins on BACKTESTED return, which is exactly
+# why it is kept in view rather than deleted.
 #
-# NOTE on the names: the suffix is not consistent across this family — _cl2 and
-# plain _core carry the levered sleeve at 10, while _sc2x and _cl7 carry it at 7.
+# NOTE on the names: the suffix is not consistent across the fwd_core family —
+# _cl2 and plain _core carry the levered sleeve at 10, _sc2x and _cl7 at 7.
 # Left as-is because these names are already in use in the analysis.
 _CANDIDATES = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040",
                "fwd_fac_cl2", "fwd_fac", "fwd_core_cl2", "fwd_core",
@@ -472,7 +473,9 @@ _CANDIDATES = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040",
 
 
 def _pin(name: str) -> str:
-    """Leading mark for a portfolio name: star = live target, diamond = candidate."""
+    """Leading mark: circle = chosen, star = previous target, diamond = secondary."""
+    if name in _CHOSEN:
+        return "\u25cf "
     if name in _TARGETS:
         return "\u2605 "
     if name in _CANDIDATES:
@@ -481,8 +484,12 @@ def _pin(name: str) -> str:
 
 
 def _tier(name: str) -> int:
-    """Sort tier: targets, then candidates, then everything else."""
-    return 0 if name in _TARGETS else (1 if name in _CANDIDATES else 2)
+    """Sort tier: chosen, previous targets, secondaries, then the field."""
+    if name in _CHOSEN:
+        return 0
+    if name in _TARGETS:
+        return 1
+    return 2 if name in _CANDIDATES else 3
 
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
@@ -585,7 +592,7 @@ def _growth_windows_png(portfolios, *, anchor=100.0, metrics_of=None):
     if not navs:
         return None
     names = list(navs)
-    targets = _TARGETS
+    targets = _CHOSEN
     # Stable identity: hue varies fastest so neighbours in the fixed order get the
     # validated adjacent-pair separation; the dash changes every 8 series.
     plain = [n for n in names if n not in targets]
@@ -674,7 +681,7 @@ def _summary_sheet(wb, portfolios) -> None:
     ws = wb.create_sheet("Summary", 0)
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = _C["band"]
-    targets = _TARGETS
+    targets = _CHOSEN
 
     # Global equity benchmark for beta/alpha = MSCI ACWI, built as an ACWI-weighted
     # blend of the geo proxies (all span ~2000-2026, unlike the single VTWSX/ACWI
@@ -740,7 +747,7 @@ def _summary_sheet(wb, portfolios) -> None:
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
     t = ws.cell(row=1, column=1, value=("SUMMARY — all portfolios · full KPI set per window "
-                                          "(\u2605 = target pair, \u25c6 = secondary)"))
+                                          "(\u25cf = chosen, \u2605 = previous target, \u25c6 = secondary)"))
     t.font = _font(15, bold=True, color=_C["white"]); t.fill = _fill(_C["header"])
     ws.row_dimensions[1].height = 26
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
@@ -1425,7 +1432,7 @@ def _method_sheet(wb, portfolios) -> None:
         for j, item in enumerate(vals):
             if j == 0:
                 c = ws.cell(row=r, column=1, value=item)
-                c.font = _font(9, bold=p.name in _TARGETS,
+                c.font = _font(9, bold=p.name in _CHOSEN,
                                color=(_C["amber"] if p.name in _CANDIDATES else _C["text"]))
                 c.alignment = _align("left")
             else:
@@ -1522,7 +1529,7 @@ def _method_sheet(wb, portfolios) -> None:
 
     # --- Worked example: the same arithmetic, sleeve by sleeve --------------
     by_name = {q.name: q for q in portfolios}
-    lead = next((by_name[n] for n in _TARGETS
+    lead = next((by_name[n] for n in _CHOSEN
                  if n in by_name
                  and ((by_name[n].rob or {}).get("mc_conditional", {}) or {})
                  .get("sleeve_exposures")), None)
