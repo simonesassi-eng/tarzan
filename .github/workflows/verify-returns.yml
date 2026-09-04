@@ -49,16 +49,22 @@ jobs:
 
       # Every holding, every window. The script exits non-zero on any disagreement it
       # can actually decide, so this step IS the assertion.
+      #
+      # The book is not in this repo — only the taxonomy is tracked — so the Drive
+      # credentials are what makes this check the REAL portfolio. Without them the
+      # step fails on a missing order list rather than passing on an empty one.
+      # Scoped to this step alone, as in the send: nothing before it sees a secret.
+      # No SMTP, no claim store, no Drive WRITE: this renders and compares, and its
+      # output is an artifact.
       - name: Compare the newsletter's figures against Yahoo
+        env:
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
         run: python3 scripts/verify_returns_vs_yahoo.py --all
 
-      - name: Upload the comparison
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: verify-returns
-          path: |
-            output/verify_returns.json
-            output/verify_returns.html
-          if-no-files-found: warn
-          retention-days: 30
+      # NO artifact upload, deliberately. This repo is public, and on a public repo a
+      # run's artifacts are downloadable by anyone: output/verify_returns.html is the
+      # fully rendered newsletter, positions and values included. The detail stays on
+      # the machine that ran it. What CI publishes is the verdict -- ``$CI`` puts the
+      # script in redacted mode, so the log carries counts and any finding, never a
+      # per-instrument inventory of the book.
