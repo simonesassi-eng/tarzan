@@ -23,11 +23,19 @@ Usage:
     python3 scripts/verify_returns_vs_yahoo.py --seed 7        # a different sample
     python3 scripts/verify_returns_vs_yahoo.py --windows 1d,1m,1y
 
-Exit code is 1 when any comparison exceeds its tolerance, so it can gate a release.
+Exit code is 1 when any comparison exceeds its tolerance, so it IS the assertion.
 
 It hits the network and reads the real book, so it is a script rather than a unit
-test: nothing here belongs in CI, where Yahoo's availability would decide whether the
-suite is green.
+test: in the suite, Yahoo's availability would decide whether the tests are green.
+It runs instead as its own scheduled workflow
+(``.github/workflows/verify-returns.yml``) — NOT as a step in the newsletter, whose
+render is already throttle-bound, and which a second full pipeline run per issue
+would slow for every send to catch a rare fault.
+
+This repo is PUBLIC and a run's log is public with it, so under ``$CI`` the script
+redacts: counts and findings print, the per-instrument table does not. A return is
+public information; the list of instruments someone holds is not, and printing the
+whole book daily would republish what the repo was scrubbed to remove.
 """
 
 from __future__ import annotations
@@ -42,8 +50,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-os.chdir(REPO)
-os.environ.setdefault("TARZAN_DISABLE_AI", "1")
 
 import pandas as pd  # noqa: E402
 
@@ -137,6 +143,34 @@ def _yahoo_period_return(closes: pd.Series, bucket: str, quote: dict | None = No
             str(pd.Timestamp(anchor).date()), "ok")
 
 
+def source_can_referee(source_last, stamped_end, bucket: str) -> bool:
+    """Can a source frame ending on ``source_last`` judge our ``bucket`` figure,
+    given that the tape it is judging was stamped to ``stamped_end``?
+
+    Extracted and tested because this one rule decides whether a difference is
+    reported or waved through, and it has been wrong twice in opposite directions:
+
+    * **Relative to the sample.** "Is this frame behind the OTHERS in this run?" reads
+      a uniformly stale sample as current. Measured on a Saturday: three Milan frames
+      all stopped on the same earlier session, all agreed with each other, nothing
+      abstained, and nine endpoint mismatches of 0.10-4.25pp were reported as findings.
+    * **The venue's last session.** Absolute, but the wrong absolute: before the open,
+      the last session is TODAY and nothing has traded, so every frame looks a session
+      behind and every window abstains — a check that runs daily and decides nothing.
+
+    The tape's own stamped end is the reference, because that is the endpoint our figure
+    was measured to. Equal dates: both sides measured to the same close, so a difference
+    is real. Frame behind: different endpoints, and the gap is the sessions in between.
+
+    1D is exempt. It is compared against the published quote pair, which is current
+    whatever the daily frame is missing — the very reason it reads the pair and not the
+    frame's second-to-last row.
+    """
+    if bucket == "1d":
+        return True
+    return not source_last < stamped_end
+
+
 #: Header label -> the engine's column name. The table's own header is the authority
 #: on which column is which, so the mapping only has to translate the labels.
 _HEADER_TO_KEY = {"intraday": "1d", "1d": "1d", "5d": "5d", "1m": "1m", "3m": "3m",
@@ -194,9 +228,32 @@ def main() -> int:
                     help="sample seed; omit for a fresh random sample each run")
     ap.add_argument("--windows", default="",
                     help="comma-separated subset of " + ",".join(WINDOWS))
+    # On by default in CI because this repo is PUBLIC and a run's log is public with
+    # it. Printing every held ticker and its returns daily publishes the book's
+    # composition, which is the thing the repo was scrubbed to remove — a return is
+    # public information, the list of instruments someone holds is not. Redacted mode
+    # keeps the counts and the findings (a finding has to name its instrument to be
+    # worth anything) and drops the per-instrument table.
+    ap.add_argument("--redact", action="store_true",
+                    default=bool(os.environ.get("CI")),
+                    help="suppress the per-instrument table (default: on under CI)")
+    ap.add_argument("--no-redact", dest="redact", action="store_false",
+                    help="print the full table even under CI")
     args = ap.parse_args()
+    os.chdir(REPO)
+    os.environ.setdefault("TARZAN_DISABLE_AI", "1")
     windows = ([w.strip() for w in args.windows.split(",") if w.strip()]
                or list(WINDOWS))
+
+    def say(line: str) -> None:
+        """Print unless redacted. Every line that NAMES an instrument goes
+        through here; counts and findings print unconditionally."""
+        if not args.redact:
+            print(line)
+
+    if args.redact:
+        print("redacted mode: per-instrument detail is suppressed "
+              "(public repo, public log)")
 
     import tarzan.runtime as rt
     rt.allows_live_transport = lambda: True
@@ -208,11 +265,40 @@ def main() -> int:
     from tarzan.data.enricher import _fetch_history
     from tarzan.export.newsletter import render_newsletter
 
+    # The SAME input resolution the send uses, not a hardcoded path: in CI the book
+    # is not in the repo at all (only the taxonomy is tracked) and comes from the
+    # private Drive folder, so hardcoding ``input/`` verified nothing there. Sharing
+    # ``resolve_inputs`` also means this checks the book the newsletter actually
+    # renders rather than a second, possibly staler copy of it.
+    from tarzan.delivery import _seed_manual_proxies, resolve_inputs
+
+    # Its local defaults are ``.private/``; this tree keeps the book in ``input/``.
+    # Fill in the documented overrides only when unset and the file is there, so
+    # Drive mode and an explicit override both still win.
+    if not (os.environ.get("DRIVE_FOLDER_ID")
+            and os.environ.get("GOOGLE_DRIVE_CREDENTIALS_JSON")):
+        for var, path in (("ORDERS_PATH", "input/order_list.csv"),
+                          ("TARGETS_PATH", "input/targets.csv"),
+                          ("TARGETS_PER_HOLDING_PATH",
+                           "input/targets_per_holding.csv")):
+            if not os.environ.get(var) and Path(path).exists():
+                os.environ[var] = path
+    inputs = resolve_inputs()
+    say(f"    inputs: orders={inputs['orders']}")
+
     print("running the pipeline (one run; every figure below comes from it)...")
     metrics, config = orchestrator.run(
-        config_source="input/targets.csv",
-        orders_source="input/order_list.csv",
-        targets_per_holding_source="input/targets_per_holding.csv")
+        config_source=inputs["config"],
+        orders_source=inputs["orders"],
+        targets_per_holding_source=inputs["targets_per_holding"])
+
+    # Mirrors the send: the carry/CTA sleeves need their manual index levels before
+    # render. Never fatal here — a missing proxy is not a wrong return figure, and
+    # failing the oracle over one would teach us to ignore it.
+    try:
+        _seed_manual_proxies()
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"    (manual proxies unavailable: {exc})")
 
     html = render_newsletter(
         metrics, config,
@@ -260,7 +346,7 @@ def main() -> int:
         engine_by_bare[bare] = row
     dupes = {b: v for b, v in ambiguous.items() if len(v) > 1}
     if dupes:
-        print(f"    two listings for: {dupes} (the held one is compared)")
+        say(f"    two listings for: {dupes} (the held one is compared)")
 
     # The row's first cell is the ticker glued to the abbreviated name
     # ("CL2Amu. MSCI USA (2x) Lev. [EUR]"), so a greedy [A-Z0-9]+ swallowed the
@@ -302,7 +388,7 @@ def main() -> int:
     print(f"    {checked} figures compared, "
           f"{len([f for f in findings if f.startswith('RENDER')])} disagreeing")
     if unmatched:
-        print(f"    unmatched rows (not checked): {unmatched}")
+        say(f"    unmatched rows (not checked): {unmatched}")
 
     # ── 2. engine vs yahoo ──────────────────────────────────────────────────
     tickers = sorted({str(r.get("ticker") or "") for _i, r in hp.iterrows()
@@ -319,14 +405,33 @@ def main() -> int:
         sample = rnd.sample(pool, min(3, len(pool)))
 
     print(f"\n[2] ENGINE vs YAHOO  ({len(sample)} instruments x {len(windows)} windows)")
-    print(f"    sample: {', '.join(sample)}")
-    from tarzan.data.market_quotes import _fetch_official_quotes
+    say(f"    sample: {', '.join(sample)}")
+    from tarzan.data.current_session import pick_quote, stamp_date
+    from tarzan.data.market_quotes import _sibling_symbols, official_quotes
     inconclusive = []
     # How current is a source frame? Not "days from today" — a Monday run is three days
-    # from Friday's close and perfectly current. What matters is whether THIS listing's
-    # frame is behind the others in the same run: our tape is patched to the published
-    # price, so a frame that stopped earlier than its peers cannot referee it, and
-    # every window would "disagree" by whatever happened after it went quiet.
+    # from Friday's close and perfectly current. And NOT "behind its peers in this run"
+    # either, which is what this asked first and got wrong: that is a RELATIVE test, so
+    # a sample whose frames are all equally stale reads as all current. Measured on a
+    # Saturday run: Yahoo's daily frames for three Milan listings all stopped on Wed
+    # 2 Sep while the last session was Fri 4 Sep, every frame agreed with every other,
+    # nothing was flagged inconclusive, and all nine comparisons were reported as
+    # findings — 0.10 to 4.25pp of pure endpoint mismatch. A direct yfinance pull
+    # confirmed the frames, so this was the oracle, not the cache and not the engine.
+    #
+    # The reference is the date the engine's tape actually ENDS on, which is neither
+    # the frame's own end nor the calendar's last session. The calendar is absolute but
+    # answers the wrong question: at 08:30, before Milan opens, "the venue's last
+    # session" is today while nothing has traded, so every frame would look a session
+    # behind and every window would abstain every day -- the check would run daily and
+    # decide nothing.
+    #
+    # ``current_session.stamp_date`` is the production function that decides which
+    # session a published quote belongs to, from the observation on the venue's own
+    # clock. Handed the same quote, it returns the very date the engine stamped. So:
+    # equal dates means both sides measured to the same close and the comparison is
+    # real; a frame behind it means the engine measured to a later point and the source
+    # cannot referee. Pre-open that date IS yesterday, so the morning run decides.
     frames = {}
     for tk in sample:
         f = _fetch_history(tk)
@@ -340,28 +445,58 @@ def main() -> int:
     # ``.MI`` one Europe/Rome, and ``bdate_range`` refuses two tz-aware endpoints in
     # different zones. A session date has no zone to disagree about.
     newest = max(c.index[-1].date() for c in frames.values())
-    print(f"    newest source close in this run: {newest}")
+    # The run's own clock, not the system's: a pinned run must judge staleness against
+    # the date it is pretending to be, or it decides differently on every replay.
+    today = pd.Timestamp(rt.today()).date()
+    print(f"    newest source close in this run: {newest}  (run date {today})")
 
     for tk in sample:
         closes = frames.get(tk)
         if closes is None or closes.dropna().empty:
             findings.append(f"YAHOO {tk}: no closes returned")
             continue
-        quote = _fetch_official_quotes([tk]).get(tk) or {}
+        last_day = closes.dropna().index[-1].date()
+        reference = float(closes.dropna().iloc[-1])
+        # Resolve the quote the way PRODUCTION does, not by asking the canonical symbol.
+        # ``pick_quote`` takes the first candidate whose level agrees with the
+        # instrument's own last close, which is what rejects a corrupt feed: this
+        # book holds a listing whose quote endpoint returns 25.515 against its own
+        # 28.82 frame — 11.5% out, a split reflected in one feed and not the other —
+        # and the engine prices it from the sibling venue instead.
+        #
+        # Asking the canonical symbol made the oracle quote the very feed production
+        # refuses, and produced six findings on that one instrument: its "Yahoo" 1D was
+        # 25.515/25.805 = -1.12% while the engine's coherent pair gave -0.76%. The
+        # engine was right and the oracle was reading garbage.
+        candidates = [tk, *_sibling_symbols(tk)]
+        cand_quotes = official_quotes(candidates)
+        quote = pick_quote(candidates, cand_quotes, reference)
+        source_symbol = next(
+            (c for c in candidates
+             if (cand_quotes.get(c) or {}).get("price")
+             and quote and (cand_quotes.get(c) or {}).get("price") == quote.get("price")),
+            tk)
         row = next((r for _i, r in hp.iterrows()
                     if str(r.get("ticker") or "") == tk), None)
-        last_day = closes.dropna().index[-1].date()
-        behind = max(0, len(pd.bdate_range(last_day, newest)) - 1)
-        note = "" if behind <= 0 else f"   [frame {behind} session(s) behind its peers]"
-        # A source whose own frame has stopped cannot referee our figure. Our tape is
-        # patched to today from the published pair (and from a sibling venue when the
-        # canonical listing is dormant), so every window would "disagree" by whatever
-        # happened after the source went quiet. Measured on the dormant listing: five
-        # windows off by 0.37-1.56pp, all of it the source being days behind.
-        source_stale = behind > 0
-        print(f"\n    {tk}   last close {last_day} "
+        # None when the quote belongs on no session, which means the engine stamped
+        # nothing and its tape ends where this frame does — comparable.
+        stamped = stamp_date(quote, today, tk)
+        engine_end = stamped.date() if stamped is not None else last_day
+        # When production had to leave the canonical venue, no single frame reproduces
+        # our tape: it is this listing's own history with a SIBLING's close on the end.
+        # Comparing it against either venue's frame is apples to oranges at the
+        # endpoint (0.17% apart here), so the multi-day windows abstain and say why.
+        # This is worth reading, not hiding: it means the canonical quote is unusable.
+        cross_venue = source_symbol != tk
+        source_stale = not source_can_referee(last_day, engine_end, "3m")
+        note = "".join([
+            "" if not source_stale else
+            f"   [frame stops {last_day}; the tape is stamped to {engine_end}]",
+            "" if not cross_venue else
+            f"   [canonical quote rejected; priced from {source_symbol}]"])
+        say(f"\n    {tk}   last close {last_day} "
               f"= {float(closes.dropna().iloc[-1]):.4f}{note}")
-        print(f"      {'window':<6}{'engine':>11}{'yahoo':>11}{'gap':>9}  anchor / why")
+        say(f"      {'window':<6}{'engine':>11}{'yahoo':>11}{'gap':>9}  anchor / why")
         for w in windows:
             theirs, anchor, verdict = _yahoo_period_return(closes, w, quote)
             ours = None if row is None else row.get(w)
@@ -369,15 +504,24 @@ def main() -> int:
                 ours = None
             gap = (None if None in (ours, theirs) else float(ours) - theirs)
             tail = anchor or "—" if verdict == "ok" else f"INDECIDIBILE: {verdict}"
-            print(f"      {w:<6}"
+            say(f"      {w:<6}"
                   f"{('—' if ours is None else f'{float(ours):+.4f}%'):>11}"
                   f"{('—' if theirs is None else f'{theirs:+.4f}%'):>11}"
                   f"{('—' if gap is None else f'{gap:+.4f}'):>9}  {tail}")
-            if source_stale:
+            if not source_can_referee(last_day, engine_end, w):
                 inconclusive.append(
-                    f"{tk} {w}: the source's frame is {behind} session(s) behind its "
-                    f"peers (stops {last_day}), so it cannot referee a tape patched "
-                    f"to the published price")
+                    f"{tk} {w}: the source's frame stops {last_day} while the tape is "
+                    f"stamped to {engine_end}, so the two measure to different "
+                    f"closes")
+                continue
+            # 1D stays decidable: it is compared against the coherent published pair,
+            # which is the very pair the engine used.
+            if cross_venue and w != "1d":
+                inconclusive.append(
+                    f"{tk} {w}: its canonical quote failed the coherence gate and the "
+                    f"price came from {source_symbol}, so our tape is this venue's "
+                    f"history ending on another venue's close — no single frame "
+                    f"reproduces it")
                 continue
             if verdict != "ok":
                 inconclusive.append(f"{tk} {w}: {verdict}")
@@ -392,7 +536,16 @@ def main() -> int:
         print(f"{len(inconclusive)} comparison(s) the oracle cannot decide "
               f"(the SOURCE's own frame is incomplete, not our figure):")
         for i in inconclusive:
-            print(f"  ? {i}")
+            say(f"  ? {i}")
+        if args.redact:
+            # The reasons are not private — dates and vendor gaps are not positions —
+            # and without them a fully-abstaining run is indistinguishable from a
+            # broken one. So the REASONS print, grouped, with the instruments stripped.
+            reasons: dict[str, int] = {}
+            for i in inconclusive:
+                reasons[i.split(": ", 1)[-1]] = reasons.get(i.split(": ", 1)[-1], 0) + 1
+            for reason, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+                print(f"  ? x{n}: {reason}")
         print()
     if findings:
         print(f"{len(findings)} FINDING(S)")
