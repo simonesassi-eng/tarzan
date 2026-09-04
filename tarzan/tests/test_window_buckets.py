@@ -454,7 +454,9 @@ class TestTheTargetGetsItsSessionToo:
 
     def test_a_seed_not_yet_owned_still_counts_toward_the_target(self):
         """Nearly a quarter of a real target can sit in instruments not owned yet.
-        They are in ``target_weights``, so their bars are required — and used."""
+        They are in ``target_weights``, so their weight counts either way: with bars
+        it shapes the line, without them it dilutes it — the same treatment the
+        valuation gives a sleeve it cannot quote."""
         from tarzan.export._palette import PALETTE
 
         weights = {"AAA.MI": 50.0, "SEED.MI": 50.0}
@@ -464,19 +466,26 @@ class TestTheTargetGetsItsSessionToo:
             target_weights=weights, quoted=("AAA.MI", "BENCH.MI")))
 
         assert f'stroke="{PALETTE["target"]}"' in with_seed
-        assert f'stroke="{PALETTE["target"]}"' not in without, (
-            "a target missing half its weight was drawn anyway")
+        # Drawn either way now. Withholding it here was an asymmetry with the
+        # PORTFOLIO line, which has always blended on over a symbol it could not
+        # quote — one panel drawing its own line and hiding the other's.
+        assert f'stroke="{PALETTE["target"]}"' in without
 
-    def test_partial_coverage_draws_no_target_rather_than_a_renormalised_one(self):
+    def test_partial_coverage_dilutes_the_target_rather_than_withholding_it(self):
+        """The rule this used to assert the opposite of.
+
+        A sleeve with no session is marked at its previous close, so it moved 0% — not
+        "unknown". Refusing the whole allocation over it treated the two as the same
+        thing, and on the reference book that cost the target line for a 5% sleeve
+        Yahoo did not return while the eight others had bars.
+        """
         from tarzan.export._palette import PALETTE
 
         cell = self._cell(self._metrics(
             target_weights={"AAA.MI": 60.0, "BBB.MI": 40.0},
             quoted=("AAA.MI", "BENCH.MI")))          # BBB has no session
 
-        assert f'stroke="{PALETTE["target"]}"' not in cell
-        # ...and the portfolio and benchmark still are: one missing reference does
-        # not cost the cell its other lines.
+        assert f'stroke="{PALETTE["target"]}"' in cell
         assert f'stroke="{PALETTE["port"]}"' in cell
         assert f'stroke="{PALETTE["bench"]}"' in cell
 
@@ -636,7 +645,7 @@ class TestTheGateVerifiesTheOneDayPanelToo:
 
         errors = self._errors(m, audit, html)
 
-        assert any("legend uses a different endpoint" in e for e in errors), errors
+        assert any("legend uses a different figure" in e for e in errors), errors
 
     def test_a_visible_label_that_rounds_to_the_wrong_figure_is_caught(self, monkeypatch):
         m, audit, html = self._render(monkeypatch)
@@ -683,15 +692,19 @@ class TestTheGateVerifiesTheOneDayPanelToo:
 
         assert any("unavailable window" in e for e in errors), errors
 
-    def test_a_target_withheld_for_partial_coverage_is_not_demanded(self, monkeypatch):
-        """The gate recomputes through the same all-or-nothing rule, so a target
-        the renderer correctly refused is not reported as a dropped line."""
-        m, audit, html = self._render(monkeypatch)
-        m.intraday_quotes.pop("BBB.MI")           # half the target loses its bars
+    def test_a_target_diluted_by_a_missing_sleeve_is_still_verified(self, monkeypatch):
+        """The gate recomputes through the same rule, so a target the renderer drew
+        over partial coverage is verified rather than reported as an extra line.
+
+        This asserted the opposite until the rule changed: a sleeve with no session
+        contributes 0% instead of withholding the allocation, so the target IS drawn
+        and the gate has to check it.
+        """
         m2, audit2, html2 = self._render(
             monkeypatch, weights={"AAA.MI": 60.0, "ZZZ.MI": 40.0})
 
-        assert audit2["performance_windows"]["1d"]["drawn"] == ["twror", "acwi"]
+        assert audit2["performance_windows"]["1d"]["drawn"] == [
+            "twror", "target", "acwi"]
         assert self._errors(m2, audit2, html2) == []
 
 
@@ -845,3 +858,232 @@ class TestTheTargetsOwnSleevesAreRequestedIntraday:
                   if "candidates differ" in e]
 
         assert errors, "the gate went blind to a dropped target sleeve"
+
+
+class TestAnInstrumentThatHasNotTradedContributesZero:
+    """"No bars yet" is not missing data.
+
+    An instrument that has not traded today is marked at its previous close, so its
+    contribution to the session is exactly ZERO — and the quote carries that close:
+    ``intraday_feeds`` emits ``intraday_baseline`` on its no-bars branch precisely
+    because it is the pill's reference.
+
+    Treating that as unknown cost the 1D target line for the first hours of a session:
+    nine sleeves include thin funds that print late, and the blend refused the whole
+    allocation while every one of its inputs was known. The weight belongs in the
+    denominator and adds nothing to the numerator, which IS a flat 0% line — without
+    fabricating timestamps for one.
+    """
+
+    STAMPS = pd.date_range("2026-09-04 08:00", periods=4, freq="30min", tz="UTC")
+
+    @classmethod
+    def _bars(cls, base, drift):
+        return {"intraday_series": pd.Series(
+            [base * (1 + drift * i / 100.0) for i in range(len(cls.STAMPS))],
+            index=cls.STAMPS), "intraday_baseline": base}
+
+    @staticmethod
+    def _quiet(base):
+        """Held and valued, but no print today — the real no-bars shape."""
+        return {"intraday_series": None, "intraday_baseline": base}
+
+    def test_a_quiet_sleeve_no_longer_withholds_the_whole_allocation(self):
+        from tarzan.export.newsletter._sections_perf import _intraday_weighted_path
+
+        quotes = {"AAA.MI": self._bars(100.0, 1.0), "BBB.MI": self._quiet(50.0)}
+
+        path = _intraday_weighted_path(quotes, {"AAA.MI": 50.0, "BBB.MI": 50.0})
+
+        assert path is not None
+
+    def test_it_dilutes_rather_than_disappearing(self):
+        """Half the book up 3% and half not trading is +1.5%, not +3%."""
+        from tarzan.export.newsletter._sections_perf import _intraday_weighted_path
+
+        quotes = {"AAA.MI": self._bars(100.0, 1.0), "BBB.MI": self._quiet(50.0)}
+        both = _intraday_weighted_path(quotes, {"AAA.MI": 50.0, "BBB.MI": 50.0})
+        alone = _intraday_weighted_path(quotes, {"AAA.MI": 50.0})
+
+        assert float(alone.iloc[-1]) == pytest.approx(3.0, abs=1e-9)
+        assert float(both.iloc[-1]) == pytest.approx(1.5, abs=1e-9)
+
+    def test_a_sleeve_absent_from_the_catalog_also_contributes_zero(self):
+        """One rule, whatever the cause. A symbol Yahoo did not return at all is
+        marked at its previous close by the valuation just as a quiet one is, so the
+        chart says the same thing. Refusing here while the PORTFOLIO line blended on
+        was an asymmetry that withheld the target over a 5% sleeve while the eight
+        others had bars."""
+        from tarzan.export.newsletter._sections_perf import _intraday_weighted_path
+
+        quotes = {"AAA.MI": self._bars(100.0, 1.0)}      # BBB.MI absent entirely
+
+        path = _intraday_weighted_path(quotes, {"AAA.MI": 50.0, "BBB.MI": 50.0})
+
+        assert path is not None
+        assert float(path.iloc[-1]) == pytest.approx(1.5, abs=1e-9)
+
+    def test_with_nothing_drawable_at_all_there_is_still_no_line(self):
+        """The floor that remains: no sleeve with a session is no session to draw."""
+        from tarzan.export.newsletter._sections_perf import _intraday_weighted_path
+
+        assert _intraday_weighted_path(
+            {"AAA.MI": self._quiet(100.0)}, {"AAA.MI": 100.0}) is None
+        assert _intraday_weighted_path({}, {"AAA.MI": 100.0}) is None
+
+    @pytest.mark.parametrize("quote", [{"intraday_series": None,
+                                        "intraday_baseline": None},
+                                       {"intraday_series": None,
+                                        "intraday_baseline": 0.0},
+                                       {"intraday_series": None,
+                                        "intraday_baseline": "n/a"}])
+    def test_an_unusable_baseline_dilutes_like_any_other_quiet_sleeve(self, quote):
+        """A malformed quote is no more informative than an absent one, and no less:
+        either way the sleeve has no session and its mark is its previous close."""
+        from tarzan.export.newsletter._sections_perf import _intraday_weighted_path
+
+        quotes = {"AAA.MI": self._bars(100.0, 1.0), "BBB.MI": quote}
+
+        path = _intraday_weighted_path(quotes, {"AAA.MI": 50.0, "BBB.MI": 50.0})
+
+        assert path is not None
+        assert float(path.iloc[-1]) == pytest.approx(1.5, abs=1e-9)
+
+    def test_the_portfolio_blend_follows_the_same_rule(self):
+        """Both lines in the 1D cell must treat a quiet holding the same way. The
+        portfolio path used to skip it, renormalising over the holdings that HAD
+        traded — which overstates the day rather than diluting it."""
+        from tarzan.models.portfolio import PortfolioMetrics
+        from tarzan.export.newsletter._sections_perf import (
+            _portfolio_intraday_series,
+        )
+
+        m = PortfolioMetrics(
+            total_value=1000.0, invested_value=1000.0,
+            holdings_df=pd.DataFrame([
+                {"ticker": "AAA.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0},
+                {"ticker": "BBB.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0}]))
+        m.intraday_quotes = {"AAA.MI": self._bars(100.0, 1.0),
+                             "BBB.MI": self._quiet(50.0)}
+
+        level = _portfolio_intraday_series(m)
+
+        assert level is not None
+        assert float(level.iloc[-1]) - 100.0 == pytest.approx(1.5, abs=1e-9)
+
+
+class TestTheOneDayLabelComesFromTheTape:
+    """The convention the rest of the newsletter already follows.
+
+    Every per-row 1D cell — RETURNS holdings, the Watchlist, Target instruments — puts
+    a TAPE figure in its pill and uses the bars only for the sparkline's shape, and the
+    portfolio row takes its pill from the NAV. None of them reads the end of a drawn
+    line. The 1D grid cell was the single exception, and that is what let one sleeve
+    spoil its number: a symbol the quote catalog did not return contributes nothing to
+    a blended path, so the drawn end was short by its weight times its move — while
+    that sleeve's own 1D was known and printed two sections above.
+
+    So the bars say WHEN the day moved and the tape says BY HOW MUCH.
+    """
+
+    @staticmethod
+    def _metrics(*, quoted, moves):
+        """``moves`` is the tape's 1D per ticker, ``quoted`` who has bars."""
+        import numpy as np
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        idx = pd.date_range("2025-08-01", "2026-09-04", freq="B")
+        n = len(idx)
+        wob = 1 + 0.01 * np.sin(np.arange(n) / 5)
+        m = PortfolioMetrics(
+            total_value=1000.0, invested_value=1000.0,
+            holdings_df=pd.DataFrame([
+                {"ticker": "AAA.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0},
+                {"ticker": "BBB.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0}]))
+        m.pnl_eur, m.pnl_pct, m.twror_pct = 100.0, 10.0, 9.0
+        m.actual_value_series = pd.Series(np.linspace(900, 1000, n) * wob, index=idx)
+        m.pnl_series = pd.Series(np.linspace(0, 100, n) * wob, index=idx)
+        m.portfolio_history = pd.Series(np.linspace(100, 109, n) * wob, index=idx)
+        m.benchmark_histories = {"B": pd.Series(
+            np.linspace(200, 230, n) * wob, index=idx)}
+        m.benchmark_tickers = {"B": "BENCH.MI"}
+        m.target_weights = {"AAA.MI": 50.0, "BBB.MI": 50.0}
+        m.holding_performance = pd.DataFrame(
+            [{"ticker": t, "1d": v} for t, v in moves.items()])
+
+        stamps = pd.date_range("2026-09-04 08:00", periods=5, freq="30min", tz="UTC")
+
+        def _bars(base, drift):
+            return {"intraday_series": pd.Series(
+                [base * (1 + drift * i / 100.0) for i in range(len(stamps))],
+                index=stamps), "intraday_baseline": base}
+
+        m.intraday_quotes = {t: _bars(100.0, 0.25) for t in quoted}
+        return m
+
+    def test_the_target_label_is_the_weighted_tape_move(self):
+        """AAA +1.0% and BBB −3.0%, equally weighted, is −1.0% — whatever the bars
+        of whichever sleeve happened to report."""
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BENCH.MI"),
+                          moves={"AAA.MI": 1.0, "BBB.MI": -3.0})
+
+        win = _perf_intraday_window(m, "B")
+
+        assert win is not None
+        assert win["labels"]["target"] == pytest.approx(-1.0, abs=1e-9)
+
+    def test_and_it_differs_from_the_drawn_end(self):
+        """The whole reason for the split: BBB has no bars, so the drawn path carries
+        only AAA diluted by BBB's weight, while the label carries both moves."""
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BENCH.MI"),
+                          moves={"AAA.MI": 1.0, "BBB.MI": -3.0})
+
+        win = _perf_intraday_window(m, "B")
+
+        assert win["labels"]["target"] != pytest.approx(
+            win["endpoints"]["target"], abs=1e-6)
+
+    def test_the_portfolio_label_is_the_navs_own_move(self):
+        """The same figure the matrix row and the Session tile print, so the panel
+        cannot disagree with the two things beside it."""
+        from tarzan.engine.stats import compute_period_return
+        from tarzan.export._perf_series import _norm_series
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BBB.MI", "BENCH.MI"),
+                          moves={"AAA.MI": 1.0, "BBB.MI": -3.0})
+
+        win = _perf_intraday_window(m, "B")
+        expected = compute_period_return(
+            _norm_series(m.portfolio_history).dropna(), "1d")
+
+        assert win["labels"]["twror"] == pytest.approx(expected, abs=1e-9)
+
+    def test_a_sleeve_with_no_tape_move_is_left_out_of_both_sides(self):
+        """The one place renormalising is right: no figure is reported for it at all,
+        so there is nothing to include and nothing to assume."""
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BBB.MI", "BENCH.MI"),
+                          moves={"AAA.MI": 2.0})          # BBB absent from hp
+
+        win = _perf_intraday_window(m, "B")
+
+        assert win["labels"]["target"] == pytest.approx(2.0, abs=1e-9)
+
+    def test_a_line_that_is_not_drawn_gets_no_label(self):
+        """Labelling a series the panel did not draw is worse than the figure being
+        absent — and the gate would then demand a line nothing rendered."""
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BBB.MI"),      # no benchmark bars
+                          moves={"AAA.MI": 1.0, "BBB.MI": -3.0})
+
+        win = _perf_intraday_window(m, "B")
+
+        assert win["endpoints"].get("acwi") is None
+        assert "acwi" not in win["labels"]

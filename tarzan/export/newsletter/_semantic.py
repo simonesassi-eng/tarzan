@@ -435,8 +435,16 @@ def validate_newsletter_semantics(
             rendered_endpoints = panel_audit.get("endpoints", {})
             legend_values = panel_audit.get("legend_values", {})
             legend_labels = panel_audit.get("legend_labels", {})
+            # What the LABEL must equal is not always the drawn endpoint. A window may
+            # supply its own authoritative figures — only 1D does — because a blended
+            # session path is short by any sleeve the quote catalog did not return
+            # while that sleeve's own 1D is known from the tape. Every other 1D cell in
+            # the newsletter already labels from the tape, so this checks the
+            # convention the page follows rather than the one the grid used to.
+            expected_labels = dict(expected_window.get("labels") or {})
             for key in sorted(resolvable):
                 expected_value = expected_endpoints.get(key)
+                expected_label = expected_labels.get(key, expected_value)
                 rendered_value = rendered_endpoints.get(key)
                 label_value = legend_values.get(key)
                 label = _text(legend_labels.get(key))
@@ -448,16 +456,16 @@ def validate_newsletter_semantics(
                         f"shared-close endpoint"
                     )
                 if label_value is None or not math.isclose(
-                    float(label_value), float(expected_value), abs_tol=1e-9
+                    float(label_value), float(expected_label), abs_tol=1e-9
                 ):
-                    errors.append(f"{bucket} {key} legend uses a different endpoint")
+                    errors.append(f"{bucket} {key} legend uses a different figure")
                 displayed = _displayed_percent(label)
                 if displayed is None or not math.isclose(
-                    displayed, float(expected_value), abs_tol=0.0051
+                    displayed, float(expected_label), abs_tol=0.0051
                 ):
                     errors.append(
                         f"{bucket} {key} visible label {label!r} disagrees with "
-                        f"endpoint {float(expected_value):+.6f}%"
+                        f"{float(expected_label):+.6f}%"
                     )
                 if label and label not in newsletter_html:
                     errors.append(

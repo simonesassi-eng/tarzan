@@ -17,6 +17,7 @@ from tarzan.export._format import (
 )
 from tarzan.export import _charts as _charts
 from tarzan.export._perf_series import (
+    _geo_benchmark_series,
     _norm_series,
     _perf_full_series,
     _perf_vol_series,
@@ -454,13 +455,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     def _panel(win: Optional[dict], bucket: str) -> tuple[list, list]:
         """``(series, legend)`` for one window, recording the audit as it goes.
 
-        The end label is the endpoint of the exact array handed to the chart —
-        never a generic return bucket read separately — so what is drawn and what
-        is written are one number by construction.
+        The end label is the endpoint of the exact array handed to the chart, so what
+        is drawn and what is written are one number by construction — EXCEPT where the
+        window supplies its own ``labels``, which only 1D does. There the bars say
+        when the day moved and the tape says by how much, because a blended session
+        path is short by any sleeve the quote catalog did not return while that
+        sleeve's own 1D is known and printed in its own row. Every other 1D cell in
+        the newsletter has always taken its figure from the tape; this brings the grid
+        into line rather than out of it.
         """
         if not win:
             return [], []
         endpoints = dict(win.get("endpoints") or {})
+        authoritative = dict(win.get("labels") or {})
         series, legend = [], []
         values: dict[str, float] = {}
         labels: dict[str, str] = {}
@@ -468,7 +475,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             line = win.get(key)
             if line is None or endpoints.get(key) is None:
                 continue
-            value = float(endpoints[key])
+            value = float(authoritative.get(key, endpoints[key]))
             label = _pct(value, signed=True)
             values[key] = value
             labels[key] = label
@@ -882,6 +889,22 @@ def _intraday_quote_parts(quote) -> tuple[object, object]:
     return quote, None
 
 
+def _intraday_baseline_known(quote) -> bool:
+    """Does this quote tell us what the instrument closed at yesterday?
+
+    That is the whole question behind "has it moved today". With a baseline and no
+    bars the answer is a definite ZERO -- the instrument is marked at that close --
+    while without one there is no valuation at all. ``intraday_feeds`` emits the
+    baseline on its no-bars branch for exactly this reason, so the distinction is
+    already carried and only needed reading.
+    """
+    _intra, base = _intraday_quote_parts(quote)
+    try:
+        return float(base) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _intraday_pct_path(quote):
     """One instrument's session as % against its own previous close, or None.
 
@@ -923,10 +946,26 @@ def _intraday_weighted_path(quotes: dict, weights: dict):
             return None
         if weight <= 0:
             continue
-        path = _intraday_pct_path(quotes.get(str(key)))
-        if path is None:
-            return None                              # partial != the allocation
-        paths.append((weight, path))
+        quote = quotes.get(str(key))
+        path = _intraday_pct_path(quote)
+        if path is not None:
+            paths.append((weight, path))
+            total += weight
+            continue
+        # No session data is not a reason to withhold the allocation. Whatever the
+        # cause -- a thin fund that has not printed yet, or a symbol Yahoo did not
+        # return at all -- the sleeve's mark today is its previous close, which is
+        # exactly what the VALUATION does: ``current_session.pick_quote`` rejects an
+        # unusable quote and the tape keeps the last close. So its contribution is
+        # ZERO: the weight divides, and adds nothing to the numerator, which is a flat
+        # 0% line without inventing timestamps for one.
+        #
+        # This is also the rule the PORTFOLIO line has always effectively applied,
+        # and the asymmetry was mine: refusing here while the portfolio blended on
+        # meant one panel drew its own line and withheld the other's over the same
+        # missing symbol. Measured on the reference book: one sleeve of nine (5% of
+        # the target) absent from the quote catalog withheld the whole target line
+        # while all eight others had bars.
         total += weight
     if not paths or total <= 0:
         return None
@@ -943,6 +982,79 @@ def _intraday_weighted_path(quotes: dict, weights: dict):
 #: The lines a 1D panel may draw, keyed as every other window's are, so one gate
 #: loop covers all six. Order is draw order: references after the portfolio.
 _INTRADAY_LINE_KEYS = ("twror", "target", "acwi")
+
+
+def _tape_one_day(m, geo_name: Optional[str] = None) -> dict:
+    """The AUTHORITATIVE 1D per line, from the tape rather than from the bars.
+
+    This is the convention the rest of the project already follows and the 1D grid
+    cell was the only exception to. Every per-row 1D cell in RETURNS, the Watchlist
+    and Target instruments takes its PILL from a tape figure and uses the bars only
+    for the sparkline's shape (``_perf_spark_cell``'s ``day_val`` against its
+    ``intraday_map``); the portfolio row takes its pill from the NAV. None of them
+    reads the end of a drawn line.
+
+    Reading the label off the bars is what let one sleeve spoil it: a symbol the quote
+    catalog did not return contributes nothing to a blended path, so the drawn end was
+    short by its weight times its move, and the label inherited that. The tape knows
+    that instrument's day — it is the number its own row prints — so the label does
+    not have to guess.
+
+    Returns ``{key: pct}`` for the keys this panel draws, any of which may be absent:
+
+    * ``twror``  the NAV's own 1D, the same figure the matrix row and the Session tile
+      carry, so the panel cannot disagree with the two things beside it.
+    * ``target`` the sleeves' 1D weighted by ``target_weights``. No single series
+      exists for it, so it is composed here — and a sleeve whose own 1D is unknown is
+      left out of both sides of the ratio, which is the one place renormalising is
+      right: there is no third option for a figure nothing reports.
+    * ``acwi``   the benchmark's 1D off its own daily history.
+    """
+    from tarzan.engine.stats import compute_period_return
+
+    out: dict[str, float] = {}
+
+    nav = getattr(m, "portfolio_history", None)
+    if nav is not None and len(nav) >= 2:
+        v = compute_period_return(_norm_series(nav).dropna(), "1d")
+        if v is not None:
+            out["twror"] = float(v)
+
+    hp = getattr(m, "holding_performance", None)
+    per_ticker: dict[str, float] = {}
+    if hp is not None and not getattr(hp, "empty", True) and "ticker" in hp.columns:
+        for _i, row in hp.iterrows():
+            try:
+                val = row.get("1d")
+                if val is None or (isinstance(val, float) and val != val):
+                    continue
+                per_ticker[str(row.get("ticker", ""))] = float(val)
+            except (TypeError, ValueError):
+                continue
+
+    weights = getattr(m, "target_weights", {}) or {}
+    num = den = 0.0
+    for key, weight in weights.items():
+        try:
+            weight = float(weight or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if weight <= 0:
+            continue
+        move = per_ticker.get(str(key))
+        if move is None:
+            continue
+        num += weight * move
+        den += weight
+    if den > 0:
+        out["target"] = num / den
+
+    bench = _geo_benchmark_series(m, geo_name)
+    if bench is not None and len(bench) >= 2:
+        v = compute_period_return(bench.dropna(), "1d")
+        if v is not None:
+            out["acwi"] = float(v)
+    return out
 
 
 def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
@@ -1021,6 +1133,15 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     if all(v is None for v in endpoints.values()):
         return None
     out["endpoints"] = endpoints
+    # The figures the panel PRINTS, which are not the ends of the drawn lines: the
+    # bars say WHEN the day moved, the tape says BY HOW MUCH. Every other 1D cell in
+    # the newsletter already works this way — see ``_tape_one_day`` — and reading the
+    # label off the bars was what let a single unreturned symbol shift it. Only for
+    # keys the panel actually drew: labelling a line that is not there is worse than
+    # the figure being absent.
+    tape = _tape_one_day(m, geo_name)
+    out["labels"] = {k: tape[k] for k in _INTRADAY_LINE_KEYS
+                     if k in tape and endpoints.get(k) is not None}
     out["window_start"] = axis[0]
     out["window_end"] = axis[-1]
     out["source_end_dates"] = {"portfolio": axis[-1], "benchmark": axis[-1]}
@@ -1189,6 +1310,7 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
     if not intraday_map:
         return None
     paths = []  # (weight, pct-path indexed by timestamp)
+    flat_weight = 0.0   # held, valued, but has not traded today: contributes 0%
     for ticker_value, weight in zip(df["ticker"], df["weight_pct"]):
         if weight is None:
             continue
@@ -1196,6 +1318,12 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
         quote = intraday_map.get(ticker)
         intra, feed_baseline = _intraday_quote_parts(quote)
         if intra is None or len(intra) < 2:
+            # Skipping outright renormalised the blend over the holdings that HAD
+            # traded, which overstates the day: a position marked at its previous
+            # close moved 0%, it did not vanish from the book. Its weight belongs in
+            # the denominator — the same rule the target blend applies, so the two
+            # lines in one cell cannot disagree about a quiet holding.
+            flat_weight += float(weight)
             continue
         day_return = raw1d.get(ticker)
         try:
@@ -1235,6 +1363,8 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
         pp = p.reindex(idx).ffill().bfill()
         agg = pp * w if agg is None else agg + pp * w
         wsum += w
+    # The non-traders' weight divides but does not add: that IS their flat 0%.
+    wsum += flat_weight
     if agg is None or wsum <= 0:
         return None
     port_pct = agg / wsum
