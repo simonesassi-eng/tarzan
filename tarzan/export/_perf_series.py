@@ -139,7 +139,8 @@ def _window_twror(nav: Optional[pd.Series], bucket: str) -> Optional[float]:
     return compute_period_return(s, bucket)
 
 
-def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | None":
+def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex",
+                      *, blank_lead_in: bool = False) -> "list | None":
     """Rebase a level series over exactly the dates spanned by ``idx``.
 
     The denominator is the first real source observation inside the window;
@@ -153,6 +154,16 @@ def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | Non
     close on-or-before the trailing cutoff), so ``idx[0]`` is already the same
     reference every return table column uses — no per-series anchor override is
     needed here.
+
+    ``blank_lead_in`` leaves the stretch BEFORE the series' first in-window
+    observation as NaN instead of flattening it onto the anchor. Opt-in, because
+    every line on every panel comes through here and the flattening is right for
+    almost all of them: a source that merely skipped a session should not tear its
+    own line in half. It is wrong for a series that genuinely does not exist yet —
+    a target holding a fund four months old, drawn on a YTD window — where a flat
+    run at 0% reads as "it went nowhere" across eight months it never saw.
+    ``chart_pct_compact`` already draws one polyline per contiguous FINITE run, so
+    a NaN lead-in becomes a gap rather than a claim.
     """
     a = _norm_series(araw)
     if a is None:
@@ -171,9 +182,12 @@ def _rebase_to_window(araw: "pd.Series", idx: "pd.DatetimeIndex") -> "list | Non
         a.reindex(a.index.union(idx)).sort_index().ffill().reindex(idx)
     )
     # Leading target dates before the first in-window observation start at the
-    # anchor (0%) rather than carrying a stale pre-window source value.
+    # anchor (0%) rather than carrying a stale pre-window source value — unless the
+    # caller asked for the gap, in which case they stay NaN and the chart breaks the
+    # line there.
     lead = aligned.index < in_win.index[0]
-    aligned = aligned.mask(lead, anchor).bfill()
+    aligned = (aligned.mask(lead, float("nan")) if blank_lead_in
+               else aligned.mask(lead, anchor).bfill())
     return list(((aligned / anchor - 1.0) * 100.0).values.astype(float))
 
 
@@ -191,10 +205,19 @@ def _geo_benchmark_series(m: PortfolioMetrics, geo_name: Optional[str]) -> "pd.S
 def _target_line(m: PortfolioMetrics, idx) -> "list | None":
     """The target allocation's cumulative return over ``idx``, or None.
 
-    None when the target's own common window opens after the chart does: a
-    shorter series would be drawn flat at 0% across the lead-in by
-    ``_rebase_to_window``, which reads as "the target went nowhere" for a
-    stretch it simply does not cover.
+    Drawn from wherever the target's own series starts, with the stretch before that
+    left BLANK. It used to be withheld entirely when the target opened after the
+    chart, because ``_rebase_to_window`` flattened the lead-in onto the anchor and a
+    run at 0% reads as "the target went nowhere" across months it never saw. Blanking
+    that stretch says the true thing instead — the target exists from here — and it is
+    the honest answer for a target that names a young fund: measured on the reference
+    book, one sleeve four months old truncated the common window to 83 days, which
+    silently removed the target from YTD, 1Y, since-inception and both volatility
+    panels at once.
+
+    ``target_history`` is the INTERSECTION of its sleeves' histories, so the youngest
+    sleeve sets that start date for the whole allocation. Nothing here can widen it;
+    what this decides is only whether the part that does exist gets drawn.
     """
     raw = getattr(m, "target_history", None)
     if raw is None or len(raw) < 2 or len(idx) < 2:
@@ -202,9 +225,9 @@ def _target_line(m: PortfolioMetrics, idx) -> "list | None":
     s = _norm_series(raw).replace(
         [float("inf"), float("-inf")], float("nan")
     ).dropna()
-    if len(s) < 2 or s.index[0] > pd.Timestamp(idx[0]):
+    if len(s) < 2:
         return None
-    return _rebase_to_window(s, pd.DatetimeIndex(idx))
+    return _rebase_to_window(s, pd.DatetimeIndex(idx), blank_lead_in=True)
 
 
 def _perf_window(m: PortfolioMetrics, n_days: int = 30,
@@ -601,23 +624,26 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     }
 
     def _bench_vol(full):
-        """A reference line's rolling vol over ``idx``, or None.
+        """A reference line's rolling vol over ``idx``, or None when it holds no
+        estimate at all inside the window.
 
-        Demands a real full-window estimate at the chart's LEFT EDGE, not merely
-        a series that starts before it: a reference whose own history opens
-        inside the window would otherwise be back-filled with its first
-        computable figure across a stretch it says nothing about.
+        It used to demand a full-window estimate at the chart's LEFT EDGE, on the
+        stated grounds that a reference opening inside the window "would otherwise be
+        back-filled with its first computable figure across a stretch it says nothing
+        about". Measured: it would not. ``_line`` reindexes with ``method="ffill"``,
+        which fills FORWARD only, so dates before the first estimate stay NaN — 114 of
+        176 on a reference opening mid-window — and ``chart_pct_compact`` breaks its
+        polyline there. The back-fill that justified the demand is not in this code.
+
+        So the demand is gone, and what it was costing is the whole point: a target
+        naming a fund four months old lost its volatility line on every panel wider
+        than its own life, when the part that exists was drawable all along. The
+        remaining guard is ``_line``'s — a series with nothing finite anywhere is not
+        a line — which is the real failure this protects against.
         """
         if full is None or len(full) < vol_window + 1:
             return None
-        v = _rolling_ann_vol(full, vol_window)
-        opens = v.first_valid_index()
-        if opens is None or opens > pd.Timestamp(idx[0]):
-            return None
-        # Same rule as the portfolio line: the left-edge demand above proves the
-        # reference OPENS before the window, not that it says anything inside one
-        # — an interior gap in its own history still lands a NaN on idx[0].
-        return _line(v)
+        return _line(_rolling_ann_vol(full, vol_window))
 
     return {"dates": list(idx), "port": port, "acwi": _bench_vol(acwi_full),
             "target": _bench_vol(target_full), "span": span,

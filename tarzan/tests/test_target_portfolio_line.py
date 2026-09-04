@@ -192,12 +192,33 @@ class TestTheTargetLineNeverFakesItsLeadIn:
         assert line is not None and len(line) == len(idx)
         assert line[0] == pytest.approx(0.0, abs=1e-9)   # rebased on the window
 
-    def test_a_target_opening_inside_the_window_is_withheld(self):
-        """``_rebase_to_window`` fills the uncovered lead-in with the anchor, so
-        a late-starting target would be drawn as a flat 0% run — a stretch of
-        "the target went nowhere" that is really "no data"."""
+    def test_a_target_opening_inside_the_window_is_blank_before_it_starts(self):
+        """The property this has always protected: the uncovered stretch must not read
+        as "the target went nowhere". It used to be protected by withholding the whole
+        line, which cost the target on every panel wider than its own life. Now the
+        lead-in is NaN and ``chart_pct_compact`` breaks its polyline there, so the
+        stretch says nothing instead of saying zero.
+        """
+        import math
+
         idx = pd.date_range("2026-07-20", "2026-08-20", freq="B")
-        assert _target_line(self._metrics("2026-08-05"), idx) is None
+        line = _target_line(self._metrics("2026-08-05"), idx)
+
+        assert line is not None and len(line) == len(idx)
+        first = next(i for i, v in enumerate(line) if math.isfinite(v))
+        assert first > 0, "nothing was blanked"
+        assert all(not math.isfinite(v) for v in line[:first])
+        # And crucially NOT a flat run at zero, which is what withholding avoided.
+        assert not all(v == 0.0 for v in line[:first])
+        assert line[first] == pytest.approx(0.0, abs=1e-9)   # rebased where it starts
+
+    def test_a_target_that_covers_nothing_is_still_no_line(self):
+        """The floor stays: fewer than two in-window observations is not a line."""
+        idx = pd.date_range("2026-07-20", "2026-08-20", freq="B")
+        m = PortfolioMetrics()
+        m.target_history = _ramp(0.20, pd.date_range("2027-01-04", "2027-02-01",
+                                                     freq="B"))
+        assert _target_line(m, idx) is None
 
     def test_no_target_history_is_no_line(self):
         assert _target_line(PortfolioMetrics(), _IDX[-20:]) is None
@@ -223,18 +244,41 @@ class TestTheVolatilityPanelHoldsTheSameRule:
         # The target wobbles three times harder than the portfolio.
         assert vs["target"][-1] > vs["port"][-1]
 
-    def test_a_target_opening_inside_the_window_draws_no_volatility(self):
-        """Asserted on the since-inception span, which is where this can bite.
+    def test_a_target_opening_inside_the_window_is_blank_until_it_can_be_measured(self):
+        """Asserted on the since-inception span, which is where this bites.
 
-        On the 30-day panel a series is already rejected by the 22-row floor a
-        21-day rolling window needs — 30 calendar days hold fewer rows than
-        that, so no series can both start inside the window and clear the floor.
-        Over the whole history a target that begins a year after inception clears
-        it easily, and would otherwise be back-filled with its first computable
-        volatility across a year it says nothing about.
+        The line used to be withheld here, on the stated grounds that it "would
+        otherwise be back-filled with its first computable volatility across a year it
+        says nothing about". Measured: it would not. ``_line`` reindexes with
+        ``method="ffill"``, which fills forward only, so every date before the first
+        rolling estimate stays NaN and the chart breaks the polyline there. The
+        back-fill that justified withholding is not in the code.
+
+        So the line is drawn from where it can be measured, and the stretch before it
+        is blank — which is what withholding was trying to achieve, at the price of
+        losing the part that exists.
         """
+        import math
+
         from tarzan.export._perf_series import _perf_vol_series
+
         vs = _perf_vol_series(self._metrics("2025-06-01"), None, n_days=None)
+
+        assert vs and vs["port"]
+        assert vs["target"] is not None
+        first = next(i for i, v in enumerate(vs["target"]) if math.isfinite(v))
+        assert first > 0, "the lead-in was filled"
+        assert all(not math.isfinite(v) for v in vs["target"][:first])
+
+    def test_a_target_with_no_measurable_volatility_anywhere_is_no_line(self):
+        """The remaining guard, and the real failure it protects against: a series
+        holding no finite estimate at all is not a line."""
+        from tarzan.export._perf_series import _perf_vol_series
+
+        m = self._metrics("2024-01-01")
+        m.target_history = m.target_history.iloc[:5]      # too short for any window
+        vs = _perf_vol_series(m, None, n_days=None)
+
         assert vs and vs["port"]
         assert vs["target"] is None
 
@@ -357,3 +401,69 @@ class TestAllThreePanelsCarryTheTarget:
         src = inspect.getsource(_semantic)
         assert '"target", "acwi"' in src or '"target"' in src, (
             "the 30-day audit loop must include the target line")
+
+
+class TestTheBlankLeadInSurvivesToTheSvg:
+    """The gap has to reach the markup, and cost no other line its label.
+
+    Two things could have swallowed it. ``chart_pct_compact`` might have bridged the
+    NaN stretch with a straight segment — it does not, it emits one polyline per
+    contiguous finite run — and its own comment warns that "a NaN endpoint wipes EVERY
+    end label on the panel, because the placement shares one shift across all of
+    them". The target's NaNs are at the HEAD, not the end, so that path should not
+    fire; asserted rather than assumed.
+    """
+
+    @staticmethod
+    def _svg(lead_in_nans: int = 40, n: int = 120):
+        from tarzan.export import _charts
+        from tarzan.export._palette import PALETTE
+
+        idx = pd.date_range("2026-01-02", periods=n, freq="B")
+        full = list(np.linspace(0, 8, n))
+        bench = list(np.linspace(0, 5, n))
+        tgt = ([float("nan")] * lead_in_nans
+               + list(np.linspace(0, 6, n - lead_in_nans)))
+        return _charts.chart_pct_compact(
+            [{"values": full, "color": PALETTE["port"], "width": 2.2,
+              "end_label": "+8.00%"},
+             {"values": tgt, "color": PALETTE["target"], "end_label": "+6.00%"},
+             {"values": bench, "color": PALETTE["bench"], "end_label": "+5.00%"}],
+            list(idx), w=580, h=166, month_ticks=True, end_gutter=54), n
+
+    @staticmethod
+    def _polys(svg, colour):
+        return re.findall(
+            rf'<polyline points="([^"]+)" fill="none" stroke="{colour}"', svg)
+
+    def test_the_target_line_starts_where_its_data_starts(self):
+        from tarzan.export._palette import PALETTE
+
+        svg, n = self._svg(lead_in_nans=40)
+        polys = self._polys(svg, PALETTE["target"])
+
+        assert len(polys) == 1, polys
+        assert len(polys[0].split()) == n - 40
+        # ...and to the RIGHT of where the full-span lines begin.
+        tgt_x = float(polys[0].split()[0].split(",")[0])
+        port_x = float(self._polys(svg, PALETTE["port"])[0].split()[0].split(",")[0])
+        assert tgt_x > port_x + 100, (tgt_x, port_x)
+
+    def test_the_references_are_not_truncated_by_it(self):
+        from tarzan.export._palette import PALETTE
+
+        svg, n = self._svg(lead_in_nans=40)
+        for colour in (PALETTE["port"], PALETTE["bench"]):
+            polys = self._polys(svg, colour)
+            assert len(polys) == 1 and len(polys[0].split()) == n, (colour, polys)
+
+    def test_no_nan_reaches_the_markup(self):
+        """A literal "nan,nan" in a points attribute truncates the line in every
+        client, silently and at the wrong place."""
+        svg, _n = self._svg(lead_in_nans=40)
+        assert "nan" not in svg.lower()
+
+    def test_every_end_label_survives(self):
+        svg, _n = self._svg(lead_in_nans=40)
+        labels = re.findall(r'>([+-]\d+\.\d\d%)<', svg)
+        assert labels == ["+8.00%", "+6.00%", "+5.00%"], labels
