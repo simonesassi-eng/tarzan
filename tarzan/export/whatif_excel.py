@@ -501,6 +501,17 @@ _WIN_METRICS = (("CAGR", "cagr", "0.0"), ("Vol%", "volatility", "0.0"),
                 ("β", "beta", "0.00"), ("α%", "alpha", "0.0"))
 
 
+def _wtxt(w: float) -> str:
+    """A weight as text without losing it: two decimals, trailing zeros dropped.
+
+    ``f"{w:.0f}"`` is not safe for a printed recap. Python rounds half to EVEN,
+    so 7.5 renders as "8" and a 7.5/7.5 split prints "8 · 8" — a line that reads
+    as 101 when the portfolio is 100. Numeric CELLS are immune (they hold the
+    exact float and the number format only changes the view); text is not.
+    """
+    return f"{w:.2f}".rstrip("0").rstrip(".")
+
+
 def _clean_num(v):
     """None for missing/NaN so the cell shows n/a instead of a broken value."""
     return None if (v is None or (isinstance(v, float) and v != v)) else v
@@ -853,7 +864,14 @@ def _summary_sheet(wb, portfolios) -> None:
         mc_p5 = _clean_num(mccg.get("p05")); mc_p95 = _clean_num(mccg.get("p95"))
         mc_band = (mc_p95 - mc_p5) if (mc_p5 is not None and mc_p95 is not None) else None
         fv = 100_000 * (1.0 + mc_med / 100.0) ** 15 if mc_med is not None else None
-        comp = " · ".join(f"{tk} {w:.0f}" for tk, w in
+        # Weights are TEXT here, so rounding them is irreversible — unlike the
+        # numeric columns, where the cell keeps the exact float and only the view
+        # rounds. Printed with 0 decimals this recap did not add up: Python
+        # rounds half to EVEN, so a 7.5/7.5 trend split showed as "8 · 8" and the
+        # line summed to 101, and a book of fractional weights drifted to 102.
+        # Keep up to two decimals and drop trailing zeros, so 35 stays "35",
+        # 7.5 reads "7.5", and the line adds up to what the input says.
+        comp = " · ".join(f"{tk} {_wtxt(w)}" for tk, w in
                           sorted(p.weights().items(), key=lambda kv: -kv[1]))
         vals = [_pin(p.name) + p.name.replace("_", " ")]
         # Decision block: MC projection, €100k outcome, rolling holds, allocation.

@@ -80,3 +80,27 @@ def test_the_hedged_list_is_explicit_not_sniffed():
     from tarzan.backtest.engine import _HEDGED_TICKERS
     assert "MFEH" in _HEDGED_TICKERS
     assert "DBMFE" not in _HEDGED_TICKERS
+
+
+class TestWeightText:
+    """A printed weight recap has to add up: unlike a numeric cell, text cannot
+    be un-rounded later."""
+
+    def test_half_weights_survive(self):
+        """The bug this exists for: Python rounds half to EVEN, so "%.0f" turned a
+        7.5/7.5 trend split into "8 · 8" and the recap line read 101 for a
+        portfolio that sums to 100."""
+        from tarzan.export.whatif_excel import _wtxt
+        assert _wtxt(7.5) == "7.5"
+        assert _wtxt(8.5) == "8.5"
+
+    def test_whole_weights_stay_clean(self):
+        from tarzan.export.whatif_excel import _wtxt
+        assert _wtxt(35.0) == "35"
+        assert _wtxt(5.0) == "5"
+
+    def test_a_real_book_adds_up(self):
+        from tarzan.export.whatif_excel import _wtxt
+        book = {"NTSG": 35.0, "AVWC": 10.0, "AVWS": 10.0, "SGLD": 10.0,
+                "CL2": 8.0, "DBMFE": 7.5, "MFEH": 7.5, "AVEM": 7.0, "UEQC": 5.0}
+        assert sum(float(_wtxt(w)) for w in book.values()) == 100.0
