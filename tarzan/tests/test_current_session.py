@@ -293,3 +293,68 @@ class TestTheStampBelongsToTheObservedSession:
                             {"price": 25.30, "prev_close": 25.36},
                             ticker="AVWS.DE")
         assert out.index[-1].date() == datetime.date(2026, 8, 25)
+
+
+class TestTheRunRecordsWhatDataItHeld:
+    """A figure that cannot be traced to its data cannot be diagnosed.
+
+    A 1M column read -0.69% where a recomputation from the same source said -1.61% —
+    the same arithmetic on a tape one session behind. Establishing that took two
+    attempts and neither succeeded, because the run that printed it kept no record of
+    which close each holding's tape ended on. The run's log is retained; this puts the
+    answer there.
+    """
+
+    @staticmethod
+    def _holding(ticker, last_day):
+        from tarzan.models.holding import Holding
+
+        h = Holding(isin="IE00" + ticker[:8].ljust(8, "0"), ticker=ticker,
+                    quantity=1.0, cost_basis_eur=100.0, market_value_eur=100.0,
+                    currency="EUR")
+        idx = pd.bdate_range(end=pd.Timestamp(last_day), periods=30)
+        h.price_history = pd.Series([100.0] * len(idx), index=idx)
+        return h
+
+    def test_it_names_the_holdings_that_lag(self, caplog):
+        from tarzan.data import current_session as cs
+
+        with caplog.at_level("INFO"):
+            cs._log_tape_vintage([self._holding("AAA.MI", "2026-09-04"),
+                                  self._holding("BBB.MI", "2026-09-02")])
+
+        line = next(r.getMessage() for r in caplog.records
+                    if "Tape vintage" in r.getMessage())
+        assert "newest close 2026-09-04" in line
+        assert "BBB.MI@2026-09-02" in line
+        assert "AAA.MI" not in line, "a current holding is noise, not signal"
+
+    def test_it_says_so_when_everything_is_current(self, caplog):
+        from tarzan.data import current_session as cs
+
+        with caplog.at_level("INFO"):
+            cs._log_tape_vintage([self._holding("AAA.MI", "2026-09-04"),
+                                  self._holding("BBB.MI", "2026-09-04")])
+
+        line = next(r.getMessage() for r in caplog.records
+                    if "Tape vintage" in r.getMessage())
+        assert "all 2 holdings current to 2026-09-04" in line
+
+    def test_a_holding_with_no_tape_is_skipped_not_crashed(self, caplog):
+        from tarzan.data import current_session as cs
+
+        h = self._holding("CCC.MI", "2026-09-04")
+        h.price_history = None
+        with caplog.at_level("INFO"):
+            cs._log_tape_vintage([h, self._holding("AAA.MI", "2026-09-04")])
+
+        assert any("Tape vintage" in r.getMessage() for r in caplog.records)
+
+    def test_no_holdings_logs_nothing_rather_than_failing(self, caplog):
+        from tarzan.data import current_session as cs
+
+        with caplog.at_level("INFO"):
+            cs._log_tape_vintage([])
+            cs._log_tape_vintage(None)
+
+        assert not [r for r in caplog.records if "Tape vintage" in r.getMessage()]

@@ -1,0 +1,64 @@
+name: Verify returns vs Yahoo
+
+# A separate, scheduled check rather than a step inside the newsletter.
+#
+# Inline was the obvious first idea and it is the wrong one: the oracle needs its own
+# full pipeline run, and the render step is already throttle-bound — measured,
+# render = 130s + 0.293s per failed Yahoo fetch, and one send has already been lost to
+# a dropped download. Doubling the fetches per issue to gain a check would make the
+# thing it guards fail more often.
+#
+# Daily and out of band catches a regression within a day, blocks nothing, and its
+# failure is loud on its own. The newsletter keeps its own defence: the semantic gate,
+# which refuses to ship a chart figure it cannot reproduce.
+
+on:
+  schedule:
+    - cron: "30 6 * * 1-5"      # 08:30 Rome, an hour into the European session
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install immutable dependencies
+        run: python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt
+
+      - name: Restore market-data cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tarzan
+          key: tarzan-verify-cache-${{ github.run_id }}
+          restore-keys: |
+            tarzan-market-cache-
+            tarzan-verify-cache-
+
+      # Every holding, every window. The script exits non-zero on any disagreement it
+      # can actually decide, so this step IS the assertion.
+      - name: Compare the newsletter's figures against Yahoo
+        run: python3 scripts/verify_returns_vs_yahoo.py --all
+
+      - name: Upload the comparison
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-returns
+          path: |
+            output/verify_returns.json
+            output/verify_returns.html
+          if-no-files-found: warn
+          retention-days: 30
