@@ -360,4 +360,43 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             "Stamped the current session onto %d holding series and price(s)",
             len(stamped),
         )
+    _log_tape_vintage(holdings)
     return tuple(stamped)
+
+
+def _log_tape_vintage(holdings: list) -> None:
+    """Record, per holding, the date its tape actually ends on.
+
+    Nothing used to. Twice in one day a printed figure looked wrong and could not be
+    diagnosed after the fact — a 1M of -0.69% against a recomputed -1.61%, which is the
+    same arithmetic on a tape one session behind — because the run that produced it kept
+    no record of what data it held. The run's log is retained; this puts the answer in
+    it, so the next such question is a grep rather than an afternoon.
+
+    Logged as the newest date plus only the holdings BEHIND it. A list of twenty
+    identical dates is noise; the ones that lag are the whole signal, and a figure
+    computed off a lagging tape is not wrong so much as older than it looks.
+    """
+    ends: dict[str, str] = {}
+    for holding in holdings or []:
+        series = getattr(holding, "price_history", None)
+        if series is None:
+            continue
+        clean = series.dropna()
+        if clean.empty:
+            continue
+        ends[str(getattr(holding, "ticker", "") or "?")] = str(
+            pd.Timestamp(clean.index[-1]).date())
+    if not ends:
+        return
+    newest = max(ends.values())
+    behind = sorted((t, d) for t, d in ends.items() if d < newest)
+    if behind:
+        logger.info(
+            "Tape vintage: newest close %s; %d holding(s) behind it -> %s",
+            newest, len(behind),
+            ", ".join(f"{t}@{d}" for t, d in behind),
+        )
+    else:
+        logger.info("Tape vintage: all %d holdings current to %s",
+                    len(ends), newest)
