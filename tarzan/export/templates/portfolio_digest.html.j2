@@ -109,6 +109,19 @@
               {% endif %}
             </td>
           </tr>
+          {# The independent return check disagreed with this issue's own figures, or
+             could not run. Present ONLY then — a badge that is always there is
+             furniture, and a reader stops reading furniture. Built in
+             _sections_alloc.py::_verify_verdict; absent on any run that was not handed
+             a verdict (local, pinned, or GitHub not answering). #}
+          {% if header.verify_alert %}
+          <tr>
+            <td class="px-32" style="padding:9px 20px;background:{{ palette.red }};">
+              <span style="{{ type.label }}color:#ffffff;font-weight:700;">{{ header.verify_alert.text }}</span>
+              <span style="{{ type.data }}color:#ffffff;">&nbsp;· the returns below may be wrong; do not act on them{% if header.verify_alert.url %} · <a href="{{ header.verify_alert.url }}" style="color:#ffffff;text-decoration:underline;">the run</a>{% endif %}</span>
+            </td>
+          </tr>
+          {% endif %}
           {# ═══ BODY ORDER ═══════════════════════════════════════════
              Thirteen sections, each with one question:
                01 state        what the portfolio is
