@@ -6,7 +6,7 @@
 
    The context contains palette/header/hero data plus the preformatted
    performance, market, diversification, holdings, risk, optimizer,
-   contribution, tax, and methodology sections consumed below. Section HTML
+   movers, tax, and feed sections consumed below. Section HTML
    is built by the focused newsletter modules before template rendering.
 
    Display values are preformatted; section mappings remain structured so the
@@ -127,16 +127,16 @@
                01 state        what the portfolio is
                02 portfolio    what it did, over time and by window
                03 vs the market whether that beat the alternative
-               04 markets      what the market did, and why
-               05 allocation   where the money sits vs where it should
-               06 returns      how each position performed
-               07 target instr how the plan's not-yet-held names performed
-               08 watchlist    how the instruments not held performed
-               09 the book     the positions themselves
-               10 attribution  which positions moved the number
+               04 movers       which lines moved the number, and by how much
+               05 markets      what the market did, and why
+               06 allocation   where the money sits vs where it should
+               07 returns      how each position performed
+               08 target instr how the plan's not-yet-held names performed
+               09 watchlist    how the instruments not held performed
+               10 the book     the positions themselves
                11 risk         what the shape of the ride was
                12 optimizer    what to do about it
-               13 appendix     tax, method, feeds
+               13 appendix     tax and feeds
              The ordinals come from the shared counter in sec(), so a section
              the engine cannot fill leaves no hole in the sequence. #}
 
@@ -178,6 +178,24 @@
             <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, performance30.vs_market_title or "Vs the market", performance30.vs_market_sub) }}
               <div style="margin-top:12px;">{{ performance30.vs_market_html|safe }}</div>
+            </td>
+          </tr>
+          {% endif %}
+
+          {# ─── [04] PORTFOLIO MOVERS ───────────────────────
+             Which lines moved the number over each short window, ranked by
+             CONTRIBUTION (weight x return) rather than by return -- a 4.5% sleeve
+             down 6.6% moved the book a third as much as a 12.8% sleeve down 0.8%.
+             Book and target side by side, at their two different weights.
+
+             This replaces the old Attribution section: same measure, four windows
+             instead of the lifetime alone, and the plan as well as the book.
+             Built in _sections_perf.py::_build_portfolio_movers. #}
+          {% if portfolio_movers.available %}
+          <tr>
+            <td class="px-32" style="padding:20px 20px 0 20px;">
+              {{ sec(secn, "Portfolio movers") }}
+              <div style="margin-top:11px;">{{ portfolio_movers.html|safe }}</div>
             </td>
           </tr>
           {% endif %}
@@ -266,39 +284,6 @@
              Returns and Watchlist. #}
           {% include "partials/holdings.html.j2" %}
 
-          {# ─── [10] ATTRIBUTION — waterfall, then the two ranked lists ─ #}
-          {% if return_contrib.winners or return_contrib.laggards %}
-          <tr>
-            <td class="px-32" style="padding:20px 20px 0 20px;">
-              {# No subtitle: the waterfall's connectors show that the bars add
-                 up, and its own footnote states the measure. #}
-              {{ sec(secn, "Attribution") }}
-              {% if return_contrib.chart_html %}
-              <div style="margin-top:12px;border:1px solid {{ palette.border }};border-radius:10px;overflow:hidden;">{{ return_contrib.chart_html|safe }}</div>
-              {% endif %}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">
-                <tr>
-                  <td width="50%" valign="top" style="padding:0 9px 0 0;">
-                    {% if return_contrib.winners %}
-                    <div style="{{ type.label }}color:{{ palette.green }};">▲ Top contributors</div>
-                    {% for w in return_contrib.winners %}
-                    <div style="margin-top:6px;{{ type.data }}color:{{ palette.ink }};">{{ w.name|truncate(26, true, '…') }}<b style="color:{{ palette.green }};float:right;font-variant-numeric:tabular-nums;">{{ w.value }}</b></div>
-                    {% endfor %}
-                    {% endif %}
-                  </td>
-                  <td width="50%" valign="top" style="padding:0 0 0 9px;border-left:1px solid {{ palette.border }};">
-                    {% if return_contrib.laggards %}
-                    <div style="{{ type.label }}color:{{ palette.red }};">▼ Laggards</div>
-                    {% for l in return_contrib.laggards %}
-                    <div style="margin-top:6px;{{ type.data }}color:{{ palette.ink }};">{{ l.name|truncate(26, true, '…') }}<b style="color:{{ palette.red }};float:right;font-variant-numeric:tabular-nums;">{{ l.value }}</b></div>
-                    {% endfor %}
-                    {% endif %}
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          {% endif %}
           {# ─── [11] RISK — after attribution and immediately before the
              optimizer, so the evidence precedes the action. #}
           {% if risk_profile.available %}
@@ -428,14 +413,14 @@
              every morning, and the file was the one input the pipeline carried
              for presentation alone. ── #}
 
-          {# ─── [13] APPENDIX — tax, method, feeds ─────────────
-             Three reference blocks under one heading. They were three unnumbered
+          {# ─── [13] APPENDIX — tax, feeds ─────────────────────
+             Two reference blocks under one heading. They were unnumbered
              blocks trailing off the end of the document, which read as an
              afterthought rather than as the place to look things up. #}
-          {% if tax_note.available or methodology.available or ticker_sources.available %}
+          {% if tax_note.available or ticker_sources.available %}
           <tr>
             <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "Appendix", "Tax estimate, return-window method, and the feed behind every instrument.") }}
+              {{ sec(secn, "Appendix", "Tax estimate and the feed behind every instrument.") }}
             </td>
           </tr>
           {% endif %}
@@ -443,13 +428,6 @@
           <tr>
             <td class="px-32" style="padding:12px 20px 0 20px;">
               {{ tax_note.html|safe }}
-            </td>
-          </tr>
-          {% endif %}
-          {% if methodology.available %}
-          <tr>
-            <td class="px-32" style="padding:12px 20px 0 20px;">
-              {{ methodology.html|safe }}
             </td>
           </tr>
           {% endif %}

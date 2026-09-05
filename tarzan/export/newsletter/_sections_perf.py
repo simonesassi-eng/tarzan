@@ -1721,6 +1721,270 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         "benchmark_alpha_beta": ab_bench_name,
     }
 
+#: The windows the movers grid ranks over — the short end of PERIOD_WINDOWS. Beyond
+#: three months a "mover" stops being news and becomes the lifetime return, which the
+#: hero and the Returns table already carry.
+_MOVER_WINDOWS = (("1d", "1D"), ("5d", "5D"), ("1m", "1M"), ("3m", "3M"))
+
+#: How many each side of a window's ranking. Three is what fits a half-column beside
+#: the target grid without truncating a ticker.
+_MOVER_RANKS = 3
+
+
+def _mover_pp(value: Optional[float]) -> str:
+    """A contribution in points of the total, tapered by magnitude.
+
+    A one-day contribution routinely runs under a tenth of a point, where two decimals
+    round every line in the column to 0.00 and the ranking stops being legible; a
+    three-month one runs to whole points, where three decimals are noise. Same taper
+    as ``_pct_compact`` applies to percentages, for the same reason.
+    """
+    if value is None:
+        return ""
+    sign = "+" if value >= 0 else "−"
+    return f"{sign}{abs(float(value)):.{3 if abs(value) < 0.1 else 2}f}"
+
+
+def _mover_tint(fg: str, bg: str, alpha: float) -> str:
+    """``fg`` over ``bg`` at ``alpha``, resolved to a flat hex.
+
+    Email clients cannot be relied on for ``rgba()`` in an inline style, so the blend
+    is computed here and shipped as an opaque colour.
+    """
+    a = max(0.0, min(1.0, alpha))
+    f = [int(fg[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(bg[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(
+        f"{int(round(f[i] * a + b[i] * (1 - a))):02x}" for i in range(3))
+
+
+def _mover_rows(universe: list[dict], key: str) -> tuple[list[dict], list[dict]]:
+    """``(ahead, behind)`` for one window, ranked by CONTRIBUTION.
+
+    Contribution, not return: a 4.5% sleeve down 6.6% and a 12.8% sleeve down 0.8%
+    are not the same news, and the second moved the book more. Ranking on the return
+    alone put the small one at the top of the list while it mattered a third as much.
+    """
+    have = [r for r in universe if r["contrib"].get(key) is not None]
+    have.sort(key=lambda r: -r["contrib"][key])
+    return have[:_MOVER_RANKS], list(reversed(have[-_MOVER_RANKS:]))
+
+
+def _mover_universe(rows: list[dict]) -> list[dict]:
+    """Attach each line's per-window contribution (weight x return / 100)."""
+    out = []
+    for r in rows:
+        weight = float(r.get("weight") or 0.0)
+        if weight <= 0:
+            continue
+        contrib = {}
+        for key, _ in _MOVER_WINDOWS:
+            value = r["rets"].get(key)
+            contrib[key] = None if value is None else weight / 100.0 * value
+        if all(v is None for v in contrib.values()):
+            continue
+        out.append(dict(r, weight=weight, contrib=contrib))
+    return out
+
+
+def _mover_grid_html(universe: list[dict], label: str, swatch: str,
+                     total_by_window: dict) -> str:
+    """One half of the movers section: a grid of ticker x window.
+
+    Only the lines that reached a top-three or bottom-three in some window are shown.
+    The alternative — every line, with the quiet ones tinted faintly — was rejected as
+    too busy: it printed twenty-five rows to say something about eleven of them.
+
+    The figure prints only where a line WAS an extreme. The tint carries the magnitude
+    of everything else, which is what it is for; filling all fifty-six cells with
+    numbers made them compete with each other and the tint stopped reading at all.
+    """
+    marks: dict[str, dict[str, int]] = {}
+    scale: dict[str, float] = {}
+    for key, _ in _MOVER_WINDOWS:
+        ahead, behind = _mover_rows(universe, key)
+        for r in ahead:
+            marks.setdefault(r["ticker"], {})[key] = 1
+        for r in behind:
+            marks.setdefault(r["ticker"], {})[key] = -1
+        magnitudes = [abs(r["contrib"][key]) for r in universe
+                      if r["contrib"].get(key) is not None]
+        scale[key] = max(magnitudes) if magnitudes else 1.0
+    shown = sorted((r for r in universe if r["ticker"] in marks),
+                   key=lambda r: -r["weight"])
+    if not shown:
+        return ""
+    dropped = len(universe) - len(shown)
+    heaviest = max(r["weight"] for r in universe)
+
+    head = (f'<tr><td style="{TYPE["label"]}color:{PALETTE["subtle"]};'
+            f'padding:0 0 4px 0;">Ticker</td>'
+            f'<td style="{TYPE["label"]}color:{PALETTE["subtle"]};'
+            f'padding:0 0 4px 6px;">Wt</td>')
+    for _, column in _MOVER_WINDOWS:
+        head += (f'<td align="center" style="{TYPE["label"]}'
+                 f'color:{PALETTE["subtle"]};padding:0 0 4px 0;">{column}</td>')
+    head += "</tr>"
+
+    body = ""
+    for r in shown:
+        fill = max(2, int(round(r["weight"] / heaviest * 26)))
+        body += (
+            f'<tr><td style="{TYPE["data"]}color:{PALETTE["ink"]};padding:1px 0;'
+            f'white-space:nowrap;">{_esc(r["bare"])}</td>'
+            f'<td style="padding:1px 0 1px 6px;white-space:nowrap;">'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+            f'style="width:26px;background:{PALETTE["group_bg"]};border-radius:2px;">'
+            f'<tr><td style="width:{fill}px;height:5px;'
+            f'background:{PALETTE["accent"]};border-radius:2px;font-size:0;'
+            f'line-height:0;">&nbsp;</td>'
+            f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table></td>')
+        for key, _ in _MOVER_WINDOWS:
+            value = r["contrib"].get(key)
+            if value is None:
+                body += (f'<td align="center" style="{TYPE["prose"]}'
+                         f'color:{PALETTE["subtle"]};padding:1px 2px;">&middot;</td>')
+                continue
+            colour = PALETTE["green"] if value >= 0 else PALETTE["red"]
+            tint = _mover_tint(colour, PALETTE["card_alt"],
+                               min(1.0, abs(value) / scale[key]) * 0.75)
+            extreme = marks.get(r["ticker"], {}).get(key)
+            body += (
+                f'<td align="center" style="background:{tint};font-size:9px;'
+                f'font-weight:{"700" if extreme else "400"};'
+                f'color:{PALETTE["ink"] if extreme else PALETTE["subtle"]};'
+                f'font-variant-numeric:tabular-nums;padding:1px 4px;'
+                f'border:1px solid {PALETTE["card_alt"]};white-space:nowrap;">'
+                f'{_mover_pp(value) if extreme else "&nbsp;"}</td>')
+        body += "</tr>"
+
+    foot = (f'<tr><td colspan="2" style="{TYPE["label"]}color:{PALETTE["subtle"]};'
+            f'padding:4px 0 0 0;white-space:nowrap;">All</td>')
+    for key, _ in _MOVER_WINDOWS:
+        total = total_by_window.get(key)
+        colour = (PALETTE["subtle"] if total is None
+                  else PALETTE["green"] if total >= 0 else PALETTE["red"])
+        foot += (f'<td align="center" style="{TYPE["data"]}color:{colour};'
+                 f'font-variant-numeric:tabular-nums;padding:4px 2px 0 2px;'
+                 f'white-space:nowrap;">'
+                 f'{"—" if total is None else _pct(total, signed=True)}</td>')
+    foot += "</tr>"
+
+    note = f"{len(shown)} of {len(universe)}"
+    if dropped:
+        note += f" · {dropped} not top three"
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'border="0"><tr>'
+        f'<td style="padding:0 0 5px 0;border-bottom:1px solid '
+        f'{PALETTE["border"]};white-space:nowrap;">'
+        f'<span style="display:inline-block;width:7px;height:7px;'
+        f'background:{swatch};border-radius:2px;"></span>'
+        f'<span style="{TYPE["label"]}color:{PALETTE["ink"]};padding-left:6px;">'
+        f'{_esc(label)}</span>'
+        f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};padding-left:7px;">'
+        f'{note}</span></td></tr></table>'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'style="margin-top:8px;border-collapse:separate;border-spacing:0;">'
+        f'{head}{body}{foot}</table>')
+
+
+def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
+    """Which lines moved the number, over each short window, held and planned.
+
+    Replaces the Attribution section, which answered the same question over one window
+    only — the lifetime — and answered it with a waterfall whose parts summed to the
+    total. This ranks by the same measure (weight times return) over four windows, and
+    covers the target as well as the book, so nothing Attribution said is lost.
+
+    Weights come from where each universe's weights actually live: the book's from
+    ``holdings_df`` (share of current value), the plan's from ``target_weights``. A
+    line held AND planned appears in both, at its two different weights, which is the
+    point — it is a different share of each.
+    """
+    m = ctx.metrics
+    hp = getattr(m, "holding_performance", None)
+    if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
+        return {"available": False}
+
+    perf_by_ticker: dict[str, dict] = {}
+    for _i, row in hp.iterrows():
+        ticker = str(row.get("ticker") or "")
+        if not ticker:
+            continue
+        rets = {}
+        for key, _ in _MOVER_WINDOWS:
+            value = row.get(key)
+            if value is None or (isinstance(value, float) and value != value):
+                rets[key] = None
+            else:
+                rets[key] = float(value)
+        # A ticker can appear twice, held on one venue and tracked on another. The
+        # held listing wins, because this section ranks positions.
+        held = "portfolio" in str(row.get("type") or "").lower()
+        if ticker not in perf_by_ticker or held:
+            perf_by_ticker[ticker] = {
+                "ticker": ticker,
+                "bare": ticker.split(".")[0].upper(),
+                "rets": rets,
+            }
+
+    df = getattr(m, "holdings_df", None)
+    book_rows = []
+    if df is not None and not df.empty and "ticker" in df.columns:
+        for _i, row in df.iterrows():
+            entry = perf_by_ticker.get(str(row.get("ticker") or ""))
+            if entry is None:
+                continue
+            book_rows.append(dict(entry, weight=row.get("weight_pct")))
+
+    plan_rows = []
+    for ticker, weight in (getattr(m, "target_weights", {}) or {}).items():
+        entry = perf_by_ticker.get(str(ticker))
+        if entry is not None:
+            plan_rows.append(dict(entry, weight=weight))
+
+    book = _mover_universe(book_rows)
+    plan = _mover_universe(plan_rows)
+    if not book and not plan:
+        return {"available": False}
+
+    def _weighted(universe: list[dict], key: str) -> Optional[float]:
+        """The universe's own return for the window — the number its parts add up
+        towards, so a column of contributions can be read against something."""
+        num = sum(r["contrib"][key] for r in universe
+                  if r["contrib"].get(key) is not None)
+        den = sum(r["weight"] / 100.0 for r in universe
+                  if r["contrib"].get(key) is not None)
+        return num / den if den else None
+
+    # The book's own figure is the portfolio's measured return, not a reweighting of
+    # its parts: the two differ by the cash and the lines with no market history, and
+    # the measured one is what every other section prints.
+    port = getattr(m, "performance", None) or {}
+    book_totals = {}
+    for key, _ in _MOVER_WINDOWS:
+        value = port.get(key)
+        if value is None or (isinstance(value, float) and value != value):
+            value = _weighted(book, key)
+        book_totals[key] = None if value is None else float(value)
+    plan_totals = {key: _weighted(plan, key) for key, _ in _MOVER_WINDOWS}
+
+    left = _mover_grid_html(book, "Portfolio", PALETTE["port"], book_totals) if book else ""
+    right = _mover_grid_html(plan, "Target", PALETTE["target"], plan_totals) if plan else ""
+    if not left and not right:
+        return {"available": False}
+    if left and right:
+        html = ('<table role="presentation" width="100%" cellpadding="0" '
+                'cellspacing="0" border="0"><tr>'
+                f'<td width="50%" valign="top" style="padding:0 8px 0 0;">{left}</td>'
+                f'<td width="50%" valign="top" style="padding:0 0 0 8px;">{right}</td>'
+                '</tr></table>')
+    else:
+        html = left or right
+    return {"available": True, "html": html}
+
+
 def _build_movers(ctx: _NewsletterContext) -> dict:
     """Find best & worst performer over the last week."""
     m = ctx.metrics
