@@ -183,6 +183,60 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
         ),
     }
 
+#: Beyond this many days, a green verdict is reported as "last verified" rather than
+#: as "verified": the scheduled check runs every weekday, so a verdict older than a
+#: long weekend means the check itself stopped running — and GitHub disables scheduled
+#: workflows after a stretch of repository inactivity, which would otherwise freeze a
+#: reassuring badge in place forever.
+_VERIFY_FRESH_DAYS = 4
+
+
+def _verify_verdict() -> Optional[dict]:
+    """The last independent return check, or None when there is nothing to report.
+
+    ``scripts/verify_returns_vs_yahoo.py`` recomputes every printed return against a
+    raw Yahoo pull and runs as its own scheduled workflow, deliberately not as a step
+    in the send (its own full pipeline run, against a render that is already
+    throttle-bound). The cost of that separation is that a red verdict lands in a
+    workflow log the reader of the digest never sees — so the digest carries it.
+
+    Read from the environment, not fetched here. The workflow does the one API call it
+    takes and passes the answer in, which keeps the network out of render, keeps the
+    figures independent of whether GitHub answered, and means a local run or a pinned
+    replay simply shows nothing.
+
+    Returns ``{"ok", "text", "url"}``. ``ok`` False is the case worth seeing: the
+    figures in the issue may be the ones the oracle disagreed with.
+    """
+    import os
+
+    from tarzan import runtime as _runtime
+
+    conclusion = (os.environ.get("VERIFY_CONCLUSION") or "").strip().lower()
+    if not conclusion:
+        return None
+    raw_at = (os.environ.get("VERIFY_AT") or "").strip()
+    when, age_days = "", None
+    if raw_at:
+        try:
+            stamp = datetime.fromisoformat(raw_at.replace("Z", "+00:00"))
+            when = stamp.strftime("%d %b %H:%M")
+            age_days = (_runtime.today() - stamp.date()).days
+        except ValueError:
+            when = ""
+    ok = conclusion == "success"
+    stale = age_days is not None and age_days > _VERIFY_FRESH_DAYS
+    if ok:
+        # "last verified" states the same fact without implying it is current.
+        lead = "last verified" if stale else "verified"
+        text = f"{lead} {when}".strip() if when else "verified"
+    else:
+        text = (f"RETURN CHECK FAILED {when}".strip() if when
+                else "RETURN CHECK FAILED")
+    return {"ok": ok, "text": text,
+            "url": (os.environ.get("VERIFY_URL") or "").strip()}
+
+
 def _build_header(ctx: _NewsletterContext) -> dict:
     """Build the header strip metadata.
 
@@ -272,12 +326,22 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     elif not live and end_label:
         stamp += f" \u00b7 at the {end_label} close"
     stamp += f' \u00b7 market {"OPEN" if _market_is_open(perf) else "CLOSED"}'
+    # The verdict belongs on this line and nowhere else: the stamp already carries the
+    # three facts that change what the numbers MEAN, and "were these numbers checked
+    # against an outside source" is the fourth. A pass rides in the stamp; a failure
+    # gets its own strip, because a reader who skims the header must not be able to
+    # miss it.
+    verify = _verify_verdict()
+    if verify and verify["ok"]:
+        stamp += f' \u00b7 {verify["text"]}'
     return {
         "date_short": now.strftime("%a, %d %b %Y"),
         "stamp": stamp,
         "issue_number": issue_number,
         "inception_date": inception_date,
         "status_bar": tuple(status_bar),
+        "verify_alert": (None if not verify or verify["ok"] else {
+            "text": _esc(verify["text"]), "url": _esc(verify["url"])}),
     }
 
 

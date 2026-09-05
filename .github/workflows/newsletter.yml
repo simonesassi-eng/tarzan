@@ -117,6 +117,30 @@ jobs:
           restore-keys: |
             tarzan-market-cache-
 
+      # The verdict of the last independent return check, carried into the issue so a
+      # disagreement reaches the reader instead of dying in a workflow log nobody
+      # opens. `continue-on-error` and the `|| true` are both deliberate: this is a
+      # nice-to-have annotation, and a GitHub API hiccup must never cost a digest.
+      # Empty outputs render nothing at all.
+      # Unauthenticated on purpose. The obvious version handed gh the automatic per-run
+      # GitHub token, which tripped the gate in test_delivery_gates.py that keeps every
+      # credential inside the publication step -- and that gate is right: a step running
+      # before the send should hold nothing worth stealing. This repo is public, so its
+      # run conclusions are public too: the read needs no credential and no extra
+      # permission. Rate limiting (60/hr per IP, shared across runners) is handled like
+      # any other failure here -- no output, no annotation, digest sent anyway.
+      - name: Read the last independent return check
+        id: verify
+        continue-on-error: true
+        run: |
+          line=$(curl -sS --max-time 15 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${{ github.repository }}/actions/workflows/verify-returns.yml/runs?status=completed&per_page=1" | jq -r 'first(.workflow_runs[]? | select(.conclusion) | "\(.conclusion)|\(.updated_at)|\(.html_url)")' || true)
+          if [ -n "$line" ]; then
+            echo "conclusion=$(echo "$line" | cut -d'|' -f1)" >> "$GITHUB_OUTPUT"
+            echo "at=$(echo "$line" | cut -d'|' -f2)" >> "$GITHUB_OUTPUT"
+            echo "url=$(echo "$line" | cut -d'|' -f3)" >> "$GITHUB_OUTPUT"
+          fi
+          echo "verdict: ${line:-none}"
+
       # Publication credentials are scoped only to the step that consumes
       # them. Validation, checkout, setup, installation, and cache restore see
       # no Drive, Gemini, claim-store, recipient, or SMTP credential.
@@ -136,4 +160,7 @@ jobs:
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
           DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
           DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}
+          VERIFY_CONCLUSION: ${{ steps.verify.outputs.conclusion }}
+          VERIFY_AT: ${{ steps.verify.outputs.at }}
+          VERIFY_URL: ${{ steps.verify.outputs.url }}
         run: python scripts/send_newsletter.py
