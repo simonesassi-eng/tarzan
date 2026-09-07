@@ -1088,7 +1088,15 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     #                  figures do not touch the sparkline that follows
     #   trend    73px  27px of sparkline + 4 + "-10.8pp"
     #   drift    44px  "-10.8pp"
-    W = {"name": 24, "track": 10, "now": 22, "target": 21, "trend": 14, "drift": 9}
+    #   drift  48px  "-10.8pp" is 42 and its box was exactly 42, so the first rounding
+    #                 pushed the figure outside the table -- fixed layout clips nothing
+    #                 unless told to, and clipping a number is worse than making room.
+    W = {"name": 21, "track": 10, "now": 23, "target": 22, "trend": 13,
+         "drift": 11}
+    #: Inset from the table's own border, on the two columns that touch it. The header
+    #: band and the row tints are backgrounds now, so a label flush against the border
+    #: reads as a rendering slip rather than a column.
+    EDGE = 8
     #: The gutter after Target, wider than the rest: to its right sits a graphic, and
     #: 8px between a figure and a sparkline reads as no gap at all.
     GUT_TARGET = 14
@@ -1146,17 +1154,26 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
 
     def _th(key: str, label: str, align: str = "left") -> str:
         gut = GUT_TARGET if key == "target" else GUT
+        left = EDGE if key == "name" else 0
+        right = EDGE if key == "drift" else gut
         return (f'<td width="{W[key]}%" align="{align}" style="{TYPE["label"]}'
-                f'color:{P["subtle"]};padding:0 {gut}px 4px 0;">{label}</td>')
+                f'color:{P["muted"]};padding:5px {right}px 5px {left}px;">'
+                f'{label}</td>')
 
+    # The shell PORTFOLIO MOVERS uses, so the two sections read as one table language:
+    # a rounded border, a header band on ``head_bg``, zebra rows.
     out = [f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-           f'border="0" style="width:100%;table-layout:fixed;margin-top:10px;">',
-           '<tr>' + _th("name", _esc(first_label)) + _th("track", "Vs target")
+           f'border="0" style="width:100%;table-layout:fixed;margin-top:10px;'
+           f'border:1px solid {P["border"]};border-radius:8px;'
+           f'border-collapse:separate;border-spacing:0;overflow:hidden;">',
+           f'<tr style="background:{P["head_bg"]};">'
+           + _th("name", _esc(first_label)) + _th("track", "Vs target")
            + _th("now", "Now", "right") + _th("target", "Target", "right")
            + _th("trend", "Trend") + _th("drift", "Drift", "right") + '</tr>']
 
-    for r in rows:
-        pad = f'padding:3px {GUT}px 3px 0;'
+    for i, r in enumerate(rows):
+        zebra = P["zebra"] if i % 2 else P["card"]
+        pad = f'background:{zebra};padding:3px {GUT}px 3px 0;'
         if r.get("eur_row"):
             # Cash: an amount, not a share of the invested base, so no track and no
             # percentage — the row states the two figures and their gap.
@@ -1176,7 +1193,8 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                 f'<td style="{pad}border-top:1px solid {P["row_rule"]};">&nbsp;</td>'
                 f'<td align="right" style="{TYPE["data"]}'
                 f'color:{r.get("delta_color") or P["muted"]};font-weight:700;'
-                f'padding:3px 0;font-variant-numeric:tabular-nums;white-space:nowrap;'
+                f'background:{zebra};padding:3px {EDGE}px 3px 0;'
+                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
                 f'border-top:1px solid {P["row_rule"]};">'
                 f'{_signed_eur(r.get("delta_eur"))}</td></tr>')
             continue
@@ -1280,7 +1298,7 @@ def _trend_cell(vals, target, colour) -> str:
             f'<circle cx="{1 + (len(series) - 1) * step:.1f}" '
             f'cy="{y(series[-1]):.1f}" r="1.6" fill="{colour}"/></svg>'
             f'<span style="{TYPE["prose"]}color:{P["subtle"]};padding-left:4px;">'
-            f'{_signed_pp(move)}pp</span>')
+            f'{_signed_pp(move)}</span>')
 
 def _ph_target_rows(ctx: _NewsletterContext, tol: float,
                     hold_inv_series: Optional[list]) -> tuple[list[dict], str]:
@@ -1373,7 +1391,7 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
                 # the first five of them; at 42 the name ran straight into the track
                 # beside it ("AVWS Avant. Gl. Sm Cap Value" overlapping its own bar).
                 display_instrument_name(_isin_for(it), key,
-                                        it.get("category") or key, 15),
+                                        it.get("category") or key, 11),
                 ticker=tk),
             "now": now,
             "target": float(it.get("target_pct", 0.0) or 0.0),

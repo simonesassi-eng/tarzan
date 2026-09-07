@@ -192,7 +192,13 @@ class TestOneLinePerRow:
 
     def test_the_trend_move_and_the_drift_are_both_present_and_different(self):
         """Two figures a reader could confuse: the trend is how far the weight moved
-        over the month, the drift is how far it sits from target. 70.0 -> 77.6 is
-        +7.6pp of movement; 77.6 against a 75.0 target is +2.6pp of drift."""
+        over the month, the drift is how far it sits from target. 70.0 -> 77.6 is +7.6
+        of movement; 77.6 against a 75.0 target is +2.6pp of drift.
+
+        Only the drift carries the unit. The trend's sits immediately to its left and
+        the two columns are adjacent, so repeating "pp" cost 12px the sparkline needed
+        more than the reader needed the letters.
+        """
         html = _div_table([_value_row()], tol=2.0, base=300_000.0)
-        assert "+7.6pp" in html and "+2.6pp" in html
+        assert ">+7.6<" in html or "+7.6</span>" in html, "trend move, unitless"
+        assert "+2.6pp" in html, "drift, with its unit"
