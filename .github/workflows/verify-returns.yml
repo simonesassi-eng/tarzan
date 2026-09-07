@@ -14,7 +14,12 @@ name: Verify returns vs Yahoo
 
 on:
   schedule:
-    - cron: "30 6 * * 1-5"      # 08:30 Rome, an hour into the European session
+    # 08:17 Rome, an hour into the European session. NOT on the half hour: :00 and :30
+    # are the two most contended minutes on GitHub's scheduler, and a low-priority
+    # cron there gets delayed or dropped. Observed: the first Monday this existed, the
+    # 06:30 UTC run had still not started an hour later while the workflow sat active.
+    # An odd minute is the standard mitigation and costs nothing.
+    - cron: "17 6 * * 1-5"
   workflow_dispatch:
 
 permissions:
