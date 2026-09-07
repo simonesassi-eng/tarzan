@@ -537,6 +537,31 @@ def _run_once(
     )
     _apply_per_holding_targets(holdings, targets_by_isin)
 
+    # When the per-instrument plan carries weights, IT is the plan: the asset-class and
+    # equity-geography targets are derived from it and the ones declared in targets.csv
+    # are not used. Three hand-maintained lists had no way to stay in agreement and on
+    # the reference book had stopped -- the plan implies 21% fixed income against a
+    # declared 28%, and 15% alternative against 11% -- so every drift figure measured
+    # the book against a portfolio its own plan does not produce.
+    #
+    # Placed here, before enrichment and before any consumer reads a target, so the
+    # engine, the rebalancer and the newsletter all see one set of numbers.
+    from tarzan.engine.target_derivation import apply_to_config as _derive_targets
+
+    target_derivation = _derive_targets(config, targets_by_isin)
+    if target_derivation and target_derivation.get("applied"):
+        session.ledger.append(LedgerEntryType.STAGE, {
+            "stage": "targets",
+            "outcome": "SUCCEEDED",
+            "availability": Availability.AVAILABLE.value,
+            "source": "derived_from_per_holding_plan",
+            "instruments": len(target_derivation["plan"]),
+            "notional_pct": round(target_derivation["notional_pct"], 4),
+        })
+        for _note in target_derivation.get("notes") or []:
+            from tarzan.runtime import data_quality as _dq_t
+            _dq_t.warning("targets", _note, context="targets_per_holding.csv")
+
     if not holdings:
         # A fully liquidated book is a legitimate state, not bad input: every
         # effective order nets to zero, so €0 IS the true total and the realized
