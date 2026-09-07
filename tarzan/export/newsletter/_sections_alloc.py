@@ -1091,18 +1091,26 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     #   drift  48px  "-10.8pp" is 42 and its box was exactly 42, so the first rounding
     #                 pushed the figure outside the table -- fixed layout clips nothing
     #                 unless told to, and clipping a number is worse than making room.
-    W = {"name": 21, "track": 10, "now": 23, "target": 22, "trend": 13,
+    W = {"name": 20, "track": 10, "now": 23, "target": 22, "trend": 14,
          "drift": 11}
     #: Inset from the table's own border, on the two columns that touch it. The header
     #: band and the row tints are backgrounds now, so a label flush against the border
     #: reads as a rendering slip rather than a column.
-    EDGE = 8
+    EDGE = 12
     #: The gutter after Target, wider than the rest: to its right sits a graphic, and
     #: 8px between a figure and a sparkline reads as no gap at all.
     GUT_TARGET = 14
+    #: Trend is the one left-aligned column between two right-aligned ones, so it needs
+    #: its own leading inset or its sparkline starts where Target's figures end.
+    TREND_LEAD = 8
 
-    top = max([float(r.get("now") or 0.0) for r in rows]
-              + [float(r.get("target") or 0.0) for r in rows] + [1.0]) * 1.08
+    # The axis every track shares, scaled on the SLICES only. The total row draws no
+    # bar -- it is a sum, not a slice -- but its 114.7% was in this maximum, so every
+    # real class was squashed into the left eighth of its track and Gold, Commodities
+    # and Alternative read as slivers.
+    _scaled = [r for r in rows if not r.get("is_total") and not r.get("eur_row")]
+    top = max([float(r.get("now") or 0.0) for r in _scaled]
+              + [float(r.get("target") or 0.0) for r in _scaled] + [1.0]) * 1.08
 
     def _fig(pct: Optional[float], lev=None, *, bold: bool, dp: int) -> str:
         if pct is None:
@@ -1154,11 +1162,11 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
 
     def _th(key: str, label: str, align: str = "left") -> str:
         gut = GUT_TARGET if key == "target" else GUT
-        left = EDGE if key == "name" else 0
+        left = EDGE if key == "name" else (TREND_LEAD if key == "trend" else 0)
         right = EDGE if key == "drift" else gut
         return (f'<td width="{W[key]}%" align="{align}" style="{TYPE["label"]}'
-                f'color:{P["muted"]};padding:5px {right}px 5px {left}px;">'
-                f'{label}</td>')
+                f'color:{P["muted"]};padding:5px {right}px 5px {left}px;'
+                f'white-space:nowrap;">{label}</td>')
 
     # The shell PORTFOLIO MOVERS uses, so the two sections read as one table language:
     # a rounded border, a header band on ``head_bg``, zebra rows.
@@ -1391,7 +1399,7 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
                 # the first five of them; at 42 the name ran straight into the track
                 # beside it ("AVWS Avant. Gl. Sm Cap Value" overlapping its own bar).
                 display_instrument_name(_isin_for(it), key,
-                                        it.get("category") or key, 11),
+                                        it.get("category") or key, 10),
                 ticker=tk),
             "now": now,
             "target": float(it.get("target_pct", 0.0) or 0.0),
@@ -1629,15 +1637,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         # 100% rule and which way a trend colour reads. The sum past 100% needs
         # no separate sentence -- the total row states it and the x factors in
         # the drift column say where it comes from.
-        html.append(
-            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
-            f'Band {tol:.1f}pp tolerance \u00b7 tick target \u00b7 faint rule '
-            f'100% of capital \u00b7 trend is the weight over the last month '
-            f'against its target, green closing, red widening \u00b7 '
-            f'\u00d7 is notional exposure per euro of physical capital, stated for '
-            f'the book beside Now and for the plan beside Target \u00b7 '
-            f'"synth" marks a class the plan holds no physical capital in.</div>'
-        )
+        # No caption. The marks it described -- the tolerance band, the target tick,
+        # the leverage factor, "synth" -- are now in a table that reads like the rest of
+        # the issue, and six lines of legend under a seven-row table is more page than
+        # the reader was spending on it.
     if geo_rows:
         html.append(_div_table(geo_rows, tol, base=equity_base,
                                first_label="Equity geography"))
