@@ -1074,12 +1074,24 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     P, FS = PALETTE, TYPE_PX["data"]
     GUT = 8
 
-    # Widths sum to 100 and every column carries the same gutter. Sized on the widest
-    # content at ~6px a character: "74.4% <amount> 1.10x" is 21, "-13.2pp" is 7.
-    if show_leverage:
-        W = {"name": 19, "track": 11, "now": 22, "target": 21, "trend": 14, "drift": 13}
-    else:
-        W = {"name": 24, "track": 14, "now": 19, "target": 18, "trend": 14, "drift": 11}
+    # ONE width table for every block, so the three tables' columns line up down the
+    # section. Two of them (one for the leverage variant, one without) put Now, Target
+    # and Trend at different x in each block, and three tables whose columns do not
+    # agree read as three unrelated things.
+    #
+    # Sized on the widest content each column must hold, at ~6px a character in the
+    # 580px content box, minus its 8px gutter:
+    #   name    131px  "NTSG WT Gl. Eff. Core" = 21 chars
+    #   track    50px  a bar and a tick need no more
+    #   now     120px  "114.7% <amount> 1.15x" = 20 chars
+    #   target  108px  "125.5% <amount> 1.25x"   = 18 chars, and its gutter is 14 so the
+    #                  figures do not touch the sparkline that follows
+    #   trend    73px  27px of sparkline + 4 + "-10.8pp"
+    #   drift    44px  "-10.8pp"
+    W = {"name": 24, "track": 10, "now": 22, "target": 21, "trend": 14, "drift": 9}
+    #: The gutter after Target, wider than the rest: to its right sits a graphic, and
+    #: 8px between a figure and a sparkline reads as no gap at all.
+    GUT_TARGET = 14
 
     top = max([float(r.get("now") or 0.0) for r in rows]
               + [float(r.get("target") or 0.0) for r in rows] + [1.0]) * 1.08
@@ -1133,8 +1145,9 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
             f'<div style="margin-top:-9px;">{tick}</div></div>')
 
     def _th(key: str, label: str, align: str = "left") -> str:
+        gut = GUT_TARGET if key == "target" else GUT
         return (f'<td width="{W[key]}%" align="{align}" style="{TYPE["label"]}'
-                f'color:{P["subtle"]};padding:0 {GUT}px 4px 0;">{label}</td>')
+                f'color:{P["subtle"]};padding:0 {gut}px 4px 0;">{label}</td>')
 
     out = [f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
            f'border="0" style="width:100%;table-layout:fixed;margin-top:10px;">',
@@ -1243,7 +1256,7 @@ def _trend_cell(vals, target, colour) -> str:
     if len(series) < 2:
         return f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};">no series</span>'
     P = PALETTE
-    w, h = 36, 15
+    w, h = 27, 15
     pool = series + ([float(target)] if target is not None else [])
     lo, hi = min(pool), max(pool)
     if hi - lo < 1e-9:
@@ -1356,8 +1369,11 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
             # No swatch: every per-holding row would carry the same accent
             # square, keying nothing and taking the width the name needs.
             "label_html": _div_label(
+                # 15, not 42. The name column holds 21 characters and the ticker takes
+                # the first five of them; at 42 the name ran straight into the track
+                # beside it ("AVWS Avant. Gl. Sm Cap Value" overlapping its own bar).
                 display_instrument_name(_isin_for(it), key,
-                                        it.get("category") or key, 42),
+                                        it.get("category") or key, 15),
                 ticker=tk),
             "now": now,
             "target": float(it.get("target_pct", 0.0) or 0.0),
