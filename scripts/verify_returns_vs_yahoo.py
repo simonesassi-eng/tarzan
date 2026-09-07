@@ -178,11 +178,30 @@ _HEADER_TO_KEY = {"intraday": "1d", "1d": "1d", "5d": "5d", "1m": "1m", "3m": "3
                   "3y": "3y", "5y": "5y"}
 
 
+#: The section headers are "[NN]&nbsp;&nbsp;<span ...>Label</span>". Sections are
+#: located by LABEL: the ordinals shift the moment a section is added or removed, and
+#: when Portfolio movers took fourth place every ordinal after it moved by one. The
+#: oracle went on slicing between [06] and [07], read the Allocation section, found no
+#: period columns, and reported "0 figures compared, 0 disagreeing" -- which reads as a
+#: pass. A check that cannot find what it checks must not look green.
+_SECTION_RE = (r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>%s</span>')
+
+
+def _section(html: str, label: str) -> str:
+    """The markup of the section titled ``label``, up to the next section header."""
+    m = re.search(_SECTION_RE % re.escape(label), html)
+    if m is None:
+        return ""
+    rest = html[m.end():]
+    nxt = re.search(r'\[\d\d\]</span>&nbsp;&nbsp;<span', rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
 def _header_keys(html: str) -> list:
     """The RETURNS table's period columns, in the order it prints them."""
-    if "[06]" not in html:
+    sec = _section(html, "Returns")
+    if not sec:
         return []
-    sec = html.split("[06]", 1)[1].split("[07]", 1)[0]
     for tr in re.findall(r"<tr>.*?</tr>", sec, re.S):
         cells = [re.sub(r"<[^>]+>", "", c).strip().lower()
                  for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
@@ -193,9 +212,9 @@ def _header_keys(html: str) -> list:
 
 def _rendered_rows(html: str) -> dict:
     """``{displayed ticker: [figures]}`` from the RETURNS section's own markup."""
-    if "[06]" not in html:
+    sec = _section(html, "Returns")
+    if not sec:
         return {}
-    sec = html.split("[06]", 1)[1].split("[07]", 1)[0]
     out = {}
     for tr in re.findall(r"<tr>.*?</tr>", sec, re.S):
         cells = [re.sub(r"<[^>]+>", "", c).strip()
@@ -387,6 +406,14 @@ def main() -> int:
                     f"{float(eng):+.4f}% formats as {expected!r}")
     print(f"    {checked} figures compared, "
           f"{len([f for f in findings if f.startswith('RENDER')])} disagreeing")
+    # Zero comparisons is not a clean bill of health, it is a broken check. This fired
+    # for real when the section ordinals shifted and the slice landed on the wrong
+    # section: the step printed "0 figures compared, 0 disagreeing" and only the second
+    # check kept the run from going green on nothing.
+    if not checked:
+        findings.append(
+            "RENDER: no figures could be compared at all — the Returns table was not "
+            f"found or has no period columns (header read as {header_keys})")
     if unmatched:
         say(f"    unmatched rows (not checked): {unmatched}")
 
@@ -403,6 +430,17 @@ def main() -> int:
     else:
         rnd = random.Random(args.seed)
         sample = rnd.sample(pool, min(3, len(pool)))
+
+    # Mid-session, the tape and the oracle's own quote are two observations minutes
+    # apart, so 1D cannot be refereed: measured on a 09:33 Rome run, CL2 -- a 2x
+    # leveraged ETF, where a 0.65% index move is 1.3% on the line -- read -0.36% on the
+    # tape against +0.94% on a quote fetched moments later, and the 1.30pp "finding"
+    # was the clock. The scheduled slot is 08:17 Rome, before Milan and Xetra open, so
+    # this only bites a manual run.
+    session_open = bool((getattr(metrics, "performance", None) or {}).get("market_open"))
+    if session_open:
+        print("    a session is OPEN: 1D is not compared (tape and quote are "
+              "observations minutes apart)")
 
     print(f"\n[2] ENGINE vs YAHOO  ({len(sample)} instruments x {len(windows)} windows)")
     say(f"    sample: {', '.join(sample)}")
@@ -508,6 +546,11 @@ def main() -> int:
                   f"{('—' if ours is None else f'{float(ours):+.4f}%'):>11}"
                   f"{('—' if theirs is None else f'{theirs:+.4f}%'):>11}"
                   f"{('—' if gap is None else f'{gap:+.4f}'):>9}  {tail}")
+            if w == "1d" and session_open:
+                inconclusive.append(
+                    f"{tk} 1d: a session is open, so the tape's stamp and this "
+                    f"quote are observations minutes apart")
+                continue
             if not source_can_referee(last_day, engine_end, w):
                 inconclusive.append(
                     f"{tk} {w}: the source's frame stops {last_day} while the tape is "

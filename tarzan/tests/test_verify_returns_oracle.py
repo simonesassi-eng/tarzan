@@ -82,3 +82,48 @@ class TestWhenTheSourceMayJudge:
         """
         assert oracle.source_can_referee(
             dt.date(2026, 9, 4), dt.date(2026, 9, 3), "1m") is True
+
+
+def _section_html(ordinal: str, label: str, body: str = "") -> str:
+    """The shape the template emits for a section header."""
+    return (f'<span style="x">[{ordinal}]</span>&nbsp;&nbsp;'
+            f'<span style="y">{label}</span>{body}')
+
+
+class TestFindingTheReturnsTable:
+    """The oracle locates sections by LABEL, and this is why.
+
+    It used to slice between the literal strings "[06]" and "[07]". When Portfolio
+    movers took fourth place, every ordinal after it moved by one: Returns became [07]
+    and the slice landed on Allocation. The step then read no period columns and
+    printed "0 figures compared, 0 disagreeing" — a green line for a check that had
+    compared nothing.
+    """
+
+    def test_it_finds_the_section_by_its_label(self, oracle):
+        html = (_section_html("06", "Allocation", "ALLOC-BODY")
+                + _section_html("07", "Returns", "RETURNS-BODY")
+                + _section_html("08", "Watchlist", "WATCH-BODY"))
+        assert "RETURNS-BODY" in oracle._section(html, "Returns")
+        assert "ALLOC-BODY" not in oracle._section(html, "Returns")
+        assert "WATCH-BODY" not in oracle._section(html, "Returns")
+
+    def test_the_ordinal_may_move_without_breaking_it(self, oracle):
+        """The regression itself: same document, Returns renumbered."""
+        for ordinal in ("06", "07", "11"):
+            html = (_section_html("05", "Allocation", "ALLOC")
+                    + _section_html(ordinal, "Returns", "RETURNS-BODY"))
+            assert "RETURNS-BODY" in oracle._section(html, "Returns"), ordinal
+
+    def test_a_missing_section_yields_nothing_rather_than_the_whole_page(self, oracle):
+        html = _section_html("06", "Allocation", "ALLOC")
+        assert oracle._section(html, "Returns") == ""
+        assert oracle._header_keys(html) == []
+        assert oracle._rendered_rows(html) == {}
+
+    def test_the_period_columns_come_from_the_table_header(self, oracle):
+        html = _section_html("07", "Returns", (
+            "<table><tr>"
+            "<td>Instrument</td><td>1D</td><td>5D</td><td>1M</td><td>3Y</td>"
+            "</tr></table>"))
+        assert oracle._header_keys(html) == ["1d", "5d", "1m", "3y"]
