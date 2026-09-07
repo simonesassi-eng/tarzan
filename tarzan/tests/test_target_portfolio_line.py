@@ -306,16 +306,19 @@ class TestAllThreePanelsCarryTheTarget:
         # like-for-like span figure too ("Target 11.10%"), so match the name rather
         # than the exact label.
         named = re.findall(r'>(Target(?: [\d.]+%)?)</span>', html)
-        assert len(named) == 5, named
+        # Four keys: five return-grid cells share one, then the lifetime return and
+        # the lifetime volatility have one each... the 3M volatility panel is gone.
+        assert len(named) == 4, named
 
     def test_the_target_is_a_line_not_only_a_legend_entry(self):
         from tarzan.export._palette import PALETTE
         html = self._section()["vs_market_html"]
         drawn = len(re.findall(
             rf'<polyline[^>]*stroke="{PALETTE["target"]}"', html))
-        # Five return-grid cells (5D/1M/3M/YTD/1Y — 1D is figures, not a plot),
-        # the lifetime return, and the volatility pair (3M + lifetime).
-        assert drawn == 8, f"target polylines drawn: {drawn}"
+        # Five return-grid cells (5D/1M/3M/YTD/1Y — 1D is figures, not a plot), plus
+        # the lifetime return and the lifetime volatility. The 3M volatility panel
+        # that made this eight has been removed.
+        assert drawn == 7, f"target polylines drawn: {drawn}"
 
     def test_the_heading_names_the_target_and_the_benchmark_in_use(self):
         assert self._section()["vs_market_title"] == "Vs target &amp; Bench Index"

@@ -583,14 +583,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # of padding either side of each cell leaves 182px per plot; these are passed
     # explicitly because the SVG carries its own width — putting a chart in a
     # wider table cell does not make the chart wider.
-    W_WIDE, H_WIDE = 580, 166
     W_CELL, H_CELL = 182, 116
     # The volatility pair sits two-up: 580px content box less the 8px gutter either
     # side of the divider leaves 282px each.
     W_HALF, H_HALF = 282, 138
     # Room for the end labels: bare signed percentages, three of them stacked at
-    # the line ends, so ~46px at cell width and 54px on the wide chart.
-    G_WIDE, G_CELL, G_HALF = 54, 46, 52
+    # the line ends, so ~46px at cell width and 52px at half width.
+    G_CELL, G_HALF = 46, 52
     def _last_estimate(values):
         """The last FINITE value of a line, or None when it has none.
 
@@ -707,9 +706,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if win1d is not None:
             ser, leg = _panel(win1d, "1d")
             if ser:
+                # Two clock ticks, not three. They are spaced evenly by INDEX but
+                # placed by TIME, so mid-session -- when the prints fill the left
+                # third of a full-session axis -- three of them bunch: measured,
+                # "11:08" landed on top of "11:26". Two gives the first and last
+                # print, and the session's close is labelled at the right edge
+                # regardless, which is the whole axis a reader needs here.
                 chart = _charts.chart_pct_compact(
                     ser, win1d["dates"], include_zero=True, w=W_CELL, h=H_CELL,
-                    date_fmt="%H:%M", min_day_ticks=3, end_gutter=G_CELL,
+                    date_fmt="%H:%M", min_day_ticks=2, end_gutter=G_CELL,
                     x_span=win1d.get("session_span"))
                 if chart:
                     return _cellcap("1D", "session") + chart
@@ -780,32 +785,27 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         ret_grid = (_colcap("Return · by window") + _grid(ret_cells)
                     + _mini_legend(_ret_leg_all))
 
-        # The whole life, full width and on month ticks, under the grid. It is the
-        # only place the lifetime trajectory lives, and the gap it draws is the
-        # number the masthead and the state tile quote. None of the six windows
+        # The whole life, on month ticks, beside the volatility over the same span.
+        # It is the only place the lifetime trajectory lives, and the gap it draws is
+        # the number the masthead and the state tile quote. None of the six windows
         # substitutes for it: 1Y is a window, inception is the book.
+        #
+        # Half width rather than full, because it is now paired with the volatility
+        # over the SAME span: return and roughness over one period, read together.
         _si_chart = _charts.chart_pct_compact(
-            ssi, si_dates, include_zero=False, w=W_WIDE, h=H_WIDE,
-            month_ticks=True, end_gutter=G_WIDE) if ssi else ""
+            ssi, si_dates, include_zero=False, w=W_HALF, h=H_HALF,
+            month_ticks=True, end_gutter=G_HALF) if ssi else ""
         si_panel = (_colcap("Return · since inception")
                     + _si_chart + _mini_legend(si_leg)) if _si_chart else ""
 
-        # ── Volatility: two panels, not six ───────────────────────────────────
-        # The by-window grid is gone. Six volatility plots restated one fact the
-        # RISK section already carries a tile for, and their per-window sigmas
-        # ranged 8.74-10.99% on the reference book — a spread no reader acts on.
-        # What survives is the pair that answers a question the tile cannot: was
-        # the last quarter rougher than the book has been all along.
-        vol_3m = _vol_panel(vol_windows.get("3m"),
-                            (vol_windows.get("3m") or {}).get("dates") or si_dates,
-                            month_ticks=True, min_day_ticks=0,
-                            w=W_HALF, h=H_HALF, gutter=G_HALF)
-        if vol_3m:
-            _s3 = ((vol_windows.get("3m") or {}).get("window_sigma") or {}).get("port")
-            vol_3m = (_colcap("Volatility · 3M"
-                              + (f" · σ {_pct(_s3, signed=False)}" if _s3 is not None
-                                 else ""))
-                      + vol_3m + _mini_legend(_vol_legend(vol_windows.get("3m"))))
+        # ── Volatility: one panel ─────────────────────────────────────────────
+        # The by-window grid went first: six volatility plots restated one fact the
+        # RISK section already carries a tile for, and their per-window sigmas ranged
+        # 8.74-10.99% on the reference book — a spread no reader acts on. The 3M panel
+        # has now gone the same way. It was kept to answer "was the last quarter
+        # rougher than the book has been all along", which sounds like a question and
+        # is answered by comparing two numbers, not two plots; and its slot is worth
+        # more to the lifetime RETURN, which now sits beside it over the same span.
         vol_si_panel = _vol_panel(
             vol_si, vol_si["dates"] if vol_si else si_dates,
             month_ticks=True, min_day_ticks=0,
@@ -818,26 +818,28 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             vol_si_panel = (_colcap("Volatility · since inception")
                             + vol_si_panel
                             + _mini_legend(_vol_legend(vol_si, with_span=True)))
-        vol_row = ""
-        if vol_3m or vol_si_panel:
-            # One note for the pair rather than a caption each: at half width the
-            # estimator's description does not fit beside the window's name, and it
-            # is the same sentence twice.
-            vol_row = (
+        # Return and volatility over the book's whole life, two-up. One note under
+        # the pair rather than a caption each: at half width the estimator's
+        # description does not fit beside the panel's name.
+        life_row = ""
+        if si_panel or vol_si_panel:
+            life_row = (
                 f'<table role="presentation" width="100%" cellpadding="0" '
                 f'cellspacing="0" border="0"><tr>'
                 f'<td width="50%" valign="top" style="padding:0 8px 0 0;">'
-                f'{vol_3m}</td>'
+                f'{si_panel}</td>'
                 f'<td width="50%" valign="top" style="padding:0 0 0 8px;'
                 f'border-left:1px solid {P["border"]};">{vol_si_panel}</td>'
-                f'</tr></table>'
-                f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
-                f'Annualized. Line: rolling 21 sessions. '
-                f'Figures in the keys: σ over the panel’s own span.</div>')
+                f'</tr></table>')
+            if vol_si_panel:
+                life_row += (
+                    f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
+                    f'Volatility annualized. Line: rolling 21 sessions. '
+                    f'Figures in its key: σ over the book’s whole life.</div>')
 
         _rule = (f'<div style="margin-top:12px;padding-top:12px;'
                  f'border-top:1px solid {P["border"]};"></div>')
-        _blocks = [b for b in (ret_grid, si_panel, vol_row) if b]
+        _blocks = [b for b in (ret_grid, life_row) if b]
         charts_tbl = f'<div style="margin-top:12px;">{_rule.join(_blocks)}</div>'
         # No "why you're diverging" block. The concept does not carry one, and
         # it restated the section: the gap is in the heading's subtitle, the
@@ -983,6 +985,11 @@ def _intraday_weighted_path(quotes: dict, weights: dict):
 #: loop covers all six. Order is draw order: references after the portfolio.
 _INTRADAY_LINE_KEYS = ("twror", "target", "acwi")
 
+#: How far before the bell the 0% origin sits. Long enough that the overnight gap
+#: reads as a ramp rather than a vertical line at the very edge (10 minutes is ~2% of
+#: an 8.5-hour session), short enough not to claim the market was open then.
+_ORIGIN_LEAD_MIN = 10
+
 
 def _tape_one_day(m, geo_name: Optional[str] = None) -> dict:
     """The AUTHORITATIVE 1D per line, from the tape rather than from the bars.
@@ -1101,6 +1108,66 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     if not raw:
         return None
 
+    # The venue's session, resolved here rather than at the end because the origin
+    # point below has to join the shared axis. Taken from the venue that produced the
+    # most heavily weighted path -- the holdings' own -- and None when no cash session
+    # is modelled (a continuously traded book), which leaves the panel on the even
+    # spread it has always used.
+    from tarzan.data.market_quotes import session_span
+    span = None
+    try:
+        first = next((str(t) for t in (m.holdings_df["ticker"]
+                                       if getattr(m, "holdings_df", None) is not None
+                                       and "ticker" in m.holdings_df else [])
+                      if str(t) in quotes), "")
+        if first:
+            src = str((quotes.get(first) or {}).get("intraday_source_ticker") or first)
+            span = session_span(src)
+    except Exception:  # noqa: BLE001 — no venue is not an error, only no span
+        span = None
+
+    # ── Every line starts at 0% ────────────────────────────────────────────────
+    # Each path is a percentage of its OWN previous close, so at the bell its value
+    # is the overnight gap, not zero -- and the three gaps differ. Measured on the
+    # real book mid-session: the portfolio's line began at +0.144%, the target's at
+    # -0.029% and the benchmark's at +0.261%, three different heights on one axis,
+    # which is unreadable as a comparison however honest each line is.
+    #
+    # So an ORIGIN is prepended: the previous close itself, at 0%, a few minutes
+    # before the bell. Every line then leaves the same point and the overnight gap
+    # becomes the first SEGMENT -- visible where it happened rather than baked into
+    # the starting height. Nothing is restated: the origin is each series' own
+    # denominator, and the endpoint is untouched, so the panel still ends on the
+    # figure the 1D column and the Session tile print.
+    #
+    # The alternative -- rebasing each line on its first bar of the day -- would also
+    # start them together, and would silently drop the overnight move and break that
+    # endpoint identity. Not that.
+    origin = None
+    if span:
+        opened = pd.Timestamp(span[0])
+        earliest = min(pd.Timestamp(s.index[0]) for s in raw.values() if s is not None)
+        if earliest.tz is not None and opened.tz is None:
+            opened = opened.tz_localize(earliest.tz)
+        elif earliest.tz is not None:
+            opened = opened.tz_convert(earliest.tz)
+        # Before the bell, and before any pre-market print: a session's origin must
+        # never land mid-session.
+        origin = min(opened, earliest) - pd.Timedelta(minutes=_ORIGIN_LEAD_MIN)
+        for key, s_ in list(raw.items()):
+            if s_ is None:
+                continue
+            raw[key] = pd.concat(
+                [pd.Series([0.0], index=[origin], dtype=float), s_.astype(float)])
+        # The axis has to reach the origin or the point is drawn outside the plot.
+        # Both ends in the VENUE's zone, not the bars': the axis labels are clock
+        # times a reader checks against the market they hold, and normalising onto the
+        # feed's UTC index printed "06:50 ... 15:30" for a Milan session that runs
+        # 09:00-17:30.
+        venue_tz = getattr(pd.Timestamp(span[1]), "tz", None)
+        start = origin if venue_tz is None else pd.Timestamp(origin).tz_convert(venue_tz)
+        span = (start.to_pydatetime(), pd.Timestamp(span[1]).to_pydatetime())
+
     axis = None
     for key in _INTRADAY_LINE_KEYS:
         s = raw.get(key)
@@ -1110,6 +1177,17 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     if axis is None or len(axis) < 2:
         return None
 
+    # The axis in the VENUE's zone, because the chart labels its interior ticks from
+    # these timestamps and its right edge from the span. Left in the feed's UTC they
+    # disagreed: one 1D cell printed "06:50" (the origin, UTC) on top of "08:50" (the
+    # same instant, Rome) beside a right edge reading "17:30". Same instant either way
+    # -- values, order and endpoints are untouched -- so this is purely what the reader
+    # is shown.
+    if span and getattr(pd.Timestamp(span[0]), "tz", None) is not None:
+        try:
+            axis = pd.DatetimeIndex(axis).tz_convert(pd.Timestamp(span[0]).tz)
+        except (TypeError, ValueError):
+            pass
     out: dict[str, object] = {"dates": list(axis)}
     endpoints: dict[str, Optional[float]] = {}
     for key in _INTRADAY_LINE_KEYS:
@@ -1151,18 +1229,6 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     # venue that produced the most heavily weighted path -- the holdings' own -- and
     # None when no cash session is modelled (a continuously traded book), which
     # leaves the caller on the even spread it has always used.
-    from tarzan.data.market_quotes import session_span
-    span = None
-    try:
-        first = next((str(t) for t in (m.holdings_df["ticker"]
-                                       if getattr(m, "holdings_df", None) is not None
-                                       and "ticker" in m.holdings_df else [])
-                      if str(t) in quotes), "")
-        if first:
-            src = str((quotes.get(first) or {}).get("intraday_source_ticker") or first)
-            span = session_span(src)
-    except Exception:  # noqa: BLE001 — no venue is not an error, only no span
-        span = None
     out["session_span"] = span
     return out
 
@@ -1730,6 +1796,10 @@ _MOVER_WINDOWS = (("1d", "1D"), ("5d", "5D"), ("1m", "1M"), ("3m", "3M"))
 #: the target grid without truncating a ticker.
 _MOVER_RANKS = 3
 
+#: Ceiling on the magnitude tint. The cell has to stay a wash the figure reads through;
+#: at 0.75 the strongest cells rendered as solid blocks and fought the numbers in them.
+_MOVER_TINT_MAX = 0.5
+
 
 def _mover_pp(value: Optional[float]) -> str:
     """A contribution in points of the total, tapered by magnitude.
@@ -1817,56 +1887,76 @@ def _mover_grid_html(universe: list[dict], label: str, swatch: str,
     dropped = len(universe) - len(shown)
     heaviest = max(r["weight"] for r in universe)
 
-    head = (f'<tr><td style="{TYPE["label"]}color:{PALETTE["subtle"]};'
-            f'padding:0 0 4px 0;">Ticker</td>'
-            f'<td style="{TYPE["label"]}color:{PALETTE["subtle"]};'
-            f'padding:0 0 4px 6px;">Wt</td>')
+    # The house table idiom, so the grid reads as part of the issue rather than as a
+    # widget dropped into it: a header band on ``head_bg``, zebra rows, the 10px data
+    # font every other table uses, figures right-aligned on tabular numerals, and the
+    # whole thing at 100% width. The first pass used a bare 9px grid sized to its
+    # content, which left its half-column short of the margin and looked foreign.
+    head = (f'<tr style="background:{PALETTE["head_bg"]};">'
+            f'<td style="{TYPE["label"]}color:{PALETTE["muted"]};'
+            f'padding:5px 6px;">Ticker</td>'
+            f'<td align="right" style="{TYPE["label"]}color:{PALETTE["muted"]};'
+            f'padding:5px 6px;">Wt</td>')
     for _, column in _MOVER_WINDOWS:
-        head += (f'<td align="center" style="{TYPE["label"]}'
-                 f'color:{PALETTE["subtle"]};padding:0 0 4px 0;">{column}</td>')
+        head += (f'<td align="right" style="{TYPE["label"]}'
+                 f'color:{PALETTE["muted"]};padding:5px 6px;">{column}</td>')
     head += "</tr>"
 
     body = ""
-    for r in shown:
-        fill = max(2, int(round(r["weight"] / heaviest * 26)))
+    for i, r in enumerate(shown):
+        fill = max(2, int(round(r["weight"] / heaviest * 30)))
+        zebra = PALETTE["zebra"] if i % 2 else PALETTE["card"]
         body += (
-            f'<tr><td style="{TYPE["data"]}color:{PALETTE["ink"]};padding:1px 0;'
-            f'white-space:nowrap;">{_esc(r["bare"])}</td>'
-            f'<td style="padding:1px 0 1px 6px;white-space:nowrap;">'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-            f'style="width:26px;background:{PALETTE["group_bg"]};border-radius:2px;">'
-            f'<tr><td style="width:{fill}px;height:5px;'
+            f'<tr><td style="{TYPE["data"]}color:{PALETTE["ink"]};'
+            f'background:{zebra};padding:4px 6px;white-space:nowrap;'
+            f'border-top:1px solid {PALETTE["row_rule"]};">{_esc(r["bare"])}</td>'
+            f'<td align="right" style="background:{zebra};padding:4px 6px;'
+            f'white-space:nowrap;border-top:1px solid {PALETTE["row_rule"]};">'
+            f'<table role="presentation" align="right" cellpadding="0" '
+            f'cellspacing="0" border="0" style="width:30px;'
+            f'background:{PALETTE["group_bg"]};border-radius:2px;">'
+            f'<tr><td style="width:{fill}px;height:6px;'
             f'background:{PALETTE["accent"]};border-radius:2px;font-size:0;'
             f'line-height:0;">&nbsp;</td>'
             f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table></td>')
         for key, _ in _MOVER_WINDOWS:
             value = r["contrib"].get(key)
             if value is None:
-                body += (f'<td align="center" style="{TYPE["prose"]}'
-                         f'color:{PALETTE["subtle"]};padding:1px 2px;">&middot;</td>')
+                body += (f'<td align="right" style="{TYPE["data"]}'
+                         f'background:{PALETTE["card"]};'
+                         f'color:{PALETTE["subtle"]};padding:4px 6px;'
+                         f'border-top:1px solid {PALETTE["row_rule"]};">'
+                         f'&middot;</td>')
                 continue
             colour = PALETTE["green"] if value >= 0 else PALETTE["red"]
-            tint = _mover_tint(colour, PALETTE["card_alt"],
-                               min(1.0, abs(value) / scale[key]) * 0.75)
+            # Over ONE base, not the zebra: two things varying the same background
+            # (row parity and magnitude) read as noise, and the tint is the one
+            # carrying information. Capped well below opaque so it stays a wash a
+            # figure can be read through -- at 0.75 the cells read as filled blocks
+            # and competed with the numbers printed in them.
+            tint = _mover_tint(colour, PALETTE["card"],
+                               min(1.0, abs(value) / scale[key]) * _MOVER_TINT_MAX)
             extreme = marks.get(r["ticker"], {}).get(key)
             body += (
-                f'<td align="center" style="background:{tint};font-size:9px;'
+                f'<td align="right" style="background:{tint};{TYPE["data"]}'
                 f'font-weight:{"700" if extreme else "400"};'
                 f'color:{PALETTE["ink"] if extreme else PALETTE["subtle"]};'
-                f'font-variant-numeric:tabular-nums;padding:1px 4px;'
-                f'border:1px solid {PALETTE["card_alt"]};white-space:nowrap;">'
+                f'font-variant-numeric:tabular-nums;padding:4px 6px;'
+                f'border-top:1px solid {PALETTE["row_rule"]};white-space:nowrap;">'
                 f'{_mover_pp(value) if extreme else "&nbsp;"}</td>')
         body += "</tr>"
 
-    foot = (f'<tr><td colspan="2" style="{TYPE["label"]}color:{PALETTE["subtle"]};'
-            f'padding:4px 0 0 0;white-space:nowrap;">All</td>')
+    foot = (f'<tr style="background:{PALETTE["group_bg"]};">'
+            f'<td colspan="2" style="{TYPE["label"]}color:{PALETTE["muted"]};'
+            f'padding:5px 6px;white-space:nowrap;'
+            f'border-top:1px solid {PALETTE["border"]};">All</td>')
     for key, _ in _MOVER_WINDOWS:
         total = total_by_window.get(key)
         colour = (PALETTE["subtle"] if total is None
                   else PALETTE["green"] if total >= 0 else PALETTE["red"])
-        foot += (f'<td align="center" style="{TYPE["data"]}color:{colour};'
-                 f'font-variant-numeric:tabular-nums;padding:4px 2px 0 2px;'
-                 f'white-space:nowrap;">'
+        foot += (f'<td align="right" style="{TYPE["data"]}color:{colour};'
+                 f'font-variant-numeric:tabular-nums;padding:5px 6px;'
+                 f'white-space:nowrap;border-top:1px solid {PALETTE["border"]};">'
                  f'{"—" if total is None else _pct(total, signed=True)}</td>')
     foot += "</tr>"
 
@@ -1884,8 +1974,10 @@ def _mover_grid_html(universe: list[dict], label: str, swatch: str,
         f'{_esc(label)}</span>'
         f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};padding-left:7px;">'
         f'{note}</span></td></tr></table>'
-        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'style="margin-top:8px;border-collapse:separate;border-spacing:0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'border="0" style="width:100%;margin-top:8px;table-layout:fixed;'
+        f'border:1px solid {PALETTE["border"]};border-radius:8px;'
+        'border-collapse:separate;border-spacing:0;overflow:hidden;">'
         f'{head}{body}{foot}</table>')
 
 

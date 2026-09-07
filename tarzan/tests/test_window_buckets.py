@@ -15,6 +15,8 @@ window (1D / 5D / 1M / 3M / YTD / 1Y). Two things had to exist for that:
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -269,25 +271,6 @@ class TestTheWindowSigmaIsNotTheLinesEndValue:
         assert vs is not None
         assert vs["window_sigma"]["port"] is not None
 
-    def test_the_caption_prints_it_beside_the_window_name(self):
-        """The by-window volatility grid is gone, so the per-window σ now appears on
-        the one volatility panel that names a window: 3M. It still has to be the
-        WINDOW's σ and not the line's end value, which is why ``window_sigma``
-        exists — the two tests above pin that distinction directly."""
-        from tarzan.export.newsletter._constants import _NewsletterContext
-        from tarzan.export.newsletter._sections_perf import _build_performance30
-        from tarzan.models.investor_config import InvestorConfig
-        from tarzan.export._perf_series import _perf_vol_series
-        from tarzan.export.newsletter._format import _pct
-
-        m = self._metrics()
-        sec = _build_performance30(_NewsletterContext(
-            metrics=m, config=InvestorConfig(), benchmark_geo="B"))
-        html = sec["vs_market_html"]
-
-        expected = _perf_vol_series(m, "B", bucket="3m")["window_sigma"]["port"]
-        assert f"Volatility · 3M · σ {_pct(expected, signed=False)}" in html
-
 
 class TestTheOneDayCellDrawsTheSession:
     """1D comes from INTRADAY bars, not from two daily closes.
@@ -353,7 +336,9 @@ class TestTheOneDayCellDrawsTheSession:
 
         assert "<svg" in cell, cell[:300]
         # Times, not dates: the x axis of one session is a clock.
-        assert ">09:05<" in cell or ">10:05<" in cell, cell[-600:]
+        # A clock label, not a specific hour: the axis now opens ten minutes before
+        # the bell (the 0% origin), so pinning one tick pinned the origin's offset.
+        assert re.search(r">\d\d:\d\d<", cell), cell[-600:]
 
     def test_both_the_portfolio_and_the_benchmark_are_drawn(self):
         from tarzan.export._palette import PALETTE

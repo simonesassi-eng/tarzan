@@ -66,12 +66,15 @@ class TestTheRankingMeasure:
 
 class TestWhatTheGridPrints:
     @pytest.fixture
-    def html(self):
+    def universe(self):
         # Eight lines so the three-each-side ranking leaves lines out.
-        rows = [(f"T{i}", float(i + 1), {"1d": (i - 3) * 0.5, "5d": 0.1,
-                                        "1m": 0.2, "3m": 0.3})
-                for i in range(8)]
-        return sp._mover_grid_html(_universe(rows), "Portfolio", "#E6EDF6",
+        return _universe([(f"T{i}", float(i + 1),
+                           {"1d": (i - 3) * 0.5, "5d": 0.1, "1m": 0.2, "3m": 0.3})
+                          for i in range(8)])
+
+    @pytest.fixture
+    def html(self, universe):
+        return sp._mover_grid_html(universe, "Portfolio", "#E6EDF6",
                                    {"1d": -0.1, "5d": 0.1, "1m": 0.2, "3m": 0.3})
 
     def test_it_names_the_bare_ticker(self, html):
@@ -89,23 +92,22 @@ class TestWhatTheGridPrints:
     def test_the_header_says_how_many_were_dropped(self, html):
         assert "not top three" in html
 
-    def test_a_figure_is_printed_only_where_a_line_was_an_extreme(self, html):
+    def test_a_figure_is_printed_exactly_on_the_extremes(self, universe, html):
         """The tint carries the magnitude of the rest.
 
-        Filling every cell was tried on the real book and rejected as too busy, so a
-        cell that is merely tinted must stay wordless — and a bold cell must carry a
-        figure. Both directions matter: a bold blank would look like a bug.
+        Filling every cell was tried on the real book and rejected as too busy, so the
+        count of printed contributions must equal the count of top-three/bottom-three
+        slots — no more (clutter) and no fewer (a bold blank looks like a bug). Counted
+        rather than matched on CSS, so restyling the grid cannot quietly break it.
         """
-        # Body cells only. The totals row is also centred and also carries a
-        # figure, and it is not an extreme of anything -- only the grid cells,
-        # which are the ones with a cell border, are under this rule.
-        cells = [c for c in re.findall(r'<td align="center"[^>]*>(?:&nbsp;|[^<]*)</td>',
-                                      html) if "border:1px solid" in c]
-        assert cells, "no grid cells matched"
-        for cell in cells:
-            bold = "font-weight:700" in cell
-            body = re.sub(r"<[^>]+>", "", cell).replace("&nbsp;", "").strip()
-            assert bold == bool(body), cell
+        expected = 0
+        for key, _ in sp._MOVER_WINDOWS:
+            ahead, behind = sp._mover_rows(universe, key)
+            expected += len({r["ticker"] for r in ahead} | {r["ticker"] for r in behind})
+        # Contributions print bare; the totals row prints percentages, so the trailing
+        # "%" is what tells the two apart.
+        printed = re.findall(r">([+−]\d+\.\d{2,3})</td>", html)
+        assert len(printed) == expected, printed
 
     def test_the_universe_total_is_the_last_row(self, html):
         assert html.rindex("All") > html.rindex("T0")
