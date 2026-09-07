@@ -358,8 +358,9 @@ def resolve_isin(symbol: str) -> Optional[str]:
     interchangeable inputs (no manual ISIN entry needed).
 
     Chain: learned ticker↔ISIN cache → yfinance ``.isin`` (reliable for US
-    listings; European UCITS listings usually return "-"). Any hit is cached
-    (immutable). Returns None when no free source knows it (caller then keeps
+    listings; European UCITS listings usually return "-"). A hit is cached
+    (immutable) only when the provider also NAMES the symbol — see
+    :func:`_names_itself`. Returns None when no free source knows it (caller then keeps
     whatever ISIN it already has, or degrades gracefully).
     """
     if not symbol:
@@ -375,15 +376,48 @@ def resolve_isin(symbol: str) -> Optional[str]:
     try:
         import yfinance as yf
         from tarzan.data import _yf_net
-        raw = _yf_net.fetch_yf(lambda: yf.Ticker(symbol).isin,
+        ticker = yf.Ticker(symbol)
+        raw = _yf_net.fetch_yf(lambda: ticker.isin,
                                what=f"isin {symbol}", log=logger) or ""
         raw = raw.replace("-", "").strip().upper()
         if len(raw) == 12 and raw[:2].isalpha():
+            # An ISIN from a symbol the provider cannot NAME is not this instrument's.
+            # A bare ticker is ambiguous across venues, and asking for "MFEH" returned
+            # DE000A0KD0F7 with no name at all -- an unrelated German security -- while
+            # "MFEH.DE" is the iMGP DBi Managed Futures R EUR HP and reports no ISIN,
+            # as European UCITS listings usually do. The wrong pair was then stored,
+            # and this cache is immutable, so it stayed wrong for good.
+            #
+            # Requiring a name keeps the US listings this exists for (AAPL, JNJ and the
+            # rest all identify themselves) and refuses the ambiguous match.
+            if not _names_itself(ticker, symbol):
+                logger.info(
+                    "Refusing ISIN %s for %r: the provider returns no instrument name "
+                    "for that symbol, so the match is not verifiable.", raw, symbol)
+                return None
             price_cache.store_ticker_isin(symbol, raw)
             return raw
     except Exception as e:  # noqa: BLE001
         logger.debug("ISIN resolve failed for %s: %s", symbol, e)
     return None
+
+
+def _names_itself(ticker, symbol: str) -> bool:
+    """Whether the provider returns an instrument name for this symbol.
+
+    The one cheap signal that a quote is a real listing rather than a loose match on a
+    ticker string. Any failure reading it counts as "cannot verify": an ISIN is only
+    learned once, so the cost of a false negative is one re-resolution and the cost of
+    a false positive is a permanent wrong answer.
+    """
+    from tarzan.data import _yf_net
+
+    try:
+        info = _yf_net.fetch_yf(lambda: ticker.info,
+                                what=f"info {symbol}", log=logger) or {}
+        return bool((info.get("longName") or info.get("shortName") or "").strip())
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def justetf_ter(isin: str) -> Optional[float]:
