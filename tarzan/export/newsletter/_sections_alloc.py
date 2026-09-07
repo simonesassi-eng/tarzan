@@ -1046,243 +1046,228 @@ def _div_label(name: str, color: Optional[str] = None,
 def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
                show_leverage: bool = False, first_label: str = "Name",
                subs: bool = True, value_subs: Optional[bool] = None) -> str:
-    """Unified diversification table (asset class / geography / by holding).
+    """The allocation table: one slice per ROW, one line per row.
 
-    One row per slice — current weight, target, the weight against its target
-    on a shared axis, a 1-month trend sparkline and the drift — in a single
-    table style shared by all three groups (no donuts). Each row dict carries ``label_html``, ``now``,
-    ``target``, ``spark_vals`` and ``color``. When ``base`` (the EUR value of
-    100%) is given, the Now/Target cells also show the compact absolute
-    amount inline (e.g. "26.5% · €12.5k") — same row height, no extra
-    columns, since the % is what drives width/alignment.
+    Every column the section has always carried — the weight now, the target, the two
+    against each other on a shared axis, the month's trend and the drift — in about
+    22px instead of 50. The height came from two habits, not from the column count:
+    the percentage stacked over its euro amount, and a 40px sparkline. On one line and
+    at 15px the three tables together take roughly half the page they did.
 
-    ``subs`` gates the trend-pp line under the sparkline and the leverage
-    line under drift. ``value_subs`` gates the euro line under Now/Target
-    independently — it defaults to ``subs`` when not given, so existing
-    callers are unaffected, but a table can show the euro amount without
-    also turning on the trend-pp sub-line, or vice versa.
+    The track is a bullet graph: a pale band for the ±tolerance around the target, the
+    weight as a bar over it, the target as a tick. A bar inside its band needs nothing
+    doing, which the reader sees without reading a figure.
 
-    ``show_leverage`` adds a "Lev" column = notional exposure / physical
-    capital in that class (row dict ``leverage``); used only for the asset-
-    class table, where >1.0 marks a partly-synthetic class (e.g. a bond
-    overlay). Returns "" for an empty ``rows``.
+    ``show_leverage`` puts each class's notional-per-euro factor INSIDE the Now and
+    Target cells rather than in a column of its own — actual beside the actual weight,
+    the plan's beside the plan's, which is where each belongs. The target factor is
+    ``None`` for a class the plan holds no physical capital in ("synth"): fixed income
+    here is entirely an efficient core's bond overlay, and printing a ratio over a zero
+    denominator would invent one.
+
+    ``subs`` and ``value_subs`` are kept for call-site compatibility and no longer gate
+    a second line, because there is no second line: ``base`` alone decides whether a
+    euro amount appears beside a percentage.
     """
     if not rows:
         return ""
-    P = PALETTE
-    value_subs = subs if value_subs is None else value_subs
+    P, FS = PALETTE, TYPE_PX["data"]
+    GUT = 8
 
-    # One bar scale across this sub-table's rows, so a 78% sleeve and a 2% one
-    # are comparable bars instead of each filling its own cell.
-    _weights = []
-    for _r in rows:
-        for _k in ("now", "target"):
-            try:
-                _weights.append(float(_r.get(_k)))
-            except (TypeError, ValueError):
-                pass
-    _bullet_scale = (max(_weights) * 1.08) if _weights else None
+    # Widths sum to 100 and every column carries the same gutter. Sized on the widest
+    # content at ~6px a character: "74.4% <amount> 1.10x" is 21, "-13.2pp" is 7.
+    if show_leverage:
+        W = {"name": 19, "track": 11, "now": 22, "target": 21, "trend": 14, "drift": 13}
+    else:
+        W = {"name": 24, "track": 14, "now": 19, "target": 18, "trend": 14, "drift": 11}
 
-    # Column widths. The value columns lost two thirds of their width when the
-    # euro amount moved under the percentage instead of beside it, and the row
-    # labels got it: asset-class and instrument names no longer wrap.
-    # The concept's own column widths, now that the content box is 580px rather
-    # than 536: 58 for each numeric column, 96 for the bullet, 88 for the trend
-    # and 56 for the drift. That leaves 224px for the row label, which is what
-    # stops asset-class and instrument names wrapping.
-    W_VAL, W_BULLET, W_TREND, W_DRIFT = 58, 96, 88, 56
-    BULLET_W, SPARK_W, MARK_H = 88, 84, 26
+    top = max([float(r.get("now") or 0.0) for r in rows]
+              + [float(r.get("target") or 0.0) for r in rows] + [1.0]) * 1.08
 
-    def _no_series() -> str:
-        """An explicit placeholder where a trend has no history.
+    def _fig(pct: Optional[float], lev=None, *, bold: bool, dp: int) -> str:
+        if pct is None:
+            return f'<span style="color:{P["subtle"]};">\u2014</span>'
+        colour = P["ink"] if bold else P["muted"]
+        weight = "700" if bold else "400"
+        out = (f'<span style="color:{colour};font-weight:{weight};">'
+               f'{_pct_smart(float(pct))}</span>')
+        if base:
+            out += (f'<span style="color:{P["subtle"]};"> '
+                    f'{_eur_smart(float(pct) / 100.0 * float(base))}</span>')
+        if show_leverage and lev is not _NO_LEV:
+            out += (f'<span style="color:{P["subtle"]};"> '
+                    f'{"synth" if lev is None else f"{float(lev):.2f}\u00d7"}</span>')
+        return out
 
-        A blank cell is ambiguous: it reads as a flat weight rather than as an
-        instrument that has not been held long enough to have a trend.
-        """
-        return (f'<span style="font-size:{TYPE_PX["label"]}px;'
-                f'color:{P["subtle"]};">no series</span>')
+    def _track(now: float, target: Optional[float], colour: str) -> str:
+        w_now = max(1, int(round(now / top * 100)))
+        if target is None:
+            band = '<td style="font-size:0;line-height:0;">&nbsp;</td>'
+            tick = ""
+        else:
+            lo = max(0, min(100, int(round((target - tol) / top * 100))))
+            hi = max(0, min(100, int(round((target + tol) / top * 100))))
+            x = max(0, min(100, int(round(target / top * 100))))
+            band = (f'<td width="{lo}%" style="font-size:0;line-height:0;">&nbsp;</td>'
+                    f'<td width="{max(1, hi - lo)}%" style="background:'
+                    f'{_tint(P["accent"], P["card"], 0.20)};font-size:0;'
+                    f'line-height:0;">&nbsp;</td>'
+                    f'<td style="font-size:0;line-height:0;">&nbsp;</td>')
+            tick = (f'<table role="presentation" width="100%" cellpadding="0" '
+                    f'cellspacing="0" border="0"><tr>'
+                    f'<td width="{x}%" style="font-size:0;line-height:0;">&nbsp;</td>'
+                    f'<td width="1" style="height:13px;background:{P["ink"]};'
+                    f'font-size:0;line-height:0;">&nbsp;</td>'
+                    f'<td style="font-size:0;line-height:0;">&nbsp;</td>'
+                    f'</tr></table>')
+        return (
+            f'<div><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0" style="height:9px;background:'
+            f'{P["group_bg"]};border-radius:2px;"><tr style="height:9px;">'
+            f'{band}</tr></table>'
+            f'<div style="margin-top:-7px;"><table role="presentation" width="100%" '
+            f'cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td width="{w_now}%" style="height:5px;background:{colour};'
+            f'border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>'
+            f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table></div>'
+            f'<div style="margin-top:-9px;">{tick}</div></div>')
 
-    def _trend_pp(vals) -> str:
-        """The window's change in weight, in percentage points, for the line
-        under the sparkline. Empty when there is no window to measure.
+    def _th(key: str, label: str, align: str = "left") -> str:
+        return (f'<td width="{W[key]}%" align="{align}" style="{TYPE["label"]}'
+                f'color:{P["subtle"]};padding:0 {GUT}px 4px 0;">{label}</td>')
 
-        No arrow: the sparkline above it already points, and the sign on the
-        number says the same thing a third time.
-        """
-        if not subs or not vals or len(vals) < 2:
-            return ""
-        return f"{_signed_pp(float(vals[-1]) - float(vals[0]))}pp"
+    out = [f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+           f'border="0" style="width:100%;table-layout:fixed;margin-top:10px;">',
+           '<tr>' + _th("name", _esc(first_label)) + _th("track", "Vs target")
+           + _th("now", "Now", "right") + _th("target", "Target", "right")
+           + _th("trend", "Trend") + _th("drift", "Drift", "right") + '</tr>']
 
-    def _lev_sub(lev) -> str:
-        """The leverage factor as the drift cell's sub-line: how much notional
-        the sleeve carries per euro of capital.
-
-        Inline beside the drift it competed for the cell's width and, being a
-        second figure on the same line, read as part of the drift. On its own
-        line it is legible at every value, so it no longer has to be suppressed
-        below 1.05x to dodge the collision.
-        """
-        if not subs or not show_leverage or lev is None:
-            return ""
-        try:
-            return f"{float(lev):.2f}\u00d7"
-        except (TypeError, ValueError):
-            return ""
-
-    def _bullet_cell(now_pct, tgt_pct) -> str:
-        """The weight against its target on a shared axis, with the tolerance
-        corridor drawn. A drift figure alone cannot say whether the position is
-        inside the band: -2.0pp reads the same against a 1pp corridor and a 5pp
-        one."""
-        try:
-            a, t = float(now_pct), float(tgt_pct)
-        except (TypeError, ValueError):
-            return ""
-        # One shared scale across the sub-table's rows, so a 78% sleeve and a
-        # 2% sleeve are comparable bars rather than each filling its own cell.
-        return _bullet(a, t, tol=tol, w=BULLET_W, h=MARK_H,
-                       scale_max=_bullet_scale)
-
-    FS = TYPE_PX["data"]  # one type size across the row, label included
-
-    def _stack(main: str, sub: str, *, color: str, weight: int = 700) -> str:
-        """A value and its qualifier, stacked.
-
-        The qualifier used to sit inline after a middot ("77.6% \u00b7 \u20ac177k"),
-        so every value column carried two figures side by side and took the
-        width the row labels needed -- asset-class names wrapped onto three
-        lines. Stacked, the column is a third as wide, the figures still align
-        because both lines are tabular, and the eye reads one number per column.
-        """
-        top = (f'<div style="font-size:{FS}px;font-weight:{weight};'
-               f'color:{color};font-variant-numeric:tabular-nums;'
-               f'white-space:nowrap;">{main}</div>')
-        if not sub:
-            return top
-        return (top + f'<div style="margin-top:1px;'
-                      f'font-size:{TYPE_PX["label"]}px;'
-                      f'color:{P["subtle"]};font-variant-numeric:tabular-nums;'
-                      f'white-space:nowrap;">{sub}</div>')
-
-    def _num_cell(pct_val: float, color: str, weight: int = 700) -> str:
-        """A Now/Target cell: the weight, with its euro amount underneath when a
-        EUR base for 100% is known and this table shows the value sub-line."""
-        eur = (_eur_smart(pct_val / 100.0 * base)
-               if (value_subs and base and base > 0) else "")
-        return _stack(_pct_smart(pct_val), eur, color=color, weight=weight)
-
-    def _eur_cell(eur_val: float, color: str, weight: int = 700,
-                  signed: bool = False) -> str:
-        """The cash row's value cell: a EUR amount and no percentage, because
-        cash is not a share of the invested base."""
-        return _stack(_eur_smart(eur_val, signed=signed), "",
-                      color=color, weight=weight)
-
-    body = []
     for r in rows:
-        bb = f'border-bottom:1px solid {P["border"]};'
-        # Total-portfolio summary row: highlighted, portfolio-level leverage
-        # (total notional / capital), total notional Now vs total Target.
-        if r.get("is_total"):
-            abg = P["accent_bg"]
-            now = float(r.get("now", 0.0) or 0.0)
-            tgt = float(r.get("target", 0.0) or 0.0)
-            drift = now - tgt
-            vals = r.get("spark_vals")
-            sp = _spark(vals, tgt, P["accent"], SPARK_W, MARK_H) if vals else ""
-            sp = _stack(sp, _trend_pp(vals), color=P["accent"]) if sp else ""
-            body.append(
-                f'<tr>'
-                f'<td style="padding:8px;background:{abg};font-size:{FS}px;font-weight:700;'
-                f'color:{P["accent"]};">{r.get("label_html", "")}</td>'
-                f'<td align="right" style="padding:8px;background:{abg};width:{W_VAL}px;">'
-                f'{_num_cell(now, P["accent"])}</td>'
-                f'<td align="right" style="padding:8px;background:{abg};width:{W_VAL}px;">'
-                f'{_num_cell(tgt, P["accent"])}</td>'
-                # The total gets a bullet like every other row, with a second,
-                # fainter mark at 100% of capital: that is the reference the
-                # overshoot is read against, and an empty cell here left the
-                # sleeves' sum with nothing to compare to.
-                f'<td align="right" valign="middle" style="padding:8px 6px;'
-                f'background:{abg};width:{W_BULLET}px;">'
-                f'{_bullet(now, tgt, tol=tol, w=BULLET_W, h=MARK_H, scale_max=max(now, tgt) * 1.06, ref=100.0)}</td>'
-                f'<td align="right" valign="middle" style="padding:8px 4px;background:{abg};'
-                f'width:{W_TREND}px;white-space:nowrap;">{sp}</td>'
-                f'<td align="right" style="padding:8px;background:{abg};width:{W_DRIFT}px;">'
-                f'{_stack(f"{_signed_pp(drift)}pp", _lev_sub(r.get("leverage")), color=P["accent"])}</td>'
-                f'</tr>'
-            )
-            continue
-        # Cash (EUR-native) row: not a share of the invested base, so show
-        # plain EUR amounts and a EUR drift, no trend.
+        pad = f'padding:3px {GUT}px 3px 0;'
         if r.get("eur_row"):
-            ddcol = r.get("delta_color", P["muted"])
-            body.append(
-                f'<tr>'
-                f'<td style="padding:5px 8px;{bb}font-size:{FS}px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
-                f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_eur_cell(r.get("now_eur", 0.0), P["ink"])}</td>'
-                f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_eur_cell(r.get("target_eur", 0.0), P["muted"])}</td>'
-                # Cash has no target corridor and no trend, but both cells have
-                # to be present so the EUR drift lands under its own header.
-                f'<td style="padding:6px 6px;{bb}width:{W_BULLET}px;"></td>'
-                f'<td style="padding:6px 4px;{bb}width:{W_TREND}px;"></td>'
-                f'<td align="right" style="padding:6px 8px;{bb}font-size:{FS}px;font-weight:700;'
-                f'color:{ddcol};white-space:nowrap;font-variant-numeric:tabular-nums;width:{W_DRIFT}px;">'
-                f'{_eur_smart(r.get("delta_eur", 0.0), signed=True)}</td>'
-                f'</tr>'
-            )
+            # Cash: an amount, not a share of the invested base, so no track and no
+            # percentage — the row states the two figures and their gap.
+            out.append(
+                f'<tr><td style="{TYPE["data"]}color:{P["ink"]};{pad}'
+                f'white-space:nowrap;overflow:hidden;border-top:1px solid '
+                f'{P["row_rule"]};">{r.get("label_html", "")}</td>'
+                f'<td style="{pad}border-top:1px solid {P["row_rule"]};">&nbsp;</td>'
+                f'<td align="right" style="{TYPE["data"]}color:{P["ink"]};{pad}'
+                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
+                f'border-top:1px solid {P["row_rule"]};">'
+                f'{_eur_smart(float(r.get("now_eur") or 0.0))}</td>'
+                f'<td align="right" style="{TYPE["data"]}color:{P["muted"]};{pad}'
+                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
+                f'border-top:1px solid {P["row_rule"]};">'
+                f'{_eur_smart(float(r.get("target_eur") or 0.0))}</td>'
+                f'<td style="{pad}border-top:1px solid {P["row_rule"]};">&nbsp;</td>'
+                f'<td align="right" style="{TYPE["data"]}'
+                f'color:{r.get("delta_color") or P["muted"]};font-weight:700;'
+                f'padding:3px 0;font-variant-numeric:tabular-nums;white-space:nowrap;'
+                f'border-top:1px solid {P["row_rule"]};">'
+                f'{_signed_eur(r.get("delta_eur"))}</td></tr>')
             continue
-        now = float(r.get("now", 0.0) or 0.0)
-        tgt = float(r.get("target", 0.0) or 0.0)
-        drift = now - tgt
-        dcol = _semaphore_color(_semaphore(drift, tol))
-        vals = r.get("spark_vals")
-        sp = _spark(vals, tgt, r.get("color", P["accent"]), SPARK_W, MARK_H) if vals else ""
-        # The sparkline's own change over the window, on the line beneath it
-        # rather than inline beside it. Inline it landed against the drift
-        # figure in the next column -- two signed pp numbers touching, one
-        # movement over time and the other distance from target.
-        trend_inner = (_stack(sp, _trend_pp(vals), color=P["ink"]) if sp
-                       else _no_series())
-        # Fixed column widths so the sub-tables (asset class / geography / by
-        # holding) line up on the same grid regardless of their content.
-        body.append(
-            f'<tr>'
-            f'<td style="padding:6px 8px;{bb}font-size:{FS}px;color:{P["ink"]};">{r.get("label_html", "")}</td>'
-            f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_num_cell(now, P["ink"])}</td>'
-            f'<td align="right" style="padding:6px 8px;{bb}width:{W_VAL}px;">{_num_cell(tgt, P["muted"], weight=600)}</td>'
-            f'<td align="right" valign="middle" style="padding:6px 6px;{bb}'
-            f'width:{W_BULLET}px;">{_bullet_cell(now, tgt)}</td>'
-            f'<td align="right" valign="middle" style="padding:6px 4px;{bb}width:{W_TREND}px;'
-            f'white-space:nowrap;">{trend_inner}</td>'
-            f'<td align="right" style="padding:6px 8px;{bb}width:{W_DRIFT}px;">'
-            f'{_stack(f"{_signed_pp(drift)}pp", _lev_sub(r.get("leverage")), color=dcol)}</td>'
-            f'</tr>'
-        )
-    # The first column is named after what the table lists ("Asset class",
-    # "Equity geography", ...) rather than a generic "Name": that made the
-    # kicker above each sub-table pure duplication, so it is gone and the table
-    # is a line shorter.
-    _drift_label = "Drift \u00b7 lev" if show_leverage else "Drift"
-    head = (
-        f'<tr>'
-        f'<td style="padding:4px 8px;{TYPE["label"]}'
-        f'color:{P["muted"]};">{first_label}</td>'
-        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
-        f'white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Now</td>'
-        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
-        f'white-space:nowrap;color:{P["muted"]};width:{W_VAL}px;">Target</td>'
-        f'<td align="right" style="padding:4px 6px;{TYPE["label"]}'
-        f'white-space:nowrap;color:{P["muted"]};width:{W_BULLET}px;">vs target</td>'
-        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
-        f'white-space:nowrap;color:{P["muted"]};width:{W_TREND}px;">Trend</td>'
-        f'<td align="right" style="padding:4px 8px;{TYPE["label"]}'
-        f'white-space:nowrap;color:{P["muted"]};width:{W_DRIFT}px;">{_drift_label}</td>'
-        + '</tr>'
-    )
-    return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'style="margin-top:16px;background:{P["card_alt"]};border:1px solid {P["border"]};'
-            f'border-radius:10px;border-collapse:separate;overflow:hidden;">{head}{"".join(body)}</table>')
+
+        now = float(r.get("now") or 0.0)
+        target = r.get("target")
+        target = None if target is None else float(target)
+        drift = None if target is None else now - target
+        dcol = _semaphore_color(_semaphore(drift, tol)) if drift is not None else P["muted"]
+        colour = r.get("color") or P["accent"]
+        is_total = bool(r.get("is_total"))
+        rule = (f'border-top:1px solid {P["border"]};' if is_total
+                else f'border-top:1px solid {P["row_rule"]};')
+        name_colour = P["accent"] if is_total else P["ink"]
+        lev = r.get("leverage", _NO_LEV) if show_leverage else _NO_LEV
+        tlev = r.get("target_leverage", _NO_LEV) if show_leverage else _NO_LEV
+
+        out.append(
+            f'<tr><td style="{TYPE["data"]}color:{name_colour};'
+            f'{"font-weight:700;" if is_total else ""}{pad}{rule}'
+            f'white-space:nowrap;overflow:hidden;">{r.get("label_html", "")}</td>'
+            f'<td style="{pad}{rule}">'
+            f'{"&nbsp;" if is_total else _track(now, target, dcol)}</td>'
+            f'<td align="right" style="{TYPE["data"]}{pad}{rule}'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">'
+            f'{_fig(now, lev, bold=True, dp=1)}</td>'
+            f'<td align="right" style="{TYPE["data"]}{pad}{rule}'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">'
+            f'{_fig(target, tlev, bold=False, dp=0)}</td>'
+            f'<td style="{pad}{rule}white-space:nowrap;overflow:hidden;">'
+            f'{_trend_cell(r.get("spark_vals"), target, colour)}</td>'
+            f'<td align="right" style="{TYPE["data"]}color:{dcol};font-weight:700;'
+            f'padding:3px 0;{rule}font-variant-numeric:tabular-nums;'
+            f'white-space:nowrap;">'
+            f'{(_signed_pp(drift) + "pp") if drift is not None else "\u2014"}</td>'
+            f'</tr>')
+
+    out.append("</table>")
+    return "".join(out)
+
+
+def _signed_eur(value) -> str:
+    """A signed euro gap: "+<amount>". Cash is held as an amount, not a share, so its
+    row's drift cannot be points."""
+    if value is None:
+        return ""
+    amount = float(value)
+    return f'{"+" if amount >= 0 else "\u2212"}{_eur_smart(abs(amount))}'
+
+
+#: Sentinel: a row that carries no leverage key at all, as against one that carries
+#: ``None`` to mean "synthetic". The two must render differently -- nothing versus the
+#: word -- and ``None`` cannot express both.
+_NO_LEV = object()
+
+
+def _tint(fg: str, bg: str, alpha: float) -> str:
+    """``fg`` over ``bg`` at ``alpha``, as a flat hex.
+
+    Resolved here because an emailed ``rgba()`` is unreliable: several clients drop the
+    declaration entirely and the band would vanish.
+    """
+    a = max(0.0, min(1.0, alpha))
+    f = [int(fg[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(bg[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{int(round(f[i] * a + b[i] * (1 - a))):02x}" for i in range(3))
+
+
+def _trend_cell(vals, target, colour) -> str:
+    """A 15px sparkline of the last month against its target, plus the move in points.
+
+    15px rather than the 40 this used to draw. The shape is what the column is for and
+    it survives the smaller box; the 25px per row it returns is half of what made the
+    section a thousand pixels tall.
+    """
+    series = [float(v) for v in (vals or []) if v is not None]
+    if len(series) < 2:
+        return f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};">no series</span>'
+    P = PALETTE
+    w, h = 36, 15
+    pool = series + ([float(target)] if target is not None else [])
+    lo, hi = min(pool), max(pool)
+    if hi - lo < 1e-9:
+        lo, hi = lo - 1.0, hi + 1.0
+
+    def y(v: float) -> float:
+        return h - 1.5 - (v - lo) / (hi - lo) * (h - 3)
+
+    step = (w - 2) / (len(series) - 1)
+    pts = " ".join(f"{1 + i * step:.1f},{y(v):.1f}" for i, v in enumerate(series))
+    dash = ("" if target is None else
+            f'<line x1="1" y1="{y(float(target)):.1f}" x2="{w - 1}" '
+            f'y2="{y(float(target)):.1f}" stroke="{P["subtle"]}" stroke-width="0.7" '
+            f'stroke-dasharray="2,2" stroke-opacity="0.8"/>')
+    move = series[-1] - series[0]
+    return (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
+            f'xmlns="http://www.w3.org/2000/svg" style="display:inline-block;'
+            f'vertical-align:middle;">{dash}'
+            f'<polyline points="{pts}" fill="none" stroke="{colour}" '
+            f'stroke-width="1.3" stroke-linejoin="round"/>'
+            f'<circle cx="{1 + (len(series) - 1) * step:.1f}" '
+            f'cy="{y(series[-1]):.1f}" r="1.6" fill="{colour}"/></svg>'
+            f'<span style="{TYPE["prose"]}color:{P["subtle"]};padding-left:4px;">'
+            f'{_signed_pp(move)}pp</span>')
 
 def _ph_target_rows(ctx: _NewsletterContext, tol: float,
                     hold_inv_series: Optional[list]) -> tuple[list[dict], str]:
@@ -1506,6 +1491,26 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         return (f'<span style="display:inline-block;width:{sz}px;height:{sz}px;'
                 f'border-radius:2px;background:{color};vertical-align:middle;"></span>')
 
+    # The plan's own leverage per class, for the Target cell beside each class's
+    # target weight. Only meaningful because the class targets are DERIVED from the
+    # per-instrument plan: while they came from a separate file the ratio mixed two
+    # sources and Alternative read 11/15 = 0.73x, which is not a leverage but the
+    # distance between two lists that disagreed. From one plan it reads 15/15 = 1.00x.
+    _target_lev: dict = {}
+    try:
+        from tarzan.engine.target_derivation import (
+            derive_target_leverage, plan_weights)
+
+        _plan, _ = plan_weights(getattr(ctx.metrics, "target_rows", None) or {})
+        if not _plan:
+            # The metrics object does not carry the raw rows; rebuild the plan from the
+            # weights the engine already deduplicated for its own target line.
+            _plan = dict(getattr(ctx.metrics, "target_weights", {}) or {})
+        if _plan:
+            _target_lev = derive_target_leverage(_plan)
+    except Exception:  # noqa: BLE001 — a missing factor must not cost the section
+        _target_lev = {}
+
     # ── Asset-class rows (cash folded in as a normal, EUR-native row that
     #    does NOT participate in the invested base) ──
     asset_rows = []
@@ -1521,6 +1526,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             })
             continue
         asset_rows.append({
+            "target_leverage": _target_lev.get(r["name"]),
             "label_html": _div_label(r["name"], r["color"]),
             "now": r.get("actual_pct_raw"),
             "target": r.get("target_left"),
@@ -1546,6 +1552,9 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             "now": _tnow,
             "target": _ttgt,
             "leverage": (_tnow / 100.0) if _tnow else None,
+            # The plan's own leverage: its notional over 100% of capital, the same
+            # ratio the actual side of this row states.
+            "target_leverage": (_ttgt / 100.0) if _ttgt else None,
             "spark_vals": _ttrend,
             "color": P["accent"],
         }
@@ -1591,7 +1600,9 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             f'Band {tol:.1f}pp tolerance \u00b7 tick target \u00b7 faint rule '
             f'100% of capital \u00b7 trend is the weight over the last month '
             f'against its target, green closing, red widening \u00b7 '
-            f'\u00d7 is notional exposure per euro of capital.</div>'
+            f'\u00d7 is notional exposure per euro of physical capital, stated for '
+            f'the book beside Now and for the plan beside Target \u00b7 '
+            f'"synth" marks a class the plan holds no physical capital in.</div>'
         )
     if geo_rows:
         html.append(_div_table(geo_rows, tol, base=equity_base,
