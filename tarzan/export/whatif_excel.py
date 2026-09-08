@@ -127,6 +127,7 @@ _PORTFOLIO_NOTES: dict[str, str] = {
     "fwd_em_sc8": "The mirror of fwd_em_cl8 with the GLOBAL levered sleeve (SC2X 8) instead of the US-only CL2, the single open question left in the construction. CL2 is cheaper (0.50% vs 1.40%) and has ~5 years of real history against SC2X's few weeks; SC2X spreads the leverage across ACWI instead of concentrating it in the US.",
     "fwd_core_cl10": "fwd_core_cl7 fine-tuned: the levered sleeve back to 10, funded 1 from carry (6 to 5) and 2 from trend (17 to 15), and the trend sleeve then SPLIT 50/50 between DBMFE and MFEH for currency hedging. Read the split with care - the backtest CANNOT price it. Both tickers map to the same Alternative proxy with the same 0.75% TER, so their synthetic bases are byte-identical (+4.98% CAGR each) and the hedged-vs-unhedged distinction that is the entire point of MFEH is invisible here. Two things to weigh outside the model: hedging a collateral-plus-trend strategy is roughly expectation-neutral (it swaps the USD cash rate for the EUR one) while removing FX variance, which argues for it; and MFEH has 0.3 years of real history, which is the same too-new objection that moved this family off SC2X in the first place.",
     "fwd_core_sc10": "The same fine-tune with the GLOBAL levered sleeve (SC2X 10) instead of the US-only one.",
+    "fwd_em_cl5": "PROPOSED. fwd_em_cl8 with ONE change: the levered sleeve 8->5, the freed 3 points split evenly into AVWC and AVWS. Everything else - NTSG 35, gold 10, trend 7.5+7.5, AVEM 7, carry 5 - is untouched, because a macro review (central banks, institutional CMAs, geopolitics, and the four structural bets) validated each of them and challenged only the leverage. What challenged it: CAPE 41.4 against a dot-com peak of 44.2, top-10 S&P weight 38.1%, AI capex still ACCELERATING at ~102% of cloud revenue, and a median institutional forecast of ~6.4-6.7% nominal for US large cap against ~10% historically. CL2 is 2x MSCI USA, so it concentrates the single most expensive asset AND finances it - and a daily-reset 2x vehicle's real risk is volatility decay through a slow de-rating, not one crash. Measured cost of each point of CL2, holding all else equal: +0.024pp of CAGR bought with 0.005 of Sharpe, 0.56pp of max drawdown and 0.4pp of 15-year loss probability. The freed points go to AVWC/AVWS rather than AVEM because the 2026 EM rally is concentrated in Korean/Taiwanese AI hardware and would re-import the very concentration this cut removes; EM stays at 7 rather than rising. What the review explicitly validated and this portfolio therefore keeps: NTSG 35 (the 10Y at 4.77% against ~3.67% financing is +1.10% of carry on 21 points of notional, and the backtest OVERSTATES its rate risk ~2.4x by proxying a 7-year futures ladder with 17-year VUSTX), gold 10 (nobody calls it expensive, JPM RAISED its long-run estimate, and it is already 22% off the January 2026 peak), and the value/small-value tilt (no source declares the premium dead). One caveat that belongs to the carry sleeve rather than the allocation: UEQC's backfill carries vol 7.63% and Sharpe 1.30 against the real fund's 15.54% and -0.07 over 5.2 real years, so the 26-year line CANNOT price it - the 5 points are a judgement about wanting commodity exposure, not a backtested result.",
     "fwd_core_cl7": "fwd_core_sc2x with the levered sleeve swapped SC2X -> CL2 at the same 7: the matched pair that isolates the leverage VEHICLE with nothing else moving. CL2 is 2x MSCI USA (100% US, TER 0.50%, ~5 years of real history) against SC2X's 2x ACWI (global, TER 1.40%, launched July 2026). Cheaper and far less synthetic, paid for with US concentration in the levered sleeve.",
     "fwd_core_div": "The diversifier-maximal version: trend 20, carry 8, gold 8 - 36 points of non-equity diversifiers against 30 in fwd_core - funded from the levered sleeve and a point off each factor leg. READ ITS CARRY WITH SUSPICION: UEQC's pre-inception history is a vendored SIMULATED index that tracks the real fund's total return well but at roughly half its volatility and 0.39 correlation, so any carry-heavy portfolio's Sharpe here is flattered. That is exactly why carry was capped at 5 in the first place, and this variant deliberately tests the boundary.",
     "mom_6040_cl2": "mom_6040 (60/40 value/momentum sleeve) with the same SC2X to CL2 swap - the momentum variant on a cheaper, longer-lived leverage vehicle.",
@@ -455,6 +456,11 @@ def _risk_matrix(ws, row, portfolios) -> int:
 # open question stays visible instead of being buried by the choice.
 _CHOSEN = ("fwd_em_cl8", "fwd_em_sc8")
 
+# _PROPOSED: under decision RIGHT NOW, so it sorts above the settled choice and
+# carries its own mark. These are the post-macro-review re-cuts; they are NOT in
+# targets_per_holding.csv yet. Emptying this tuple retires the tier.
+_PROPOSED = ("fwd_em_cl5",)
+
 # _TARGETS: the pair that held the top spot before AVEM went to 7 and the
 # levered sleeve to 8. Kept a tier of its own rather than demoted into the field,
 # because the step from it to _CHOSEN is small and worth being able to re-read.
@@ -473,7 +479,10 @@ _CANDIDATES = ("target_fac_cl2", "target_fac", "target_mix", "mom_6040",
 
 
 def _pin(name: str) -> str:
-    """Leading mark: circle = chosen, star = previous target, diamond = secondary."""
+    """Leading mark: triangle = proposed, circle = chosen, star = previous
+    target, diamond = secondary."""
+    if name in _PROPOSED:
+        return "\u25b2 "
     if name in _CHOSEN:
         return "\u25cf "
     if name in _TARGETS:
@@ -484,12 +493,14 @@ def _pin(name: str) -> str:
 
 
 def _tier(name: str) -> int:
-    """Sort tier: chosen, previous targets, secondaries, then the field."""
-    if name in _CHOSEN:
+    """Sort tier: proposed, chosen, previous targets, secondaries, then the field."""
+    if name in _PROPOSED:
         return 0
-    if name in _TARGETS:
+    if name in _CHOSEN:
         return 1
-    return 2 if name in _CANDIDATES else 3
+    if name in _TARGETS:
+        return 2
+    return 3 if name in _CANDIDATES else 4
 
 # Windows for the summary (label, start-date); FULL first, then restricted.
 _SUMMARY_WINDOWS = (("FULL 2000-26", "2000-08-31"), ("2011-26", "2011-01-01"),
@@ -758,7 +769,8 @@ def _summary_sheet(wb, portfolios) -> None:
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
     t = ws.cell(row=1, column=1, value=("SUMMARY — all portfolios · full KPI set per window "
-                                          "(\u25cf = chosen, \u2605 = previous target, \u25c6 = secondary)"))
+                                          "(\u25b2 = proposed, \u25cf = chosen, "
+                                          "\u2605 = previous target, \u25c6 = secondary)"))
     t.font = _font(15, bold=True, color=_C["white"]); t.fill = _fill(_C["header"])
     ws.row_dimensions[1].height = 26
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
