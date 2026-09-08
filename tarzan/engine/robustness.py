@@ -687,7 +687,11 @@ def conditional_drift(state: dict, sleeve_exposures: dict, realised: dict, *,
     gold_target, fin_drag = comp["gold_target"], comp["financing"]
 
     shifts: dict[str, float] = {}
-    per_class = {"Equities": eq_shift, "Fixed Income": fi_shift}
+    # Both fixed-income proxy buckets take the same yield-based shift: the
+    # split is about which series backfills the sleeve, not about what
+    # today's starting yield implies for it.
+    per_class = {"Equities": eq_shift, "Fixed Income": fi_shift,
+                 "Fixed Income Intermediate": fi_shift}
     for ticker, exposures in (sleeve_exposures or {}).items():
         total, seen = 0.0, False
         for cls, expo in (exposures or {}).items():

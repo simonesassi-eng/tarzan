@@ -31,7 +31,7 @@ from tarzan.backtest.loader import (
     enrich_universe, load_portfolios, portfolio_items,
 )
 from tarzan.backtest.model import (
-    CASH, COMM, CRYPTO, EQ, FI, GOLD, ALT, Portfolio, WhatIfItem,
+    CASH, COMM, CRYPTO, EQ, FI, FI_INTERMEDIATE, GOLD, ALT, Portfolio, WhatIfItem,
     compute_allocations,
 )
 from tarzan.backtest.ter import instrument_ter
@@ -99,12 +99,29 @@ def is_factor_fund(it: "WhatIfItem") -> bool:
     return any(k in text for k in _FACTOR_KEYWORDS)
 
 
+# Only these roles keep the LONG-duration bond proxy. Everything else with a
+# fixed-income leg — an efficient-core fund's Treasury-futures ladder (~7y), a
+# linker sleeve, an aggregate — is backfilled with the intermediate proxy. This
+# splits the PROXY only: allocation tables still report one "Fixed Income" line,
+# because they read comp_notional rather than these exposure keys.
+_LONG_DURATION_ROLES = frozenset({"long duration"})
+
+
+def _is_long_duration(item: WhatIfItem) -> bool:
+    role = getattr(getattr(item, "holding", None), "role", None) or ""
+    return role.strip().lower() in _LONG_DURATION_ROLES
+
+
 def instrument_exposures(item: WhatIfItem) -> dict:
     """Per-instrument exposure (fraction of the instrument's own value).
 
     Equity is split by the instrument's own geo breakdown; other classes from
     its notional composition. Gross may exceed 1 (a leveraged fund), which the
     replicator finances. Drives the instrument's synthetic base.
+
+    A fixed-income leg is routed by DURATION (see ``_LONG_DURATION_ROLES``), so
+    an efficient-core fund's intermediate futures ladder is not backfilled with a
+    17-year proxy.
     """
     if item.bare.upper() in _CARRY_TICKERS:
         gross = sum(item.comp_notional.values()) / 100.0
@@ -126,7 +143,8 @@ def instrument_exposures(item: WhatIfItem) -> dict:
     for cls in (FI, GOLD, COMM, CRYPTO, ALT, CASH):
         v = item.comp_notional.get(cls, 0.0) / 100.0
         if v > 0:
-            exp[cls] = exp.get(cls, 0.0) + v
+            key = FI_INTERMEDIATE if (cls == FI and not _is_long_duration(item)) else cls
+            exp[key] = exp.get(key, 0.0) + v
     return exp
 
 
@@ -147,6 +165,68 @@ def _real_daily_returns(holding) -> Optional[pd.Series]:
     r.index = (idx.tz_localize(None).normalize()
                if getattr(idx, "tz", None) is not None else idx.normalize())
     return r[~r.index.duplicated(keep="last")]
+
+
+# A backfill drives most of a 20+ year line off a few years of real overlap, so
+# it can be far too SMOOTH and quietly manufacture a risk-adjusted advantage the
+# fund never had. Three separate instances were found by hand before this check
+# existed, and each one reversed an allocation conclusion: a world-quality ETF
+# rebuilt at 0.40x its true volatility (the daily-fit bug in calibrated_splice),
+# a 2.5x commodity-carry index at 0.49x with a synthetic Sharpe of 1.30 against
+# the real fund's -0.07, and a managed-futures share class at 0.51x. Ratios ABOVE
+# the band are the conservative direction (the backtest overstates risk) and are
+# recorded but not warned about.
+_REALISM_BAND = (0.7, 1.4)
+_MIN_REAL_DAYS = 250          # under ~1 year the real vol is too noisy to judge
+# Judge the tail's LAST few years, not its whole length. Several bases legitimately
+# begin as cash decades before the strategy existed (managed futures are cash
+# before 2007), and averaging that in would condemn every such sleeve for a
+# disclosed gap rather than for a reconstruction that misstates its risk.
+_REALISM_TAIL_YEARS = 5
+
+# ticker → {ratio, vol_synth_pct, vol_real_pct, n_synth, n_real}. Populated per
+# aligned-backtest run; read by callers that want to disclose it.
+BACKFILL_REALISM: dict[str, dict] = {}
+
+
+def _check_backfill_realism(ticker: str, spliced: pd.Series, real) -> None:
+    """Compare the SYNTHETIC tail's volatility with the fund's REAL volatility.
+
+    Records the ratio for every instrument that has enough of both, and warns
+    when it leaves ``_REALISM_BAND`` from below — the direction in which the
+    backtest flatters the sleeve. This cannot prove a backfill right; it only
+    catches the failure that matters, a reconstructed history whose risk does not
+    resemble the instrument's own.
+    """
+    if real is None or getattr(real, "empty", True) or len(real) < _MIN_REAL_DAYS:
+        return
+    start = real.index.min()
+    tail = spliced.loc[spliced.index < start].dropna()
+    if len(tail) < TRADING_DAYS:
+        return
+    tail = tail.loc[start - pd.DateOffset(years=_REALISM_TAIL_YEARS):]
+    if len(tail) < TRADING_DAYS:
+        return
+    vs, vr = float(tail.std()), float(real.std())
+    if vr <= 0 or vs <= 0:
+        return
+    ratio = vs / vr
+    ann = TRADING_DAYS ** 0.5 * 100.0
+    BACKFILL_REALISM[ticker] = {"ratio": ratio, "vol_synth_pct": vs * ann,
+                                "vol_real_pct": vr * ann,
+                                "n_synth": len(tail), "n_real": len(real)}
+    if ratio < _REALISM_BAND[0]:
+        logger.warning(
+            "%s: backfill volatility is %.2fx the real fund's (%.1f%% vs %.1f%% "
+            "annualised over %d synthetic / %d real days). The synthetic history "
+            "is too SMOOTH, so this sleeve's long-history return, Sharpe and "
+            "drawdown are flattered - do not settle an allocation on them.",
+            ticker, ratio, vs * ann, vr * ann, len(tail), len(real))
+    elif ratio > _REALISM_BAND[1]:
+        logger.info(
+            "%s: backfill volatility is %.2fx the real fund's (%.1f%% vs %.1f%%) "
+            "- conservative direction, risk overstated rather than hidden.",
+            ticker, ratio, vs * ann, vr * ann)
 
 
 def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
@@ -209,6 +289,7 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
         if spliced is None or spliced.empty:
             continue
         key = it.bare or f"i{i}"
+        _check_backfill_realism(key, spliced, real)
         cols[key] = spliced
         weights[key] = it.weight / 100.0
     if not cols:
@@ -267,8 +348,12 @@ def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
                                            leverage_borrowed=borrowed)
     wts = {t: float(w.get(t, 0.0)) for t in exposures}
 
-    def _expo(cls: str) -> float:
-        return sum(wts[t] * (exposures[t].get(cls) or 0.0) for t in exposures)
+    def _expo(*classes: str) -> float:
+        """Portfolio exposure to one or more proxy buckets. Fixed income needs
+        BOTH duration buckets summed, or a portfolio whose bonds arrive through
+        an efficient-core fund would read as having none."""
+        return sum(wts[t] * sum(exposures[t].get(c) or 0.0 for c in classes)
+                   for t in exposures)
 
     gold_delta = sum(
         wts[t] * (exposures[t].get("Gold") or 0.0)
@@ -276,7 +361,7 @@ def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
         for t in exposures if exposures[t].get("Gold") and t in realised)
     drivers = {
         "equity_valuation": (comp["equity"] or 0.0) * _expo("Equities"),
-        "bond_yield": (comp["fixed_income"] or 0.0) * _expo("Fixed Income"),
+        "bond_yield": (comp["fixed_income"] or 0.0) * _expo(FI, FI_INTERMEDIATE),
         "gold": gold_delta,
         "financing": (comp["financing"] or 0.0) * sum(wts.values()),
     }
@@ -284,7 +369,7 @@ def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
     out["drivers_total"] = sum(drivers.values())
     out["components"] = comp
     out["exposure"] = {"Equities": _expo("Equities"),
-                       "Fixed Income": _expo("Fixed Income"),
+                       "Fixed Income": _expo(FI, FI_INTERMEDIATE),
                        "Gold": _expo("Gold")}
     # Kept so the workbook can show the arithmetic sleeve by sleeve rather than
     # only the aggregate: a reader who cannot reproduce the number cannot

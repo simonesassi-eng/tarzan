@@ -19,6 +19,10 @@ from tarzan.models.taxonomy import GEO_ORDER as _GEO_ORDER, ORDER_WHATIF
 # keys parsed by InvestorConfig).
 EQ = AssetClass.EQUITIES.value
 FI = AssetClass.FIXED_INCOME.value
+# Duration-routed PROXY bucket for fixed income, not an AssetClass: it selects
+# which long-history series backfills a bond leg (intermediate vs 15-30y), and
+# never appears in an allocation table. See backtest.engine.instrument_exposures.
+FI_INTERMEDIATE = f"{FI} Intermediate"
 GOLD = AssetClass.GOLD.value
 COMM = AssetClass.COMMODITIES.value
 CRYPTO = AssetClass.CRYPTO.value

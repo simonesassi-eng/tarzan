@@ -95,6 +95,14 @@ EQUITY_GEO_PROXY = {
 # are handled as the cash (financing) leg, not a ticker.
 ASSET_PROXY = {
     "Fixed Income": ["VUSTX"],                # Vanguard Long-Term Treasury, 1986+
+    # Fixed income is DURATION-ROUTED (see backtest.engine.instrument_exposures):
+    # a 15-30y bond ETF and the ~7y Treasury-futures ladder inside an
+    # efficient-core fund are not the same instrument, and backfilling both with
+    # a ~17y proxy overstates the ladder's rate risk by roughly 2.4x — enough to
+    # make every rate-shock stress figure for an efficient-core-heavy portfolio
+    # pessimistic. Only role "Long Duration" keeps the long proxy above.
+    "Fixed Income Intermediate": ["VFITX", "IEF"],   # Vanguard Interm. Treasury
+                                                     # (1991+) → iShares 7-10y
     "Gold": ["GC=F", "GLD"],                  # Gold futures (2000) → GLD (2004)
     "Commodities": ["^BCOM", "DBC"],          # Bloomberg Commodity index → DBC (2006)
     "Crypto": ["BTC-USD"],                    # Bitcoin, 2014+
