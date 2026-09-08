@@ -20,12 +20,18 @@ from pathlib import Path
 # Make the tarzan package importable when invoked as a bare script from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tarzan import log_redaction  # noqa: E402
 from tarzan.delivery import run_and_send  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+# After basicConfig, so the handler it just created is the one that gets the
+# filter. This repo is public and so is every Actions run's log: under $CI the
+# amounts, ISINs and tickers come out of the records before they are printed.
+log_redaction.install()
 
 
 if __name__ == "__main__":
