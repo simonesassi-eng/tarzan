@@ -45,7 +45,8 @@ def splice_returns(long_ret: pd.Series, short_ret: pd.Series) -> pd.Series:
 
 
 def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
-                      min_overlap: int = 252, beta_bounds=(0.2, 3.0),
+                      min_overlap: int = 252, min_overlap_months: int = 24,
+                      beta_bounds=(0.2, 3.0),
                       min_r2: float = 0.10) -> pd.Series:
     """Beta/alpha-calibrated backfill: over the overlap window fit the real
     fund on its proxy basket (``short ≈ a + b·long`` by OLS), then reconstruct
@@ -53,11 +54,29 @@ def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
     1:1. This corrects a systematic beta/drag mismatch between the fund and its
     proxy composite.
 
+    The fit is on MONTHLY returns, for the same reason as
+    :func:`factor_loadings`: a daily fit is severely ATTENUATED by
+    non-synchronous closes. A EUR-listed global fund prices at 17:30 CET while a
+    US-dominated proxy basket prices at 22:00 CET, so a day's move lands partly
+    in the fund's next observation. The daily regression reads that timing noise
+    as fund-specific variance and shrinks beta toward zero — measured on a real
+    world-quality ETF, daily gave ``b=0.38, R²=0.21`` against monthly's
+    ``b=0.83, R²=0.79`` on the same overlap. Because the backfill is
+    ``a + b·long``, an attenuated beta is not a harmless imprecision: it
+    reconstructs two decades of history at ``b`` times the proxy's volatility
+    (7.7% instead of 16.9% annualised) while the intercept absorbs the missing
+    return as fabricated alpha (+5.5%/yr instead of -0.3%/yr). That combination
+    — half the volatility and a large free drift — makes such a fund look
+    dominant in any risk-adjusted comparison against sleeves whose history is
+    real or correctly reconstructed. The monthly intercept is spread evenly over
+    the overlap's average trading days per month, so it compounds to the same
+    drift without inventing daily structure.
+
     Falls back to the naive 1:1 splice whenever the calibration is untrustworthy
-    (overlap < ``min_overlap`` days, implausible beta, or R² below ``min_r2``),
-    so it can never be worse than the classic splice. Note: the reconstructed
-    tail omits the regression residual, so its idiosyncratic volatility is a
-    lower bound (disclosed in the report).
+    (overlap < ``min_overlap`` days or < ``min_overlap_months`` months,
+    implausible beta, or R² below ``min_r2``), so it can never be worse than the
+    classic splice. Note: the reconstructed tail omits the regression residual,
+    so its idiosyncratic volatility is a lower bound (disclosed in the report).
     """
     if short_ret is None or short_ret.empty:
         return long_ret
@@ -70,15 +89,20 @@ def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
     ov = pd.concat([short_ret.rename("y"), long_ret.rename("x")], axis=1).dropna()
     if len(ov) < min_overlap:
         return splice_returns(long_ret, short_ret)
-    x, y = ov["x"].values, ov["y"].values
+    mo = pd.DataFrame({"y": (1.0 + ov["y"]).resample("ME").prod() - 1.0,
+                       "x": (1.0 + ov["x"]).resample("ME").prod() - 1.0}).dropna()
+    if len(mo) < min_overlap_months:
+        return splice_returns(long_ret, short_ret)
+    x, y = mo["x"].values, mo["y"].values
     vx = x.var()
     if vx <= 0:
         return splice_returns(long_ret, short_ret)
     b = float(((x - x.mean()) * (y - y.mean())).mean() / vx)
-    a = float(y.mean() - b * x.mean())
+    a_month = float(y.mean() - b * x.mean())
     corr = float(np.corrcoef(x, y)[0, 1]) if len(x) > 1 else 0.0
     if not (beta_bounds[0] <= b <= beta_bounds[1]) or corr * corr < min_r2:
         return splice_returns(long_ret, short_ret)
+    a = a_month / (len(ov) / len(mo))       # monthly drift → per trading day
     backfill = a + b * pre
     return pd.concat([backfill, short_ret]).sort_index()
 
