@@ -5,8 +5,8 @@ your order list and targets CSVs live in a Drive folder shared (read-only)
 with a service account, instead of being committed to the repo.
 
 Required environment variables:
-    DRIVE_FOLDER_ID                  ID portion of the Drive folder URL
-                                     (e.g. "<your-folder-id>")
+    DRIVE_FOLDER_ID                  ID portion of the Drive folder URL — the
+                                     33 characters after "/folders/"
     GOOGLE_DRIVE_CREDENTIALS_JSON    Full service-account JSON key, as a
                                      single-line string (newlines escaped).
 
