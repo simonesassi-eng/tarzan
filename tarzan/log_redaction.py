@@ -41,7 +41,8 @@ import os
 import re
 import secrets
 
-# "<amount>", "<amount> EUR", "EUR 9,850.00".
+# Synthetic examples of the shapes this matches: "€123,456.78", "9876.54 EUR",
+# "EUR 1,500.00". (Synthetic on purpose — an illustration is not worth leaking.)
 _AMOUNT = re.compile(r"(?:€|EUR)\s?\d[\d.,]*\d|\d[\d.,]*\d\s?(?:€|EUR)\b|(?:€|EUR)\s?\d")
 
 # ISO 6166: two-letter country, nine alphanumerics, one check digit.
