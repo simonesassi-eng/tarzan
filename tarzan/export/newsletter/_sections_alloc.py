@@ -369,7 +369,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # applicable" — the numeric-zero-is-not-unavailable rule the property's own
     # docstring states. Coercing it defeated ``_pnl_tile``'s ``is_missing``
     # fallback, so a fully liquidated book headlined "Total P&L 0.00%" beside a
-    # caption reading "+<amount>": the big number said the book had made nothing while
+    # caption reading "+€3.0k": the big number said the book had made nothing while
     # the small one said what it had really made.
     unrealized_pct = m.unrealized_pnl_pct
 
@@ -1083,8 +1083,8 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
     # 580px content box, minus its 8px gutter:
     #   name    131px  "NTSG WT Gl. Eff. Core" = 21 chars
     #   track    50px  a bar and a tick need no more
-    #   now     120px  "114.7% <amount> 1.15x" = 20 chars
-    #   target  108px  "125.5% <amount> 1.25x"   = 18 chars, and its gutter is 14 so the
+    #   now     120px  "114.7% EUR120.0k 1.15x" = 20 chars
+    #   target  108px  "125.5% EUR140k 1.25x"   = 18 chars, and its gutter is 14 so the
     #                  figures do not touch the sparkline that follows
     #   trend    73px  27px of sparkline + 4 + "-10.8pp"
     #   drift    44px  "-10.8pp"
@@ -1245,7 +1245,7 @@ def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
 
 
 def _signed_eur(value) -> str:
-    """A signed euro gap: "+<amount>". Cash is held as an amount, not a share, so its
+    """A signed euro gap: "+EUR2.5k". Cash is held as an amount, not a share, so its
     row's drift cannot be points."""
     if value is None:
         return ""

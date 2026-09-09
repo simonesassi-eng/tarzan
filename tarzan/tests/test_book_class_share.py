@@ -1,7 +1,7 @@
 """The Book's "% Class" column must be a share, and every holding must be counted.
 
 A holding whose ``asset_class`` is unset used to divide its value by a ONE EURO
-default and print <amount> as 301309.3%: the per-class totals were keyed on the
+default and print €1,500.00 as 150000.0%: the per-class totals were keyed on the
 raw column (which ``groupby`` drops None/NaN from) while each row looked its total
 up under a normalised key, so no "Other" entry could ever exist. The same split
 made the summary chips count only the classed holdings.

@@ -8,7 +8,7 @@ closed round trips, which is the only thing such a book has to report, went with
 
 What these pin: the realized P&L reaches the issue, and no tile claims 0.00% on a
 book that made money. The percentage is the HEADLINE of a P&L tile, so a coerced
-zero put a prominent "0.00%" beside a caption reading "+<amount>" — the big number
+zero put a prominent "0.00%" beside a caption reading "+€3.0k" — the big number
 saying the book had made nothing while the small one said what it had really made.
 
 Zero EFFECTIVE ORDERS is a different state and stays an input error.

@@ -70,7 +70,7 @@ def class_key(value) -> str:
     totals on the RAW ``asset_class`` column (and ``groupby`` drops None/NaN
     outright) while each row looked its total up under a normalised key, so an
     unclassified holding found no entry, took a ``.get(klass, 1)`` default of one
-    EURO, and printed <amount> as 301309.3%. The same split made the summary
+    EURO, and printed €1,500.00 as 150000.0%. The same split made the summary
     chips count only the classed holdings.
 
     Lives here, in the models layer, so the engine can key on it too — a

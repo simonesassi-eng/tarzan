@@ -9,8 +9,8 @@ otherwise: "If we skip this step, current_value explodes by 100x."
 It skipped it. Three modules each knew the code list separately — the enricher's
 rescale, the contract validator's allowlist, and the stress generator's cash leg —
 and a fourth place needed it and had none: ``returns_builder._seed_market_value``
-valued a 79-unit GBp position at <amount> against a €619 cost basis, a +9,593% gain
-that was 73% of the portfolio total. Its own order carried ``currency="GBp"``.
+valued a 100-unit GBp position at €48,500 against a €500 cost basis, a +9,600% gain
+that dominated the portfolio total. Its own order carried ``currency="GBp"``.
 
 So the fact lives here, in the models layer below both data and engine, and every
 reader imports it rather than restating it.

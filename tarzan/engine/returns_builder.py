@@ -356,8 +356,8 @@ def _seed_market_value(orders: list[Order], isin: str, qty: float) -> float:
     # ``value_position`` applies the INSTRUMENT-KIND convention (a bond's per-100)
     # and knows nothing about the CURRENCY's. A price quoted in a minor unit —
     # "653.3082 GBp" is £6.533082, not £653 — was seeded a hundred times too high:
-    # 79 units against a €619 cost basis were valued at <amount>, a +9,593% gain
-    # that made up 73% of the portfolio total. The order itself carried
+    # 100 units against a €500 cost basis were valued at €48,500, a +9,600% gain
+    # that dominated the portfolio total. The order itself carried
     # ``currency="GBp"`` the whole time. There is no FX pair for a minor code, so
     # the rescale has to happen before the divide, not after.
     price = to_major(price, getattr(last, "currency", None))

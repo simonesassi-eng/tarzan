@@ -2002,8 +2002,8 @@ class TestAMinorUnitPriceIsRescaledInTheSeed:
     ``_seed_market_value`` valued a position from its latest order price through
     ``value_position``, which applies the INSTRUMENT-KIND convention (a bond's
     per-100) and knows nothing about the CURRENCY's. So an LSE order at
-    "653.3082 GBp" — £6.533082 — was seeded as if it were £653.3082: 79 units on a
-    €619 cost basis were valued at <amount>, a +9,593% gain that made up 73% of the
+    "653.3082 GBp" — £6.533082 — was seeded as if it were £653.3082: 100 units on
+    a €500 cost basis were valued at €48,500, a +9,600% gain that dominated the
     portfolio total. The order carried ``currency="GBp"`` the whole time.
 
     The enricher's own comment on its rescale says what is at stake: "If we skip
