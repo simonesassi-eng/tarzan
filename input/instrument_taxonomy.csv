@@ -55,7 +55,7 @@ Xtrackers II Eurozone Government Bond 7-10,X710,,etf,Fixed Income,Govt Nominal,F
 Xtrackers Eurozone Govt Bond 15-30,X15E,LU0290357507,etf,Fixed Income,Long Duration,,,,,,,,,,,,,,,0.0015,Eurozone government bonds 15-30y (long duration).,7/9/26
 Amundi Euro Government Bond 25+ (LMTH),LMTH,LU1686832194,etf,Fixed Income,Long Duration,,,,,,,,,,,,,,,0.0014,Long EUR government bonds 25+ (long duration).,7/8/26
 Xtrackers II Eurozone Government Bond 25+,X25E,LU0290357846,etf,Fixed Income,Long Duration,True,,,,,,,,,,,,,,0.0015,Eurozone government bonds 25+ (long duration).,8/29/26
-iMGP DBi Managed Futures (EUR Hedged),MFEH,,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0075,Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,6/25/26
+iMGP DBi Managed Futures (EUR Hedged),MFEH,LU3359622902,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0075,Active managed futures (CTA) strategy using long/short global futures (EUR hedged).,9/9/26
 iMGP DBi Managed Futures R EUR,DBMFE,LU2951555403,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0075,Active managed futures (CTA) strategy - R EUR share class.,7/11/26
 BNP Paribas Easy Managed Futures,EEAU,LU3307218399,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.006,Managed futures (CTA) via swap on the BNP Paribas Easy Managed Futures index - EUR share class. Launched 29 May 2026: history is short.,7/28/26
 L&G Market Neutral Commodities,COMN,IE000IIHLZL0,etc,Commodities,Market Neutral,True,,,,,,,,,,,,,,0.0039,Market-neutral commodities (long/short) - uncorrelated diversifier and not directional commodity beta.,8/29/26
