@@ -191,7 +191,7 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     from tarzan.export import _charts as _ch
     # Seven target ticks, not four: on a 30-day window the value axis spans a
     # few thousand euros and four gridlines put the whole line between two of
-    # them, so a reader could not tell <amount> from <amount> without the end label.
+    # them, so a reader could not tell €139k from €141k without the end label.
     _TICKS = 7
     vlo, vhi, vticks = _ch.nice_ticks(
         min(min(values), base), max(max(values), base), _TICKS

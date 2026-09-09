@@ -3023,7 +3023,7 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
 
         # Safety net: never let a holding carry a None/NaN current_value into
         # the portfolio total. A single NaN propagates through the sum and
-        # collapses the whole portfolio (the ~€13k-instead-of-<amount> symptom
+        # collapses the whole portfolio (the ~€13k-instead-of-€121k symptom
         # seen when yfinance throttles the live quote). Seed from the
         # last-known EUR value (CSV/order anchor) so the total stays sane.
         cv = holding.current_value

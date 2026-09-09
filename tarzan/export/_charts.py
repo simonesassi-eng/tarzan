@@ -73,8 +73,8 @@ def fmt_eur_tick(v: float, step: Optional[float] = None) -> str:
     """Axis tick in euros, with the minus SIGN like every other figure.
 
     ``step`` is the axis' own tick spacing. Pass it on a fine axis: whole
-    thousands are unreadable below a €1k step, where <amount> and <amount> both
-    print "<amount>" and the axis looks like it repeated a label.
+    thousands are unreadable below a €1k step, where 138,000 and 138,500 both
+    print "€138k" and the axis looks like it repeated a label.
     """
     a = abs(v)
     s = "−" if v < 0 else ""

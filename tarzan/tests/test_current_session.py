@@ -4,7 +4,7 @@ Every "today" figure reads a price series while the portfolio's own valuation is
 selected separately, so "today" used to exist twice. The stamp lived in
 ``MetricsEngine``, which runs after ``ValuationCompletenessEvaluator`` and after
 ``_valuation`` — so ``total_value`` and the series terminal could not agree by
-construction. Measured on a live run (24 Aug 2026, <amount> book) they sat €115
+construction. Measured on a live run (24 Aug 2026, a six-figure book) they sat €115
 apart: fourteen of sixteen holdings agreed to four decimals, and both that did
 not were fallbacks — MONEY.MI's valuation had dropped to its 10.0920 order price
 while the market quoted 10.1840.

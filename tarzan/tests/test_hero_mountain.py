@@ -286,7 +286,7 @@ class TestTheSplitIsAgainstTheWindowOpen:
 
         total = [8.0, 11.0, 6.0, 9.5]          # opens +8%, dips BELOW it, recovers
         svg = _hero_value_chart(
-            [<amount>, <amount>, <amount>, <amount>], [1.0, 2.0, 0.5, 1.8],
+            [140000.0, 141000.0, 139500.0, 142000.0], [1.0, 2.0, 0.5, 1.8],
             ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"], [],
             total_pct=total,
         )
@@ -318,7 +318,7 @@ class TestTheSplitIsAgainstTheWindowOpen:
         from tarzan.export.newsletter._charts import _hero_value_chart
 
         svg = _hero_value_chart(
-            [<amount>, <amount>, <amount>], [1.0, 2.0, 1.8],
+            [140000.0, 141000.0, 142000.0], [1.0, 2.0, 1.8],
             ["2026-08-10", "2026-08-17", "2026-08-24"], [],
             total_pct=[8.0, 9.0, 9.5],
         )
