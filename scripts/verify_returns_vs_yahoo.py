@@ -53,6 +53,8 @@ sys.path.insert(0, str(REPO))
 
 import pandas as pd  # noqa: E402
 
+from tarzan import log_redaction  # noqa: E402
+
 #: engine vs yahoo — both compute from the same closes; the slack is for the last bar
 #: moving between two fetches inside one run.
 TOL_YAHOO_PP = 0.05
@@ -259,6 +261,12 @@ def main() -> int:
     ap.add_argument("--no-redact", dest="redact", action="store_false",
                     help="print the full table even under CI")
     args = ap.parse_args()
+    # ``--redact`` covers what THIS script prints. It cannot cover what the
+    # libraries log: yfinance writes the failing symbol to its own logger, and
+    # tarzan's resolver logs every ISIN it resolves, so a redacted run still
+    # published the whole instrument list. Same filter, same $CI gate as the
+    # send path.
+    log_redaction.install(enabled=args.redact)
     os.chdir(REPO)
     os.environ.setdefault("TARZAN_DISABLE_AI", "1")
     windows = ([w.strip() for w in args.windows.split(",") if w.strip()]

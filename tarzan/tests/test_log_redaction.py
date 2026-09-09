@@ -20,10 +20,10 @@ class TestTheLeakingLinesAreRedacted:
     def test_both_portfolio_total_lines_lose_the_figure(self):
         """The two call sites that published it, in their own formats. The
         trailing "EUR" goes with the number — it is part of the amount."""
-        assert self._r("Enrichment complete. Total portfolio value: 123456.78 EUR") \
-            == "Enrichment complete. Total portfolio value: <amount>"
-        assert self._r("Total portfolio value: €123456.78") \
-            == "Total portfolio value: <amount>"
+        enricher = "Enrichment complete. Total portfolio value: 123456.78 EUR"  # synthetic
+        orchestrator = "Total portfolio value: €123456.78"  # synthetic
+        assert self._r(enricher) == "Enrichment complete. Total portfolio value: <amount>"
+        assert self._r(orchestrator) == "Total portfolio value: <amount>"
         assert "9,850" not in self._r("priced and correct at EUR 9,850.00")
 
     def test_an_isin_becomes_a_token(self):
@@ -80,7 +80,7 @@ class TestInstallation:
         try:
             install(enabled=True)
             logging.getLogger("tarzan.data.enricher").warning(
-                "Total portfolio value: %.2f EUR", 123456.78)
+                "Total portfolio value: %.2f EUR", 123456.78)  # synthetic
             assert "123456" not in stream.getvalue(), stream.getvalue()
             assert "<amount>" in stream.getvalue()
         finally:
