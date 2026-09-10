@@ -14,12 +14,27 @@ name: Verify returns vs Yahoo
 
 on:
   schedule:
-    # 08:17 Rome, an hour into the European session. NOT on the half hour: :00 and :30
-    # are the two most contended minutes on GitHub's scheduler, and a low-priority
-    # cron there gets delayed or dropped. Observed: the first Monday this existed, the
-    # 06:30 UTC run had still not started an hour later while the workflow sat active.
-    # An odd minute is the standard mitigation and costs nothing.
-    - cron: "17 6 * * 1-5"
+    # Three weekday slots, and the times are chosen around two measured facts.
+    #
+    # GitHub delays this schedule badly. The single 06:17 UTC slot was firing at about
+    # 11:24 -- five hours late -- which landed it in the middle of the European session
+    # every day. Odd minutes (never :00 or :30, the two most contended) help but do not
+    # fix it, so the schedule is built to tolerate the delay rather than assume it away.
+    #
+    # And check 2 can only DECIDE when the venues are shut. With a session open our
+    # endpoint is a live quote while the source's is today's provisional close: the dates
+    # match, so the referee rule is satisfied, but the prices do not, and the gap lands
+    # on every window at once. That is what failed the 8 Sep run on one listing with a
+    # uniform 0.07-0.11pp across 1m/3m/ytd/1y while the runs either side passed on the
+    # same code. Check 1 -- the render against the engine, 119 figures -- is unaffected
+    # and runs whatever the hour.
+    #
+    # European cash sessions are 07:00-15:30 UTC. So: one slot before the open, which a
+    # delay pushes into the session and which then verifies check 1 only; and two after
+    # the close, far enough back that even a five-hour slip lands with everything shut.
+    - cron: "47 5 * * 1-5"
+    - cron: "47 16 * * 1-5"
+    - cron: "17 20 * * 1-5"
   workflow_dispatch:
 
 permissions:

@@ -447,8 +447,9 @@ def main() -> int:
     # this only bites a manual run.
     session_open = bool((getattr(metrics, "performance", None) or {}).get("market_open"))
     if session_open:
-        print("    a session is OPEN: 1D is not compared (tape and quote are "
-              "observations minutes apart)")
+        print("    a session is OPEN: check 2 is not run at all -- our endpoint is a "
+              "live quote and the source's is a provisional close, so no window is "
+              "comparable. Check 1 above is unaffected.")
 
     print(f"\n[2] ENGINE vs YAHOO  ({len(sample)} instruments x {len(windows)} windows)")
     say(f"    sample: {', '.join(sample)}")
@@ -554,10 +555,25 @@ def main() -> int:
                   f"{('—' if ours is None else f'{float(ours):+.4f}%'):>11}"
                   f"{('—' if theirs is None else f'{theirs:+.4f}%'):>11}"
                   f"{('—' if gap is None else f'{gap:+.4f}'):>9}  {tail}")
-            if w == "1d" and session_open:
+            # A live session makes EVERY window undecidable, not just 1D. Our tape ends
+            # on the quote observed a moment ago; the source's frame ends on today's
+            # provisional close. The dates match, so source_can_referee is satisfied,
+            # but the PRICES do not -- and since every window shares that endpoint the
+            # gap lands on all of them at once, in the same direction.
+            #
+            # Measured: the 8 Sep run failed on one listing with -0.0694, -0.0709,
+            # -0.0946 and -0.1068pp on 1m/3m/ytd/1y, a uniform offset that is the
+            # endpoint and not the arithmetic. The runs either side of it passed on the
+            # same code because that day's quote happened to sit within tolerance, which
+            # is what a flaky check looks like.
+            #
+            # Date equality cannot tell a live quote from a stale tape; the session state
+            # can. With every venue closed and the dates matching, a price difference is
+            # a real finding and is still reported.
+            if session_open:
                 inconclusive.append(
-                    f"{tk} 1d: a session is open, so the tape's stamp and this "
-                    f"quote are observations minutes apart")
+                    f"{tk} {w}: a session is open, so our endpoint is a live quote and "
+                    f"the source's a provisional close")
                 continue
             if not source_can_referee(last_day, engine_end, w):
                 inconclusive.append(
