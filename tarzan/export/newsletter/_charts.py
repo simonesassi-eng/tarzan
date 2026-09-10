@@ -229,7 +229,8 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         grid += (
             f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" '
             f'text-anchor="start" font-size="{TYPE_PX["label"]}" fill="{P["muted"]}">'
-            f'{_ch.fmt_pct_tick(t)}</text>'
+            f'{_ch.fmt_pct_tick(t, (pticks[1] - pticks[0]) if len(pticks) > 1 else None)}'
+            f'</text>'
         )
     xlab = ""
     for k in sorted({0, n // 3, 2 * n // 3, n - 1}):

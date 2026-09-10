@@ -957,7 +957,7 @@ class TestAnInstrumentThatHasNotTradedContributesZero:
         assert float(level.iloc[-1]) - 100.0 == pytest.approx(1.5, abs=1e-9)
 
 
-class TestTheOneDayLabelComesFromTheTape:
+class TestTheOneDayLineEndsOnTheTape:
     """The convention the rest of the newsletter already follows.
 
     Every per-row 1D cell — RETURNS holdings, the Watchlist, Target instruments — puts
@@ -968,7 +968,13 @@ class TestTheOneDayLabelComesFromTheTape:
     a blended path, so the drawn end was short by its weight times its move — while
     that sleeve's own 1D was known and printed two sections above.
 
-    So the bars say WHEN the day moved and the tape says BY HOW MUCH.
+    So the bars say WHEN the day moved and the tape says BY HOW MUCH -- and the way that
+    is settled is that each line ENDS on the tape's figure. It was settled the other way
+    first, by drawing the blend and labelling it from the tape, which printed a number at
+    a dot that was not the dot's value: on the real book the portfolio's line ended at
+    -0.0277% under a label reading -0.0574%, so the labels ran in a different order than
+    the dots they belonged to. The last point of a session path is where the book stands
+    now, which is what the tape states, so that is the point.
     """
 
     @staticmethod
@@ -1017,11 +1023,15 @@ class TestTheOneDayLabelComesFromTheTape:
         win = _perf_intraday_window(m, "B")
 
         assert win is not None
-        assert win["labels"]["target"] == pytest.approx(-1.0, abs=1e-9)
+        assert win["endpoints"]["target"] == pytest.approx(-1.0, abs=1e-9)
 
-    def test_and_it_differs_from_the_drawn_end(self):
-        """The whole reason for the split: BBB has no bars, so the drawn path carries
-        only AAA diluted by BBB's weight, while the label carries both moves."""
+    def test_the_drawn_line_ends_on_that_same_figure(self):
+        """Position and label are one number, even where the bars cannot reach it.
+
+        BBB has no bars, so the blended path carries only AAA diluted by BBB's weight
+        and its own last point would be wrong. The final point is the tape's, so the
+        dot sits where its figure says.
+        """
         from tarzan.export.newsletter._sections_perf import _perf_intraday_window
 
         m = self._metrics(quoted=("AAA.MI", "BENCH.MI"),
@@ -1029,8 +1039,25 @@ class TestTheOneDayLabelComesFromTheTape:
 
         win = _perf_intraday_window(m, "B")
 
-        assert win["labels"]["target"] != pytest.approx(
-            win["endpoints"]["target"], abs=1e-6)
+        assert win["target"][-1] == pytest.approx(win["endpoints"]["target"], abs=1e-9)
+        assert win["target"][-1] == pytest.approx(-1.0, abs=1e-9)
+
+    def test_the_path_before_the_end_is_still_the_bars(self):
+        """Only the last point is replaced. The shape is the session's own, and the
+        start stays at 0% so the three lines remain comparable."""
+        from tarzan.export.newsletter._sections_perf import _perf_intraday_window
+
+        m = self._metrics(quoted=("AAA.MI", "BENCH.MI"),
+                          moves={"AAA.MI": 1.0, "BBB.MI": -3.0})
+
+        win = _perf_intraday_window(m, "B")
+        path = win["target"]
+
+        assert path[0] == pytest.approx(0.0, abs=1e-9)
+        assert len(path) > 2
+        # The interior is the blend, which here is positive (AAA is up), while the tape
+        # figure is negative -- so an interior point must not have been overwritten.
+        assert max(path[:-1]) > 0
 
     def test_the_portfolio_label_is_the_navs_own_move(self):
         """The same figure the matrix row and the Session tile print, so the panel
@@ -1046,7 +1073,7 @@ class TestTheOneDayLabelComesFromTheTape:
         expected = compute_period_return(
             _norm_series(m.portfolio_history).dropna(), "1d")
 
-        assert win["labels"]["twror"] == pytest.approx(expected, abs=1e-9)
+        assert win["endpoints"]["twror"] == pytest.approx(expected, abs=1e-9)
 
     def test_a_sleeve_with_no_tape_move_is_left_out_of_both_sides(self):
         """The one place renormalising is right: no figure is reported for it at all,
@@ -1058,11 +1085,11 @@ class TestTheOneDayLabelComesFromTheTape:
 
         win = _perf_intraday_window(m, "B")
 
-        assert win["labels"]["target"] == pytest.approx(2.0, abs=1e-9)
+        assert win["endpoints"]["target"] == pytest.approx(2.0, abs=1e-9)
 
-    def test_a_line_that_is_not_drawn_gets_no_label(self):
-        """Labelling a series the panel did not draw is worse than the figure being
-        absent — and the gate would then demand a line nothing rendered."""
+    def test_a_line_that_is_not_drawn_gets_no_figure(self):
+        """A figure for a series the panel did not draw is worse than none — the gate
+        would then demand a line nothing rendered."""
         from tarzan.export.newsletter._sections_perf import _perf_intraday_window
 
         m = self._metrics(quoted=("AAA.MI", "BBB.MI"),      # no benchmark bars
@@ -1071,4 +1098,4 @@ class TestTheOneDayLabelComesFromTheTape:
         win = _perf_intraday_window(m, "B")
 
         assert win["endpoints"].get("acwi") is None
-        assert "acwi" not in win["labels"]
+        assert win.get("acwi") is None

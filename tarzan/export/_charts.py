@@ -85,15 +85,30 @@ def fmt_eur_tick(v: float, step: Optional[float] = None) -> str:
     return f"{s}€{a / 1000:.0f}k"
 
 
-def fmt_pct_tick(v: float) -> str:
-    """Axis tick with the minus SIGN, not a hyphen.
+def fmt_pct_tick(v: float, step: Optional[float] = None) -> str:
+    """Axis tick with the minus SIGN, not a hyphen, at enough decimals to be distinct.
 
     Every other negative figure in the issue is written with U+2212; an axis
     labelled "-5%" beside a table cell reading "\u22125%" is two glyphs for one
     idea, and the hyphen is visibly shorter at 9px.
+
+    ``step`` is the spacing between ticks, and the decimals come from IT rather than
+    from the value. One decimal is right for a 20-point axis and wrong for a
+    two-tenths one: the intraday session panel, whose whole range is about 0.2pp,
+    printed ticks of 0.05, 0.10 and 0.15 as "0.1%", "0.1%" and "0.2%" -- three
+    gridlines, two of them claiming the same height. Without a step the old
+    behaviour stands, so callers that do not know their spacing are unchanged.
     """
     a = abs(v)
-    txt = f"{a:.0f}" if abs(a - round(a)) < 1e-9 else f"{a:.1f}"
+    if step:
+        # As many decimals as the STEP itself needs, found by asking rather than by a
+        # log: 0.25 needs two where -log10 says one, and 5 needs none where a +1 fudge
+        # gave "5.0%".
+        places = next((d for d in range(5)
+                       if abs(round(abs(step), d) - abs(step)) < 1e-9), 4)
+        txt = f"{a:.{places}f}"
+    else:
+        txt = f"{a:.0f}" if abs(a - round(a)) < 1e-9 else f"{a:.1f}"
     sign = "\u2212" if v < 0 else ""
     return f"{sign}{txt}%"
 
@@ -182,7 +197,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
             continue
         y = Y(t)
         out.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml + pw}" y2="{y:.1f}" stroke="{BORDER}" stroke-width="1"/>')
-        out.append(f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="{fs}" fill="{SUBTLE}">{fmt_pct_tick(t)}</text>')
+        out.append(f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="{fs}" fill="{SUBTLE}">{fmt_pct_tick(t, (ticks[1] - ticks[0]) if len(ticks) > 1 else None)}</text>')
     if include_zero and vmin < 0 < vmax:
         y0 = Y(0.0)
         out.append(f'<line x1="{ml}" y1="{y0:.1f}" x2="{ml + pw}" y2="{y0:.1f}" stroke="{MUTED}" stroke-width="1" stroke-dasharray="2,3"/>')

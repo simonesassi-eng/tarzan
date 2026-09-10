@@ -456,18 +456,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         """``(series, legend)`` for one window, recording the audit as it goes.
 
         The end label is the endpoint of the exact array handed to the chart, so what
-        is drawn and what is written are one number by construction — EXCEPT where the
-        window supplies its own ``labels``, which only 1D does. There the bars say
-        when the day moved and the tape says by how much, because a blended session
-        path is short by any sleeve the quote catalog did not return while that
-        sleeve's own 1D is known and printed in its own row. Every other 1D cell in
-        the newsletter has always taken its figure from the tape; this brings the grid
-        into line rather than out of it.
+        is drawn and what is written are one number by construction. 1D used to be the
+        exception -- drawn from the bars, labelled from the tape -- and the exception
+        printed labels whose order contradicted the order of the dots. The 1D window now
+        ends its lines ON the tape's figures, so there is one rule again.
         """
         if not win:
             return [], []
         endpoints = dict(win.get("endpoints") or {})
-        authoritative = dict(win.get("labels") or {})
         series, legend = [], []
         values: dict[str, float] = {}
         labels: dict[str, str] = {}
@@ -475,7 +471,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             line = win.get(key)
             if line is None or endpoints.get(key) is None:
                 continue
-            value = float(authoritative.get(key, endpoints[key]))
+            value = float(endpoints[key])
             label = _pct(value, signed=True)
             values[key] = value
             labels[key] = label
@@ -1210,16 +1206,31 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
         endpoints[key] = float(vals[-1])
     if all(v is None for v in endpoints.values()):
         return None
-    out["endpoints"] = endpoints
-    # The figures the panel PRINTS, which are not the ends of the drawn lines: the
-    # bars say WHEN the day moved, the tape says BY HOW MUCH. Every other 1D cell in
-    # the newsletter already works this way — see ``_tape_one_day`` — and reading the
-    # label off the bars was what let a single unreturned symbol shift it. Only for
-    # keys the panel actually drew: labelling a line that is not there is worse than
-    # the figure being absent.
+    # Each line ENDS on the authoritative figure, by construction.
+    #
+    # The bars say WHEN the day moved; the tape says BY HOW MUCH, and every other 1D
+    # cell in the issue reads the tape. This used to be settled by drawing the blend and
+    # LABELLING it from the tape, which put a number at a dot that was not the dot's
+    # value: measured on the real book, the portfolio's line ended at -0.0277% under a
+    # label reading -0.0574% and the target's at -0.0313% under -0.0784%, so the three
+    # labels ran in a different order than the three dots. A reader saw a line sitting
+    # above another and labelled below it, which is indefensible however true each
+    # figure is on its own.
+    #
+    # So the last point IS the tape's figure. That is not a fabrication: the end of a
+    # session path is where the book stands now, which is exactly what the tape states.
+    # The intermediate points remain the bars' own story, and the final segment absorbs
+    # the gap between what the bars covered and where the book actually is. The start
+    # stays at 0%, and ``endpoints`` now equals what is printed, so the semantic gate is
+    # back to one rule for all six windows.
     tape = _tape_one_day(m, geo_name)
-    out["labels"] = {k: tape[k] for k in _INTRADAY_LINE_KEYS
-                     if k in tape and endpoints.get(k) is not None}
+    for key in _INTRADAY_LINE_KEYS:
+        vals = out.get(key)
+        if not vals or key not in tape:
+            continue
+        vals[-1] = float(tape[key])
+        endpoints[key] = vals[-1]
+    out["endpoints"] = endpoints
     out["window_start"] = axis[0]
     out["window_end"] = axis[-1]
     out["source_end_dates"] = {"portfolio": axis[-1], "benchmark": axis[-1]}

@@ -435,13 +435,12 @@ def validate_newsletter_semantics(
             rendered_endpoints = panel_audit.get("endpoints", {})
             legend_values = panel_audit.get("legend_values", {})
             legend_labels = panel_audit.get("legend_labels", {})
-            # What the LABEL must equal is not always the drawn endpoint. A window may
-            # supply its own authoritative figures — only 1D does — because a blended
-            # session path is short by any sleeve the quote catalog did not return
-            # while that sleeve's own 1D is known from the tape. Every other 1D cell in
-            # the newsletter already labels from the tape, so this checks the
-            # convention the page follows rather than the one the grid used to.
-            expected_labels = dict(expected_window.get("labels") or {})
+            # One rule for all six windows: the label IS the drawn endpoint. 1D was the
+            # exception until its lines were made to END on the tape's figure instead of
+            # being labelled with it -- an exception that printed a number at a dot that
+            # was not the dot's value, and left the labels in a different order than the
+            # dots they belonged to.
+            expected_labels: dict = {}
             for key in sorted(resolvable):
                 expected_value = expected_endpoints.get(key)
                 expected_label = expected_labels.get(key, expected_value)
