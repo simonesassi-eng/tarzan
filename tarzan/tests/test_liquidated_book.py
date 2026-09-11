@@ -67,14 +67,21 @@ class TestALiquidatedBookReportsWhatItMade:
         assert "+36.79%" in _tile(_liquidated(), "TWROR")["value"]
 
     def test_nothing_open_means_no_unrealized_percentage(self):
-        """No cost basis, so the ratio is not applicable — the tile falls back to
-        the euro figure rather than asserting break-even."""
+        """No cost basis, so the ratio is not applicable. The euro figure was always
+        going to be the headline; what this pins is that no percentage is INVENTED
+        for the caption line either."""
         t = _tile(_liquidated(), "Unrealized P&L")
         assert "%" not in t["value"], f"tile reads {t['value']!r}"
 
-    def test_a_normal_book_still_headlines_the_percentage(self):
+    def test_a_normal_book_still_states_both_figures(self):
         """Guards against over-correcting: dropping the ``or 0.0`` must not stop a
-        book WITH a cost basis from leading with its percentage."""
+        book WITH a cost basis from stating its percentage at all.
+
+        The euros are the headline now and the percentage is the caption, which is
+        the OPPOSITE of the liquidated case above — there the ratio is undefined and
+        the tile has only euros to show. So this pins the normal book showing both,
+        in that order.
+        """
         df = pd.DataFrame([{
             "isin": "US0000000001", "ticker": "AAA", "name": "Alpha",
             "asset_class": "Equities", "current_value": 6000.0,
@@ -86,8 +93,12 @@ class TestALiquidatedBookReportsWhatItMade:
                              cash_value=0.0, holdings_df=df)
         m.pnl_eur = 1000.0
         m.pnl_pct = 20.0
-        assert _tile(m, "Total P&L")["value"] == "+20.00%"
-        assert "+20.00%" in _tile(m, "Unrealized P&L")["value"]
+        total = _tile(m, "Total P&L")
+        assert total["value"] == "+€1k", total["value"]   # synthetic
+        assert "+20.00%" in total["caption"], total["caption"]
+        unreal = _tile(m, "Unrealized P&L")
+        assert "€" in unreal["value"], unreal["value"]
+        assert "+20.00%" in unreal["caption"], unreal["caption"]
 
 
 class TestZeroEffectiveOrdersIsStillAnInputError:

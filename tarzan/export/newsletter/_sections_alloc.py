@@ -444,24 +444,26 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
                 "caption": _esc(str(caption)), "tone": tone}
 
     def _pnl_tile(label, eur, pct, denominator):
-        """A P&L tile with the PERCENTAGE as the headline and the euros beneath.
+        """A P&L tile with the EUROS as the headline and the percentage beneath.
 
-        These two led with the euro amount, which is the figure that grows with
-        the book rather than the one that says how the book is doing: a euro P&L
-        answers nothing without the capital behind it, while +8.62% is the answer
-        and is comparable to every other percentage in the issue. The euro amount
-        keeps its place, first on the caption line.
+        This led with the percentage for a while, on the reasoning that a euro P&L
+        answers nothing without the capital behind it while a percentage is comparable
+        to every other figure in the issue. Both are true and it is still the wrong way
+        round for a P&L: the money made is the thing, and the rate it was made at is how
+        to judge it. The percentage keeps its place, first on the caption line, and the
+        issue is full of percentages elsewhere -- TWROR, MWR and CAGR are all rates and
+        all still lead with one.
 
-        The tone follows the headline, so the colour belongs to the number it is
-        drawn on. If the percentage is unavailable the tile falls back to leading
-        with the euros rather than headlining a "—".
+        The tone follows the headline, so the colour belongs to the number it is drawn
+        on. Both figures share a sign, so nothing changes about which colour that is. If
+        the euros are unavailable the tile falls back to leading with the percentage
+        rather than headlining a "—".
         """
-        if is_missing(pct):
-            return _tile(label, _eur_smart(eur, signed=True), denominator,
-                         _tone(eur))
-        caption = denominator if is_missing(eur) else (
-            f"{_eur_smart(eur, signed=True)} · {denominator}")
-        return _tile(label, _pct(pct, signed=True), caption, _tone(pct))
+        if is_missing(eur):
+            return _tile(label, _pct(pct, signed=True), denominator, _tone(pct))
+        caption = denominator if is_missing(pct) else (
+            f"{_pct(pct, signed=True)} · {denominator}")
+        return _tile(label, _eur_smart(eur, signed=True), caption, _tone(eur))
 
     state_tiles = [
         _tile("Portfolio", _eur(m.total_value, decimals=0),
@@ -528,10 +530,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
                                  "weighted average, annual"))
 
 
-    # Dual-axis hero chart: 30-day portfolio value (€, left) + both P&L
-    # measures as % (right, flow-adjusted via the daily cost-basis series),
-    # with cash-flow triangles. Empty string when the order-derived series are
-    # unavailable (holdings-only path).
+    # Dual-axis hero chart: 30-day portfolio value (€, left) + both P&L measures
+    # (€, right), with cash-flow triangles. Empty string when the order-derived
+    # series are unavailable (holdings-only path).
     value_chart_html = ""
     hero_chart_legend = ""
     hero_flow_chips = ""
@@ -540,26 +541,25 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             and m.unrealized_series is not None and m.actual_value_series is not None):
         dts = win["dates"]
         idx = pd.DatetimeIndex(dts)
-        av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
 
-        def _cost_basis_pct(source):
-            """A P&L series as % of its own cost basis (value − that P&L).
+        def _pnl_eur(source):
+            """A P&L series in EUROS, on the chart's own index.
 
-            Both lines use this one definition, so Total and Unrealized are
-            directly comparable on the shared right axis — and it is the same
-            definition the STATE tile captions state.
+            It used to be expressed as a percentage of its cost basis, which put a
+            percentage axis beside a euro one and left the reader converting between
+            them to see how much of the value line was profit. Both axes are money now,
+            so the right one is a share of the left and the comparison is direct.
             """
             if source is None:
                 return None
             s = _norm_series(source).reindex(idx, method="ffill").bfill()
-            return list(((s / (av - s).replace(0, float("nan"))) * 100.0)
-                        .bfill().values.astype(float))
+            return list(s.astype(float).values)
 
-        unreal_series = _cost_basis_pct(m.unrealized_series)
-        total_series = _cost_basis_pct(m.pnl_series)
+        unreal_series = _pnl_eur(m.unrealized_series)
+        total_series = _pnl_eur(m.pnl_series)
         value_chart_html = _hero_value_chart(
             win["value"], unreal_series, dts, win["flows"],
-            total_pct=total_series,
+            total_eur=total_series,
         )
         if value_chart_html:
             hero_chart_legend = _hero_chart_legend(
@@ -646,6 +646,16 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             rebal_color, rebal_bg = PALETTE["red"], PALETTE["red_bg"]
         else:
             rebal_color, rebal_bg = PALETTE["amber"], PALETTE["amber_bg"]
+
+    # The ten risk figures close STATE. They were section [11] RISK, and the
+    # question they answer -- what shape was the ride -- is a property of the state
+    # rather than a topic of its own, so they sit with the value and the return
+    # measures instead of eleven sections later. The weak/fair/strong gauge that
+    # used to sit beside each figure is gone: the configured bands name themselves
+    # per metric, so the band is the caption and its colour is the figure's.
+    from tarzan.export.newsletter._risk_tiles import risk_tiles as _risk_tiles
+
+    state_tiles.extend(_risk_tiles(m, _tile))
 
     return {
         # Hero big number, rounded to whole euros (e.g. €XXX,XXX): decimals add

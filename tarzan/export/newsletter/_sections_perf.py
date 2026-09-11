@@ -12,7 +12,6 @@ import pandas as pd
 from tarzan.models.instrument_key import normalize_ticker
 from tarzan.export._format import (
     display_instrument_name,
-    greek_safe,
     eur_smart as _eur_smart,
 )
 from tarzan.export import _charts as _charts
@@ -395,7 +394,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
     PORT, PNL, BENCH = _charts.PORT, _charts.PNL, _charts.BENCH
-    UNREAL, TARGET = _charts.UNREAL, _charts.TARGET
+    TARGET = _charts.TARGET
     # Every legend label on this section is pre-escaped markup ("Total P&amp;L"),
     # and the benchmark's name is configured text, so it escapes once here rather
     # than at each of the three legends and the heading that reuse it.
@@ -523,7 +522,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # authoritative fields (m.twror_pct, m.pnl_pct).
     ssi = []
     si_leg = []
-    full = _perf_full_series(m, ctx.benchmark_geo)
+    full = _perf_full_series(m, ctx.benchmark_geo, with_mwr=True)
     si_dates = full["dates"] if full else dates
     if full is not None:
         # Bare value at each line end; the name is in the colour key below the
@@ -534,20 +533,23 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi.append({"values": full["twror"], "color": PORT, "width": 2.2,
                         "end_label": _pct(m.twror_pct, signed=True)})
             si_leg.append((PORT, "TWROR"))
-        if full["pnl_pct"] is not None:
-            ssi.append({"values": full["pnl_pct"], "color": PNL,
-                        "end_label": _pct(m.pnl_pct, signed=True)})
-            si_leg.append((PNL, "Total P&amp;L"))
-        if full.get("unreal_pct") is not None and not is_missing(full["unreal_pct"][-1]):
-            # Labelled from the line's own end point, not from a lifetime
-            # metrics field: there is no ``m.unrealized_pct`` counterpart to
-            # ``m.pnl_pct``, and inventing one from the final ratio would risk
-            # printing a number the drawn line does not reach. A missing end
-            # point drops the line rather than labelling it "—", which would
-            # name a series the reader cannot read a value for.
-            ssi.append({"values": full["unreal_pct"], "color": UNREAL,
-                        "end_label": _pct(full["unreal_pct"][-1], signed=True)})
-            si_leg.append((UNREAL, "Unreal. P&amp;L"))
+        if full.get("mwr") is not None and not is_missing(full["mwr"][-1]):
+            # MWR replaced the two P&L lines here. Those were the same fact as the
+            # TWROR line with a different denominator, and both now read in EUROS on
+            # the hero chart, which is where a P&L belongs. What the panel was missing
+            # was the OTHER return: money-weighted beside time-weighted is the pair
+            # that says whether the timing of contributions helped or hurt, and the
+            # distance between the two lines is that answer.
+            #
+            # It takes the freed P&L cyan. Labelled from the line's own end point --
+            # which ``_mwr_line`` pins to ``m.xirr_pct`` compounded over the span, so
+            # the figure is the state tile's rate expressed cumulatively, not a second
+            # estimate of it. "(cum.)" is on the legend because the tile quotes the
+            # ANNUALIZED rate under the same three letters, and two different numbers
+            # under one name in one issue is the confusion worth four characters.
+            ssi.append({"values": full["mwr"], "color": PNL,
+                        "end_label": _pct(full["mwr"][-1], signed=True)})
+            si_leg.append((PNL, "MWR (cum.)"))
         if full.get("target") is not None:
             ssi.append({"values": full["target"], "color": TARGET,
                         "end_label": _pct(full["target"][-1], signed=True)})
@@ -2366,9 +2368,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "returns": _build_bench_returns_dict(r.to_dict()),
             })
 
-    # Risk metrics are now rendered in their own unified Risk Profile
-    # section by ``_build_risk_profile``; we no longer return separate
-    # chip data here.
+    # Risk metrics are STATE tiles now (``_risk_tiles``); no chip data here.
 
     # Order-list returns (only present when an order list was supplied;
     # all None for a holdings-only run so the template renders nothing).
@@ -2494,223 +2494,4 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         "benchmark_geo": ctx.benchmark_geo,
         "returns": returns_block,
     }
-
-def _build_risk_profile(ctx: _NewsletterContext) -> dict:
-    """Build the "Historical risk profile" table (transposed layout).
-
-    Data source is ``metrics.historical_risk`` (MetricsEngine._historical_risk):
-    each instrument is measured over its OWN full available price history
-    (uncapped, span shown per row), and the portfolio row is a current-weight
-    static backtest over the common window of holdings with ≥1Y of history.
-    This deliberately trades the old apples-to-apples single window for
-    maximum history per series.
-
-    Columns are the risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Ulcer,
-    VaR 95%, CVaR 95%, α, β). α and β are computed against the configured α/β
-    benchmark (so that row reads β≈1.00 / α≈0), noted in a footnote.
-    """
-    m = ctx.metrics
-    hr = m.historical_risk or {}
-    if not hr.get("available"):
-        return {"available": False, "rows": [], "columns": []}
-
-    ab_bench_name = ctx.benchmark_alpha_beta or "S&P 500"
-
-    def _fmt_pct(v) -> str:
-        if is_missing(v):
-            return "—"
-        return _pct(float(v))
-
-    def _fmt_num(v) -> str:
-        if is_missing(v):
-            return "—"
-        return f"{float(v):.2f}"
-
-    # Metric columns, in display order. Tuple: (label, key, is_pct, note).
-    # α and β carry a "*" footnote marker because they are referenced to
-    # a specific market index. Ulcer Index sits next to Max DD as a
-    # duration-aware companion (RMS of drawdowns).
-    # (label, metrics key, is_pct, note, ratings key). The last field says
-    # which ``metric_ratings`` entry in constants.yaml describes the metric; its
-    # thresholds and ``invert`` flag are what the tile's gauge is drawn from.
-    # That direction cannot be inferred from the sign -- a positive volatility
-    # is not good news, and a -7% drawdown beats a -21% one -- and it is already
-    # declared in configuration, so reading it here keeps one source of truth
-    # instead of a second copy that can drift from the legend beside it.
-    # Beta carries None: the configured bands rate it as market exposure, which
-    # is a property to know rather than a score to win, so it draws no gauge.
-    # Full names, not abbreviations. "Vol", "VaR" and "CVaR" were squeezed for
-    # an eleven-column table that no longer exists; a tile has room to say what
-    # the metric is, and the confidence level on the two tail measures is part of
-    # their definition rather than a footnote.
-    metric_cols = [
-        ("CAGR", "cagr", True, "", "cagr"),
-        ("Volatility", "volatility", True, "", "volatility"),
-        ("Sharpe", "sharpe", False, "", "sharpe"),
-        ("Sortino", "sortino", False, "", "sortino"),
-        ("Max DD", "max_drawdown", True, "", "max_drawdown"),
-        ("Ulcer", "ulcer_index", True, "", "ulcer_index"),
-        ("VaR 95%", "var_95", True, "", "var_pct"),
-        ("CVaR 95%", "cvar_95", True, "", "cvar_pct"),
-        # The asterisk points at the footnote naming the index these two are
-        # measured against, which is their definition, not a comparison.
-        ("\u03b1", "alpha", True, "*", "alpha"),
-        ("\u03b2", "beta", False, "*", None),
-    ]
-
-    # ``invert: true`` in constants.yaml means "a smaller magnitude is better",
-    # and it is written against the metric's ABSOLUTE value: max_drawdown is
-    # banded at [-15, -30] and VaR at [0.8, 1.5] while both carry the flag --
-    # which is why the gauge below is fed abs(value) against abs(threshold).
-    from tarzan import config as _rating_cfg
-    _ratings = _rating_cfg.metric_ratings() or {}
-
-    port = hr.get("portfolio")
-    if not (port or hr.get("instruments")):
-        return {"available": False, "rows": [], "columns": []}
-
-    # ── The portfolio's own ten metrics, as tiles ────────────────────────
-    # This section used to be a 36-row table: the portfolio plus every reference
-    # instrument, over eleven columns. The question it exists to answer is "what
-    # shape was the ride" for THIS portfolio, and the answer was one row out of
-    # thirty-six -- the other thirty-five set up a comparison nobody asked for
-    # and cost a quarter of the issue's height.
-    #
-    # Each tile carries the figure and, where the configuration rates the
-    # metric, a gauge placing it on its own weak/fair/strong scale. Those
-    # thresholds are metric_ratings in constants.yaml, with its citations, so
-    # the gauge draws a rating the project declares rather than one invented
-    # here.
-    port_metrics = (port or {}).get("metrics") or {}
-    tiles = []
-    for label, key, is_pct, note, rating_key in metric_cols:
-        value = port_metrics.get(key)
-        if is_missing(value):
-            continue
-        band = (_ratings.get(rating_key) or {}) if rating_key else {}
-        thresholds = band.get("thresholds") or []
-        gauge = ""
-        if len(thresholds) >= 2:
-            gauge = _charts.band_gauge(
-                abs(float(value)), good=abs(float(thresholds[0])),
-                warn=abs(float(thresholds[1])),
-                invert=bool(band.get("invert", False)))
-        tiles.append({
-            # The label is uppercased by CSS, which folds a Greek alpha onto a
-            # capital that is drawn like a Latin A. greek_safe scopes the
-            # exception to the characters that break.
-            "label": greek_safe(f"{label}{note}"),
-            "value": _fmt_pct(value) if is_pct else _fmt_num(value),
-            "gauge": gauge,
-        })
-
-    description = ""
-
-    return {
-        "available": True,
-        "title": "Historical risk profile",
-        # The section heading carries this now, so it names the one thing the
-        # reader needs before reading a column: the window each series covers.
-        "subtitle": (
-            f'Portfolio over {(port or {}).get("span_label") or "its"} of '
-            f'history: a backtest at today\u2019s weights held constant, over '
-            f'the longest window where every holding with a year or more of '
-            f'history overlaps.'
-        ),
-        "tiles": tuple(tiles),
-        "description": description,
-        # Backtest transparency note (holdings excluded / renormalized).
-        "portfolio_note": (port or {}).get("note"),
-        # Footnote: α and β are both referenced to the α/β benchmark.
-        "alpha_beta_note": (
-            f"\u03b1 and \u03b2 are computed against {ab_bench_name}."
-        ),
-        "legend": _build_risk_legend(),
-        "benchmark_alpha_beta": ctx.benchmark_alpha_beta,
-        "benchmark_geo": ctx.benchmark_geo,
-    }
-
-def _build_risk_legend() -> list[dict]:
-    """Build the Risk Profile legend rows. Sources thresholds and units from
-    ``constants.yaml::metric_ratings`` so the bands quoted here are the ones
-    the ratings are actually computed from.
-
-    Each entry: {label, strong, fair, weak, description}. One line per metric:
-    the description says what the number IS and stops there. Calibration --
-    whether a given value is good -- is the gauge drawn on the tile above and
-    the three band chips beside the name, so the prose no longer repeats it
-    ("equity indexes ~15-20%", ">1 is good, >2 excellent"). Ten boxed cards
-    with three-line glosses were taller than the ten tiles they explained.
-
-    The α and β rows describe the metrics in general; the benchmark they are
-    measured against is named in the tile note above, so the legend stays
-    reusable across configurations.
-    """
-    from tarzan import config as cfg
-    ratings = cfg.metric_ratings() or {}
-
-    # (label, ratings_key, description). Order matches the tiles above. One
-    # clause each: what the number is, not how to feel about it.
-    legend_specs = [
-        ("CAGR", "cagr", "Yearly return, compounded, start to end value."),
-        ("Volatility", "volatility",
-         "Annualized standard deviation of daily returns."),
-        ("Sharpe", "sharpe", "(CAGR \u2212 risk-free rate) / volatility."),
-        ("Sortino", "sortino", "Sharpe counting downside volatility only."),
-        ("Max Drawdown", "max_drawdown", "Worst peak-to-trough loss."),
-        ("Ulcer Index", "ulcer_index",
-         "RMS of drawdowns: depth and time underwater together."),
-        ("VaR 95%", "var_pct", "Daily loss exceeded on 5% of days."),
-        ("CVaR 95%", "cvar_pct", "Average loss on the worst 5% of days."),
-        ("\u03b1", "alpha",
-         "Return above the benchmark once risk is accounted for (CAPM)."),
-        ("\u03b2", "beta", "Portfolio move per 1% benchmark move."),
-    ]
-
-    def _fmt(value: Optional[float], unit: str) -> str:
-        if value is None:
-            return "\u2014"
-        v = float(value)
-        # Drop the ".0" on integer thresholds so the bands read tight
-        # ("<3%" not "< 3.0%") — they sit inline next to the metric name.
-        # The minus SIGN, like every other negative figure in the issue: a band
-        # chip reading "-15%" beside a tile reading "\u221215%" is two glyphs for
-        # one idea.
-        a = abs(v)
-        num = f"{int(round(a))}" if abs(a - round(a)) < 1e-9 else f"{a:.1f}"
-        sign = "\u2212" if v < 0 else ""
-        return f"{sign}{num}{unit}"
-
-    legend_rows = []
-    for label, key, description in legend_specs:
-        spec = ratings.get(key, {}) or {}
-        thresholds = spec.get("thresholds", [None, None])
-        invert = bool(spec.get("invert", False))
-        unit = spec.get("unit", "")
-        good_t, warn_t = (thresholds + [None, None])[:2]
-
-        if good_t is None or warn_t is None:
-            strong = fair = weak = "\u2014"
-        elif invert:
-            # Lower-is-better metrics: better when below good threshold.
-            strong = f"<{_fmt(abs(good_t), unit)}"
-            fair = f"{_fmt(abs(warn_t), unit)}\u2013{_fmt(abs(good_t), unit)}"
-            weak = f">{_fmt(abs(warn_t), unit)}"
-        else:
-            strong = f">{_fmt(good_t, unit)}"
-            fair = f"{_fmt(warn_t, unit)}\u2013{_fmt(good_t, unit)}"
-            weak = f"<{_fmt(warn_t, unit)}"
-
-        legend_rows.append({
-            "label": label,
-            # Escaped here, not in the template: the digest template is
-            # ``.html.j2``, whose extension select_autoescape() does not
-            # recognise, so autoescape is off and "<10%" reached the document as
-            # a bare angle bracket in a text node.
-            "strong": _esc(strong),
-            "fair": _esc(fair),
-            "weak": _esc(weak),
-            "description": description,
-        })
-    return legend_rows
 

@@ -402,3 +402,134 @@ def test_chart_window_matches_the_table_across_a_tz_aware_benchmark():
     # which is the point: they must coincide for the same reason the table's two
     # columns do, not because one of them was measured over a different month.
     assert abs(win["endpoints"]["unreal_pct"] - win["endpoints"]["pnl_pct"]) < 1e-9
+
+
+# ======================================================================
+# The since-inception MWR line
+# ======================================================================
+
+def _mwr_book():
+    """Two years of daily value with two deposits, and the flows XIRR solves on.
+
+    All synthetic: €10k in at inception, €5k more a year later, ending at €20k, so
+    the book is up €5k on €15k contributed (synthetic). The second deposit lands
+    before the second year's rise — so a money-weighted return and a time-weighted
+    one have different answers here, which is the whole reason the line exists.
+    """
+    import datetime
+
+    idx = pd.date_range("2024-07-01", "2026-07-01", freq="B")
+    mid = datetime.date(2025, 7, 1)
+    # Value: 10k → 12k over year one, +5k deposit, 17k → 20k over year two.
+    vals = []
+    for ts in idx:
+        if ts.date() < mid:
+            frac = (ts.date() - idx[0].date()).days / 365.0
+            vals.append(10_000.0 * (1 + 0.20 * frac))
+        else:
+            frac = (ts.date() - mid).days / 365.0
+            vals.append(17_000.0 * (1 + 0.1765 * frac))
+    m = PortfolioMetrics(total_value=20_000.0, invested_value=20_000.0,
+                         cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 15_000.0}]))
+    m.actual_value_series = pd.Series(vals, index=idx)
+    m.portfolio_history = pd.Series(np.linspace(100.0, 130.0, len(idx)), index=idx)
+    m.xirr_cashflows = [
+        (idx[0].date(), -10_000.0),
+        (mid, -5_000.0),
+        (idx[-1].date(), 20_000.0),
+    ]
+    from tarzan.engine.stats import xirr
+    m.xirr_pct = xirr(m.xirr_cashflows) * 100.0
+    return m
+
+
+def test_the_mwr_line_is_cumulative_not_the_annual_rate():
+    """The transform is the point: the plotted line must be on the same scale as
+    the cumulative TWROR beside it, NOT the annual rate the STATE tile quotes."""
+    from tarzan.export._perf_series import _mwr_line
+
+    m = _mwr_book()
+    line = _mwr_line(m, list(m.actual_value_series.index))
+    assert line is not None
+    finite = [v for v in line if v == v]
+    assert finite, "no finite point on the MWR line"
+    # ~+40% cumulative on the synthetic book: €5k gained on capital that averaged
+    # €12.5k over the span (synthetic: €10k for two years, €5k for one of them).
+    assert 35.0 < finite[-1] < 45.0, finite[-1]
+    # Cumulative EXCEEDS the annual rate because the span is longer than a year:
+    # ~18.6%/yr compounded twice is ~40%. If the line were plotting the rate raw,
+    # this is the assertion that would catch it.
+    assert finite[-1] > m.xirr_pct > 0.0, (finite[-1], m.xirr_pct)
+
+
+def test_the_mwr_line_ends_on_the_authoritative_rate():
+    """The chart's end label is this array's last point, so it has to BE the
+    STATE tile's rate expressed cumulatively — not a second solve of it."""
+    from tarzan.engine.stats import DAYS_PER_YEAR
+    from tarzan.export._perf_series import _mwr_line
+
+    m = _mwr_book()
+    idx = list(m.actual_value_series.index)
+    line = _mwr_line(m, idx)
+    span = (idx[-1].date() - m.xirr_cashflows[0][0]).days / DAYS_PER_YEAR
+    expected = ((1.0 + m.xirr_pct / 100.0) ** span - 1.0) * 100.0
+    assert abs(line[-1] - expected) < 1e-9, (line[-1], expected)
+
+
+def test_the_mwr_line_agrees_with_a_hand_computed_money_weighted_return():
+    """Verified against a Modified-Dietz approximation, computed here from the
+    flows rather than read from the code under test.
+
+    Dietz weights each deposit by the fraction of the span it was invested for;
+    an IRR discounts continuously. They are different estimators, so this asserts
+    agreement within a percentage point, which is enough to catch a wrong day
+    count, a dropped flow, or a sign flip — the failures that matter.
+    """
+    from tarzan.export._perf_series import _mwr_line
+
+    m = _mwr_book()
+    idx = list(m.actual_value_series.index)
+    t0, tn = idx[0].date(), idx[-1].date()
+    span = (tn - t0).days
+    start = -m.xirr_cashflows[0][1]
+    deposits = [(d, -amt) for d, amt in m.xirr_cashflows[1:-1]]
+    end = m.xirr_cashflows[-1][1]
+    gain = end - start - sum(a for _d, a in deposits)
+    avg_capital = start + sum(a * ((tn - d).days / span) for d, a in deposits)
+    dietz = gain / avg_capital * 100.0
+    line = _mwr_line(m, idx)
+    assert abs(line[-1] - dietz) < 1.0, (line[-1], dietz)
+
+
+def test_a_point_before_the_first_flow_is_a_gap_not_a_zero():
+    """A date with no capital deployed has no money-weighted return. Drawing 0%
+    there would claim the book was flat when it did not yet exist."""
+    from tarzan.export._perf_series import _mwr_line
+
+    m = _mwr_book()
+    idx = list(m.actual_value_series.index)
+    line = _mwr_line(m, idx)
+    assert line[0] != line[0], line[0]   # NaN at inception (zero elapsed span)
+
+
+def test_no_flows_means_no_line():
+    """The holdings-only path has no order history, so there is nothing to solve.
+    None drops the line; it must not fall back to an all-NaN series, which the
+    chart would list in its key and draw nothing for."""
+    from tarzan.export._perf_series import _mwr_line
+
+    m = _mwr_book()
+    m.xirr_cashflows = None
+    assert _mwr_line(m, list(m.actual_value_series.index)) is None
+
+
+def test_full_series_only_solves_the_mwr_when_asked():
+    """One XIRR per plotted point is the most expensive line here, and three of
+    the four callers of ``_perf_full_series`` never draw it."""
+    m = _mwr_book()
+    m.benchmark_histories = {"ACWI": pd.Series(
+        np.linspace(200.0, 260.0, len(m.actual_value_series)),
+        index=m.actual_value_series.index)}
+    assert _perf_full_series(m, "ACWI")["mwr"] is None
+    assert _perf_full_series(m, "ACWI", with_mwr=True)["mwr"] is not None

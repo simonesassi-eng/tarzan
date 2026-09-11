@@ -44,6 +44,10 @@ from tarzan.export.newsletter._sections_alloc import (
     _build_preheader,
     _build_ticker_sources,
 )
+from tarzan.export.newsletter._risk_tiles import (
+    risk_legend as _risk_legend,
+    risk_notes as _risk_notes,
+)
 from tarzan.export.newsletter._sections_perf import (
     _build_performance30,
     _build_movers,
@@ -51,7 +55,6 @@ from tarzan.export.newsletter._sections_perf import (
     _build_returns_snapshot,
     _build_performance,
     _build_markets,
-    _build_risk_profile,
 )
 
 # Preserve the _perf_series re-export surface BY IDENTITY (test_audit asserts
@@ -167,7 +170,13 @@ def build_context(
         "performance": _build_performance(nctx),
         "markets": _build_markets(nctx),
         "portfolio_movers": _build_portfolio_movers(nctx),
-        "risk_profile": _build_risk_profile(nctx),
+        # The risk METRICS are STATE tiles now (see _risk_tiles); what stays here is
+        # the glossary that defines them and the three disclosures that came with the
+        # section they used to live in, both rendered at the foot of the issue.
+        "risk_legend": _risk_legend(),
+        "risk_window_note": _risk_notes(nctx)["window"],
+        "risk_alpha_beta_note": _risk_notes(nctx)["alpha_beta"],
+        "risk_backtest_note": _risk_notes(nctx)["backtest"],
         "optimizer": _build_optimizer(nctx),
         "tax_note": _build_tax_note(nctx),
         "ticker_sources": _build_ticker_sources(nctx),

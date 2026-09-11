@@ -1,7 +1,14 @@
 {# [01] STATE — the figures the rest of the issue elaborates on.
-   Three rows of three: what the portfolio is worth and the profit in it, then
-   the three return measures, then the context each is judged against. Each tile
-   carries its own one-line caption; the definitions live in the appendix.
+   Rows of three: what the portfolio is worth and the profit in it, the three
+   return measures, the context each is judged against, and then the ten risk
+   metrics that used to be section [11]. Each tile carries its own one-line
+   caption; the definitions live in the appendix.
+
+   A tile's tone is its VERDICT, and there are three of them, not two. The return
+   tiles are judged by sign — up is green, down is red — while a risk metric is
+   judged against its configured band, whose middle is neither: amber. Beta draws
+   neutral ink on purpose, because its bands describe market exposure rather than
+   score it.
 
    The value chart and the cash-flow chips used to sit in this block. They moved
    to [02] PORTFOLIO, next to the window matrix, because a chart of the value
@@ -41,7 +48,7 @@
                         {% for t in row %}
                         <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
                           <div style="{{ type.label }}color:{{ palette.muted }};">{{ t.label }}</div>
-                          <div style="margin-top:3px;{{ type.display }}color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
+                          <div style="margin-top:3px;{{ type.display }}color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
                           <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};">{{ t.caption }}</div>
                         </td>
                         {% endfor %}

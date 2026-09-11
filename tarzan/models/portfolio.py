@@ -218,6 +218,13 @@ class PortfolioMetrics:
     # markers on the newsletter performance charts. None on the holdings-only
     # path. Same object the TWROR engine consumes (no recomputation).
     external_flows: Optional[dict] = None
+    # The dated cash flows XIRR is solved on, bank-account perspective:
+    # deposits negative, distributions positive, terminated by ``(today,
+    # current_value)``. NOT the same object as ``external_flows``, whose sign
+    # convention is the opposite and whose construction differs -- carried here
+    # so the since-inception MWR line is solved on the exact flows
+    # ``xirr_pct`` came from instead of a look-alike that would drift from it.
+    xirr_cashflows: Optional[list] = None
     # Portfolio inception date (ISO "YYYY-MM-DD"), derived automatically
     # from the first order when an order list is present. None on the
     # holdings-only path (the header then falls back to config).

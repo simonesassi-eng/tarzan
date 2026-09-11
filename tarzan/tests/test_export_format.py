@@ -251,13 +251,20 @@ class TestAssetClassOrder:
         assert set(_format.ASSET_CLASS_COLORS).issubset(set(nl.ASSET_CLASS_ORDER))
 
 
-class TestRiskProfileBenchmarkLabels:
-    """_build_risk_profile must honor the configured benchmark names,
-    not hardcoded 'S&P 500' / 'MSCI ACWI' literals."""
+class TestRiskMetricsBecomeStateTiles:
+    """The risk figures are STATE tiles, judged by their configured band.
 
-    def _ctx(self, ab_name, geo_name):
+    They were section [11] RISK, each figure beside a weak/fair/strong gauge. The
+    section is gone and the metrics moved into [01] STATE: they answer "what shape was
+    the ride", which is a property of the state rather than a topic of its own.
+
+    The gauge went with it, and what it carried survives without a drawing. The bands in
+    constants.yaml NAME themselves per metric, so the band word is the tile's caption
+    and the band's colour is the figure's — no bar to measure against its own track.
+    """
+
+    def _metrics_obj(self, ab_name="MSCI World", geo_name="FTSE All-World"):
         from tarzan.models.portfolio import PortfolioMetrics
-        from tarzan.models.investor_config import InvestorConfig
 
         def _metrics(cagr, vol, sh, so, mdd, ui, var, cvar, a, b):
             return {"cagr": cagr, "volatility": vol, "sharpe": sh, "sortino": so,
@@ -265,72 +272,125 @@ class TestRiskProfileBenchmarkLabels:
                     "cvar_95": cvar, "alpha": a, "beta": b}
 
         m = PortfolioMetrics()
-        # New contract: the Historical risk profile reads metrics.historical_risk
-        # (per-instrument full history + a current-weight portfolio backtest).
         m.historical_risk = {
             "available": True,
             "portfolio": {
                 "label": "Your portfolio", "ticker": None, "span_label": "3.0Y",
                 "note": None, "is_portfolio": True,
-                "metrics": _metrics(5.0, 12.0, 1.0, 1.2, -10.0, 6.0, -1.0, -1.5, 0.5, 0.9),
+                "metrics": _metrics(5.0, 12.0, 1.0, 1.2, -10.0, 6.0, -1.0, -1.5,
+                                    0.5, 0.9),
             },
-            "instruments": [
-                {"label": ab_name, "ticker": "SWDA.MI", "span_label": "10.0Y",
-                 "note": None, "is_portfolio": False,
-                 "metrics": _metrics(4.0, 15.0, 0.8, 1.0, -20.0, 9.0, -1.5, -2.0, 0.0, 1.0)},
-                {"label": geo_name, "ticker": "VWCE.MI", "span_label": "9.0Y",
-                 "note": None, "is_portfolio": False,
-                 "metrics": _metrics(4.5, 14.0, 0.9, 1.1, -18.0, 8.0, -1.4, -1.9, 0.2, 0.95)},
-            ],
+            "instruments": [],
         }
+        return m
+
+    def _ctx(self, ab_name="MSCI World", geo_name="FTSE All-World"):
+        from tarzan.models.investor_config import InvestorConfig
+
         return nl._NewsletterContext(
-            metrics=m, config=InvestorConfig(),
-            benchmark_alpha_beta=ab_name, benchmark_geo=geo_name,
-        )
+            metrics=self._metrics_obj(), config=InvestorConfig(),
+            benchmark_alpha_beta=ab_name, benchmark_geo=geo_name)
 
-    def test_portfolio_metrics_become_tiles(self):
-        """The section is the portfolio's own ten metrics, as tiles.
+    @staticmethod
+    def _tile(label, value, caption, tone="flat"):
+        return {"label": label, "value": value, "caption": caption, "tone": tone}
 
-        It used to be a 36-row table -- the portfolio plus every reference
-        instrument, over eleven columns -- which answered a comparison nobody
-        asked for at a quarter of the issue's height. The reference benchmarks
-        are no longer rendered here; ``alpha_beta_note`` still names the index
-        alpha and beta are measured against, because that one is not a
-        comparison but the definition of two of the figures.
-        """
-        ctx = self._ctx("MSCI World", "FTSE All-World")
-        profile = nl._build_risk_profile(ctx)
-        assert profile["available"]
-        # Greek letters are wrapped so a CSS uppercase transform cannot fold
-        # them onto capitals drawn like Latin A and B, so strip the markup here.
-        labels = [re.sub(r"<[^>]+>", "", t["label"]) for t in profile["tiles"]]
-        assert labels == ["CAGR", "Volatility", "Sharpe", "Sortino", "Max DD",
+    def _tiles(self):
+        from tarzan.export.newsletter._risk_tiles import risk_tiles
+
+        return risk_tiles(self._metrics_obj(), self._tile)
+
+    def test_the_metrics_become_tiles_in_order(self):
+        labels = [t["label"] for t in self._tiles()]
+        assert labels == ["Volatility", "Sharpe", "Sortino", "Max DD",
                           "Ulcer", "VaR 95%", "CVaR 95%",
-                          "\u03b1*", "\u03b2*"], labels
-        alpha = next(t["label"] for t in profile["tiles"]
-                     if "\u03b1" in t["label"])
-        assert "text-transform:none" in alpha
-        assert "MSCI World" in profile["alpha_beta_note"]
+                          "Alpha*", "Beta*"], labels
+
+    def test_no_second_cagr_tile(self):
+        """STATE already carries a CAGR — the book's own annualized TWROR — and the risk
+        block computes a DIFFERENT one, a backtest at today's weights. On the reference
+        book they read +15.68% and 24.27%. Two tiles labelled CAGR with different numbers
+        six tiles apart is worse than the backtest figure being absent, so it is absent;
+        Sharpe and Sortino still carry it as their numerator.
+        """
+        assert "CAGR" not in [t["label"] for t in self._tiles()]
+        from tarzan.export.newsletter._risk_tiles import risk_legend
+        assert "CAGR" not in [r["label"] for r in risk_legend()]
+
+    def test_the_greek_labels_are_spelled_out_not_wrapped_in_markup(self):
+        """A CSS uppercase folds α onto Α, drawn like a Latin A — and a STATE tile's
+        label is ESCAPED on the way out, so the ``text-transform:none`` wrapper that used
+        to scope the exception arrived as VISIBLE TEXT in the newsletter. Spelling the
+        names out needs neither.
+        """
+        labels = [t["label"] for t in self._tiles()]
+        assert "Alpha*" in labels and "Beta*" in labels, labels
+        assert not any("<" in t["label"] for t in self._tiles()), labels
 
     def test_tiles_carry_the_portfolio_values(self):
-        ctx = self._ctx("MSCI World", "FTSE All-World")
-        tiles = {t["label"]: t["value"] for t in nl._build_risk_profile(ctx)["tiles"]}
-        # The fixture's portfolio row, not a benchmark's.
-        assert tiles["CAGR"] == "5.00%"
+        tiles = {t["label"]: t["value"] for t in self._tiles()}
+        assert tiles["Volatility"] == "12.00%"
         assert tiles["Sharpe"] == "1.00"
         assert tiles["Sortino"] == "1.20"
 
-    def test_rated_metrics_get_a_gauge_and_beta_does_not(self):
-        """A gauge is drawn wherever constants.yaml rates the metric, so the
-        scale shown is the configured one rather than one invented here."""
-        ctx = self._ctx("MSCI World", "FTSE All-World")
-        tiles = {t["label"]: t["gauge"] for t in nl._build_risk_profile(ctx)["tiles"]}
-        for label in ("Volatility", "Sharpe", "Sortino", "Max DD", "CAGR"):
-            assert "<svg" in tiles[label], label
-        # Lower-is-better metrics put the strong zone on the left, so the end
-        # captions swap with it.
-        assert tiles["Volatility"].index("strong") < tiles["Volatility"].index("weak")
-        assert tiles["Sharpe"].index("weak") < tiles["Sharpe"].index("strong")
+    def test_the_tone_is_the_configured_band_not_the_sign(self):
+        """The point of the change. A -10% drawdown is GOOD news (contained, green) and
+        a +12% volatility is middling (amber): neither reading follows from the sign,
+        which is how the return tiles are judged.
+        """
+        tones = {t["label"]: t["tone"] for t in self._tiles()}
+        assert tones["Max DD"] == "pos", "-10% is inside the -15% contained band"
+        assert tones["Volatility"] == "warn", "12% sits between the 10% and 18% bands"
+        assert tones["Sharpe"] == "pos", "1.00 meets the strong threshold"
+        assert tones["Ulcer"] == "warn", "6% is between the 3% and 8% bands"
+
+    def test_beta_keeps_its_band_word_but_takes_no_verdict(self):
+        """Its bands rate market EXPOSURE, a property to know rather than a score to
+        win, so painting "defensive" green would state an opinion the project has
+        declined to make."""
+        beta = next(t for t in self._tiles() if t["label"] == "Beta*")
+        assert beta["tone"] == "flat"
+        assert "neutral" in beta["caption"]
+
+    def test_each_caption_names_the_band_and_what_it_is_measured_on(self):
+        caps = {t["label"]: t["caption"] for t in self._tiles()}
+        assert caps["Max DD"] == "contained · peak to trough"
+        assert caps["Volatility"] == "moderate · annualized"
+
+    def test_no_risk_block_means_no_tiles_rather_than_ten_dashes(self):
+        from tarzan.export.newsletter._risk_tiles import risk_tiles
+
+        m = self._metrics_obj()
+        m.historical_risk = {"available": False}
+        assert risk_tiles(m, self._tile) == []
+
+    def test_the_legend_quotes_the_configured_bands_with_their_comparators(self):
+        """"≥ 7%" and "≤ 15%" are different claims, and the bands are written in both
+        directions — an inverted metric is good when it is SMALL."""
+        from tarzan.export.newsletter._risk_tiles import risk_legend
+
+        rows = {r["label"]: r for r in risk_legend()}
+        assert rows["Sharpe"]["strong"] == "\u2265 1"
+        assert rows["Max DD"]["strong"] == "\u2264 15%"
+        assert rows["Volatility"]["weak"] == "> 18%"
+
+    def test_the_notes_name_the_index_and_the_window(self):
+        """Deleting the section must not drop its terms: the metrics are a backtest at
+        today's weights over a common window, and alpha and beta are measured against a
+        specific index."""
+        from tarzan.export.newsletter._risk_tiles import risk_notes
+
+        notes = risk_notes(self._ctx())
+        assert "MSCI World" in notes["alpha_beta"]
+        assert "3.0Y" in notes["window"]
+        assert "today" in notes["window"]
+
+    def test_no_risk_block_means_no_notes(self):
+        from tarzan.export.newsletter._risk_tiles import risk_notes
+
+        ctx = self._ctx()
+        ctx.metrics.historical_risk = {"available": False}
+        assert risk_notes(ctx) == {"window": "", "alpha_beta": "", "backtest": ""}
 
 
 class TestShortInstrumentName:

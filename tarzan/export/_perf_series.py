@@ -397,8 +397,72 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
     return twror_si, total_pct, unreal_pct, acwi_si
 
 
+def _mwr_line(m: PortfolioMetrics, dates) -> Optional[list]:
+    """CUMULATIVE money-weighted return (%) at each of ``dates``, or None.
+
+    XIRR is an annual RATE; every other line on the since-inception chart is a
+    cumulative return. Plotting the rate raw would put an unreadable line on the
+    panel -- a book up 2% after five days has an XIRR near +300%, which is
+    arithmetically right and pins the y-axis so hard that nothing else on the
+    chart is legible. So each point is the rate compounded over its own elapsed
+    span, ``(1 + r)**years - 1``, on the same actual/365.25 day count ``xnpv``
+    discounts with. That inverts the annualization exactly: the +300% five-day
+    book plots at +2%, and the line is the money-weighted twin of the
+    time-weighted one beside it -- same question, contributions timed in rather
+    than out.
+
+    Solved on ``m.xirr_cashflows``, the flows ``m.xirr_pct`` itself came from,
+    re-terminated at each date with the portfolio's value there.
+    ``m.external_flows`` is NOT interchangeable: opposite sign convention, built
+    from a different predicate, and a line drawn from it would miss the field it
+    is supposed to end on.
+
+    NaN at any date the rate is undefined (fewer than two flows, or every flow
+    the same sign -- no realised return to solve for), which the chart draws as
+    a gap rather than as a zero.
+    """
+    from tarzan.engine.stats import DAYS_PER_YEAR, xirr
+
+    flows = list(m.xirr_cashflows or ())
+    # The last entry is the terminal valuation at today, which this replaces per
+    # date. Without dropping it, every point would be solved with today's value
+    # sitting in its future.
+    flows = flows[:-1]
+    if len(flows) < 1 or m.actual_value_series is None:
+        return None
+    flows.sort(key=lambda f: f[0])
+    t0 = flows[0][0]
+    idx = pd.DatetimeIndex(dates)
+    av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
+
+    out: list[float] = []
+    cut = 0  # flows[:cut] are dated at/before the current date -- idx is sorted
+    for ts, value in zip(idx, av.values.astype(float)):
+        d = ts.date()
+        while cut < len(flows) and flows[cut][0] <= d:
+            cut += 1
+        years = (d - t0).days / DAYS_PER_YEAR
+        if cut < 1 or years <= 0 or not math.isfinite(value):
+            out.append(float("nan"))
+            continue
+        rate = xirr(flows[:cut] + [(d, value)])
+        out.append(float("nan") if math.isnan(rate)
+                   else ((1.0 + rate) ** years - 1.0) * 100.0)
+
+    # End the line ON the authoritative annualized figure, compounded over the
+    # full span. The last point re-solves flows that are complete, so it already
+    # lands within rounding of ``xirr_pct``; pinning it means the label the chart
+    # prints and the rate the STATE tile prints are one number by construction
+    # rather than two solves that happen to agree.
+    if m.xirr_pct is not None and out:
+        span = (idx[-1].date() - t0).days / DAYS_PER_YEAR
+        if span > 0:
+            out[-1] = ((1.0 + float(m.xirr_pct) / 100.0) ** span - 1.0) * 100.0
+    return out if any(math.isfinite(v) for v in out) else None
+
+
 def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
-                      max_points: int = 180) -> Optional[dict]:
+                      max_points: int = 180, with_mwr: bool = False) -> Optional[dict]:
     """The since-inception trajectory over the WHOLE date range (not the last
     30 days): cumulative TWROR (%), Total P&L (%) and MSCI ACWI (%) from
     inception to today, on a common daily index that is evenly downsampled to
@@ -406,7 +470,13 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     ``_perf_level_series`` for the cumulative math. None when unavailable.
 
     Keys mirror ``_perf_window`` so the chart builder is symmetric:
-    ``{dates, twror, pnl_pct, unreal_pct, acwi}`` (any line may be None)."""
+    ``{dates, twror, pnl_pct, unreal_pct, acwi, target, mwr}`` (any line may be
+    None).
+
+    ``mwr`` is off by default because it is the one line here that is SOLVED
+    rather than read: an XIRR per plotted point, and this function is called
+    several times per issue (the chart, the benchmark gap, its history, the AI
+    summary) where only the chart draws it."""
     if m.portfolio_history is None or m.actual_value_series is None:
         return None
     nav_full = _norm_series(m.portfolio_history)
@@ -433,6 +503,9 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         # Read through the same helper as the 30-day window rather than through
         # _perf_level_series' fixed 4-tuple, whose shape other callers depend on.
         "target": _target_line(m, list(idx)),
+        # One XIRR solve per plotted point, so it is only paid for when a caller
+        # asks for it -- see ``with_mwr``.
+        "mwr": _mwr_line(m, list(idx)) if with_mwr else None,
     }
 
 

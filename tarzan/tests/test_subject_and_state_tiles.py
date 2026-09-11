@@ -112,72 +112,77 @@ class TestLiveWhenOpenPreviousCloseWhenNot:
         assert self._subject_pct(nav) == "P - 19:35 - 1D +0.75%"
 
 
-class TestThePnlTilesLeadWithThePercentage:
+class TestThePnlTilesLeadWithTheEuros:
+    """The money made is the headline; the rate it was made at is the caption.
+
+    This ran the other way for a while, on the reasoning that a euro P&L answers
+    nothing without the capital behind it while a percentage compares to everything
+    else in the issue. Both are true and it is still the wrong way round for a P&L —
+    and the issue is full of rates elsewhere: TWROR, MWR and CAGR all lead with one.
+    """
+
     @staticmethod
     def _tiles(**kw):
         m = _metrics(**kw)
         return {t["label"]: t for t in _build_hero(_NewsletterContext(
             metrics=m, config=InvestorConfig()))["tiles"]}
 
-    def test_total_pnl_headlines_the_percentage_and_captions_the_euros(self):
+    def test_total_pnl_headlines_the_euros_and_captions_the_percentage(self):
         t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Total P&amp;L"]
-        assert H.unescape(t["value"]) == "+10.00%"
+        assert H.unescape(t["value"]) == "+€12.5k"   # synthetic
         cap = H.unescape(t["caption"])
-        assert cap.startswith("+€12.5k"), cap
+        assert cap.startswith("+10.00%"), cap
         assert cap.endswith("on contributed capital"), cap
 
-    def test_unrealized_pnl_headlines_the_percentage_too(self):
+    def test_unrealized_pnl_headlines_the_euros_too(self):
         t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Unrealized P&amp;L"]
-        assert H.unescape(t["value"]).endswith("%")
-        assert "€" in H.unescape(t["caption"])
+        assert "€" in H.unescape(t["value"])
+        assert "%" in H.unescape(t["caption"])
 
-    def test_the_euro_amount_is_not_lost(self):
+    def test_the_percentage_is_not_lost(self):
         """It moved, it did not go away — it is still the first thing on the
         caption line."""
         t = self._tiles(pnl_eur=12_500.0, pnl_pct=10.0)["Total P&amp;L"]
-        assert "€" not in H.unescape(t["value"])
-        assert "€" in H.unescape(t["caption"])
+        assert "%" not in H.unescape(t["value"])
+        assert "%" in H.unescape(t["caption"])
 
     def test_the_colour_follows_the_headline(self):
         """The tone is drawn on the number it is next to. A percentage and a euro
         amount can disagree in sign when contributed capital is negative (more
-        withdrawn than paid in), and then colouring by the euros would paint the
-        headline the wrong way."""
-        pos = self._tiles(pnl_eur=-100.0, pnl_pct=3.0)["Total P&amp;L"]
+        withdrawn than paid in), and now that the euros are the headline the colour
+        follows THEM."""
+        pos = self._tiles(pnl_eur=100.0, pnl_pct=-3.0)["Total P&amp;L"]
         assert pos["tone"] == "pos", pos
-        neg = self._tiles(pnl_eur=100.0, pnl_pct=-3.0)["Total P&amp;L"]
+        neg = self._tiles(pnl_eur=-100.0, pnl_pct=3.0)["Total P&amp;L"]
         assert neg["tone"] == "neg", neg
 
-    def test_a_nan_percentage_falls_back_to_the_euros(self):
+    def test_a_nan_euro_amount_falls_back_to_the_percentage(self):
         """Never headline a "—".
 
-        ``_pct`` renders NaN as an em dash, and a tile whose big number is a dash
-        while the euro amount it could have shown sits in small type below is
-        strictly worse than the old layout. None cannot reach here (the builder
-        defaults the percentage to 0.0), but NaN can, and it is the case that
-        would print the dash.
+        ``_eur_smart`` cannot render a NaN as a figure, and a tile whose big number is
+        a dash while the percentage it could have shown sits in small type below is
+        strictly worse than either layout.
         """
-        t = self._tiles(pnl_eur=12_500.0, pnl_pct=float("nan"))["Total P&amp;L"]
-        assert "€" in H.unescape(t["value"]), t
-        assert "%" not in H.unescape(t["value"]), t
+        t = self._tiles(pnl_eur=float("nan"), pnl_pct=10.0)["Total P&amp;L"]
+        assert "%" in H.unescape(t["value"]), t
         assert H.unescape(t["caption"]) == "on contributed capital", t
 
     def test_the_portfolio_tile_still_leads_with_euros(self):
-        """Only the two P&L tiles changed. "Portfolio" is a level, not a return —
-        a percentage there would have no denominator to mean anything against."""
+        """It always did: "Portfolio" is a level, not a return, and a percentage there
+        would have no denominator to mean anything against."""
         t = self._tiles()["Portfolio"]
         assert H.unescape(t["value"]).startswith("€")
 
 
 class TestTheRenderedTileMarkup:
-    def test_the_percentage_is_in_the_display_type_and_the_euros_below(self):
-        """End to end through the template, since the swap is only real if the
-        big type carries the percentage in the actual document."""
+    def test_the_euros_are_in_the_display_type_and_the_percentage_below(self):
+        """End to end through the template, since the swap is only real if the big
+        type carries the euro amount in the actual document."""
         from tarzan.tests.test_newsletter_golden_html import GOLDEN_PATH
         html = GOLDEN_PATH.read_text()
         block = html.split("Total P&amp;L")[1][:600]
         # The display-type div comes first, then the prose caption.
         big = re.search(r'font-size:22px[^>]*>([^<]+)</div>', block)
         small = re.search(r'line-height:1\.5[^>]*>([^<]+)</div>', block)
-        assert big and big.group(1).strip().endswith("%"), block[:300]
-        assert small and "€" in small.group(1), block[:300]
+        assert big and "€" in big.group(1), block[:300]
+        assert small and "%" in small.group(1), block[:300]

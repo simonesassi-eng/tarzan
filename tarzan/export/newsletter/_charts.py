@@ -152,9 +152,16 @@ def _day_spark(vals: list[float], baseline: float, w: int = 76, h: int = 22,
         f'</svg>'
     )
 
-def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
-                      total_pct=None) -> str:
-    """Dual-axis hero chart: portfolio value in €, both P&L measures in %.
+def _hero_value_chart(values, unreal_eur, dates, flows, w: int = 580, h: int = 196,
+                      total_eur=None) -> str:
+    """Dual-axis hero chart: portfolio value in € on the left, both P&L measures in €
+    on the right.
+
+    Both axes are money. The right one used to be a percentage of cost basis, which put
+    two units on one plot and asked the reader to hold both: a value line climbing in
+    euros beside a P&L line climbing in points, with no way to read one against the
+    other. In euros the two axes answer the same question at two scales -- what the book
+    is worth, and how much of that is profit -- and the second is a share of the first.
 
     The green/red split is on TOTAL P&L, with the same baseline semantics the
     value line used to carry: green above where the P&L stood when the window
@@ -166,8 +173,12 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     gives up its cyan HERE only, and the colour key says so with a two-tone
     swatch, so nothing else in the issue changes meaning.
 
-    ``total_pct`` is optional: with no lifetime P&L (the holdings-only path) no
+    ``total_eur`` is optional: with no lifetime P&L (the holdings-only path) no
     series is split and the value simply draws neutral.
+
+    The two P&L arguments were called ``pct``/``total_pct`` while the axis was a
+    percentage. They carry euros now, and a parameter whose name states the wrong
+    unit is how the wrong series gets passed to it.
     """
     global _dual_uid
     _dual_uid += 1
@@ -181,10 +192,10 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     u = _dual_uid
     P = PALETTE
     n = len(values)
-    if n < 2 or not pct or len(pct) != n:
+    if n < 2 or not unreal_eur or len(unreal_eur) != n:
         return ""
-    if total_pct is not None and len(total_pct) != n:
-        total_pct = None
+    if total_eur is not None and len(total_eur) != n:
+        total_eur = None
     ML, MR, MT, MB = 52, 48, 12, 26
     PW, PH = w - ML - MR, h - MT - MB
     base = values[0]
@@ -199,8 +210,9 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
     vstep = (vticks[1] - vticks[0]) if len(vticks) > 1 else None
     # The right axis must span BOTH P&L series, or the second line is drawn
     # against a scale that was fitted to the first and rides off the plot.
-    pct_all = list(pct) + list(total_pct or ())
-    plo, phi, pticks = _ch.nice_ticks(min(pct_all), max(pct_all), _TICKS)
+    pnl_all = list(unreal_eur) + list(total_eur or ())
+    plo, phi, pticks = _ch.nice_ticks(min(pnl_all), max(pnl_all), _TICKS)
+    pstep = (pticks[1] - pticks[0]) if len(pticks) > 1 else None
 
     def X(i):
         return ML + (i / (n - 1) * PW if n > 1 else 0)
@@ -229,7 +241,7 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
         grid += (
             f'<text x="{ML + PW + 6}" y="{Yp(t) + 3:.1f}" '
             f'text-anchor="start" font-size="{TYPE_PX["label"]}" fill="{P["muted"]}">'
-            f'{_ch.fmt_pct_tick(t, (pticks[1] - pticks[0]) if len(pticks) > 1 else None)}'
+            f'{_ch.fmt_eur_tick(t, pstep)}'
             f'</text>'
         )
     xlab = ""
@@ -243,14 +255,14 @@ def _hero_value_chart(values, pct, dates, flows, w: int = 580, h: int = 196,
 
     vline = " ".join(f"{X(i):.1f},{Yv(v):.1f}" for i, v in enumerate(values))
     baseline_y = Yv(base)
-    pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(pct))
-    tline = (" ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(total_pct))
-             if total_pct is not None else "")
+    pline = " ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(unreal_eur))
+    tline = (" ".join(f"{X(i):.1f},{Yp(v):.1f}" for i, v in enumerate(total_eur))
+             if total_eur is not None else "")
     # The split boundary: where Total P&L stood when the window opened, on the
     # RIGHT axis — the same "versus the window open" reference the value line
     # used to be coloured against. Clamped into the plot band so the clip can
     # never be drawn off the canvas.
-    split_y = max(MT, min(Yp(total_pct[0]), MT + PH)) if total_pct else baseline_y
+    split_y = max(MT, min(Yp(total_eur[0]), MT + PH)) if total_eur else baseline_y
 
     marks = ""
     if flows:
@@ -365,8 +377,8 @@ def _hero_chart_legend(*, has_total: bool) -> str:
         # window. Deliberately does not repeat the "window open" caption this
         # change removed from the plot.
         items.append((_split_swatch(),
-                      "Total P&amp;L (%, right): green up, red down"))
-    items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (%, right)"))
+                      "Total P&amp;L (€, right): green up, red down"))
+    items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (€, right)"))
     parts = [f'{swatch}<span style="color:{P["muted"]};">{label}</span>'
              for swatch, label in items]
     return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'

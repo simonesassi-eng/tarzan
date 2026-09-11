@@ -555,6 +555,7 @@ class MetricsEngine:
                 "pnl_series",
                 "unrealized_series",
                 "external_flows",
+                "xirr_cashflows",
             ):
                 ctx[field] = None
             ctx["returns_provenance"] = series.provenance
@@ -603,6 +604,9 @@ class MetricsEngine:
         # per date — the same dict TWROR consumes. Drives the deposit/withdrawal
         # markers on the newsletter performance charts (no recomputation).
         ctx["external_flows"] = series.external_flows
+        # The flows XIRR itself was solved on, so a chart can re-solve them at
+        # each date and land on ``xirr_pct`` at the last one.
+        ctx["xirr_cashflows"] = series.xirr_cashflows
         # Unrealized P&L series: the order-derived reconstruction differs from
         # the snapshot in level (bonds priced carry-flat; cum/ex-netted legs
         # carry residual cost the open-positions snapshot drops). We keep its
@@ -1986,6 +1990,7 @@ class MetricsEngine:
             pnl_series=ctx.get("pnl_series"),
             unrealized_series=ctx.get("unrealized_series"),
             external_flows=ctx.get("external_flows"),
+            xirr_cashflows=ctx.get("xirr_cashflows"),
             inception_date=ctx.get("inception_date"),
             allocation_timeline=ctx.get("allocation_timeline"),
             degraded_computers=ctx.get("_degraded", []),

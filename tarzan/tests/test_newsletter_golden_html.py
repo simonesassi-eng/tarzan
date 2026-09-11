@@ -121,7 +121,7 @@ class TestNewsletterGoldenHtml:
         # Optimizer is absent on this fixture (no rebalance suggestions), so it
         # is not part of the floor; the ordering test covers it when present.
         for label in ("State", "Portfolio", "Allocation", "The book",
-                      "Returns", "Watchlist", "Portfolio movers", "Risk",
+                      "Returns", "Watchlist", "Portfolio movers",
                       "Appendix"):
             assert f">{label}</span>" in html, (
                 f"section {label!r} vanished from the render")
@@ -137,7 +137,7 @@ class TestNewsletterGoldenHtml:
             r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
         expected = ["State", "Portfolio", "Vs the market", "Portfolio movers",
                     "Markets", "Allocation", "Returns", "Watchlist", "The book",
-                    "Risk", "Optimizer", "Strategy", "Appendix"]
+                    "Optimizer", "Strategy", "Appendix"]
         # Sections the deterministic fixture cannot fill are absent, not
         # reordered, so compare as a subsequence of the intended order.
         assert labels == [x for x in expected if x in labels], labels
