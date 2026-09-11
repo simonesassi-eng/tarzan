@@ -128,7 +128,11 @@ class OrderDerivedSeries:
         coverage_pct: % of latest portfolio value priced by real market
             data (rung 1) over the window.
         provenance: ``{source_tag: [isin, ...]}`` for disclosure.
-        span_days: calendar days from the first flow to today.
+        span_days: calendar days from the first flow to today. NOT the span
+            to annualize a return over: ``today`` can be a day the market
+            never opened, and the chained return then covers one day fewer
+            than this counts. ``_returns`` annualizes over the trading-day
+            span of ``portfolio_history`` instead — see the twror call there.
         daily_series: dense daily-indexed portfolio value over the whole
             window, valued at market on every calendar day. This is the
             series risk metrics (volatility, Sharpe, VaR, beta) must use —

@@ -570,8 +570,28 @@ class MetricsEngine:
         rate = xirr(series.xirr_cashflows)
         ctx["xirr_pct"] = rate * 100.0 if not _is_nan(rate) else None
 
+        # Annualize over the span the return was actually MEASURED over: the
+        # trading-day window of ``portfolio_history``, not calendar days to
+        # ``today``. ``series.span_days`` runs to today, and today can be a day the
+        # market never opened -- render on a Saturday and the chained return still
+        # ends at Friday's close, so dividing it by one extra day understates the
+        # annualized figure. It showed as ``performance.cagr`` and
+        # ``twror_annualized_pct`` disagreeing (15.500% vs 15.437% off ONE
+        # cumulative +10.8897%) on every weekend and holiday render, and agreeing
+        # on weekdays -- two denominators for one measure. CAGR reads this same
+        # series, so sharing its span makes them agree by construction.
+        #
+        # The same rule the risk metrics already follow: this series is collapsed to
+        # business days precisely because weekend zero-returns pollute an
+        # annualization, and a span that counts those days is that bug in the
+        # denominator instead of the numerator.
+        ph_span = ctx.get("portfolio_history")
+        span_days = series.span_days
+        if ph_span is not None and len(ph_span) >= 2:
+            span_days = (ph_span.index[-1].date() - ph_span.index[0].date()).days \
+                or series.span_days
         res = twror(
-            series.valuations, series.external_flows, series.span_days,
+            series.valuations, series.external_flows, span_days,
             coverage_pct=series.coverage_pct,
         )
         ctx["twror_pct"] = res.cumulative_pct

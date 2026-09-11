@@ -28,7 +28,10 @@ GOLDEN = {
     "cash_value": 0.0,
     "xirr_pct": 32.769384,
     "twror_pct": 15.375076,
-    "twror_annualized_pct": 33.887401,
+    # Annualized over the TRADING-day span of ``portfolio_history`` (177 days
+    # here), not calendar days to ``today`` (179). See
+    # ``test_the_two_annualizations_agree`` for why the two must be one number.
+    "twror_annualized_pct": 34.329624,
     "n_holdings": 2,
     "holdings_isins": ["IE00B4L5Y983", "IE00B4WXJJ64"],
     "alloc_by_class": {"Equities": 73.2824, "Fixed Income": 26.7176},
@@ -98,6 +101,30 @@ class TestGoldenMaster:
         assert round(m.xirr_pct, 6) == GOLDEN["xirr_pct"]
         assert round(m.twror_pct, 6) == GOLDEN["twror_pct"]
         assert round(m.twror_annualized_pct, 6) == GOLDEN["twror_annualized_pct"]
+
+    def test_the_two_annualizations_agree(self, _golden_run):
+        """CAGR and the annualized TWROR are ONE number, and must stay one.
+
+        Both annualize the same cumulative return read off the same series, so the
+        only way they can differ is the span -- and they did: ``span_days`` counted
+        calendar days to ``today`` while ``portfolio_history`` ends on the last
+        TRADING day. On a weekend or holiday render that is one to three days more,
+        and the issue printed "CAGR +15.50%" beside "time-weighted · +15.44%
+        annualized" off a single cumulative +10.89%.
+
+        Annualizing over days the market never opened is the same error the risk
+        metrics already avoid by collapsing this series to business days: a
+        definitionally-zero return in the denominator instead of the numerator.
+        """
+        from tarzan.engine.stats import compute_cagr
+
+        m = _golden_run
+        cagr = compute_cagr(m.portfolio_history)
+        assert cagr == pytest.approx(m.twror_annualized_pct, abs=1e-9), (
+            f"CAGR {cagr:.6f}% vs annualized TWROR {m.twror_annualized_pct:.6f}%"
+        )
+        # ...and it is the figure the newsletter reads, not just an internal one.
+        assert (m.performance or {}).get("cagr") == pytest.approx(cagr, abs=1e-9)
 
     def test_holdings_match_golden(self, _golden_run):
         m = _golden_run
