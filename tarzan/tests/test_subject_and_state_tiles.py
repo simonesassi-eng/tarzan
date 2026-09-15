@@ -186,3 +186,125 @@ class TestTheRenderedTileMarkup:
         small = re.search(r'line-height:1\.5[^>]*>([^<]+)</div>', block)
         assert big and "€" in big.group(1), block[:300]
         assert small and "%" in small.group(1), block[:300]
+
+
+# ======================================================================
+# The two return measures, each in both forms
+# ======================================================================
+
+def _return_metrics(**kw) -> PortfolioMetrics:
+    """A book with both return measures and a sub-year span.
+
+    262 calendar days, so the cumulative figure is SMALLER than the annualized one
+    for both measures — which is the direction that catches a tile plotting the
+    wrong form. All figures synthetic.
+    """
+    import datetime
+
+    idx = pd.date_range("2025-12-23", "2026-09-11", freq="B")
+    m = _metrics(**kw)
+    m.portfolio_history = pd.Series(
+        [100.0 + 10.89 * i / (len(idx) - 1) for i in range(len(idx))], index=idx)
+    # ``_mwr_line`` re-solves the IRR at each point off the real euro value, so the
+    # chart-vs-tile test below needs this series too.
+    m.actual_value_series = pd.Series(
+        [100.0 + 10.0 * i / (len(idx) - 1) for i in range(len(idx))], index=idx)
+    m.twr_pct = 10.89
+    m.twr_annualized_pct = 15.50
+    m.xirr_pct = 12.45
+    m.xirr_net_tax_pct = 11.20
+    m.xirr_cashflows = [(datetime.date(2025, 12, 23), -100.0),
+                        (datetime.date(2026, 9, 11), 110.0)]
+    return m
+
+
+def _tiles_by_label(m) -> dict:
+    return {H.unescape(str(t["label"])): t for t in _build_hero(
+        _NewsletterContext(metrics=m, config=InvestorConfig()))["tiles"]}
+
+
+class TestBothReturnMeasuresAppearInBothForms:
+    """Four cells, not two.
+
+    These were two tiles that disagreed about which form leads: TWR headlined the
+    cumulative figure with the annualized one in its caption, MWR headlined the
+    annualized figure. So the two numbers a reader sees first answered different
+    questions, and money-weighted-against-time-weighted — the one comparison that
+    says whether the timing of contributions helped — could not be read at all.
+    """
+
+    def test_all_four_cells_exist(self):
+        labels = _tiles_by_label(_return_metrics())
+        for want in ("TWR since inception", "TWR annualized",
+                     "MWR since inception", "MWR annualized"):
+            assert want in labels, sorted(labels)
+
+    def test_each_cell_headlines_its_own_form(self):
+        t = _tiles_by_label(_return_metrics())
+        assert H.unescape(t["TWR since inception"]["value"]) == "+10.89%"
+        assert H.unescape(t["TWR annualized"]["value"]) == "+15.50%"
+        assert H.unescape(t["MWR annualized"]["value"]) == "+12.45%"
+        # The cumulative MWR is xirr_pct de-annualized over the 262-day span:
+        # (1.1245 ** (262/365.25) - 1) = +8.78%.
+        assert H.unescape(t["MWR since inception"]["value"]) == "+8.78%"
+
+    def test_the_cumulative_figures_are_below_the_annualized_ones(self):
+        """The book is younger than a year, so an annual RATE overstates what it
+        actually made. A tile showing +12.45% under "since inception" would be the
+        un-de-annualized bug this split exists to prevent."""
+        t = _tiles_by_label(_return_metrics())
+
+        def val(label):
+            return float(H.unescape(t[label]["value"]).replace("+", "").rstrip("%"))
+
+        assert val("TWR since inception") < val("TWR annualized")
+        assert val("MWR since inception") < val("MWR annualized")
+
+    def test_the_cumulative_mwr_is_the_figure_the_chart_line_ends_on(self):
+        """One helper behind both, so the tile and the since-inception chart's MWR
+        end label cannot state two numbers for one measure."""
+        from tarzan.export._perf_series import _mwr_line, mwr_period_pct
+
+        m = _return_metrics()
+        tile = float(H.unescape(_tiles_by_label(m)["MWR since inception"]["value"])
+                     .replace("+", "").rstrip("%"))
+        line = _mwr_line(m, list(m.portfolio_history.index))
+        assert line is not None
+        assert round(line[-1], 2) == tile
+        assert round(mwr_period_pct(m), 2) == tile
+
+    def test_the_captions_name_the_measure_and_the_span(self):
+        t = _tiles_by_label(_return_metrics())
+        assert "262 days" in H.unescape(t["TWR since inception"]["caption"])
+        assert "262 days" in H.unescape(t["MWR since inception"]["caption"])
+        assert "per year" in H.unescape(t["TWR annualized"]["caption"])
+        # Net of tax is an ANNUALIZED XIRR, so it belongs on the annualized cell.
+        assert "+11.20% net of tax" in H.unescape(t["MWR annualized"]["caption"])
+        # Symmetric pairs: same shape either side of the 2x2, so a caption cannot
+        # grow past the column and wrap between a figure and its unit.
+        assert H.unescape(t["TWR since inception"]["caption"]) == \
+            "time-weighted \u00b7 262 days"
+        assert H.unescape(t["MWR since inception"]["caption"]) == \
+            "money-weighted \u00b7 262 days"
+
+
+class TestCagrIsAFallbackNotADuplicate:
+    def test_no_cagr_tile_when_the_annualized_twr_is_there(self):
+        """They are the same number to the last float bit on the order path — both
+        annualize one cumulative return read off one series (pinned end to end by
+        ``test_golden_master.test_the_two_annualizations_agree``). Two cells for one
+        fact, so the CAGR cell goes."""
+        labels = _tiles_by_label(_return_metrics(performance={"cagr": 15.50}))
+        assert "TWR annualized" in labels
+        assert "CAGR" not in labels
+
+    def test_cagr_appears_when_there_is_no_annualized_twr(self):
+        """The holdings-only path: ``_returns`` is appended to the computer list ONLY
+        when an order list is supplied, so TWR is None there while
+        ``performance.cagr`` still computes off the fixed-basket history. Dropping the
+        tile outright would leave that path with no annualized return at all.
+        """
+        m = _metrics(performance={"cagr": 7.25})
+        labels = _tiles_by_label(m)
+        assert "TWR annualized" not in labels
+        assert H.unescape(labels["CAGR"]["value"]) == "+7.25%"

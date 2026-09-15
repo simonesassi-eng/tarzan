@@ -21,6 +21,7 @@ from tarzan.export._perf_series import (
     _norm_series,
     benchmark_gap_history,
     benchmark_gap_pp,
+    mwr_period_pct,
     _perf_window,
     _window_money_pnl,
 )
@@ -473,29 +474,59 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         _pnl_tile("Unrealized P&L", unrealized_eur, unrealized_pct,
                   "on open positions"),
     ]
+    # ── The two return measures, each in BOTH forms, four cells ──────────────
+    #
+    # These were two tiles, and they disagreed about which form leads: TWR showed
+    # the cumulative figure with the annualized one in its caption, MWR showed the
+    # annualized figure with net-of-tax in its caption. So the two headline numbers
+    # on the same row answered different questions, and the one comparison a reader
+    # actually wants -- money-weighted against time-weighted, over the same span --
+    # could not be read off them at all.
+    #
+    # Four cells, laid out as a 2x2 across two rows of the grid: cumulative in the
+    # left column, annualized in the middle. The distance between the two
+    # cumulative figures is what the timing of contributions cost or earned
+    # (-2.11pp on the reference book), which no single tile here states and which
+    # the since-inception chart draws.
+    #
+    # "since inception" and "annualized" rather than "cum."/"ann.": the labels are
+    # uppercased in CSS, and the issue already calls the lifetime panel
+    # "RETURN · SINCE INCEPTION", so this is the vocabulary the reader has.
+    span_days = None
+    ph = getattr(m, "portfolio_history", None)
+    if ph is not None and len(ph) >= 2:
+        span_days = (ph.index[-1].date() - ph.index[0].date()).days
+    # The four captions are deliberately symmetric -- "<measure> · <span>" on the
+    # cumulative pair, "<measure> · per year" on the annualized pair -- so a reader
+    # sees a 2x2, not four unrelated lines. "(XIRR)" used to sit on the MWR cell and
+    # pushed its caption over the column, wrapping between "266" and "days": a figure
+    # split from its unit across two lines reads worse than a name the measure does
+    # not need, since "money-weighted" already says which of the two it is.
+    over = f" \u00b7 {span_days} days" if span_days else ""
+
     if twr_pct is not None:
-        ann = m.twr_annualized_pct
         state_tiles.append(_tile(
-            "TWR", _pct(twr_pct, signed=True),
-            "time-weighted"
-            + (f" \u00b7 {_pct(ann, signed=True)} annualized"
-               if ann is not None else ""),
-            _tone(twr_pct)))
-    if m.xirr_pct is not None:
-        net = getattr(m, "xirr_net_tax_pct", None)
+            "TWR since inception", _pct(twr_pct, signed=True),
+            f"time-weighted{over}", _tone(twr_pct)))
+    twr_ann = m.twr_annualized_pct
+    if twr_ann is not None:
         state_tiles.append(_tile(
-            "MWR", _pct(m.xirr_pct, signed=True),
-            "money-weighted (XIRR)"
-            + (f" \u00b7 {_pct(net, signed=True)} net of tax"
-               if net is not None else ""),
-            _tone(m.xirr_pct)))
-    if cagr_pct is not None:
+            "TWR annualized", _pct(twr_ann, signed=True),
+            "time-weighted \u00b7 per year", _tone(twr_ann)))
+    elif cagr_pct is not None:
+        # CAGR only when the annualized TWR is missing, which is the holdings-only
+        # path: ``_returns`` is appended to the computer list ONLY when an order
+        # list is supplied, so there TWR is None while ``performance.cagr`` still
+        # computes off the fixed-basket history. On the order path the two are the
+        # same number to the last float bit -- both annualize one cumulative return
+        # read off one series -- so showing both was one fact in two cells.
         state_tiles.append(_tile("CAGR", _pct(cagr_pct, signed=True),
                                  "compound annual growth", _tone(cagr_pct)))
-    # The gap against the geography benchmark, and how it got there. An earlier
-    # pass left this tile out on the grounds that the engine computes no such
-    # delta; both cumulative series are computed and drawn side by side in the
-    # since-inception chart, so the gap is the distance between two lines the
+    # The gap against the geography benchmark, and how it got there. It sits on the
+    # TWR row because that is what it IS: cumulative TWR minus the benchmark's own
+    # cumulative return. An earlier pass left this tile out on the grounds that the
+    # engine computes no such delta; both series are computed and drawn side by side
+    # in the since-inception chart, so the gap is the distance between two lines the
     # reader can already see.
     gap = benchmark_gap_history(m, ctx.benchmark_geo)
     if gap is not None:
@@ -508,6 +539,22 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         state_tiles.append(_tile(
             f"vs {ctx.benchmark_geo}", f"{sign}{abs(now_pp):.2f}pp",
             caption, _tone(now_pp)))
+    # MWR, same two forms. The cumulative one is ``xirr_pct`` de-annualized through
+    # the shared helper, so it is the figure the since-inception chart's MWR line
+    # ends on rather than a second estimate of it.
+    mwr_cum = mwr_period_pct(m)
+    if mwr_cum is not None:
+        state_tiles.append(_tile(
+            "MWR since inception", _pct(mwr_cum, signed=True),
+            f"money-weighted{over}", _tone(mwr_cum)))
+    if m.xirr_pct is not None:
+        net = getattr(m, "xirr_net_tax_pct", None)
+        state_tiles.append(_tile(
+            "MWR annualized", _pct(m.xirr_pct, signed=True),
+            "money-weighted \u00b7 per year"
+            + (f" \u00b7 {_pct(net, signed=True)} net of tax"
+               if net is not None else ""),
+            _tone(m.xirr_pct)))
     if session_pct is not None:
         # What the session was worth and which session it was: a percentage
         # alone does not say either.

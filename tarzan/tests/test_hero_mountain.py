@@ -242,7 +242,7 @@ class TestBothPnlMeasuresAreDrawn:
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         panel = html.split("Return · since inception", 1)[1]
         assert ">TWR<" in panel
-        assert ">MWR (cum.)<" in panel
+        assert ">MWR<" in panel
         assert ">Total P&amp;L<" not in panel
         assert ">Unreal. P&amp;L<" not in panel
 

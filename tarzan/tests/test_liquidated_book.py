@@ -64,7 +64,11 @@ class TestALiquidatedBookReportsWhatItMade:
                 f"{label} headlines 0.00% on a book that realized a gain"
 
     def test_twr_still_states_the_percentage_that_means_something(self):
-        assert "+36.79%" in _tile(_liquidated(), "TWR")["value"]
+        """The cumulative one: ``pnl_pct`` is undefined on a liquidated book (net
+        contributed capital is negative once everything is out), and TWR is the
+        percentage that still means something — the return over the periods the money
+        was actually invested."""
+        assert "+36.79%" in _tile(_liquidated(), "TWR since inception")["value"]
 
     def test_nothing_open_means_no_unrealized_percentage(self):
         """No cost basis, so the ratio is not applicable. The euro figure was always

@@ -541,15 +541,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             # that says whether the timing of contributions helped or hurt, and the
             # distance between the two lines is that answer.
             #
-            # It takes the freed P&L cyan. Labelled from the line's own end point --
-            # which ``_mwr_line`` pins to ``m.xirr_pct`` compounded over the span, so
-            # the figure is the state tile's rate expressed cumulatively, not a second
-            # estimate of it. "(cum.)" is on the legend because the tile quotes the
-            # ANNUALIZED rate under the same three letters, and two different numbers
-            # under one name in one issue is the confusion worth four characters.
+            # It takes the freed P&L cyan. Labelled from the line's own end point,
+            # which ``_mwr_line`` pins through ``mwr_period_pct`` -- the same helper
+            # the "MWR since inception" STATE tile reads, so the two are one number
+            # rather than two estimates of it.
+            #
+            # The key says "MWR", not "MWR (cum.)". The qualifier was there while the
+            # only MWR tile quoted the ANNUALIZED rate, so the same three letters named
+            # two different numbers in one issue. STATE now carries both forms as their
+            # own cells and this line matches the cumulative one exactly, so the panel
+            # title ("since inception") is the qualifier and the key needs none.
             ssi.append({"values": full["mwr"], "color": PNL,
                         "end_label": _pct(full["mwr"][-1], signed=True)})
-            si_leg.append((PNL, "MWR (cum.)"))
+            si_leg.append((PNL, "MWR"))
         if full.get("target") is not None:
             ssi.append({"values": full["target"], "color": TARGET,
                         "end_label": _pct(full["target"][-1], signed=True)})

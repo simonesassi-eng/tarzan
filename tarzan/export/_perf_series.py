@@ -397,6 +397,45 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
     return twr_si, total_pct, unreal_pct, acwi_si
 
 
+def mwr_period_pct(m: PortfolioMetrics) -> Optional[float]:
+    """``m.xirr_pct`` expressed over the HOLDING PERIOD instead of per year.
+
+    XIRR is an annual rate by construction. Over a span shorter than a year that
+    rate overstates what the book actually made, and over a longer one it
+    understates it -- so a money-weighted figure that sits beside a cumulative
+    time-weighted one has to be de-annualized first, or the pair is not comparable.
+
+    The transformation is exact rather than cosmetic: solving for the annual rate
+    and compounding it over the span is the SAME root of the SAME NPV equation with
+    time measured in whole periods instead of years, because
+    ``(1+r)**(t_i/365.25) == (1+R)**(t_i/span)`` when ``R = (1+r)**(span/365.25)-1``.
+    That is also the form the standards ask for: GIPS defines the money-weighted
+    return as an IRR and requires that periods shorter than a year not be
+    annualized.
+
+    Note it is NOT Modified Dietz, the other standard period money-weighted return.
+    Dietz is a linear approximation that weights each flow by the fraction of the
+    period it was invested for; it lands close but is a different estimator (0.69pp
+    apart on the test fixture), and this one is exactly the rate ``xirr_pct`` states.
+
+    The span runs from the first cash flow -- the IRR's own time origin, which is
+    what makes the inversion exact -- to the last day the value series carries. One
+    helper so the STATE tile and the since-inception chart's end label cannot state
+    two different numbers for one measure.
+    """
+    from tarzan.engine.stats import DAYS_PER_YEAR
+
+    rate = getattr(m, "xirr_pct", None)
+    flows = getattr(m, "xirr_cashflows", None) or ()
+    ph = getattr(m, "portfolio_history", None)
+    if rate is None or not flows or ph is None or not len(ph):
+        return None
+    span = (ph.index[-1].date() - min(d for d, _a in flows)).days / DAYS_PER_YEAR
+    if span <= 0:
+        return None
+    return ((1.0 + float(rate) / 100.0) ** span - 1.0) * 100.0
+
+
 def _mwr_line(m: PortfolioMetrics, dates) -> Optional[list]:
     """CUMULATIVE money-weighted return (%) at each of ``dates``, or None.
 
@@ -449,15 +488,14 @@ def _mwr_line(m: PortfolioMetrics, dates) -> Optional[list]:
         out.append(float("nan") if math.isnan(rate)
                    else ((1.0 + rate) ** years - 1.0) * 100.0)
 
-    # End the line ON the authoritative annualized figure, compounded over the
-    # full span. The last point re-solves flows that are complete, so it already
-    # lands within rounding of ``xirr_pct``; pinning it means the label the chart
-    # prints and the rate the STATE tile prints are one number by construction
-    # rather than two solves that happen to agree.
-    if m.xirr_pct is not None and out:
-        span = (idx[-1].date() - t0).days / DAYS_PER_YEAR
-        if span > 0:
-            out[-1] = ((1.0 + float(m.xirr_pct) / 100.0) ** span - 1.0) * 100.0
+    # End the line ON the same figure the STATE tile prints. The last point
+    # re-solves flows that are complete, so it already lands within rounding of it;
+    # going through ``mwr_period_pct`` means the chart's label and the tile are one
+    # number by construction rather than two solves that happen to agree.
+    if out:
+        pinned = mwr_period_pct(m)
+        if pinned is not None:
+            out[-1] = pinned
     return out if any(math.isfinite(v) for v in out) else None
 
 
