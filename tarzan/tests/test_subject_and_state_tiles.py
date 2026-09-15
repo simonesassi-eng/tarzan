@@ -75,14 +75,19 @@ class TestTheSubjectCarriesTheOneDayMove:
         assert delivery.build_subject(m, "P") == "P - 19:35 - 1D +0.00%"
 
 
-class TestLiveWhenOpenPreviousCloseWhenNot:
-    """The subject needs no open/closed branch — the SERIES carries it.
+class TestTheSubjectNamesWhatItShows:
+    """The FIGURE needs no open/closed branch; the LABEL does.
 
-    ``current_session`` stamps today's market point onto every price history
-    before anything reads a price, so while a venue is open the NAV's terminal
-    point IS the live valuation and 1D measures against the previous session.
-    With every venue shut, nothing is stamped, the terminal point is the last
-    close, and the same expression measures the last completed session.
+    ``current_session`` stamps today's market point onto every price history before
+    anything reads a price, so while a venue is open the NAV's terminal point IS the
+    live valuation and 1D measures against the previous session. With every venue
+    shut, nothing is stamped and the same expression measures the last completed
+    session. One expression, both cases — that part never needed a branch.
+
+    What did need one is the word in front of it. There is a third state the old
+    reasoning missed and it is the one the reader meets every morning: the venue is
+    OPEN and no bar exists yet. At 09:12 on Tue 15 Sep 2026 every tape ended on Mon
+    14 Sep, so "1D −0.59%" was Monday's completed session under today's name.
     """
 
     @staticmethod
@@ -90,26 +95,40 @@ class TestLiveWhenOpenPreviousCloseWhenNot:
         idx = pd.bdate_range("2026-06-01", periods=len(closes))
         return pd.Series(closes, index=idx, dtype=float)
 
-    def _subject_pct(self, nav):
+    def _subject(self, nav, **perf):
         from tarzan.engine.stats import compute_period_return
-        m = _metrics(performance={"1d": compute_period_return(nav, "1d")},
+        m = _metrics(performance={"1d": compute_period_return(nav, "1d"), **perf},
                      portfolio_history=nav)
         return delivery.build_subject(m, "P")
 
-    def test_a_live_terminal_point_moves_the_subject(self):
+    def test_the_figure_follows_the_terminal_point(self):
         closed = self._nav([100.0] * 20 + [101.0])
         live = self._nav([100.0] * 20 + [101.5])       # same session, price moved
+        assert "+1.00%" in self._subject(closed, **{"1d_intraday": True})
+        assert "+1.50%" in self._subject(live, **{"1d_intraday": True})
 
-        assert self._subject_pct(closed) == "P - 19:35 - 1D +1.00%"
-        assert self._subject_pct(live) == "P - 19:35 - 1D +1.50%"
+    def test_an_intraday_figure_is_labelled_1d(self):
+        nav = self._nav([100.0] * 20 + [101.0])
+        assert self._subject(nav, **{"1d_intraday": True}) == "P - 19:35 - 1D +1.00%"
 
-    def test_with_the_market_shut_it_is_the_last_completed_session(self):
-        """The terminal point is Friday's close; the subject reads Friday's move
-        whatever day it is generated on, because the window anchors on the
-        previous SESSION rather than on 'yesterday'."""
+    def test_a_completed_session_is_labelled_with_its_DATE(self):
+        """Not "1D". The fixture's tape ends Mon 29 Jun, so that is what the subject
+        says — and a reader opening it on the 30th cannot mistake it for the 30th."""
         nav = self._nav([100.0] * 20 + [100.75])
-        assert nav.index[-1].weekday() < 5
-        assert self._subject_pct(nav) == "P - 19:35 - 1D +0.75%"
+        assert nav.index[-1].strftime("%d %b") == "29 Jun"
+        assert self._subject(nav) == "P - 19:35 - 29 Jun +0.75%"
+
+    def test_it_falls_back_to_1d_when_the_session_cannot_be_named(self):
+        """No history to read a session date off. Better an unqualified "1D" than a
+        date the series does not support."""
+        m = _metrics(performance={"1d": 0.5})
+        assert delivery.build_subject(m, "P") == "P - 19:35 - 1D +0.50%"
+
+    def test_no_1d_at_all_still_relabels_to_upnl(self):
+        """``unrealized_pnl_pct`` is a derived property, so the fixture sets what it
+        is derived FROM: value 100k on a 90k cost basis is +11.11%."""
+        m = _metrics(performance={"1d": None})
+        assert delivery.build_subject(m, "P") == "P - 19:35 - uP&L +11.11%"
 
 
 class TestThePnlTilesLeadWithTheEuros:

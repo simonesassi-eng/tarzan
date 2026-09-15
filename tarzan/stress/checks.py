@@ -251,7 +251,7 @@ def d1_reproducible_identical(a, b) -> list:
 
 
 #: The fields whose difference across time-of-day is BY DESIGN, declared up front.
-D2_ALLOWED = {"market_open", "1d_live", "1d_coverage_pct", "1d"}
+D2_ALLOWED = {"market_open", "1d_intraday", "1d_coverage_pct", "1d"}
 
 
 def d2_time_of_day_invariance(a, b) -> list:

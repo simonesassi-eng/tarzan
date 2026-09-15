@@ -402,15 +402,15 @@ class TestMarketOpenCaption:
         return _market_is_open(perf)
 
     def test_open_venue_with_no_intraday_data_still_reads_open(self):
-        # The 09:09 send: market_open True, 1d_live False.
-        assert self._stamp({"market_open": True, "1d_live": False}) is True
+        # The 09:09 send: market_open True, 1d_intraday False.
+        assert self._stamp({"market_open": True, "1d_intraday": False}) is True
 
     def test_closed_venue_reads_closed(self):
-        assert self._stamp({"market_open": False, "1d_live": False}) is False
+        assert self._stamp({"market_open": False, "1d_intraday": False}) is False
 
     def test_falls_back_to_the_data_basis_when_the_engine_is_silent(self):
         # Point-in-time runs and older projections carry no market_open.
-        assert self._stamp({"1d_live": True}) is True
+        assert self._stamp({"1d_intraday": True}) is True
         assert self._stamp({}) is False
         assert self._stamp(None) is False
 
@@ -438,7 +438,10 @@ class TestMarketOpenCaption:
 
         assert ctx["market_open"] is True
         assert ctx["performance"]["market_open"] is True
-        assert not ctx["performance"].get("1d_live")
+        # ``_live_1d`` no longer owns the basis flag at all -- it is set from the
+        # TAPE in ``_session_coverage``, so a provider failure here cannot leave the
+        # issue claiming a live session.
+        assert "1d_intraday" not in ctx["performance"]
 
 
 class TestMarketOpenSpeaksForThePortfolio:
@@ -518,14 +521,14 @@ class TestSessionTileNamesItsBasis:
         digest look like it was reporting the wrong day when the arithmetic was
         right and only the caption was wrong.
         """
-        caption = self._basis({"market_open": True, "1d_live": False})
+        caption = self._basis({"market_open": True, "1d_intraday": False})
         assert caption == "14 Aug session, close to close"
         # The endpoint is named; the baseline is not presented as a reference.
         assert "vs 14 Aug" not in caption
         assert "13 Aug" not in caption
 
     def test_a_live_figure_states_the_exchange_hours(self):
-        assert self._basis({"market_open": True, "1d_live": True}) == "market open"
+        assert self._basis({"market_open": True, "1d_intraday": True}) == "market open"
 
 
 class TestTheOneDaySpanIsReadOffItsOwnSeries:
@@ -878,3 +881,102 @@ class TestADateLabelIsNotAnInstant:
         assert "observed_local" in src, \
             "provider.py must pass the unmodified observation to the session clock"
         assert "market_session_age_seconds(" in src
+
+
+class TestTheOpenMarketWithNoBarsYet:
+    """The 09:12 send of Tue 15 Sep 2026, rebuilt.
+
+    Every venue the book trades on was OPEN and not one holding had printed a bar, so
+    every tape still ended on Mon 14 Sep. The issue reported "1D −0.59%" in its
+    subject and headlined it in STATE as a live session — while its own caption said
+    "0% of the book priced today". Monday's real, completed session under today's name.
+
+    Root cause was a single conflation. ``performance["1d_live"]`` was read across the
+    newsletter as "the 1D figures are intraday" — the meaning ``_live_1d``'s docstring
+    calls DELIBERATELY SEPARATE from exchange hours, and the meaning
+    ``_market_is_open`` documents on the reader's side. Both sides described the right
+    thing; the value was ``market_open_now`` under a second name, so the separation was
+    prose only. It is now ``1d_intraday``, and it needs BOTH an open market and a tape
+    that reaches today.
+    """
+
+    _TODAY = date(2026, 9, 15)          # Tuesday
+
+    def _metrics(self, *, intraday: bool):
+        """A book whose tape ends on MONDAY, priced on Friday and Monday."""
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        idx = pd.to_datetime(["2026-09-11", "2026-09-14"])
+        m = PortfolioMetrics(total_value=251_000.0, invested_value=251_000.0,
+                             holdings_df=pd.DataFrame([{"cost_basis_eur": 236_000.0}]))
+        m.portfolio_history = pd.Series([100.0, 99.41], index=idx)
+        m.performance = {"1d": -0.59, "market_open": True,
+                         "1d_coverage_pct": 0.0, "1d_intraday": intraday}
+        return m
+
+    def _session_tile(self, m):
+        from tarzan.export.newsletter._constants import _NewsletterContext
+        from tarzan.export.newsletter._sections_alloc import _build_hero
+        from tarzan.models.investor_config import InvestorConfig
+
+        tiles = _build_hero(_NewsletterContext(
+            metrics=m, config=InvestorConfig()))["tiles"]
+        return next(t for t in tiles if t["label"] == "Session")
+
+    def test_the_tile_names_mondays_session_instead_of_claiming_a_live_one(self):
+        import html as H
+
+        caption = H.unescape(self._session_tile(self._metrics(intraday=False))["caption"])
+        assert "14 Sep session, close to close" in caption, caption
+        assert "market open" not in caption, caption
+
+    def test_the_tile_no_longer_pairs_a_live_heading_with_zero_coverage(self):
+        """The contradiction, pinned. "market open" and "0% of the book priced today"
+        cannot both describe one figure, and that pair is now unreachable: the note
+        only prints on an intraday basis, which zero coverage cannot produce."""
+        import html as H
+
+        caption = H.unescape(self._session_tile(self._metrics(intraday=False))["caption"])
+        assert "0% of the book priced today" not in caption, caption
+
+    def test_the_subject_names_the_date_not_1d(self):
+        from tarzan import delivery
+
+        subject = delivery.build_subject(self._metrics(intraday=False), "P")
+        assert subject.endswith("14 Sep −0.59%"), subject
+        assert " 1D " not in subject, subject
+
+    def test_once_the_book_starts_printing_it_reads_live_again(self):
+        """Nothing is lost for the case that WAS working: with an intraday basis the
+        tile states the exchange hours and discloses partial coverage."""
+        import html as H
+
+        m = self._metrics(intraday=True)
+        m.performance["1d_coverage_pct"] = 12.3
+        caption = H.unescape(self._session_tile(m)["caption"])
+        assert "market open" in caption, caption
+        assert "12% of the book priced today" in caption, caption
+
+    def test_the_engine_would_not_have_set_the_intraday_flag_here(self):
+        """End to end through the stage that owns it, from the real shape: open market,
+        a tape ending on Monday, nothing priced today."""
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.holding import Holding
+        from tarzan.models.investor_config import InvestorConfig
+        from tarzan import runtime
+
+        h = Holding(isin="IE00EXUS0001", ticker="EXUS.MI", quantity=1.0,
+                    cost_basis_eur=100.0, market_value_eur=100.0, currency="EUR")
+        h.current_value = 100.0
+        h.price_history = pd.Series(
+            [40.02, 39.905], index=pd.to_datetime(["2026-09-11", "2026-09-14"]))
+        engine = MetricsEngine([h], InvestorConfig())
+        orig = runtime.today
+        runtime.today = lambda: self._TODAY
+        try:
+            ctx = {"performance": {"1d": -0.59}, "market_open": True}
+            engine._session_coverage(ctx)
+        finally:
+            runtime.today = orig
+        assert ctx["performance"]["1d_coverage_pct"] == 0.0
+        assert ctx["performance"]["1d_intraday"] is False

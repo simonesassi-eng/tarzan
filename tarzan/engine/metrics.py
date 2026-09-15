@@ -60,6 +60,28 @@ from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
 logger = logging.getLogger(__name__)
 
 
+def _tape_ends_today(series, today) -> bool:
+    """Whether ``series``' last real observation is dated TODAY.
+
+    The one predicate behind every "is this figure intraday?" statement in the issue.
+    It asks the TAPE, not the clock: a venue can be trading with no bar printed yet,
+    and in that window the 1D is still the previous session's close-to-close move. On
+    Tue 15 Sep 2026 at 09:12 every holding's tape ended on Mon 14 Sep, and the issue
+    presented Monday's move under a live-session heading whose own caption said 0% of
+    the book had been priced today.
+
+    Dates come off the series' own index, which on a tz-aware series is the VENUE's
+    calendar day -- the day the reader means by "today". ``today`` None (no runtime
+    clock) reads as "cannot say", i.e. not intraday.
+    """
+    if today is None or series is None or not len(series):
+        return False
+    clean = series.dropna()
+    if not len(clean):
+        return False
+    return pd.Timestamp(clean.index[-1]).date() == today
+
+
 class MetricsEngine:
     """Computes all portfolio metrics."""
 
@@ -1217,6 +1239,16 @@ class MetricsEngine:
 
     def _holding_performance(self, ctx: dict) -> None:
         rows = []
+        # Whether each row's own tape reaches TODAY. This is what makes a row's 1D an
+        # intraday figure; exchange hours do not, and conflating the two is what put an
+        # "INTRADAY" header over close-to-close returns at the 09:12 send. Computed here
+        # because this is where each row's series is in hand -- holdings, target seeds
+        # and benchmark rows alike, so one predicate covers all three.
+        from tarzan import runtime
+        try:
+            _today = runtime.today()
+        except Exception:  # noqa: BLE001 -- a column must never break the frame
+            _today = None
         ab_record = self._alpha_beta_benchmark(ctx)
         bench_history = (
             ab_record.history if ab_record is not None
@@ -1241,6 +1273,7 @@ class MetricsEngine:
                 "currency": ccy,
             }
             _populate_perf_row(row, s, bench_history, self._rf_daily(ctx))
+            row["today_priced"] = _tape_ends_today(s, _today)
             rows.append(row)
 
         # Target instruments the book does not hold yet. The orchestrator seeds
@@ -1270,8 +1303,9 @@ class MetricsEngine:
             }
             tape, row["currency"] = self._own_tape(
                 h.price_history, h.price_history_native, h.price_currency)
-            _populate_perf_row(row, _cap_to_years(tape, 5),
-                               bench_history, self._rf_daily(ctx))
+            _seed_tape = _cap_to_years(tape, 5)
+            _populate_perf_row(row, _seed_tape, bench_history, self._rf_daily(ctx))
+            row["today_priced"] = _tape_ends_today(_seed_tape, _today)
             rows.append(row)
 
         # Benchmark rows receive the exact same full ticker whose attached
@@ -1288,6 +1322,7 @@ class MetricsEngine:
                 "currency": ccy,
             }
             _populate_perf_row(row, bs, bench_history, self._rf_daily(ctx))
+            row["today_priced"] = _tape_ends_today(bs, _today)
             rows.append(row)
 
         ctx["holding_performance"] = pd.DataFrame(rows)
@@ -1435,13 +1470,15 @@ class MetricsEngine:
             return
 
         # Whether any venue the portfolio holds is TRADING right now, from
-        # exchange hours alone. Deliberately separate from ``1d_live`` below,
-        # and computed before any fetch so a provider failure cannot silence
-        # it: ``1d_live`` says "the 1D figures are intraday", this says "the
-        # market is open". They disagree for the ~half hour after an open,
-        # when the venue trades but no bar exists yet — and reporting "market
-        # closed" then (the 09:09 send) is wrong, while flipping ``1d_live``
-        # would put an "Intraday" heading over close-to-close returns.
+        # exchange hours alone. Deliberately separate from ``1d_intraday``
+        # (``_session_coverage``), and computed before any fetch so a provider
+        # failure cannot silence it: ``1d_intraday`` says "the 1D figures are
+        # intraday", this says "the market is open". They disagree for the ~half
+        # hour after an open, when the venue trades but no bar exists yet — and
+        # reporting "market closed" then (the 09:09 send) is wrong, while calling
+        # the figures intraday then puts an "Intraday" heading over close-to-close
+        # returns. That separation was prose only until 2026-09-15: both flags were
+        # ``market_open_now``, so the 09:12 send captioned Monday's session as live.
         # It is the venues carrying the VALUE that answer it, not whichever
         # tracked listing happens to quote earliest: at 08:58 CEST on 18 Aug
         # 2026 one Munich-only watchlist row (08:00–22:00) reported the
@@ -1578,23 +1615,28 @@ class MetricsEngine:
         # whatever the two feeds disagreed on (0.18pp on 19 Aug 2026).
         #
         # What this computer owns is the evidence the daily series cannot carry:
-        # the intraday path for the sparklines, and whether the figures are
-        # intraday at all.
+        # the intraday path for the sparklines, and the exchange-hours facts.
+        # Whether the FIGURES are intraday is ``_session_coverage``'s, from the tape.
         hp["live_1d"] = [
             bool(live_flag.get(str(ticker), False)) for ticker in hp["ticker"]
         ]
         ctx["holding_performance"] = hp
-        if not resolved:
-            # Nothing resolved, so nothing can be said about the session basis.
-            # This used to test a dict of percentages whose values were then
-            # discarded — the presence of a pct was standing in for "some feed
-            # answered", which is what this says directly.
-            return
-        any_live = any(bool(flag) for flag in live_flag.values())
-        for key in ("performance", "performance_full"):
-            projection = ctx.get(key)
-            if isinstance(projection, dict):
-                projection["1d_live"] = any_live
+        # ``hp["live_1d"]`` above stays an EXCHANGE-HOURS fact, because that is what its
+        # one remaining consumer wants: the intraday sparkline's ``in_progress``, which
+        # asks whether the venue is trading right now.
+        #
+        # It used to also be projected as ``performance["1d_live"]``, read across the
+        # newsletter as "the 1D figures are intraday" -- the meaning this computer's own
+        # docstring above insists is DELIBERATELY SEPARATE from exchange hours, and the
+        # meaning ``_market_is_open`` documents on the reader's side. Both sides
+        # described the right thing; the value was ``market_open_now`` under a second
+        # name (see ``intraday_feeds``: "live" = "judged by EXCHANGE HOURS (not bar
+        # recency)"). So the separation existed in prose only, and minutes after an open
+        # the issue captioned a completed session as live.
+        #
+        # The figures-are-intraday flag is now ``1d_intraday``, set from the TAPE in
+        # ``_session_coverage`` -- which is also the stage that survives a provider
+        # failure, so the basis cannot go missing exactly when the run is degraded.
 
     def _session_coverage(self, ctx: dict) -> None:
         """Publish how much of the book the 1D figure covers.
@@ -1605,10 +1647,28 @@ class MetricsEngine:
         is when a reader most needs to know the figure is partial.
         """
         coverage = self._today_priced_share()
+        # And WHETHER the 1D is an IN-PROGRESS session. Two conditions, and it took
+        # both to get this right:
+        #
+        #   * the market is still open -- otherwise the figure is a COMPLETED session's
+        #     close-to-close move even when the tape reaches today, which is every
+        #     evening send. Dropping this made the 22:00 issue caption today's close as
+        #     though the session were live.
+        #   * some of the book has a today point for it to be measured FROM -- otherwise
+        #     the figure is the previous session's move. Dropping this is the defect
+        #     that started here: at 09:12 on Tue 15 Sep 2026 every tape ended on Mon
+        #     14 Sep and the issue headlined Monday's -0.59% as the live session, with
+        #     a caption that said 0% of the book had been priced today.
+        #
+        # ``market_open`` is absent on a pinned or transport-less run, which reads as
+        # not-live: there is no session in progress to report.
+        intraday = (bool(ctx.get("market_open"))
+                    and coverage is not None and coverage > 0.0)
         for key in ("performance", "performance_full"):
             projection = ctx.get(key)
             if isinstance(projection, dict):
                 projection["1d_coverage_pct"] = coverage
+                projection["1d_intraday"] = intraday
 
     def _today_priced_share(self) -> Optional[float]:
         """Share of the book BY VALUE whose price series carries a today point.

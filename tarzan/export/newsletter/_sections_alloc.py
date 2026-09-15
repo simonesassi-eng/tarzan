@@ -67,28 +67,35 @@ from tarzan.export.newsletter._charts import (
 def _market_is_open(perf: Optional[dict]) -> bool:
     """Whether a venue the portfolio holds is TRADING, per exchange hours.
 
-    ``market_open`` is the engine's exchange-hours fact; ``1d_live`` is a
+    ``market_open`` is the engine's exchange-hours fact; ``1d_intraday`` is a
     different one — that the 1D figures are intraday rather than close-to-close.
     Reading the latter for this caption is what printed "market CLOSED" at 09:09
     with Milan and London both trading: minutes after an open the venue is open
-    but no intraday bar exists yet. Falls back to ``1d_live`` only when the
-    engine did not state it (no live transport, or an older projection)."""
+    but no intraday bar exists yet. Falls back to ``1d_intraday`` only when the
+    engine did not state it (no live transport, or an older projection) — a weaker
+    proxy, since a book with a today point implies a venue printed one."""
     p = perf or {}
     open_now = p.get("market_open")
-    return bool(p.get("1d_live")) if open_now is None else bool(open_now)
+    return bool(p.get("1d_intraday")) if open_now is None else bool(open_now)
 
 
 def _session_basis(perf: Optional[dict], m) -> str:
     """What the Session figure IS, in the caption's own words.
 
-    ``1d_live`` false means the number is a completed session's close-to-close
+    ``1d_intraday`` false means the number is a completed session's close-to-close
     move. Captioning that "market open" — which it legitimately can be, minutes
     before the holdings' own venues open — invites reading a finished session as
     today's, which is how a Tuesday 08:58 digest showed Monday's +0.41% as the
     live session. Name the basis instead, the way the Markets strip prints
-    "Cl. Mon" rather than a bare percentage."""
+    "Cl. Mon" rather than a bare percentage.
+
+    This branch was unreachable in exactly the window it was written for. The flag it
+    reads was set from exchange hours, so at 09:12 on Tue 15 Sep 2026 it was true with
+    zero holdings priced, and the tile headlined Monday's −0.59% as "market open". It
+    now comes from the tape (``1d_intraday``), so an open venue with no bars prints
+    "14 Sep session, close to close" — which is what the figure is."""
     p = perf or {}
-    if bool(p.get("1d_live")):
+    if bool(p.get("1d_intraday")):
         return f'market {"open" if _market_is_open(p) else "closed"}'
     # Name the session the figure DESCRIBES, not the date on the other side of it.
     # "close-to-close vs 28 Aug" read as though 28 Aug were the baseline, while it
@@ -114,7 +121,7 @@ def _priced_today_note(perf: Optional[dict]) -> str:
     """
     p = perf or {}
     coverage = p.get("1d_coverage_pct")
-    if coverage is None or not bool(p.get("1d_live")):
+    if coverage is None or not bool(p.get("1d_intraday")):
         return ""
     if coverage >= 99.5:
         return ""
@@ -320,7 +327,7 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     # claiming it was the 1D baseline, which on Sat 29 Aug 2026 named 28 Aug \u2014 the
     # endpoint of the +0.45%, whose baseline was the 27th.
     base_label, end_label = session_span_labels(m, "%d %b")
-    live = bool((perf or {}).get("1d_live"))
+    live = bool((perf or {}).get("1d_intraday"))
     stamp = now.strftime("%a, %d %b %Y")
     if live and base_label:
         stamp += f" \u00b7 vs {base_label} close"

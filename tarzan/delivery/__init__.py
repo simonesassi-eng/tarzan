@@ -89,6 +89,21 @@ def now_local() -> datetime:
     return datetime.now(ZoneInfo("Europe/Rome"))
 
 
+def _completed_session_label(metrics) -> str:
+    """The date of the session a close-to-close 1D describes, e.g. "14 Sep".
+
+    Read through ``session_span_labels``, the same helper the STATE tile's caption
+    uses, so the subject and the body name one session. Empty when it cannot be
+    determined, and the caller then keeps "1D" rather than inventing a date.
+    """
+    try:
+        from tarzan.export.newsletter._charts import session_span_labels
+
+        return session_span_labels(metrics, "%d %b")[1] or ""
+    except Exception:  # noqa: BLE001 — a subject must never fail to build
+        return ""
+
+
 def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     """Build the newsletter subject line.
 
@@ -98,28 +113,36 @@ def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     ``metrics.performance["1d"]`` — the SAME expression the STATE "Session" tile
     prints, so the subject and the body cannot disagree about the day.
 
-    It is LIVE whenever a venue the book trades on is open, and the previous
-    close when none is, with no branch here. Both follow from the series:
-    ``current_session`` stamps today's market point onto every price history
-    before anything reads a price, so the NAV's terminal point IS the current
-    valuation while a market is open; and ``window_anchor`` opens the 1D window on
-    the previous SESSION from the vendored exchange calendar, so with every venue
-    closed the same expression measures the last completed session.
+    The LABEL names what the figure is. "1D" only when the tape actually reaches
+    today; otherwise the SESSION DATE the figure describes, e.g.
+    "Portfolio Digest - 09:12 - 14 Sep −0.59%".
 
-    Falls back to the lifetime unrealized figure — relabelled, so the subject
-    never mislabels what it shows — when there is no 1D at all: a holdings-only
-    run has no order-derived NAV, and a book younger than two sessions has no
-    previous session to anchor on.
+    This used to say "1D" unconditionally, on the reasoning that the figure is live
+    whenever a venue the book trades on is open and the previous close when none is.
+    There is a third state that reasoning misses, and it is the one the reader meets
+    every morning: the venue is OPEN and no bar exists yet. At 09:12 on Tue 15 Sep
+    2026 every holding's tape ended on Mon 14 Sep, so "1D −0.59%" was Monday's
+    completed session under today's name — and the subject is the first and often the
+    only thing read.
+
+    Falls back to the lifetime unrealized figure — relabelled, so the subject never
+    mislabels what it shows — when there is no 1D at all: a holdings-only run has no
+    order-derived NAV, and a book younger than two sessions has no previous session to
+    anchor on.
     """
     perf = getattr(metrics, "performance", None) or {}
     gain_pct, label = perf.get("1d"), "1D"
     if gain_pct is None or gain_pct != gain_pct:      # None or NaN
         gain_pct, label = (metrics.unrealized_pnl_pct or 0.0), "uP&L"
+    elif not perf.get("1d_intraday"):
+        # Name the session the figure ENDS on, read off the same series the figure
+        # is computed from. Unnamed, it reads as today's.
+        label = _completed_session_label(metrics) or label
     gain_pct = float(gain_pct)
     generated_at = now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
 
-    # Subject is exactly "<prefix> - HH:MM - 1D ±X.XX%". The trigger label is
+    # Subject is exactly "<prefix> - HH:MM - <basis> ±X.XX%". The trigger label is
     # intentionally NOT appended: the scheduler's slot label already carries the
     # time, which duplicated the HH:MM in the subject.
     parts = [prefix or "Portfolio Digest", generated_at,

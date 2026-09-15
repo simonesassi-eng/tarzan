@@ -151,11 +151,12 @@ class TestTheEngineActuallyPublishesIt:
     degraded and the reader most needs to know the figure is partial.
     """
 
-    def _ctx(self, book, monkeypatch):
+    def _ctx(self, book, monkeypatch, market_open=True):
         from tarzan import runtime
         monkeypatch.setattr(runtime, "today", lambda: _TODAY)
         engine = MetricsEngine(list(book), InvestorConfig())
-        ctx = {"performance": {"1d": 0.06}, "performance_full": {"1d": 0.06}}
+        ctx = {"performance": {"1d": 0.06}, "performance_full": {"1d": 0.06},
+               "market_open": market_open}
         engine._session_coverage(ctx)
         return ctx
 
@@ -165,6 +166,35 @@ class TestTheEngineActuallyPublishesIt:
         ctx = self._ctx(book, monkeypatch)
         assert ctx["performance"]["1d_coverage_pct"] == pytest.approx(25.0)
         assert ctx["performance_full"]["1d_coverage_pct"] == pytest.approx(25.0)
+
+    def test_the_basis_flag_rides_the_same_measurement(self, monkeypatch):
+        """One source for "how much is priced today" and "is the figure intraday",
+        so the caption cannot claim a live session over an unpriced book."""
+        some = self._ctx([_holding("A", 5_000.0, priced_today=True),
+                          _holding("B", 15_000.0, priced_today=False)], monkeypatch)
+        none = self._ctx([_holding("A", 5_000.0, priced_today=False)], monkeypatch)
+        assert some["performance"]["1d_intraday"] is True
+        assert some["performance_full"]["1d_intraday"] is True
+        assert none["performance"]["1d_intraday"] is False
+
+    def test_a_closed_market_is_not_intraday(self, monkeypatch):
+        """Every evening send: the tape reaches today and the figure is still a
+        COMPLETED session — today's. Reading only the tape captioned it as live."""
+        book = [_holding("A", 5_000.0, priced_today=True)]
+        ctx = self._ctx(book, monkeypatch, market_open=False)
+        assert ctx["performance"]["1d_coverage_pct"] == pytest.approx(100.0)
+        assert ctx["performance"]["1d_intraday"] is False
+
+    def test_an_absent_market_open_reads_as_not_intraday(self, monkeypatch):
+        """A pinned or transport-less run states no market: there is no session in
+        progress to report, so the figure is named by its date."""
+        from tarzan import runtime
+        monkeypatch.setattr(runtime, "today", lambda: _TODAY)
+        engine = MetricsEngine([_holding("A", 5_000.0, priced_today=True)],
+                               InvestorConfig())
+        ctx = {"performance": {"1d": 0.06}}
+        engine._session_coverage(ctx)
+        assert ctx["performance"]["1d_intraday"] is False
 
     def test_the_stage_is_registered_in_the_pipeline(self):
         engine = MetricsEngine([], InvestorConfig())
@@ -181,27 +211,44 @@ class TestTheEngineActuallyPublishesIt:
 
 class TestTheNoteSaysWhatIsCovered:
     def test_a_partial_live_figure_is_disclosed(self):
-        note = _priced_today_note({"1d_live": True, "1d_coverage_pct": 12.3})
+        note = _priced_today_note({"1d_intraday": True, "1d_coverage_pct": 12.3})
         assert note == "12% of the book priced today"
 
     def test_full_coverage_says_nothing(self):
         """At 100% the note is noise; the figure needs no qualification."""
-        assert _priced_today_note({"1d_live": True, "1d_coverage_pct": 100.0}) == ""
-        assert _priced_today_note({"1d_live": True, "1d_coverage_pct": 99.6}) == ""
+        assert _priced_today_note({"1d_intraday": True, "1d_coverage_pct": 100.0}) == ""
+        assert _priced_today_note({"1d_intraday": True, "1d_coverage_pct": 99.6}) == ""
 
     def test_a_completed_session_says_nothing(self):
         """``_session_basis`` already names it "close-to-close vs <date>", and a
         completed session is priced by definition."""
-        assert _priced_today_note({"1d_live": False, "1d_coverage_pct": 12.3}) == ""
+        assert _priced_today_note({"1d_intraday": False, "1d_coverage_pct": 12.3}) == ""
 
     def test_an_unmeasured_coverage_says_nothing(self):
-        assert _priced_today_note({"1d_live": True}) == ""
-        assert _priced_today_note({"1d_live": True, "1d_coverage_pct": None}) == ""
+        assert _priced_today_note({"1d_intraday": True}) == ""
+        assert _priced_today_note({"1d_intraday": True, "1d_coverage_pct": None}) == ""
         assert _priced_today_note(None) == ""
 
-    def test_zero_coverage_is_still_disclosed(self):
-        assert _priced_today_note({"1d_live": True, "1d_coverage_pct": 0.0}) == \
-            "0% of the book priced today"
+    def test_the_engine_cannot_produce_intraday_with_zero_coverage(self):
+        """That pair used to be reachable and printed "market open · 0% of the book
+        priced today" beside a non-zero figure — two statements that cannot describe
+        one number. ``1d_intraday`` is now DERIVED from the coverage, so zero coverage
+        is never intraday and ``_session_basis`` names the session instead.
+        """
+        from tarzan import runtime
+
+        book = [_holding("A", 5_000.0, priced_today=False)]
+        engine = MetricsEngine(book, InvestorConfig())
+        import datetime as _dt
+        orig = runtime.today
+        runtime.today = lambda: _TODAY
+        try:
+            ctx = {"performance": {"1d": -0.59}}
+            engine._session_coverage(ctx)
+        finally:
+            runtime.today = orig
+        assert ctx["performance"]["1d_coverage_pct"] == pytest.approx(0.0)
+        assert ctx["performance"]["1d_intraday"] is False
 
 
 class TestTheSessionTileCarriesIt:
@@ -216,7 +263,7 @@ class TestTheSessionTileCarriesIt:
 
     def test_the_caption_states_the_coverage(self):
         tile = self._session_tile(
-            {"1d": 0.0637, "1d_live": True, "market_open": True,
+            {"1d": 0.0637, "1d_intraday": True, "market_open": True,
              "1d_coverage_pct": 12.3})
         caption = H.unescape(tile["caption"])
         assert "market open" in caption
@@ -224,7 +271,7 @@ class TestTheSessionTileCarriesIt:
 
     def test_a_fully_priced_session_reads_as_before(self):
         tile = self._session_tile(
-            {"1d": 0.18, "1d_live": True, "market_open": True,
+            {"1d": 0.18, "1d_intraday": True, "market_open": True,
              "1d_coverage_pct": 100.0})
         caption = H.unescape(tile["caption"])
         assert "priced today" not in caption
@@ -233,6 +280,6 @@ class TestTheSessionTileCarriesIt:
     def test_the_value_still_leads_the_caption(self):
         """The euro amount keeps its place; the note is appended, not swapped in."""
         tile = self._session_tile(
-            {"1d": 0.0637, "1d_live": True, "market_open": True,
+            {"1d": 0.0637, "1d_intraday": True, "market_open": True,
              "1d_coverage_pct": 12.3})
         assert H.unescape(tile["caption"]).startswith("+€")

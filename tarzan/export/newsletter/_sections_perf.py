@@ -1650,12 +1650,18 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # holding or benchmark to another venue.
     _snap_intraday = _shared_performance_intraday(ctx)
     _raw1d: dict = {}
+    # Two flags per row, and they are NOT the same question. ``_live1d`` is exchange
+    # hours, which is what the intraday sparkline's ``in_progress`` wants. ``_intraday``
+    # is whether the row's own tape reaches today, which is what says the row's 1D
+    # figure IS intraday -- the only thing the column header may claim.
     _live1d: dict = {}
+    _intraday: dict = {}
     if hp is not None and not hp.empty:
         for _, _pr in hp.iterrows():
             _k = str(_pr.get("ticker", ""))
             _raw1d[_k] = _pr.get("1d")
             _live1d[_k] = bool(_pr.get("live_1d", False))
+            _intraday[_k] = bool(_pr.get("today_priced", False))
 
 
     # Locate the α/β benchmark's per-period returns so the Total
@@ -1746,13 +1752,18 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     _pf_series = _portfolio_intraday_series(
         m, intraday_map=_snap_intraday, raw1d=_raw1d
     )
+    # ``live`` here reaches ``_intraday_spark(in_progress=...)``, which asks whether
+    # the venue is TRADING right now -- an exchange-hours question, so it reads
+    # ``market_open`` rather than the tape-based ``1d_intraday``. The two are different
+    # facts and were the same value until the 09:12 send made the difference visible.
+    _pf_open = bool(port_full.get("market_open"))
     if _pf_series is not None and len(_pf_series) >= 2:
         _, port_inner = _perf_spark_cell(
             port_full.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
-            live=bool(port_full.get("1d_live")))
+            live=_pf_open)
     else:
         _, port_inner = _perf_spark_cell(
-            port_full.get("1d"), "", {}, live=bool(port_full.get("1d_live")))
+            port_full.get("1d"), "", {}, live=_pf_open)
     portfolio = {"name": "Portfolio", "spark_inner": port_inner,
                  "day_raw": port_full.get("1d"),
                  "returns": _returns_dict(port_full, is_portfolio=True)}
@@ -1764,13 +1775,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # Per-row session basis, for the column header (see _intraday_column). Built
     # from the rows actually rendered, not from hp — hp carries the watchlist
     # benchmarks too, and they are a different table.
-    row_live: list = []
+    row_intraday: list = []
     for _, h in df.iterrows():
         ticker = str(h.get("ticker", "") or "")
         isin = str(h.get("isin", "") or "")
         raw_name = str(h.get("name", "") or ticker)
         display_tk = _display_ticker(ticker) or ""
-        row_live.append(bool(_live1d.get(ticker, False)))
+        row_intraday.append(bool(_intraday.get(ticker, False)))
         _, inner = _perf_spark_cell(
             _raw1d.get(ticker), ticker, _snap_intraday,
             live=bool(_live1d.get(ticker, False)))
@@ -1799,7 +1810,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             period_keys, portfolio, groups,
             day_label=day_column_label(
                 m, live=_intraday_column(
-                    [bool(port_full.get("1d_live"))] + row_live))),
+                    [bool(port_full.get("1d_intraday"))] + row_intraday))),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }
@@ -2305,7 +2316,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "role": role,
                 "currency": r.get("currency"),
                 "d1": r.get("1d"),
+                # ``live`` is exchange hours (the sparkline's in_progress);
+                # ``intraday`` is whether this row's tape reaches today, which is the
+                # only thing the column header may claim. See ``_intraday_column``.
                 "live": bool(r.get("live_1d", False)),
+                "intraday": bool(r.get("today_priced", False)),
                 "tags": [],
                 "tag": None,
                 "is_portfolio": False,
@@ -2364,7 +2379,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "role": role,
                 "currency": r.get("currency"),
                 "d1": r.get("1d"),
+                # ``live`` is exchange hours (the sparkline's in_progress);
+                # ``intraday`` is whether this row's tape reaches today, which is the
+                # only thing the column header may claim. See ``_intraday_column``.
                 "live": bool(r.get("live_1d", False)),
+                "intraday": bool(r.get("today_priced", False)),
                 "tags": tags,
                 # Back-compat single tag (first one) for any old template ref.
                 "tag": tags[0] if tags else None,
@@ -2464,10 +2483,18 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                     })
                 rendered_roles.append((role, insts))
             groups.append((ac, col, rendered_roles))
+        # The portfolio's own basis flag joins the vote, exactly as it does for the
+        # holdings table. It is what carries "the market is still open" -- a row's
+        # ``intraday`` is only the tape fact, so without it an evening send, whose
+        # tapes all reach today, would head this column "Intraday" over today's
+        # completed closes.
         return _returns_table_html(
             period_cols, None, groups,
             day_label=day_column_label(
-                m, live=_intraday_column(r.get("live") for r in rows)))
+                m, live=_intraday_column(
+                    [bool((m.performance_full or m.performance or {})
+                          .get("1d_intraday"))]
+                    + [bool(r.get("intraday")) for r in rows])))
 
     table_html = _table_for(benchmark_rows)
     target_table_html = _table_for(target_rows) if target_rows else ""
