@@ -27,18 +27,18 @@ GOLDEN = {
     "invested_value": 19650.0,
     "cash_value": 0.0,
     "xirr_pct": 32.769384,
-    "twror_pct": 15.375076,
+    "twr_pct": 15.375076,
     # Annualized over the TRADING-day span of ``portfolio_history`` (177 days
     # here), not calendar days to ``today`` (179). See
     # ``test_the_two_annualizations_agree`` for why the two must be one number.
-    "twror_annualized_pct": 34.329624,
+    "twr_annualized_pct": 34.329624,
     "n_holdings": 2,
     "holdings_isins": ["IE00B4L5Y983", "IE00B4WXJJ64"],
     "alloc_by_class": {"Equities": 73.2824, "Fixed Income": 26.7176},
 }
 
 # Deterministic synthetic instruments: a linear price ramp per ISIN, so the
-# derived value series / XIRR / TWROR / allocations are fully reproducible.
+# derived value series / XIRR / TWR / allocations are fully reproducible.
 _META = {
     "IE00B4L5Y983": ("Equities", "USA", 100.0, 1.20),        # +20% over the window
     "IE00B4WXJJ64": ("Fixed Income", None, 100.0, 1.05),     # +5%
@@ -99,11 +99,11 @@ class TestGoldenMaster:
         assert round(m.invested_value, 2) == GOLDEN["invested_value"]
         assert round(m.cash_value, 2) == GOLDEN["cash_value"]
         assert round(m.xirr_pct, 6) == GOLDEN["xirr_pct"]
-        assert round(m.twror_pct, 6) == GOLDEN["twror_pct"]
-        assert round(m.twror_annualized_pct, 6) == GOLDEN["twror_annualized_pct"]
+        assert round(m.twr_pct, 6) == GOLDEN["twr_pct"]
+        assert round(m.twr_annualized_pct, 6) == GOLDEN["twr_annualized_pct"]
 
     def test_the_two_annualizations_agree(self, _golden_run):
-        """CAGR and the annualized TWROR are ONE number, and must stay one.
+        """CAGR and the annualized TWR are ONE number, and must stay one.
 
         Both annualize the same cumulative return read off the same series, so the
         only way they can differ is the span -- and they did: ``span_days`` counted
@@ -120,8 +120,8 @@ class TestGoldenMaster:
 
         m = _golden_run
         cagr = compute_cagr(m.portfolio_history)
-        assert cagr == pytest.approx(m.twror_annualized_pct, abs=1e-9), (
-            f"CAGR {cagr:.6f}% vs annualized TWROR {m.twror_annualized_pct:.6f}%"
+        assert cagr == pytest.approx(m.twr_annualized_pct, abs=1e-9), (
+            f"CAGR {cagr:.6f}% vs annualized TWR {m.twr_annualized_pct:.6f}%"
         )
         # ...and it is the figure the newsletter reads, not just an internal one.
         assert (m.performance or {}).get("cagr") == pytest.approx(cagr, abs=1e-9)

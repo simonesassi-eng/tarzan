@@ -5,7 +5,7 @@ This step is **optional**. It produces ``input/order_list.csv`` — the
 single source of truth the main pipeline (``python -m tarzan.main``)
 reads: the current snapshot (positions, cost basis) is reconstructed
 from the orders by aggregating quantities per ISIN, and the order list
-also drives the time-weighted (TWROR) and money-weighted (XIRR)
+also drives the time-weighted (TWR) and money-weighted (XIRR)
 returns. You can equally hand-curate ``order_list.csv`` instead of
 running this preprocessor.
 
@@ -276,7 +276,7 @@ def _build_rows(fineco: pd.DataFrame) -> list[dict]:
             # transfer date.
             #
             # We compute ``gross_eur`` here so downstream consumers
-            # (TWROR / XIRR) do not have to re-classify bonds vs
+            # (TWR / XIRR) do not have to re-classify bonds vs
             # equities themselves. The convention:
             #
             #   * ``Prezzo`` between 50 and 150 with ``Quantita`` ≥

@@ -290,9 +290,9 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     if perf.get("1d") is not None:
         status_bar.append(_bar("1D", _pct(perf["1d"], signed=True),
                                _tone(perf["1d"])))
-    if m.twror_pct is not None:
-        status_bar.append(_bar("TWROR", _pct(m.twror_pct, signed=True),
-                               _tone(m.twror_pct)))
+    if m.twr_pct is not None:
+        status_bar.append(_bar("TWR", _pct(m.twr_pct, signed=True),
+                               _tone(m.twr_pct)))
     # The gap against the geography benchmark. An earlier pass left this out on
     # the grounds that the engine computes no such delta -- wrong: both terms are
     # computed and already printed side by side in the since-inception chart's
@@ -378,7 +378,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     total_pnl_pct = (
         m.pnl_pct if (has_total_pnl and m.pnl_pct is not None) else unrealized_pct
     )
-    twror_pct = m.twror_pct
+    twr_pct = m.twr_pct
 
     # "Since inception" caption with the precise month/year of the first
     # order (derived automatically; falls back to empty when unknown).
@@ -451,7 +451,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         to every other figure in the issue. Both are true and it is still the wrong way
         round for a P&L: the money made is the thing, and the rate it was made at is how
         to judge it. The percentage keeps its place, first on the caption line, and the
-        issue is full of percentages elsewhere -- TWROR, MWR and CAGR are all rates and
+        issue is full of percentages elsewhere -- TWR, MWR and CAGR are all rates and
         all still lead with one.
 
         The tone follows the headline, so the colour belongs to the number it is drawn
@@ -473,14 +473,14 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         _pnl_tile("Unrealized P&L", unrealized_eur, unrealized_pct,
                   "on open positions"),
     ]
-    if twror_pct is not None:
-        ann = m.twror_annualized_pct
+    if twr_pct is not None:
+        ann = m.twr_annualized_pct
         state_tiles.append(_tile(
-            "TWROR", _pct(twror_pct, signed=True),
+            "TWR", _pct(twr_pct, signed=True),
             "time-weighted"
             + (f" \u00b7 {_pct(ann, signed=True)} annualized"
                if ann is not None else ""),
-            _tone(twror_pct)))
+            _tone(twr_pct)))
     if m.xirr_pct is not None:
         net = getattr(m, "xirr_net_tax_pct", None)
         state_tiles.append(_tile(
@@ -569,27 +569,27 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # This-week figures, mirroring the since-inception group:
     #   * Total PnL — the real money gained over the last five sessions, net
     #     of any contributions in them (delta of the cumulative P&L series);
-    #   * TWROR — the 5-session time-weighted return (performance_full['5d']),
+    #   * TWR — the 5-session time-weighted return (performance_full['5d']),
     #     the same series the Returns tables use.
     perf_full = m.performance_full or {}
-    week_twror = perf_full.get("5d")
+    week_twr = perf_full.get("5d")
     try:
-        week_twror = float(week_twror) if week_twror is not None else None
-        if week_twror != week_twror:  # NaN
-            week_twror = None
+        week_twr = float(week_twr) if week_twr is not None else None
+        if week_twr != week_twr:  # NaN
+            week_twr = None
     except (TypeError, ValueError):
-        week_twror = None
+        week_twr = None
     week_pnl_eur, week_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, "5d")
     # Last-30-days money P&L (net of contributions) for the scoreboard's
     # "Last 30 days" row, mirroring the chart window.
     month_pnl_eur, month_pnl_pct = _window_money_pnl(m.pnl_series, m.actual_value_series, "1m")
-    month_twror = perf_full.get("1m")
+    month_twr = perf_full.get("1m")
     try:
-        month_twror = float(month_twror) if month_twror is not None else None
-        if month_twror != month_twror:  # NaN
-            month_twror = None
+        month_twr = float(month_twr) if month_twr is not None else None
+        if month_twr != month_twr:  # NaN
+            month_twr = None
     except (TypeError, ValueError):
-        month_twror = None
+        month_twr = None
 
     # Cash KPI: show only the amount (no "above/below/on target" message).
     cash_msg, cash_msg_color = "", PALETTE["muted"]
@@ -680,8 +680,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # Kept for the preheader/back-compat: the headline % is Total PnL.
         "gain_pct": _pct(total_pnl_pct, signed=True),
         # Cumulative time-weighted return since inception (order path only).
-        "twror_pct": _pct(twror_pct, signed=True) if twror_pct is not None else None,
-        "twror_is_positive": (twror_pct or 0.0) >= 0,
+        "twr_pct": _pct(twr_pct, signed=True) if twr_pct is not None else None,
+        "twr_is_positive": (twr_pct or 0.0) >= 0,
         # Dual-axis hero chart (value € + Unrealized PnL %) and cash-flow
         # chips, pre-rendered as safe HTML (empty on the holdings-only path).
         "value_chart": value_chart_html or None,
@@ -693,22 +693,22 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "cash_msg": cash_msg,
         "cash_msg_color": cash_msg_color,
         # This week: real money P&L (€ + %, net of contributions) and the
-        # 1-week TWROR — both clearly labeled in the template.
+        # 1-week TWR — both clearly labeled in the template.
         "week_pnl_eur": _eur_smart(week_pnl_eur, signed=True) if week_pnl_eur is not None else None,
         "week_pnl_pct": _pct(week_pnl_pct, signed=True) if week_pnl_pct is not None else None,
         "week_pnl_is_positive": (week_pnl_eur or 0.0) >= 0,
-        "week_twror_pct": _pct(week_twror, signed=True) if week_twror is not None else None,
-        "week_twror_is_positive": (week_twror or 0.0) >= 0,
-        # Last 30 days (mirrors the chart window): money P&L + TWROR.
+        "week_twr_pct": _pct(week_twr, signed=True) if week_twr is not None else None,
+        "week_twr_is_positive": (week_twr or 0.0) >= 0,
+        # Last 30 days (mirrors the chart window): money P&L + TWR.
         "month_pnl_eur": _eur_smart(month_pnl_eur, signed=True) if month_pnl_eur is not None else None,
         "month_pnl_pct": _pct(month_pnl_pct, signed=True) if month_pnl_pct is not None else None,
         "month_pnl_is_positive": (month_pnl_eur or 0.0) >= 0,
-        "month_twror_pct": _pct(month_twror, signed=True) if month_twror is not None else None,
-        "month_twror_is_positive": (month_twror or 0.0) >= 0,
+        "month_twr_pct": _pct(month_twr, signed=True) if month_twr is not None else None,
+        "month_twr_is_positive": (month_twr or 0.0) >= 0,
         # Annualized returns (card subtitles): money-weighted XIRR vs
-        # time-weighted TWROR-annualized.
+        # time-weighted TWR-annualized.
         "xirr_pct": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
-        "twror_annualized_pct": _pct(m.twror_annualized_pct, signed=True) if m.twror_annualized_pct is not None else None,
+        "twr_annualized_pct": _pct(m.twr_annualized_pct, signed=True) if m.twr_annualized_pct is not None else None,
         # Net-of-tax ESTIMATE (order path only). Shown as a small line under
         # the since-inception PnL and as a sub-line in the XIRR annualized
         # card; the gross figures above are never altered. `has_net_tax` is
@@ -767,7 +767,7 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
         f'Estimate only: average-cost basis, '
         f'{rate_txt}, realized losses offset later gains where Italian rules allow '
         f'(ETF/fund gains are not offsettable). Excludes coupon/dividend withholding and the cost basis of '
-        f'transferred-in positions. TWROR is gross of tax.</div>'
+        f'transferred-in positions. TWR is gross of tax.</div>'
         f'</div></td></tr></table>'
     )
     return {"available": True, "html": html}

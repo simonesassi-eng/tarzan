@@ -38,7 +38,7 @@ def _metrics() -> PortfolioMetrics:
     )
     m.pnl_eur = 1000.0
     m.pnl_pct = 20.0
-    m.twror_pct = 14.49
+    m.twr_pct = 14.49
     m.inception_date = "2025-12-29"
     m.risk = {"volatility": 12.3, "sharpe": 1.1, "max_drawdown": -8.0}
     return m
@@ -53,18 +53,18 @@ def test_digest_is_comprehensive_and_serializable():
     json.dumps(digest)
     assert digest["snapshot"]["value_eur"] == 6000
     assert digest["since_inception"]["total_pnl_pct"] == 20.0
-    assert digest["since_inception"]["twror_cumulative_pct"] == 14.49
-    assert "1m" in digest["twror_by_period_pct"]
+    assert digest["since_inception"]["twr_cumulative_pct"] == 14.49
+    assert "1m" in digest["twr_by_period_pct"]
     assert digest["holdings"][0]["name"] == "Alpha ETF"
     assert "risk" in digest
 
 
 def test_digest_drops_nan_and_none():
     m = _metrics()
-    m.twror_pct = float("nan")
+    m.twr_pct = float("nan")
     digest = ai_summary.build_digest(m, _config())
     # NaN values are stripped, not serialized as NaN.
-    assert "twror_cumulative_pct" not in digest["since_inception"]
+    assert "twr_cumulative_pct" not in digest["since_inception"]
 
 
 # ── Enable/disable gating ────────────────────────────────────────────────────
@@ -220,8 +220,8 @@ def _divergence_metrics() -> PortfolioMetrics:
     # render at all.
     m.pnl_eur = 4500.0
     m.pnl_pct = 45.0
-    m.twror_pct = 38.0
-    m.twror_annualized_pct = 17.0
+    m.twr_pct = 38.0
+    m.twr_annualized_pct = 17.0
     m.xirr_pct = 16.0
     m.benchmark_histories = {"iShares MSCI ACWI": acwi}
     m.goal_deltas = gd

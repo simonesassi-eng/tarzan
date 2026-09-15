@@ -44,7 +44,7 @@ tarzan/
 ├── engine/
 │   ├── allocations.py           # canonical exposure/denominator authority
 │   ├── metrics.py               # metric-stage coordinator
-│   ├── returns_builder.py       # order-derived value series, XIRR, and TWROR
+│   ├── returns_builder.py       # order-derived value series, XIRR, and TWR
 │   ├── rebalancer.py            # deterministic final-action optimizer and proof
 │   ├── stats.py, tax.py         # return/risk math and estimated tax
 │   ├── benchmarks.py            # benchmark-relative metrics
@@ -175,7 +175,7 @@ Unsupported sector capability or a missing denominator renders Unavailable.
 
 ### Returns, risk, and planning
 
-Tarzan computes period returns, CAGR, XIRR, TWROR, volatility, Sharpe, Sortino,
+Tarzan computes period returns, CAGR, XIRR, TWR, volatility, Sharpe, Sortino,
 maximum drawdown, VaR/CVaR, Beta/Alpha, allocation history, and benchmark
 comparisons when their evidence is available. Historical price provenance
 labels primary, synthetic, carry-flat, and excluded paths rather than treating

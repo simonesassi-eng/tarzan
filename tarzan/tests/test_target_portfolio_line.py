@@ -283,7 +283,7 @@ class TestAllThreePanelsCarryTheTarget:
         wobble = 1 + 0.01 * np.sin(np.arange(n) / 5)
         m = PortfolioMetrics(total_value=6000.0, invested_value=6000.0,
                              holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wobble, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wobble, index=idx)
         m.unrealized_series = pd.Series(np.linspace(0, 800, n) * wobble, index=idx)
@@ -342,7 +342,7 @@ class TestAllThreePanelsCarryTheTarget:
         idx = pd.date_range("2025-08-01", "2026-08-20", freq="B")
         m = PortfolioMetrics(total_value=6000.0, invested_value=6000.0,
                              holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, len(idx)), index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, len(idx)), index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 114.5, len(idx)), index=idx)

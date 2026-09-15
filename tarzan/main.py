@@ -58,7 +58,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--input_orders", default="input/order_list.csv",
         help="Order-list CSV. The single source of truth: the snapshot is "
-             "derived from it and it drives the historical series + XIRR/TWROR.",
+             "derived from it and it drives the historical series + XIRR/TWR.",
     )
     parser.add_argument("--input_config", default="input/targets.csv")
     parser.add_argument(
@@ -76,7 +76,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--as_of", default=None, metavar="YYYY-MM-DD",
         help="Value the portfolio as of this date instead of today (pins the "
-             "terminal valuation date for XIRR/TWROR and the daily series). "
+             "terminal valuation date for XIRR/TWR and the daily series). "
              "Implies a pinned clock.",
     )
     parser.add_argument(

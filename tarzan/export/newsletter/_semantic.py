@@ -397,7 +397,7 @@ def validate_newsletter_semantics(
         #: gate reading its expectation out of the audit it is checking would
         #: verify nothing. Total and Unrealized P&L are absent by design -- they
         #: live in the matrix, which the money-figure checks above cover.
-        panel_keys = ("twror", "target", "acwi")
+        panel_keys = ("twr", "target", "acwi")
         window_audit = audit.get("performance_windows")
         if not isinstance(window_audit, Mapping):
             # Fall back to the single-window entry so an older audit shape is

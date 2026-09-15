@@ -47,7 +47,7 @@ _TILE_LABELS: dict[str, str] = {"alpha": "Alpha", "beta": "Beta"}
 #: against, which is their definition and not a comparison.
 #:
 #: CAGR is deliberately NOT here. The risk block computes one, but STATE already shows a
-#: CAGR from a different measure -- the book's own annualized TWROR -- and on the
+#: CAGR from a different measure -- the book's own annualized TWR -- and on the
 #: reference book the two read +15.68% and 24.27%. Two tiles labelled "CAGR" with
 #: different numbers, six tiles apart, is worse than one of them being absent; and the
 #: risk figure is the more misleading of the pair, being a backtest at TODAY's weights

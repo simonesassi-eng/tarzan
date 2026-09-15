@@ -1,6 +1,6 @@
 """Pure performance/return series helpers for the newsletter.
 
-Window P&L, TWROR, normalisation, benchmark alignment and the "Markets"
+Window P&L, TWR, normalisation, benchmark alignment and the "Markets"
 strip — all pure transforms of a ``PortfolioMetrics`` (or its series), with
 no HTML, no template, no context object. Extracted from ``newsletter.py`` so
 the financial math is importable and testable on its own, away from the
@@ -26,7 +26,7 @@ def _window_money_pnl(
     contributions in that window.
 
     Reads the same ``window_anchor`` as the percentages beside it: the matrix's
-    "5D" row used to walk seven CALENDAR days for the euros while its TWROR
+    "5D" row used to walk seven CALENDAR days for the euros while its TWR
     measured five sessions, so one row described two different spans.
 
     Returns ``(gain_eur, gain_pct)`` where the € gain is the delta of the
@@ -124,8 +124,8 @@ def _flow_list(external_flows, start, end, threshold: float = 500.0):
     return sorted(out, key=lambda t: t[0])
 
 
-def _window_twror(nav: Optional[pd.Series], bucket: str) -> Optional[float]:
-    """Window TWROR (%) from the flow-adjusted NAV index over a
+def _window_twr(nav: Optional[pd.Series], bucket: str) -> Optional[float]:
+    """Window TWR (%) from the flow-adjusted NAV index over a
     ``PERIOD_WINDOWS`` bucket ("1d", "5d", "1m", …).
 
     Delegates to the engine's ``compute_period_return`` so the matrix cell and
@@ -218,7 +218,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
     before it could build any other — and ``n_days`` remains the fallback span
     for when no anchor resolves.
 
-    Portfolio value, TWROR, P&L and the geographic benchmark are all truncated
+    Portfolio value, TWR, P&L and the geographic benchmark are all truncated
     to the latest date observed by both portfolio and benchmark before the
     ``n_days`` cutoff is calculated.  This prevents a live/partial benchmark
     candle from supplying a legend value while the chart stops at the prior
@@ -292,7 +292,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         return None
     idx = val.index
 
-    twror = (
+    twr = (
         _rebase_to_window(m.portfolio_history, idx)
         if m.portfolio_history is not None else None
     )
@@ -303,7 +303,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 
     # Both P&L lines are rebased on the window's own opening value, so each
     # reads as "what this measure added over the window" on the same axis as
-    # TWROR — not as its since-inception level, which would sit far off the
+    # TWR — not as its since-inception level, which would sit far off the
     # window's scale and flatten the lines that belong to it.
     v0 = float(val.iloc[0]) or 1.0
 
@@ -327,7 +327,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 
     dates = list(idx)
     endpoints = {
-        "twror": float(twror[-1]) if twror else None,
+        "twr": float(twr[-1]) if twr else None,
         "acwi": float(acwi[-1]) if acwi else None,
         "target": float(target[-1]) if target else None,
         "pnl_pct": float(pnl_pct[-1]) if pnl_pct else None,
@@ -336,7 +336,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
     return {
         "dates": dates,
         "value": list(val.values.astype(float)),
-        "twror": twror,
+        "twr": twr,
         "acwi": acwi,
         "target": target,
         "pnl_pct": pnl_pct,
@@ -355,26 +355,26 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
 def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = None):
     """The indicators as % over the window, each matching the hero's
     definition, from existing series (no recomputation):
-      * TWROR since inception — NAV index anchored at inception.
+      * TWR since inception — NAV index anchored at inception.
       * Total P&L %           — P&L ÷ net invested capital (value − P&L).
       * Unrealized P&L %       — unrealized ÷ cost basis (value − unrealized).
       * MSCI ACWI              — benchmark cumulative return anchored at the
         portfolio's inception, for a like-for-like since-inception compare.
-    Returns ``(twror_si, total_pct, unreal_pct, acwi_si)`` (any may be None)."""
+    Returns ``(twr_si, total_pct, unreal_pct, acwi_si)`` (any may be None)."""
     if m.portfolio_history is None or m.actual_value_series is None:
         return None
     idx = pd.DatetimeIndex(dates)
     av = _norm_series(m.actual_value_series).reindex(idx, method="ffill").bfill()
-    # TWROR since inception: anchor the NAV index at the FULL series' first
+    # TWR since inception: anchor the NAV index at the FULL series' first
     # point (inception), THEN sample the window — so the line shows the
     # cumulative since-inception trajectory over the last 30 days (ending at
-    # twror_pct), not a window-rebased 0%. (Reindexing before dividing would
+    # twr_pct), not a window-rebased 0%. (Reindexing before dividing would
     # rebase to the window start — the bug this avoids.)
     nav_full = _norm_series(m.portfolio_history)
-    twror_si = None
+    twr_si = None
     if len(nav_full) and float(nav_full.iloc[0]):
-        twror_full = (nav_full / float(nav_full.iloc[0]) - 1.0) * 100.0
-        twror_si = list(twror_full.reindex(idx, method="ffill").bfill().values.astype(float))
+        twr_full = (nav_full / float(nav_full.iloc[0]) - 1.0) * 100.0
+        twr_si = list(twr_full.reindex(idx, method="ffill").bfill().values.astype(float))
     total_pct = unreal_pct = None
     # Same absent-data rule as ``_perf_window._window_pct``: an empty or
     # all-NaN series must read as None (no line) rather than as a NaN line.
@@ -394,7 +394,7 @@ def _perf_level_series(m: PortfolioMetrics, dates, geo_name: Optional[str] = Non
     acwi_raw = _geo_benchmark_series(m, geo_name)
     if acwi_raw is not None and len(nav_full):
         acwi_si = _rebase_to_window(acwi_raw, idx)
-    return twror_si, total_pct, unreal_pct, acwi_si
+    return twr_si, total_pct, unreal_pct, acwi_si
 
 
 def _mwr_line(m: PortfolioMetrics, dates) -> Optional[list]:
@@ -464,13 +464,13 @@ def _mwr_line(m: PortfolioMetrics, dates) -> Optional[list]:
 def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
                       max_points: int = 180, with_mwr: bool = False) -> Optional[dict]:
     """The since-inception trajectory over the WHOLE date range (not the last
-    30 days): cumulative TWROR (%), Total P&L (%) and MSCI ACWI (%) from
+    30 days): cumulative TWR (%), Total P&L (%) and MSCI ACWI (%) from
     inception to today, on a common daily index that is evenly downsampled to
     ``max_points`` so a multi-year series stays a light SVG. Reuses
     ``_perf_level_series`` for the cumulative math. None when unavailable.
 
     Keys mirror ``_perf_window`` so the chart builder is symmetric:
-    ``{dates, twror, pnl_pct, unreal_pct, acwi, target, mwr}`` (any line may be
+    ``{dates, twr, pnl_pct, unreal_pct, acwi, target, mwr}`` (any line may be
     None).
 
     ``mwr`` is off by default because it is the one line here that is SOLVED
@@ -493,10 +493,10 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     lvl = _perf_level_series(m, list(idx), geo_name)
     if lvl is None:
         return None
-    twror_si, total_pct, unreal_pct, acwi_si = lvl
+    twr_si, total_pct, unreal_pct, acwi_si = lvl
     return {
         "dates": list(idx),
-        "twror": twror_si,
+        "twr": twr_si,
         "pnl_pct": total_pct,
         "unreal_pct": unreal_pct,
         "acwi": acwi_si,
@@ -699,22 +699,22 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
 
 def benchmark_gap_pp(m: PortfolioMetrics,
                      geo_name: Optional[str] = None) -> Optional[float]:
-    """Lifetime TWROR minus the geography benchmark's lifetime cumulative, in
+    """Lifetime TWR minus the geography benchmark's lifetime cumulative, in
     percentage points. None when either side is unavailable.
 
     Both terms are already computed and already printed side by side in the
-    since-inception chart's legend ("TWROR +11.28%" next to "MSCI ACWI
+    since-inception chart's legend ("TWR +11.28%" next to "MSCI ACWI
     +14.16%"), so the difference is a subtraction rather than a new estimate.
     One helper so the masthead, the state tile and the section subtitle cannot
     disagree about the same number.
     """
-    if m.twror_pct is None:
+    if m.twr_pct is None:
         return None
     full = _perf_full_series(m, geo_name)
     if not full or not full.get("acwi"):
         return None
     try:
-        return float(m.twror_pct) - float(full["acwi"][-1])
+        return float(m.twr_pct) - float(full["acwi"][-1])
     except (TypeError, ValueError, IndexError):
         return None
 
@@ -731,9 +731,9 @@ def benchmark_gap_history(m: PortfolioMetrics,
     between two lines the reader can see.
     """
     full = _perf_full_series(m, geo_name)
-    if not full or not full.get("acwi") or not full.get("twror"):
+    if not full or not full.get("acwi") or not full.get("twr"):
         return None
-    dates, port, bench = full["dates"], full["twror"], full["acwi"]
+    dates, port, bench = full["dates"], full["twr"], full["acwi"]
     n = min(len(dates), len(port), len(bench))
     if n < 2:
         return None

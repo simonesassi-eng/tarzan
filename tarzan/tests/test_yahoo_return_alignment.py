@@ -105,7 +105,7 @@ class TestTrailingWindowAnchor:
 
     def test_the_money_and_percent_columns_share_one_window(self):
         """The matrix row said "7 days" and mixed two spans: the euros walked
-        seven CALENDAR days while the TWROR beside them measured five sessions.
+        seven CALENDAR days while the TWR beside them measured five sessions.
         Both now read window_anchor, so 5D bills the same five sessions.
         """
         from tarzan.export._perf_series import _window_money_pnl
@@ -210,7 +210,7 @@ class TestWindowMatrixHasOneSource:
         metrics.pnl_series = pnl
         metrics.unrealized_series = pnl
         metrics.portfolio_history = pd.Series([v / 1000 for v in values], index=idx)
-        metrics.pnl_eur, metrics.pnl_pct, metrics.twror_pct = 6_010.0, 6.7, 6.5
+        metrics.pnl_eur, metrics.pnl_pct, metrics.twr_pct = 6_010.0, 6.7, 6.5
         metrics.performance_full = {"1d": injected_1d}
 
         html = _build_performance30(_NewsletterContext(

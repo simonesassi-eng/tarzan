@@ -102,7 +102,7 @@ class TestAWindowIsNeverASubstituteForAnother:
         wob = 1 + 0.01 * np.sin(np.arange(n) / 5)
         m = PortfolioMetrics(total_value=6000.0, invested_value=6000.0,
                              holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wob, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wob, index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 114.5, n) * wob, index=idx)
@@ -143,7 +143,7 @@ class TestAWindowIsNeverASubstituteForAnother:
         win = _perf_window(m, 30, "B")
 
         assert win is not None
-        assert win["twror"] is not None
+        assert win["twr"] is not None
 
     def test_each_bucket_opens_on_its_own_anchor(self):
         """Distinct buckets must produce distinct windows — a ``bucket`` argument
@@ -295,7 +295,7 @@ class TestTheOneDayCellDrawsTheSession:
                                        "ticker": "AAA.MI", "weight_pct": 60.0},
                                       {"cost_basis_eur": 3000.0,
                                        "ticker": "BBB.MI", "weight_pct": 40.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wob, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wob, index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 114.5, n) * wob, index=idx)
@@ -369,7 +369,7 @@ class TestTheOneDayCellDrawsTheSession:
 
         assert "<svg" not in cell
         assert "session · closes" in cell
-        assert ">TWROR<" in cell
+        assert ">TWR<" in cell
 
 
 class TestTheTargetGetsItsSessionToo:
@@ -395,7 +395,7 @@ class TestTheTargetGetsItsSessionToo:
             total_value=6000.0, invested_value=6000.0,
             holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0,
                                        "ticker": "AAA.MI", "weight_pct": 100.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wob, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wob, index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 114.5, n) * wob, index=idx)
@@ -576,7 +576,7 @@ class TestTheGateVerifiesTheOneDayPanelToo:
                                        "ticker": "AAA.MI", "weight_pct": 60.0},
                                       {"cost_basis_eur": 3000.0,
                                        "ticker": "BBB.MI", "weight_pct": 40.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(np.linspace(4800, 6000, n) * wob, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 1000, n) * wob, index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 114.5, n) * wob, index=idx)
@@ -613,12 +613,12 @@ class TestTheGateVerifiesTheOneDayPanelToo:
     def test_a_faithful_render_raises_nothing(self, monkeypatch):
         m, audit, html = self._render(monkeypatch)
         assert audit["performance_windows"]["1d"]["drawn"] == [
-            "twror", "target", "acwi"]
+            "twr", "target", "acwi"]
         assert self._errors(m, audit, html) == []
 
     def test_an_endpoint_that_drifts_from_the_recomputation_is_caught(self, monkeypatch):
         m, audit, html = self._render(monkeypatch)
-        audit["performance_windows"]["1d"]["endpoints"]["twror"] += 0.5
+        audit["performance_windows"]["1d"]["endpoints"]["twr"] += 0.5
 
         errors = self._errors(m, audit, html)
 
@@ -643,7 +643,7 @@ class TestTheGateVerifiesTheOneDayPanelToo:
     def test_a_label_missing_from_the_html_is_caught(self, monkeypatch):
         """The audit may not describe a figure the reader cannot find."""
         m, audit, html = self._render(monkeypatch)
-        label = audit["performance_windows"]["1d"]["legend_labels"]["twror"]
+        label = audit["performance_windows"]["1d"]["legend_labels"]["twr"]
 
         errors = self._errors(m, audit, html.replace(label, "+0.00%"))
 
@@ -653,7 +653,7 @@ class TestTheGateVerifiesTheOneDayPanelToo:
         """The teeth that stop a line vanishing quietly: the drawn set must EQUAL
         the set that resolved, not merely be a subset of it."""
         m, audit, html = self._render(monkeypatch)
-        audit["performance_windows"]["1d"]["drawn"] = ["twror", "acwi"]
+        audit["performance_windows"]["1d"]["drawn"] = ["twr", "acwi"]
 
         errors = self._errors(m, audit, html)
 
@@ -670,8 +670,8 @@ class TestTheGateVerifiesTheOneDayPanelToo:
     def test_an_audit_claiming_a_panel_that_has_no_session_is_caught(self, monkeypatch):
         m, audit, html = self._render(monkeypatch, with_intraday=False)
         audit.setdefault("performance_windows", {})["1d"] = {
-            "endpoints": {"twror": 0.21}, "legend_values": {"twror": 0.21},
-            "legend_labels": {"twror": "+0.21%"}, "drawn": ["twror"]}
+            "endpoints": {"twr": 0.21}, "legend_values": {"twr": 0.21},
+            "legend_labels": {"twr": "+0.21%"}, "drawn": ["twr"]}
 
         errors = self._errors(m, audit, html)
 
@@ -689,7 +689,7 @@ class TestTheGateVerifiesTheOneDayPanelToo:
             monkeypatch, weights={"AAA.MI": 60.0, "ZZZ.MI": 40.0})
 
         assert audit2["performance_windows"]["1d"]["drawn"] == [
-            "twror", "target", "acwi"]
+            "twr", "target", "acwi"]
         assert self._errors(m2, audit2, html2) == []
 
 
@@ -700,7 +700,7 @@ class TestTheTargetsOwnSleevesAreRequestedIntraday:
     the tracked BENCHMARKS alongside the holdings, and on the reference book every
     target sleeve happens to be one, so all of them were already requested: the
     union added zero symbols and the 1D target line was drawing all along (verified
-    live against the real book — 5 of 5 sleeves with bars, drawn=[twror, target,
+    live against the real book — 5 of 5 sleeves with bars, drawn=[twr, target,
     acwi]). An earlier reading of this said four sleeves were missing and the line
     was withheld; that was wrong, inferred from the false premise that a rebalance
     seed cannot appear in the performance frame.
@@ -991,7 +991,7 @@ class TestTheOneDayLineEndsOnTheTape:
             holdings_df=pd.DataFrame([
                 {"ticker": "AAA.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0},
                 {"ticker": "BBB.MI", "weight_pct": 50.0, "cost_basis_eur": 500.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 100.0, 10.0, 9.0
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 100.0, 10.0, 9.0
         m.actual_value_series = pd.Series(np.linspace(900, 1000, n) * wob, index=idx)
         m.pnl_series = pd.Series(np.linspace(0, 100, n) * wob, index=idx)
         m.portfolio_history = pd.Series(np.linspace(100, 109, n) * wob, index=idx)
@@ -1073,7 +1073,7 @@ class TestTheOneDayLineEndsOnTheTape:
         expected = compute_period_return(
             _norm_series(m.portfolio_history).dropna(), "1d")
 
-        assert win["endpoints"]["twror"] == pytest.approx(expected, abs=1e-9)
+        assert win["endpoints"]["twr"] == pytest.approx(expected, abs=1e-9)
 
     def test_a_sleeve_with_no_tape_move_is_left_out_of_both_sides(self):
         """The one place renormalising is right: no figure is reported for it at all,

@@ -1,4 +1,4 @@
-"""Tests for the hero since-inception P&L/TWROR.
+"""Tests for the hero since-inception P&L/TWR.
 
 Network-free: they build the newsletter context from a hand-made
 PortfolioMetrics and assert the hero contract, plus a full-render smoke test.
@@ -67,7 +67,7 @@ def _metrics(*, with_order_returns: bool) -> PortfolioMetrics:
         m.pnl_eur = 1200.0          # lifetime realized + unrealized
         m.pnl_pct = 24.0            # on capital deployed
         m.invested_capital_eur = 5000.0
-        m.twror_pct = 14.49
+        m.twr_pct = 14.49
         m.actual_value_series = pd.Series(
             [4800.0, 5200.0, 5100.0, 5600.0, 6000.0],
             index=pd.date_range("2025-12-29", periods=5, freq="W"),
@@ -109,14 +109,14 @@ class TestHeroSinceInception:
         assert hero["has_total_pnl"] is True
         assert "24.00%" in hero["total_pnl_pct"]
         assert "20.00%" in hero["unrealized_pct"]
-        assert hero["twror_pct"] is not None
-        assert "14.49%" in hero["twror_pct"]
+        assert hero["twr_pct"] is not None
+        assert "14.49%" in hero["twr_pct"]
 
     def test_inception_label_is_month_year(self):
         hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
         assert hero["inception_label"] == "Dec 2025"
 
-    def test_this_week_has_pnl_and_twror(self):
+    def test_this_week_has_pnl_and_twr(self):
         hero = build_context(_metrics(with_order_returns=True), _config())["hero"]
         # Weekly money P&L from the cumulative series. "5D" anchors five
         # sessions back (five days of change, six closes — the span Yahoo's own
@@ -125,16 +125,16 @@ class TestHeroSinceInception:
         assert hero["week_pnl_eur"] is not None
         assert "260" in hero["week_pnl_eur"]
         assert hero["week_pnl_pct"] is not None
-        # Weekly TWROR from performance_full['1w'] = 0.5%.
-        assert hero["week_twror_pct"] is not None
-        assert "0.50%" in hero["week_twror_pct"]
+        # Weekly TWR from performance_full['1w'] = 0.5%.
+        assert hero["week_twr_pct"] is not None
+        assert "0.50%" in hero["week_twr_pct"]
 
     def test_falls_back_to_snapshot_gain_holdings_only(self):
         hero = build_context(_metrics(with_order_returns=False), _config())["hero"]
         # No order history: Total PnL collapses to the snapshot gain (20%).
         assert hero["has_total_pnl"] is False
         assert "20.00%" in hero["total_pnl_pct"]
-        assert hero["twror_pct"] is None
+        assert hero["twr_pct"] is None
 
 
 class TestBothPnlMeasuresAreDrawn:
@@ -224,9 +224,9 @@ class TestBothPnlMeasuresAreDrawn:
         # P&L now lives: euros against euros.
         assert html.count("Total P&amp;L (€, right)") == 1
         assert html.count("Unreal. P&amp;L (€, right)") == 1
-        # Both P&L lines came off the since-inception panel -- they restated the TWROR
+        # Both P&L lines came off the since-inception panel -- they restated the TWR
         # line with a different denominator, and MWR took the space to say the thing
-        # TWROR cannot. What is left of each name is its STATE tile, and the
+        # TWR cannot. What is left of each name is its STATE tile, and the
         # abbreviated form was ONLY ever the panel's key.
         assert html.count(">Total P&amp;L<") == 1        # the tile
         assert html.count(">Unrealized P&amp;L<") == 1   # the tile
@@ -241,7 +241,7 @@ class TestBothPnlMeasuresAreDrawn:
         """
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         panel = html.split("Return · since inception", 1)[1]
-        assert ">TWROR<" in panel
+        assert ">TWR<" in panel
         assert ">MWR (cum.)<" in panel
         assert ">Total P&amp;L<" not in panel
         assert ">Unreal. P&amp;L<" not in panel
@@ -260,7 +260,7 @@ class TestBothPnlMeasuresAreDrawn:
         # that the volatility grid is gone.
         grid = html.split("Return · by window", 1)[1].split(
             "Return · since inception", 1)[0]
-        assert ">TWROR<" in grid
+        assert ">TWR<" in grid
         assert ">Total P&amp;L<" not in grid
         assert ">Unreal. P&amp;L<" not in grid
 
@@ -275,9 +275,9 @@ class TestRender:
         # "How your money moved" line was dropped because the heading plus the
         # matrix say it. Anchor on the matrix's own footer instead.
         assert ">Portfolio</span>" in html
-        # The matrix's own first column header. The "Annualized: TWROR / XIRR"
+        # The matrix's own first column header. The "Annualized: TWR / XIRR"
         # footer that used to be the anchor is gone: it repeated the captions of
-        # the TWROR and MWR tiles in STATE.
+        # the TWR and MWR tiles in STATE.
         assert ">Window<" in html
         # Every ampersand reaches the document as an entity. The matrix writes
         # it itself; the tiles go through the template, where autoescape is off
@@ -286,7 +286,7 @@ class TestRender:
         # which is invalid HTML that mail clients happen to tolerate.
         assert "P&amp;L \u20ac" in html      # matrix column head
         assert "Unrealized" in html
-        assert "TWROR" in html
+        assert "TWR" in html
         assert "Since inception" in html     # matrix row label
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile

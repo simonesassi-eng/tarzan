@@ -449,7 +449,7 @@ class TestFallbackLadder:
         )
         assert metrics.portfolio_history is None
         assert metrics.xirr_pct is None
-        assert metrics.twror_pct is None
+        assert metrics.twr_pct is None
         assert metrics.pnl_eur is None
         assert metrics.estimated_cgt_eur is None
 
@@ -529,7 +529,7 @@ class TestFallbackLadder:
         assert metrics.portfolio_history is None
         assert metrics.returns_coverage_pct is None
         assert metrics.xirr_pct is None
-        assert metrics.twror_pct is None
+        assert metrics.twr_pct is None
         assert metrics.pnl_eur is None
 
     def test_terminal_price_does_not_hide_earlier_missing_history(self):
@@ -815,7 +815,7 @@ class TestCumExConservationProperty:
         # -100%, and must not DROP the disposal's own holding-period gain either.
         # This used to assert the index was carried flat across the closing day,
         # which encoded a real defect: bought at 100, sold at 105, the dense index
-        # reported 0.0% while stats.twror on the SAME build reported +5.0%. Two
+        # reported 0.0% while stats.twr on the SAME build reported +5.0%. Two
         # implementations of one measure, disagreeing, with a test pinning the
         # wrong one. The disposal day now chains its own return — V_before is the
         # sale proceeds — and the two paths agree.
@@ -877,12 +877,12 @@ class TestCumExConservationProperty:
 
 
 class TestMarketPricedFlowsNoJump:
-    """A trade valued at market price must not inject a fictitious TWROR
+    """A trade valued at market price must not inject a fictitious TWR
     jump (Option 2): buying more of a flat-priced holding leaves the
     chained period return at ~0."""
 
     def test_same_day_buy_on_flat_prices_is_neutral(self):
-        from tarzan.engine.metrics import twror
+        from tarzan.engine.metrics import twr
 
         # AAA: flat at 100 the whole window. Buy 10 on day 1, buy 10 more
         # on day 15 (a mid-window trade), prices never move.
@@ -894,12 +894,12 @@ class TestMarketPricedFlowsNoJump:
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 1))
-        res = twror(series.valuations, series.external_flows, series.span_days)
+        res = twr(series.valuations, series.external_flows, series.span_days)
         # Flat prices → the buy must not create a positive/negative return.
         assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)
 
     def test_real_growth_is_captured(self):
-        from tarzan.engine.metrics import twror
+        from tarzan.engine.metrics import twr
 
         # AAA rises 100 → 110 over the window, single initial buy.
         prices = [100.0 + i * (10.0 / 30.0) for i in range(31)]
@@ -909,13 +909,13 @@ class TestMarketPricedFlowsNoJump:
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 1, 31))
-        res = twror(series.valuations, series.external_flows, series.span_days)
+        res = twr(series.valuations, series.external_flows, series.span_days)
         assert res.cumulative_pct == pytest.approx(10.0, abs=0.5)
 
 
 class TestRoundTripInclusion:
     """A position opened and fully closed inside the window must still
-    contribute its holding-period market move to TWROR (Lotto 3 #2)."""
+    contribute its holding-period market move to TWR (Lotto 3 #2)."""
 
     def test_closed_position_contributes_to_history(self):
         # Buy AAA at 100 on Jan 1, sell all at 110 on Jan 31. Closed today,
@@ -1076,15 +1076,15 @@ class TestDailySeries:
         assert all(v > 0 for v in nav.values)
 
 
-class TestIncomeInTwror:
+class TestIncomeInTwr:
     """GIPS total-return convention: coupons/dividends are income earned
-    by the held portfolio and must be captured in TWROR, not dropped."""
+    by the held portfolio and must be captured in TWR, not dropped."""
 
-    def test_coupon_lifts_twror_on_flat_prices(self):
-        from tarzan.engine.metrics import twror
+    def test_coupon_lifts_twr_on_flat_prices(self):
+        from tarzan.engine.metrics import twr
 
         # Flat price (100 throughout): with no income the market return
-        # is 0%. A coupon paid mid-window is income → must lift TWROR.
+        # is 0%. A coupon paid mid-window is income → must lift TWR.
         prices = [100.0] * 60
         enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
         orders = [
@@ -1095,7 +1095,7 @@ class TestIncomeInTwror:
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 28))
-        res = twror(series.valuations, series.external_flows, series.span_days)
+        res = twr(series.valuations, series.external_flows, series.span_days)
         # Coupon is recorded as a negative external flow (withdrawal from
         # the securities portfolio) so it is added back into V_before.
         assert series.external_flows.get(datetime.date(2025, 2, 1)) == pytest.approx(-20.0)
@@ -1103,7 +1103,7 @@ class TestIncomeInTwror:
         assert res.cumulative_pct > 0.0
 
     def test_no_income_stays_flat(self):
-        from tarzan.engine.metrics import twror
+        from tarzan.engine.metrics import twr
 
         prices = [100.0] * 60
         enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
@@ -1113,7 +1113,7 @@ class TestIncomeInTwror:
         ]
         series = build_order_derived_series(
             orders, enriched, today=datetime.date(2025, 2, 28))
-        res = twror(series.valuations, series.external_flows, series.span_days)
+        res = twr(series.valuations, series.external_flows, series.span_days)
         assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)
 
 
@@ -1597,7 +1597,7 @@ class TestUnavailableOrderHistory:
         assert context["performance"] is None
         assert context["risk"] is None
         assert context["xirr_pct"] is None
-        assert context["twror_pct"] is None
+        assert context["twr_pct"] is None
         assert context["pnl_eur"] is None
         assert set(context["_degraded"]) == {
             "_portfolio_history_from_orders",
@@ -1633,7 +1633,7 @@ class TestUnavailableOrderHistory:
         assert context["performance"] is None
         assert context["risk"] is None
         assert context["xirr_pct"] is None
-        assert context["twror_pct"] is None
+        assert context["twr_pct"] is None
         assert context["pnl_eur"] is None
 
     def test_price_only_history_gap_preserves_current_rebalancing(
@@ -1720,7 +1720,7 @@ class TestUnavailableOrderHistory:
         assert result.performance is None
         assert result.risk is None
         assert result.xirr_pct is None
-        assert result.twror_pct is None
+        assert result.twr_pct is None
         assert result.allocation_timeline is None
         assert sorted(no_sell for no_sell, _ in plan_calls) == [False, True]
         assert result.rebalancing_suggestions == []
@@ -1856,8 +1856,8 @@ class TestUnavailableOrderHistory:
         assert result.performance_full is None
         assert result.risk is None
         assert result.xirr_pct is None
-        assert result.twror_pct is None
-        assert result.twror_annualized_pct is None
+        assert result.twr_pct is None
+        assert result.twr_annualized_pct is None
         assert result.returns_coverage_pct is None
         assert result.pnl_eur is None
         assert result.pnl_pct is None
@@ -1971,14 +1971,14 @@ class TestNoCapitalMeansNoReturn:
             f"the silent variant still collapses the index ({ds.iloc[-1]:.4f})"
 
     def test_the_dense_and_sparse_paths_agree(self):
-        """Two implementations of one measure. ``stats.twror`` chains the sparse
+        """Two implementations of one measure. ``stats.twr`` chains the sparse
         valuations and was always right here; the dense builder disagreed, and the
         two must not be allowed to drift apart again."""
-        from tarzan.engine.stats import twror
+        from tarzan.engine.stats import twr
 
         res = self._round_trip()
         span = (datetime.date(2025, 9, 1) - datetime.date(2025, 1, 2)).days
-        sparse = twror(res.valuations, res.external_flows, span)
+        sparse = twr(res.valuations, res.external_flows, span)
         dense = (res.daily_series.iloc[-1] / res.daily_series.iloc[0] - 1) * 100
         assert dense == pytest.approx(sparse.cumulative_pct, rel=1e-9)
 

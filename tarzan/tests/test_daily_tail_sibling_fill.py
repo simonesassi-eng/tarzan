@@ -2,7 +2,7 @@
 
 Yahoo publishes some European listings' daily bar late (Borsa Italiana
 ``.MI`` most often) while the same fund's Xetra/Paris listing already has
-today. Left alone, that holding's 1w/1m/YTD, TWROR, XIRR and risk are all
+today. Left alone, that holding's 1w/1m/YTD, TWR, XIRR and risk are all
 measured to yesterday while every other holding is measured to today.
 
 The borrowed quantity is a RETURN, never a price: both endpoints come from

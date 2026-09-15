@@ -116,7 +116,7 @@ class TestChartSeriesRoles:
 
     They are a categorical set, so every pair matters, not just neighbours: the
     lines cross. And none of them may borrow a colour that MEANS something
-    elsewhere in the issue -- TWROR used to be drawn in the same green the
+    elsewhere in the issue -- TWR used to be drawn in the same green the
     waterfall bars, heat cells, sparklines and bullet bars use for "positive",
     so the reader had to know which chart they were on to know whether green was
     identity or sign.
@@ -307,7 +307,7 @@ class TestRiskMetricsBecomeStateTiles:
                           "Alpha*", "Beta*"], labels
 
     def test_no_second_cagr_tile(self):
-        """STATE already carries a CAGR — the book's own annualized TWROR — and the risk
+        """STATE already carries a CAGR — the book's own annualized TWR — and the risk
         block computes a DIFFERENT one, a backtest at today's weights. On the reference
         book they read +15.68% and 24.27%. Two tiles labelled CAGR with different numbers
         six tiles apart is worse than the backtest figure being absent, so it is absent;

@@ -1,4 +1,4 @@
-"""Render tests: XIRR/TWROR appear in the newsletter only when set."""
+"""Render tests: XIRR/TWR appear in the newsletter only when set."""
 
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ def _minimal_metrics(with_returns: bool) -> PortfolioMetrics:
     )
     if with_returns:
         m.xirr_pct = 11.09
-        m.twror_pct = 14.49
-        m.twror_annualized_pct = 36.43
+        m.twr_pct = 14.49
+        m.twr_annualized_pct = 36.43
         m.returns_coverage_pct = 93.9
         m.returns_provenance = {
             "yfinance": ["US0000000001"], "synthetic": [],
@@ -55,7 +55,7 @@ class TestNewsletterReturns:
         rb = ctx["performance"]["returns"]
         assert rb is not None
         assert "11.09%" in rb["xirr"]
-        assert "14.49%" in rb["twror"]
+        assert "14.49%" in rb["twr"]
         assert rb["fallback_count"] == 1
 
     def test_html_shows_perf_section_only_when_set(self):
@@ -67,13 +67,13 @@ class TestNewsletterReturns:
         # carries the value chart.
         assert ">Window<" not in html_off
         assert ">Window<" in html_on
-        assert "TWROR" in html_on
+        assert "TWR" in html_on
 
     def test_no_decorative_em_dash_in_prose(self):
         # "—" is allowed ONLY as the standalone missing-data placeholder in its
         # own table cell. A connective em-dash inside prose (subtitles, captions,
         # footers, the AI note) is the taste-skill anti-slop tell and must not
-        # come back (e.g. "Annualized — TWROR"). We scan the RENDERED HTML but
+        # come back (e.g. "Annualized — TWR"). We scan the RENDERED HTML but
         # require the dash's neighbours to be in the SAME text run (no HTML tag
         # between them) — so a "—" placeholder cell sitting next to a table
         # label (always separated by </td><td>) is correctly ignored.

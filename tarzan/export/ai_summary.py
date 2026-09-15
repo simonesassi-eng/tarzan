@@ -294,7 +294,7 @@ def build_divergence_digest(metrics, config,
                             benchmark_geo: Optional[str] = None) -> Optional[dict]:
     """Compact, JSON-serialisable inputs for the divergence note.
 
-    Both chart windows' portfolio-vs-benchmark gaps (TWROR − ACWI), the CAPM
+    Both chart windows' portfolio-vs-benchmark gaps (TWR − ACWI), the CAPM
     decomposition (beta/alpha → how much of the gap is *taking more/less
     market risk* vs *selection*), allocation drift vs target, and the holdings
     that drove the gap. Pure function, no I/O. None when there is no benchmark
@@ -305,8 +305,8 @@ def build_divergence_digest(metrics, config,
     win30 = _perf_window(metrics, 30, bench)
     full = _perf_full_series(metrics, bench)
     # Need a benchmark line in at least one window to say anything.
-    have30 = bool(win30 and win30.get("acwi") and win30.get("twror"))
-    havesi = bool(full and full.get("acwi") and full.get("twror"))
+    have30 = bool(win30 and win30.get("acwi") and win30.get("twr"))
+    havesi = bool(full and full.get("acwi") and full.get("twr"))
     if not (have30 or havesi):
         return None
 
@@ -318,17 +318,17 @@ def build_divergence_digest(metrics, config,
     auth = {
         "port_30d": _num(pf.get("1m")),
         "bench_30d": _num(_bench_period(metrics, bench, "1m")),
-        "port_si": _num(getattr(metrics, "twror_pct", None)),
+        "port_si": _num(getattr(metrics, "twr_pct", None)),
         # No single authoritative "benchmark since inception" scalar exists;
         # the canonically-anchored line endpoint is the source for that leg.
     }
 
     def _gap(w, port_auth=None, bench_auth=None):
-        # TWROR − benchmark over the window. Use authoritative scalars when
+        # TWR − benchmark over the window. Use authoritative scalars when
         # given, else the chart line endpoints (both anchored the same way).
-        if not (w and w.get("twror") and w.get("acwi")):
+        if not (w and w.get("twr") and w.get("acwi")):
             return None
-        p = port_auth if port_auth is not None else _num(w["twror"][-1])
+        p = port_auth if port_auth is not None else _num(w["twr"][-1])
         b = bench_auth if bench_auth is not None else _num(w["acwi"][-1])
         if p is None or b is None:
             return None
@@ -622,7 +622,7 @@ def _divergence_user_prompt(digest: dict) -> str:
 def build_digest(metrics, config) -> dict:
     """Build a compact JSON-serializable digest of the *entire* dataset.
 
-    Comprehensive (snapshot, per-period TWROR, risk, allocations vs targets,
+    Comprehensive (snapshot, per-period TWR, risk, allocations vs targets,
     geography, every holding, movers, benchmarks, rebalancing actions,
     income) but rounded and trimmed so it stays token-light. Pure function,
     no I/O — safe to unit-test.
@@ -665,16 +665,16 @@ def build_digest(metrics, config) -> dict:
         "total_pnl_eur": _num(getattr(m, "pnl_eur", None), 0),
         "total_pnl_pct": _num(getattr(m, "pnl_pct", None)),
         "unrealized_pnl_eur": _num(m.unrealized_pnl_eur, 0) if cost else None,
-        "twror_cumulative_pct": _num(getattr(m, "twror_pct", None)),
-        "twror_annualized_pct": _num(getattr(m, "twror_annualized_pct", None)),
+        "twr_cumulative_pct": _num(getattr(m, "twr_pct", None)),
+        "twr_annualized_pct": _num(getattr(m, "twr_annualized_pct", None)),
         "xirr_pct": _num(getattr(m, "xirr_pct", None)),
         "market_data_coverage_pct": _num(getattr(m, "returns_coverage_pct", None)),
     })
 
-    # Per-period TWROR (short/medium/long-term trend).
+    # Per-period TWR (short/medium/long-term trend).
     perf = m.performance_full or {}
     periods = ["1d", "5d", "1m", "3m", "6m", "ytd", "1y", "3y", "5y"]
-    digest["twror_by_period_pct"] = _clean({p: _num(perf.get(p)) for p in periods})
+    digest["twr_by_period_pct"] = _clean({p: _num(perf.get(p)) for p in periods})
 
     # Risk.
     risk = m.risk or {}

@@ -1443,7 +1443,7 @@ def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
     Yahoo's feed for some European listings (Borsa Italiana ``.MI`` most
     often) publishes today's daily bar late or not at all, while the same
     fund's Xetra/Paris listing already has it. Without this, that holding
-    sits a day behind every other one in the book: its 1w/1m/YTD, TWROR,
+    sits a day behind every other one in the book: its 1w/1m/YTD, TWR,
     XIRR and risk are all measured to yesterday while the rest are measured
     to today.
 

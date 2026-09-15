@@ -62,7 +62,7 @@ class TestItLeavesTheRestOfTheLogAlone:
 
     def test_percentages_and_dates_survive(self):
         """A log with no percentages or timestamps is not worth keeping."""
-        line = "1D +0.44% · TWROR +11.28% · beta 0.80 on 2026-09-08T15:37:45Z"
+        line = "1D +0.44% · TWR +11.28% · beta 0.80 on 2026-09-08T15:37:45Z"
         assert self._r(line) == line
 
     def test_prose_and_module_names_are_not_symbols(self):

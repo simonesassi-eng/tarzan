@@ -117,15 +117,15 @@ def test_full_series_spans_inception_and_downsamples():
     assert len(full["dates"]) <= 180
 
 
-def test_window_twror_matches_engine_period_return():
-    # _window_twror must equal the engine's compute_period_return (single
+def test_window_twr_matches_engine_period_return():
+    # _window_twr must equal the engine's compute_period_return (single
     # convention): the matrix cell and performance_full must never disagree.
-    from tarzan.export._perf_series import _window_twror, _norm_series
+    from tarzan.export._perf_series import _window_twr, _norm_series
     from tarzan.engine.stats import compute_period_return
     idx = pd.date_range("2026-04-01", "2026-07-13", freq="B")
     nav = pd.Series(np.linspace(100, 108, len(idx)), index=idx)
     for bucket in ("5d", "1m", "3m"):
-        assert _window_twror(_norm_series(nav), bucket) == compute_period_return(_norm_series(nav), bucket)
+        assert _window_twr(_norm_series(nav), bucket) == compute_period_return(_norm_series(nav), bucket)
 
 
 # ── CONTRACT: newsletter numbers == engine authoritative fields ──────────────
@@ -193,26 +193,26 @@ def _contract_metrics(tmp_path, monkeypatch):
     return metrics
 
 
-def test_contract_matrix_twror_equals_performance_full(_contract_metrics):
-    from tarzan.export._perf_series import _window_twror, _norm_series
+def test_contract_matrix_twr_equals_performance_full(_contract_metrics):
+    from tarzan.export._perf_series import _window_twr, _norm_series
     m = _contract_metrics
     pf = m.performance_full or {}
     nav = _norm_series(m.portfolio_history)
     for key in ("5d", "1m"):
-        chart = _window_twror(nav, key)
+        chart = _window_twr(nav, key)
         eng = pf.get(key)
         if chart is not None and eng is not None:
             assert abs(chart - eng) < 1e-6, f"{key}: matrix {chart} != engine {eng}"
 
 
-def test_contract_chart_twror_line_endpoint_matches_engine(_contract_metrics):
+def test_contract_chart_twr_line_endpoint_matches_engine(_contract_metrics):
     from tarzan.export._perf_series import _perf_window
     m = _contract_metrics
     pf = m.performance_full or {}
     win = _perf_window(m, 30, None)
-    if win and win.get("twror") and pf.get("1m") is not None:
-        # The 30-day TWROR chart line's endpoint equals the authoritative 1m.
-        assert abs(win["twror"][-1] - pf["1m"]) < 0.05
+    if win and win.get("twr") and pf.get("1m") is not None:
+        # The 30-day TWR chart line's endpoint equals the authoritative 1m.
+        assert abs(win["twr"][-1] - pf["1m"]) < 0.05
 
 
 
@@ -446,7 +446,7 @@ def _mwr_book():
 
 def test_the_mwr_line_is_cumulative_not_the_annual_rate():
     """The transform is the point: the plotted line must be on the same scale as
-    the cumulative TWROR beside it, NOT the annual rate the STATE tile quotes."""
+    the cumulative TWR beside it, NOT the annual rate the STATE tile quotes."""
     from tarzan.export._perf_series import _mwr_line
 
     m = _mwr_book()

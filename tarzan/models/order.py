@@ -3,7 +3,7 @@
 An ``Order`` is one dated movement in the portfolio's journal: a buy,
 sell, coupon, dividend, or security transfer. Where ``Holding`` is a
 *current snapshot*, ``Order`` is a *dated flow* — the data source for
-money-weighted (XIRR) and time-weighted (TWROR) returns and, when
+money-weighted (XIRR) and time-weighted (TWR) returns and, when
 present, the single source of truth for the portfolio's historical
 value series.
 

@@ -2,7 +2,7 @@
 
 Determinism claim under test: with a pinned ``as_of=T``, every reported metric
 must depend ONLY on data at or before T. Post-T prices must never leak into the
-XIRR, TWROR, total value or daily value series — otherwise an as-of report of a
+XIRR, TWR, total value or daily value series — otherwise an as-of report of a
 past date would silently change as new data arrives, and backtests would peek.
 
 Method: run the full pipeline twice with the SAME ``as_of``, changing ONLY the
@@ -110,8 +110,8 @@ def _fingerprint(m) -> dict:
     return {
         "total_value": _r(m.total_value, 4),
         "xirr_pct": _r(m.xirr_pct),
-        "twror_pct": _r(m.twror_pct),
-        "twror_annualized_pct": _r(m.twror_annualized_pct),
+        "twr_pct": _r(m.twr_pct),
+        "twr_annualized_pct": _r(m.twr_annualized_pct),
         "pnl_eur": _r(m.pnl_eur, 4),
         "series_tail": series_tail,
     }
@@ -526,7 +526,7 @@ def test_metrics_history_rejects_future_only_kind_from_holding(monkeypatch):
         "_order_series"
     ].valuations
     assert with_future["xirr_pct"] is baseline["xirr_pct"] is None
-    assert with_future["twror_pct"] is baseline["twror_pct"] is None
+    assert with_future["twr_pct"] is baseline["twr_pct"] is None
     pd.testing.assert_series_equal(
         with_future["_order_series"].daily_series,
         baseline["_order_series"].daily_series,
@@ -788,7 +788,7 @@ def _c1_financial_fingerprint(metrics) -> dict:
         "total_value": round(float(metrics.total_value), 2),
         "returns": (
             round(float(metrics.xirr_pct), 6) if metrics.xirr_pct is not None else None,
-            round(float(metrics.twror_pct), 6) if metrics.twror_pct is not None else None,
+            round(float(metrics.twr_pct), 6) if metrics.twr_pct is not None else None,
             round(float(metrics.pnl_eur), 2) if metrics.pnl_eur is not None else None,
         ),
         "estimated_cgt_eur": round(float(metrics.estimated_cgt_eur or 0.0), 2),

@@ -323,7 +323,7 @@ class TestTheSinceInceptionPanelIsRendered:
         n = len(_IDX)
         m = PortfolioMetrics(total_value=6000.0, invested_value=6000.0,
                              holdings_df=pd.DataFrame([{"cost_basis_eur": 5000.0}]))
-        m.pnl_eur, m.pnl_pct, m.twror_pct = 1000.0, 20.0, 14.49
+        m.pnl_eur, m.pnl_pct, m.twr_pct = 1000.0, 20.0, 14.49
         m.actual_value_series = pd.Series(_wobble(n, drift=(4800, 6000)), index=_IDX)
         m.pnl_series = pd.Series(_wobble(n, drift=(1, 1000)), index=_IDX)
         m.portfolio_history = pd.Series(_wobble(n), index=_IDX)

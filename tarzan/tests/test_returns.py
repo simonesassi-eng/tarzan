@@ -1,4 +1,4 @@
-"""Tests for the pure XIRR/TWROR return functions in metrics.py."""
+"""Tests for the pure XIRR/TWR return functions in metrics.py."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import math
 import pytest
 from hypothesis import given, settings, strategies as st
 
-from tarzan.engine.metrics import TwrorResult, twror, xirr, xnpv
+from tarzan.engine.metrics import TwrResult, twr, xirr, xnpv
 
 
 def _d(y, m, day) -> datetime.date:
@@ -71,21 +71,21 @@ class TestXirr:
         assert math.isnan(xirr([(_d(2025, 1, 1), -1000.0)]))
 
 
-class TestTwror:
+class TestTwr:
     def test_flat_price_with_deposit_is_zero(self):
         # Day 1: deposit 1000, value 1000. Day 2: deposit another 1000,
         # value 2000, but prices were flat → 0% market return.
         valuations = [(_d(2025, 1, 1), 1000.0), (_d(2025, 2, 1), 2000.0)]
         flows = {_d(2025, 1, 1): 1000.0, _d(2025, 2, 1): 1000.0}
-        res = twror(valuations, flows, span_days=31)
-        assert isinstance(res, TwrorResult)
+        res = twr(valuations, flows, span_days=31)
+        assert isinstance(res, TwrResult)
         assert res.cumulative_pct == pytest.approx(0.0, abs=1e-9)
 
     def test_pure_growth_no_flows(self):
         # 1000 → 1100 with no external flow after inception → +10%.
         valuations = [(_d(2025, 1, 1), 1000.0), (_d(2026, 1, 1), 1100.0)]
         flows = {_d(2025, 1, 1): 1000.0}  # only the initial deposit
-        res = twror(valuations, flows, span_days=365)
+        res = twr(valuations, flows, span_days=365)
         assert res.cumulative_pct == pytest.approx(10.0, abs=1e-6)
         assert res.annualized_pct == pytest.approx(10.0, abs=1e-2)
 
@@ -98,11 +98,11 @@ class TestTwror:
             (_d(2025, 6, 2), 6100.0),   # +5000 deposit, no market move
         ]
         flows = {_d(2025, 1, 1): 1000.0, _d(2025, 6, 2): 5000.0}
-        res = twror(valuations, flows, span_days=152)
+        res = twr(valuations, flows, span_days=152)
         assert res.cumulative_pct == pytest.approx(10.0, abs=1e-6)
 
     def test_coverage_passthrough(self):
-        res = twror([(_d(2025, 1, 1), 1000.0)], {}, span_days=0, coverage_pct=82.5)
+        res = twr([(_d(2025, 1, 1), 1000.0)], {}, span_days=0, coverage_pct=82.5)
         assert res.coverage_pct == 82.5
 
     def test_annualization_over_non_365_day_span(self):
@@ -118,7 +118,7 @@ class TestTwror:
         from tarzan.engine.stats import DAYS_PER_YEAR
         valuations = [(_d(2025, 1, 1), 1000.0), (_d(2025, 6, 30), 1100.0)]
         flows = {_d(2025, 1, 1): 1000.0}
-        res = twror(valuations, flows, span_days=180)
+        res = twr(valuations, flows, span_days=180)
         expected = (1.10 ** (DAYS_PER_YEAR / 180) - 1.0) * 100.0
         assert res.cumulative_pct == pytest.approx(10.0, abs=1e-6)
         assert res.annualized_pct == pytest.approx(expected, abs=1e-4)
@@ -182,5 +182,5 @@ class TestReturnProperties:
         # Property 3: a pure deposit on flat prices yields ~0% return.
         valuations = [(_d(2025, 1, 1), v0), (_d(2025, 2, 1), v0 + deposit)]
         flows = {_d(2025, 1, 1): v0, _d(2025, 2, 1): deposit}
-        res = twror(valuations, flows, span_days=31)
+        res = twr(valuations, flows, span_days=31)
         assert res.cumulative_pct == pytest.approx(0.0, abs=1e-6)

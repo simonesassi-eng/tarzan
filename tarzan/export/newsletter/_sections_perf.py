@@ -22,7 +22,7 @@ from tarzan.export._perf_series import (
     _perf_vol_series,
     _perf_window,
     _window_money_pnl,
-    _window_twror,
+    _window_twr,
     market_snapshot,
 )
 from tarzan.export import _heat
@@ -275,7 +275,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
     """Performance section: a 1D / 7D / 30D / since-inception returns matrix
-    (Total P&L €+%, Unrealized P&L €+%, TWROR %) with an annualized footer,
+    (Total P&L €+%, Unrealized P&L €+%, TWR %) with an annualized footer,
     plus three 30-day trajectory charts (patrimony €, return vs benchmark,
     your-return-three-ways). All numbers come straight from the order-derived
     series — nothing the hero already shows is recomputed here. Returns
@@ -293,7 +293,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     def _sgn(v: Optional[float]) -> str:
         return P["green"] if (v is not None and v >= 0) else P["red"]
 
-    # ── Matrix values (windows reuse _window_money_pnl / _window_twror;
+    # ── Matrix values (windows reuse _window_money_pnl / _window_twr;
     #    "since inception" uses the authoritative lifetime fields). ──────
     tot = {b: _window_money_pnl(m.pnl_series, m.actual_value_series, b)
            for b in ("1d", "5d", "1m")}
@@ -302,8 +302,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
            for b in ("1d", "5d", "1m")}
     unr_since = (m.unrealized_pnl_eur, m.unrealized_pnl_pct)
     nav_norm = _norm_series(m.portfolio_history)
-    tw = {b: _window_twror(nav_norm, b) for b in ("1d", "5d", "1m")}
-    tw_since = m.twror_pct
+    tw = {b: _window_twr(nav_norm, b) for b in ("1d", "5d", "1m")}
+    tw_since = m.twr_pct
 
     # No live-quote override here. The 1D row reads the same series as every
     # other row, and that series' current point IS the live valuation
@@ -352,7 +352,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # number. It read as "we could not compute this", and it hid the one case
     # that matters, a window containing a sale, where the unrealized change is
     # smaller than the P&L change by exactly the gain that got realized.
-    heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unr. \u20ac", "Unr. %", "TWROR")
+    heads = ("Window", "P&amp;L \u20ac", "P&amp;L %", "Unr. \u20ac", "Unr. %", "TWR")
     head_html = '<tr>' + "".join(
         f'<td align="{"left" if i == 0 else "right"}" style="padding:0 0 5px'
         f'{"" if i == 0 else " 10px"};{TYPE["label"]}'
@@ -368,19 +368,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         ("Since inception", tot_since, unr_since, tw_since),
     ]
     body = ""
-    for label, total, unreal, twror in windows:
+    for label, total, unreal, twr in windows:
         body += ('<tr>' + _label(label)
                  + _money_pair(total)
                  + _money_pair(total, pct_only=True)
                  + _money_pair(unreal)
                  + _money_pair(unreal, pct_only=True)
-                 + _pct_cell(twror)
+                 + _pct_cell(twr)
                  + '</tr>')
     matrix = (f'<table role="presentation" width="100%" cellpadding="0" '
               f'cellspacing="0" border="0" style="border-collapse:collapse;">'
               f'{head_html}{body}</table>')
-    # No footer under the matrix. It repeated the annualized TWROR and the XIRR,
-    # which are the captions of the TWROR and MWR tiles in STATE, and pointed at
+    # No footer under the matrix. It repeated the annualized TWR and the XIRR,
+    # which are the captions of the TWR and MWR tiles in STATE, and pointed at
     # a tax note that has its own place in the appendix.
     footer = ""
     matrix_card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
@@ -389,7 +389,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                    f'<tr><td style="padding:14px 16px;">{matrix}{footer}</td></tr></table>')
 
     # ── Charts: "You vs the market" — two compact side-by-side panels with
-    #    the SAME lines (TWROR, Total P&L %, MSCI ACWI), differing only in
+    #    the SAME lines (TWR, Total P&L %, MSCI ACWI), differing only in
     #    window: last-30-days rebased vs since-inception cumulative. The
     #    portfolio value chart lives in the hero, so it is not repeated here.
     dates = win["dates"]
@@ -441,7 +441,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     #: portfolio is never hidden under one). Total and Unrealized P&L are NOT
     #: here: five lines in a 182px cell is not a chart, and both keep their own
     #: € and % columns in the matrix above, where the reader can compare them.
-    PANEL_LINES = (("twror", PORT, "TWROR", 2.2),
+    PANEL_LINES = (("twr", PORT, "TWR", 2.2),
                    ("target", TARGET, "Target", 1.6),
                    ("acwi", BENCH, bench_label, 1.6))
 
@@ -519,7 +519,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
     # Since inception (cumulative), over the WHOLE inception→today range — its
     # own x-axis, not the last-30-days window. Labels pinned to the lifetime
-    # authoritative fields (m.twror_pct, m.pnl_pct).
+    # authoritative fields (m.twr_pct, m.pnl_pct).
     ssi = []
     si_leg = []
     full = _perf_full_series(m, ctx.benchmark_geo, with_mwr=True)
@@ -529,13 +529,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # chart. The name sat beside the line too ("iShares MSCI ACWI +14.16%"),
         # which repeated the key for no gain and forced a 132px right gutter
         # that ate a fifth of the plot.
-        if full["twror"] is not None:
-            ssi.append({"values": full["twror"], "color": PORT, "width": 2.2,
-                        "end_label": _pct(m.twror_pct, signed=True)})
-            si_leg.append((PORT, "TWROR"))
+        if full["twr"] is not None:
+            ssi.append({"values": full["twr"], "color": PORT, "width": 2.2,
+                        "end_label": _pct(m.twr_pct, signed=True)})
+            si_leg.append((PORT, "TWR"))
         if full.get("mwr") is not None and not is_missing(full["mwr"][-1]):
             # MWR replaced the two P&L lines here. Those were the same fact as the
-            # TWROR line with a different denominator, and both now read in EUROS on
+            # TWR line with a different denominator, and both now read in EUROS on
             # the hero chart, which is where a P&L belongs. What the panel was missing
             # was the OTHER return: money-weighted beside time-weighted is the pair
             # that says whether the timing of contributions helped or hurt, and the
@@ -721,7 +721,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # pinned/point-in-time run, or an offline one. The figures still exist and
         # the matrix already computed them, so the cell states them rather than
         # going blank: a one-session comparison as three numbers.
-        rows = [(PORT, "TWROR", tw.get("1d"))]
+        rows = [(PORT, "TWR", tw.get("1d"))]
         traw = getattr(m, "target_history", None)
         if traw is not None and len(traw) >= 2:
             rows.append((TARGET, "Target",
@@ -860,7 +860,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # gets its own heading, as in the concept. Returned separately so the
     # template can place each under its own ordinal rather than one section
     # carrying both.
-    # No subtitle. The lead vs the benchmark is the distance between the TWROR
+    # No subtitle. The lead vs the benchmark is the distance between the TWR
     # and benchmark lines on the since-inception chart directly below, both now
     # named in its colour key and labelled with their value, so a sentence
     # restating it in points was a third copy of the same fact.
@@ -981,7 +981,7 @@ def _intraday_weighted_path(quotes: dict, weights: dict):
 
 #: The lines a 1D panel may draw, keyed as every other window's are, so one gate
 #: loop covers all six. Order is draw order: references after the portfolio.
-_INTRADAY_LINE_KEYS = ("twror", "target", "acwi")
+_INTRADAY_LINE_KEYS = ("twr", "target", "acwi")
 
 #: How far before the bell the 0% origin sits. Long enough that the overnight gap
 #: reads as a ramp rather than a vertical line at the very edge (10 minutes is ~2% of
@@ -1007,7 +1007,7 @@ def _tape_one_day(m, geo_name: Optional[str] = None) -> dict:
 
     Returns ``{key: pct}`` for the keys this panel draws, any of which may be absent:
 
-    * ``twror``  the NAV's own 1D, the same figure the matrix row and the Session tile
+    * ``twr``  the NAV's own 1D, the same figure the matrix row and the Session tile
       carry, so the panel cannot disagree with the two things beside it.
     * ``target`` the sleeves' 1D weighted by ``target_weights``. No single series
       exists for it, so it is composed here — and a sleeve whose own 1D is unknown is
@@ -1023,7 +1023,7 @@ def _tape_one_day(m, geo_name: Optional[str] = None) -> dict:
     if nav is not None and len(nav) >= 2:
         v = compute_period_return(_norm_series(nav).dropna(), "1d")
         if v is not None:
-            out["twror"] = float(v)
+            out["twr"] = float(v)
 
     hp = getattr(m, "holding_performance", None)
     per_ticker: dict[str, float] = {}
@@ -1095,7 +1095,7 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     # draws, as % (that helper returns a level based at 100).
     pf = _portfolio_intraday_series(m)
     if pf is not None and len(pf) >= 2:
-        raw["twror"] = pf.astype(float) - 100.0
+        raw["twr"] = pf.astype(float) - 100.0
     target = _intraday_weighted_path(quotes, getattr(m, "target_weights", {}) or {})
     if target is not None and len(target) >= 2:
         raw["target"] = target
@@ -2374,7 +2374,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # all None for a holdings-only run so the template renders nothing).
     m = ctx.metrics
     returns_block = None
-    if m.xirr_pct is not None or m.twror_pct is not None:
+    if m.xirr_pct is not None or m.twr_pct is not None:
         prov = m.returns_provenance or {}
 
         def _identifiers(values) -> set[str]:
@@ -2400,10 +2400,10 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
 
         returns_block = {
             "xirr": _pct(m.xirr_pct, signed=True) if m.xirr_pct is not None else None,
-            "twror": _pct(m.twror_pct, signed=True) if m.twror_pct is not None else None,
-            "twror_annualized": (
-                _pct(m.twror_annualized_pct, signed=True)
-                if m.twror_annualized_pct is not None else None
+            "twr": _pct(m.twr_pct, signed=True) if m.twr_pct is not None else None,
+            "twr_annualized": (
+                _pct(m.twr_annualized_pct, signed=True)
+                if m.twr_annualized_pct is not None else None
             ),
             "coverage": (
                 _pct(m.returns_coverage_pct, decimals=0)

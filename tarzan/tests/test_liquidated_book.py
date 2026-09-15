@@ -24,17 +24,17 @@ from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 
 
-def _liquidated(pnl_eur=5050.34, twror=36.79) -> PortfolioMetrics:
+def _liquidated(pnl_eur=5050.34, twr=36.79) -> PortfolioMetrics:
     """A book holding nothing, with a real realized gain behind it."""
     m = PortfolioMetrics(total_value=0.0, invested_value=0.0, cash_value=0.0,
                          holdings_df=pd.DataFrame())
     m.pnl_eur = pnl_eur
     # None on purpose, and not a defect: pnl_pct is measured over NET capital
     # contributed, which is negative once everything has been withdrawn, so the
-    # ratio is genuinely undefined. TWROR is the percentage that still means
+    # ratio is genuinely undefined. TWR is the percentage that still means
     # something — the return over the periods the money was actually invested.
     m.pnl_pct = None
-    m.twror_pct = twror
+    m.twr_pct = twr
     m.inception_date = "2025-03-04"
     return m
 
@@ -63,8 +63,8 @@ class TestALiquidatedBookReportsWhatItMade:
             assert "0.00%" not in t["value"], \
                 f"{label} headlines 0.00% on a book that realized a gain"
 
-    def test_twror_still_states_the_percentage_that_means_something(self):
-        assert "+36.79%" in _tile(_liquidated(), "TWROR")["value"]
+    def test_twr_still_states_the_percentage_that_means_something(self):
+        assert "+36.79%" in _tile(_liquidated(), "TWR")["value"]
 
     def test_nothing_open_means_no_unrealized_percentage(self):
         """No cost basis, so the ratio is not applicable. The euro figure was always

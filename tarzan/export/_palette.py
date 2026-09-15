@@ -83,7 +83,7 @@ PALETTE = {
     "unreal": "#A855F7",
     # The portfolio's own line. Ink, not green: green, red and amber MEAN
     # something in this document — the sign of a figure, a semaphore state, a
-    # bar's direction in the waterfall — and TWROR spending the positive colour
+    # bar's direction in the waterfall — and TWR spending the positive colour
     # on mere identity is what made "green" ambiguous across the issue. Ink also
     # matches the hero, where the portfolio's value line is already neutral, so
     # one colour means "you" on every chart. Drawn a hair thicker than the

@@ -127,13 +127,13 @@ class TestSummaryContract:
         assert SUMMARY_CONTRACT_KEYS.issubset(s.keys())
 
     def test_optional_keys_only_on_order_path(self):
-        m = PortfolioMetrics()  # xirr/twror all None
+        m = PortfolioMetrics()  # xirr/twr all None
         s = m.to_summary_dict()
         assert not (SUMMARY_CONTRACT_OPTIONAL_KEYS & set(s.keys()))
         m2 = PortfolioMetrics()
         m2.xirr_pct = 12.3
-        m2.twror_pct = 8.0
-        m2.twror_annualized_pct = 15.0
+        m2.twr_pct = 8.0
+        m2.twr_annualized_pct = 15.0
         m2.returns_coverage_pct = 100.0
         s2 = m2.to_summary_dict()
         assert SUMMARY_CONTRACT_OPTIONAL_KEYS.issubset(s2.keys())
@@ -143,8 +143,8 @@ class TestSummaryContract:
         # external contract.
         m = PortfolioMetrics()
         m.xirr_pct = 1.0
-        m.twror_pct = 1.0
-        m.twror_annualized_pct = 1.0
+        m.twr_pct = 1.0
+        m.twr_annualized_pct = 1.0
         m.returns_coverage_pct = 1.0
         allowed = SUMMARY_CONTRACT_KEYS | SUMMARY_CONTRACT_OPTIONAL_KEYS
         assert set(m.to_summary_dict().keys()) == allowed
@@ -155,7 +155,13 @@ class TestSummaryContract:
         json.dumps(m.to_summary_dict(), allow_nan=False)  # must not raise
 
     def test_schema_version_in_summary(self):
-        assert PortfolioMetrics().to_summary_dict()["schema_version"] == 2
+        """Read from the module, not typed in: the whole point of the constant is that
+        a contract change bumps it, and a literal here would need editing every time
+        and could be edited to match a version nobody bumped."""
+        from tarzan.models.portfolio import PORTFOLIO_METRICS_SCHEMA_VERSION
+
+        assert (PortfolioMetrics().to_summary_dict()["schema_version"]
+                == PORTFOLIO_METRICS_SCHEMA_VERSION == 3)
 
     def test_unavailable_valuation_never_labels_known_subtotal_as_total(self):
         summary = PortfolioMetrics(

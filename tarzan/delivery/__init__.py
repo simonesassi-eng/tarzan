@@ -33,7 +33,7 @@ Environment variables (provided by GitHub Actions secrets in CI):
 
 The order list is the single source of truth: the snapshot (positions,
 valuation, allocations) is derived from it, and it also drives the historical
-value series and XIRR/TWROR.
+value series and XIRR/TWR.
 """
 
 from __future__ import annotations

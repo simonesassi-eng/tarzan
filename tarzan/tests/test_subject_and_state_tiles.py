@@ -118,7 +118,7 @@ class TestThePnlTilesLeadWithTheEuros:
     This ran the other way for a while, on the reasoning that a euro P&L answers
     nothing without the capital behind it while a percentage compares to everything
     else in the issue. Both are true and it is still the wrong way round for a P&L —
-    and the issue is full of rates elsewhere: TWROR, MWR and CAGR all lead with one.
+    and the issue is full of rates elsewhere: TWR, MWR and CAGR all lead with one.
     """
 
     @staticmethod

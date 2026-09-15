@@ -68,7 +68,7 @@ from tarzan.export._perf_series import (  # noqa: F401
     _perf_vol_series,
     _perf_window,
     _window_money_pnl,
-    _window_twror,
+    _window_twr,
     market_snapshot,
 )
 

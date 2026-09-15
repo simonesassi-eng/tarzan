@@ -280,7 +280,7 @@ def d3_row_permutation(base, shuffled) -> list:
     if base.summary is None or shuffled.summary is None:
         return [_void("D3", "DIFFERENTIAL", "a run wrote no summary.json")]
     keys = ("total_value_eur", "invested_value_eur", "cash_value_eur",
-            "num_holdings", "twror_pct", "xirr_pct")
+            "num_holdings", "twr_pct", "xirr_pct")
     bad = []
     for k in keys:
         x, y = _metrics(base).get(k), _metrics(shuffled).get(k)
@@ -296,7 +296,7 @@ def d3_row_permutation(base, shuffled) -> list:
 def d4_no_lookahead(full, truncated) -> list:
     if full.summary is None or truncated.summary is None:
         return [_void("D4", "DIFFERENTIAL", "a run wrote no summary.json")]
-    keys = ("total_value_eur", "invested_value_eur", "num_holdings", "twror_pct")
+    keys = ("total_value_eur", "invested_value_eur", "num_holdings", "twr_pct")
     bad = []
     for k in keys:
         x, y = _metrics(full).get(k), _metrics(truncated).get(k)
@@ -468,8 +468,8 @@ C8_OVERLAP = [
     ("invested_value_eur", "eur_smart", False),
     ("cash_value_eur", "eur_smart", False),
     ("avg_ter", "pct3", False),
-    ("twror_pct", "pct2", False),
-    ("twror_annualized_pct", "pct2", False),
+    ("twr_pct", "pct2", False),
+    ("twr_annualized_pct", "pct2", False),
     ("xirr_pct", "pct2", False),
     ("returns_coverage_pct", "pct0", False),
     ("num_holdings", "int", False),

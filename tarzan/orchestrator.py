@@ -414,7 +414,7 @@ def _run_once(
     The order list is the single source of truth: the snapshot — net
     quantity, average-cost basis, market value (via enrichment),
     allocations, targets, rebalancing — is *derived* from the orders, and
-    the order list also owns the historical value series and XIRR/TWROR.
+    the order list also owns the historical value series and XIRR/TWR.
     Per-instrument rebalancing targets are joined by ISIN from
     ``targets_per_holding_source``.
 
@@ -574,7 +574,7 @@ def _run_once(
         # catch it and return. Reaching here means the orders are real; only the
         # position is empty. So the pipeline continues: the returns stage derives
         # lifetime P&L from the order flows, which for a liquidated book IS the
-        # realized gain, and TWROR is the return over the periods the money was in.
+        # realized gain, and TWR is the return over the periods the money was in.
         logger.warning(
             "All %d effective order(s) net to zero: the book is fully liquidated "
             "and holds nothing. Reporting realized P&L over the closed positions.",

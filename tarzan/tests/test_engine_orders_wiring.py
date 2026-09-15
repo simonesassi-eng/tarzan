@@ -97,7 +97,7 @@ class TestProperty6SingleSeries:
         assert not ctx["portfolio_history"].empty
         # _returns reads the stashed order series and fills metrics.
         engine._returns(ctx)
-        assert "twror_pct" in ctx
+        assert "twr_pct" in ctx
         assert "xirr_pct" in ctx
         assert ctx["returns_coverage_pct"] == pytest.approx(100.0, abs=1e-6)
 

@@ -8,7 +8,7 @@ Tarzan is a serialized, single-user portfolio analyzer with market-data enrichme
 
 - **Effective orders** — one immutable order snapshot drives holdings, costs, returns, tax, history, and planning. Pinned runs exclude post-boundary orders.
 - **Market evidence** — provider/cache attempts and provenance are recorded with `AVAILABLE`, `DEGRADED`, or `UNAVAILABLE` status. A valid cache selected after a preferred source fails is degraded.
-- **Risk and returns** — CAGR, Sharpe, Sortino, drawdown, VaR/CVaR, volatility, Beta/Alpha, XIRR, and TWROR.
+- **Risk and returns** — CAGR, Sharpe, Sortino, drawdown, VaR/CVaR, volatility, Beta/Alpha, XIRR, and TWR.
 - **Canonical exposure** — asset-class, geography, sector, optimization, and verification share one capital/notional projection. Legitimate notional exposure above 100% is preserved.
 - **Explicit capabilities** — Stock, ETF, Bond, and Cash mechanics are resolved independently from Equities, Fixed Income, Cash & Cash Equivalents, Gold, Commodities, Crypto, and Alternative exposure categories. Unsupported behavior is Unavailable, never guessed or represented as zero.
 - **Rebalancing** — deterministic local-search plans model protected/deployable cash, contributions, sales, tax, and fees. Only rounded final actions that pass exact funding and position proof are executable.

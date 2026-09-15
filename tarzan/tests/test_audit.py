@@ -70,7 +70,7 @@ class TestPerfSeriesExtraction:
         from tarzan.export import _perf_series
         from tarzan.export import newsletter
         for name in ("_window_money_pnl", "_norm_series", "market_snapshot",
-                     "_flow_list", "_window_twror", "_geo_benchmark_series",
+                     "_flow_list", "_window_twr", "_geo_benchmark_series",
                      "_perf_window", "_perf_level_series"):
             assert getattr(_perf_series, name) is getattr(newsletter, name), name
 
@@ -98,7 +98,7 @@ class TestPerfSeriesExtraction:
         assert gain == 33.0
         assert round(pct, 6) == 3.3           # 33 / 1000 * 100
 
-    def test_window_twror_none_on_short_series(self):
-        from tarzan.export._perf_series import _window_twror
-        assert _window_twror(None, "1m") is None
-        assert _window_twror(pd.Series([100.0]), "1m") is None
+    def test_window_twr_none_on_short_series(self):
+        from tarzan.export._perf_series import _window_twr
+        assert _window_twr(None, "1m") is None
+        assert _window_twr(pd.Series([100.0]), "1m") is None

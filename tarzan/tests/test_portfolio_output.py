@@ -19,8 +19,8 @@ class TestSummaryDictSanitization:
         m.risk = {"sharpe": float("nan"), "volatility": 12.3, "beta": float("inf")}
         m.performance = {"cagr": float("nan"), "1y": 5.5}
         m.xirr_pct = float("nan")
-        m.twror_pct = 8.0
-        m.twror_annualized_pct = float("nan")
+        m.twr_pct = 8.0
+        m.twr_annualized_pct = float("nan")
 
         s = m.to_summary_dict()
 
@@ -30,7 +30,7 @@ class TestSummaryDictSanitization:
         assert s["performance"]["cagr"] is None
         assert s["performance"]["1y"] == 5.5
         assert s["xirr_pct"] is None
-        assert s["twror_annualized_pct"] is None
+        assert s["twr_annualized_pct"] is None
 
         # The whole payload must survive a STRICT (allow_nan=False) dump —
         # the exact failure a downstream API/DB consumer would hit.

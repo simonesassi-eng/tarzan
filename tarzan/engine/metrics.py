@@ -19,12 +19,12 @@ from tarzan import config as cfg
 
 # Pure return/risk math lives in stats.py; benchmark fetch/metrics in
 # benchmarks.py. They are imported here and re-exported so the historical
-# ``tarzan.engine.metrics`` public API (xirr, twror, compute_*, …) is
+# ``tarzan.engine.metrics`` public API (xirr, twr, compute_*, …) is
 # preserved for callers, tests and scripts.
 from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     RISK_FREE_RATE,
     DAYS_PER_YEAR,
-    TwrorResult,
+    TwrResult,
     PERIOD_WINDOWS,
     compute_cagr,
     compute_cvar,
@@ -38,7 +38,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
     normalize_index,
     rf_annual_pct,
     risk_metric_row,
-    twror,
+    twr,
     xirr,
     xnpv,
     _compute_beta_alpha,
@@ -105,7 +105,7 @@ class MetricsEngine:
         # Option Y: when an order list is supplied it becomes the single
         # source of truth for the historical value series. Swap the
         # provider so _performance/_risk read the same order-derived
-        # series, and append the _returns computer for XIRR/TWROR.
+        # series, and append the _returns computer for XIRR/TWR.
         if orders:
             idx = self._computers.index(self._portfolio_history)
             self._computers[idx] = self._portfolio_history_from_orders
@@ -510,7 +510,7 @@ class MetricsEngine:
         # carried flat). Risk metrics annualize with sqrt(252) (trading days),
         # so collapse to business days here — otherwise weekend zero-returns
         # understate volatility ~17% and pollute VaR/CVaR. This is the single
-        # series _risk / _performance_full read; XIRR/TWROR and the mountain
+        # series _risk / _performance_full read; XIRR/TWR and the mountain
         # chart read series.* directly and are unaffected.
         from tarzan.engine.stats import to_business_day_series
         ph = to_business_day_series(ph)
@@ -527,7 +527,7 @@ class MetricsEngine:
         ctx["_enriched_by_isin"] = enriched_by_isin
 
     # ------------------------------------------------------------------
-    # Returns: XIRR + TWROR (only registered when orders are present)
+    # Returns: XIRR + TWR (only registered when orders are present)
     # ------------------------------------------------------------------
     def _returns(self, ctx: dict) -> None:
         series = ctx.get("_order_series")
@@ -540,8 +540,8 @@ class MetricsEngine:
         if series.history_availability is Availability.UNAVAILABLE:
             for field in (
                 "xirr_pct",
-                "twror_pct",
-                "twror_annualized_pct",
+                "twr_pct",
+                "twr_annualized_pct",
                 "returns_coverage_pct",
                 "returns_period_debug",
                 "pnl_eur",
@@ -576,7 +576,7 @@ class MetricsEngine:
         # market never opened -- render on a Saturday and the chained return still
         # ends at Friday's close, so dividing it by one extra day understates the
         # annualized figure. It showed as ``performance.cagr`` and
-        # ``twror_annualized_pct`` disagreeing (15.500% vs 15.437% off ONE
+        # ``twr_annualized_pct`` disagreeing (15.500% vs 15.437% off ONE
         # cumulative +10.8897%) on every weekend and holiday render, and agreeing
         # on weekdays -- two denominators for one measure. CAGR reads this same
         # series, so sharing its span makes them agree by construction.
@@ -590,12 +590,12 @@ class MetricsEngine:
         if ph_span is not None and len(ph_span) >= 2:
             span_days = (ph_span.index[-1].date() - ph_span.index[0].date()).days \
                 or series.span_days
-        res = twror(
+        res = twr(
             series.valuations, series.external_flows, span_days,
             coverage_pct=series.coverage_pct,
         )
-        ctx["twror_pct"] = res.cumulative_pct
-        ctx["twror_annualized_pct"] = res.annualized_pct
+        ctx["twr_pct"] = res.cumulative_pct
+        ctx["twr_annualized_pct"] = res.annualized_pct
         ctx["returns_coverage_pct"] = res.coverage_pct
         ctx["returns_provenance"] = series.provenance
         ctx["returns_period_debug"] = res.periods
@@ -621,7 +621,7 @@ class MetricsEngine:
         ctx["actual_value_series"] = series.actual_value_series
         ctx["pnl_series"] = series.pnl_series
         # External capital flows (deposits/buys +, withdrawals/sells/distros −)
-        # per date — the same dict TWROR consumes. Drives the deposit/withdrawal
+        # per date — the same dict TWR consumes. Drives the deposit/withdrawal
         # markers on the newsletter performance charts (no recomputation).
         ctx["external_flows"] = series.external_flows
         # The flows XIRR itself was solved on, so a chart can re-solve them at
@@ -653,7 +653,7 @@ class MetricsEngine:
         # Net-of-tax estimate (Italian CGT on realized gains). This is an
         # ESTIMATE shown alongside — never replacing — the gross figures:
         # the tax is a real cash outflow, so it lowers the money-weighted
-        # views (lifetime PnL and XIRR). TWROR is left gross by convention.
+        # views (lifetime PnL and XIRR). TWR is left gross by convention.
         from tarzan.engine.tax import estimate_realized_cgt
         enriched_by_isin = ctx.get("_enriched_by_isin", {})
         cgt = estimate_realized_cgt(
@@ -1994,8 +1994,8 @@ class MetricsEngine:
             acwi_geo=ctx.get("acwi_geo", {}),
             excluded_short_tenure=ctx.get("excluded_short_tenure", []),
             xirr_pct=ctx.get("xirr_pct"),
-            twror_pct=ctx.get("twror_pct"),
-            twror_annualized_pct=ctx.get("twror_annualized_pct"),
+            twr_pct=ctx.get("twr_pct"),
+            twr_annualized_pct=ctx.get("twr_annualized_pct"),
             returns_coverage_pct=ctx.get("returns_coverage_pct"),
             returns_provenance=ctx.get("returns_provenance"),
             returns_period_debug=ctx.get("returns_period_debug"),

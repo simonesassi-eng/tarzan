@@ -27,13 +27,19 @@ def _round_or_none(value, ndigits: int):
 # (newsletter, report, to_summary_dict) must be aware of — a renamed or
 # removed field, or a changed field meaning. Consumers can assert this to fail
 # loudly on a mismatch instead of silently reading a stale/renamed field.
-PORTFOLIO_METRICS_SCHEMA_VERSION = 2
+# 3: ``twror_pct``/``twror_annualized_pct`` renamed to ``twr_pct``/
+#    ``twr_annualized_pct``. TWROR was a house contraction; the measure is the
+#    time-weighted RETURN, written TWR everywhere in the literature and in GIPS,
+#    and "rate of return" was said twice. The version exists to record exactly
+#    this: two keys on the external contract changed name, and no consumer
+#    outside this repo reads them (checked) -- so the rename is the whole cost.
+PORTFOLIO_METRICS_SCHEMA_VERSION = 3
 
 # The stable EXTERNAL output contract: the keys ``to_summary_dict`` always
 # emits, regardless of run mode. This is the narrow, versioned surface any
 # external consumer (API, mobile app, downstream pipeline) should depend on —
-# NOT the ~50-field internal cube. Additional keys (xirr_pct, twror_pct,
-# twror_annualized_pct, returns_coverage_pct) appear only on the order path and
+# NOT the ~50-field internal cube. Additional keys (xirr_pct, twr_pct,
+# twr_annualized_pct, returns_coverage_pct) appear only on the order path and
 # are documented as optional. A test pins this set so a field rename/removal is
 # caught before it breaks a consumer.
 SUMMARY_CONTRACT_KEYS = frozenset({
@@ -46,7 +52,7 @@ SUMMARY_CONTRACT_KEYS = frozenset({
     "num_holdings", "num_rebalancing_actions",
 })
 SUMMARY_CONTRACT_OPTIONAL_KEYS = frozenset({
-    "xirr_pct", "twror_pct", "twror_annualized_pct", "returns_coverage_pct",
+    "xirr_pct", "twr_pct", "twr_annualized_pct", "returns_coverage_pct",
 })
 
 
@@ -173,14 +179,14 @@ class PortfolioMetrics:
     excluded_short_tenure: list = field(default_factory=list)
     # Order-list returns (populated only when an order list is supplied;
     # all None for a holdings-only run, preserving today's behavior).
-    # xirr_pct: annualized money-weighted return. twror_pct/
-    # twror_annualized_pct: cumulative/annualized time-weighted return.
+    # xirr_pct: annualized money-weighted return. twr_pct/
+    # twr_annualized_pct: cumulative/annualized time-weighted return.
     # returns_coverage_pct: % of value priced by real market data over the
     # window. returns_provenance: {source_tag: [isin, ...]}. The period
-    # debug list carries per-period TWROR diagnostics.
+    # debug list carries per-period TWR diagnostics.
     xirr_pct: Optional[float] = None
-    twror_pct: Optional[float] = None
-    twror_annualized_pct: Optional[float] = None
+    twr_pct: Optional[float] = None
+    twr_annualized_pct: Optional[float] = None
     returns_coverage_pct: Optional[float] = None
     returns_provenance: Optional[dict] = None
     returns_period_debug: Optional[list] = None
@@ -216,7 +222,7 @@ class PortfolioMetrics:
     # positive and withdrawals/sells negative (distributions are negative —
     # cash leaving the securities portfolio). Drives the deposit/withdrawal
     # markers on the newsletter performance charts. None on the holdings-only
-    # path. Same object the TWROR engine consumes (no recomputation).
+    # path. Same object the TWR engine consumes (no recomputation).
     external_flows: Optional[dict] = None
     # The dated cash flows XIRR is solved on, bank-account perspective:
     # deposits negative, distributions positive, terminated by ``(today,
@@ -336,10 +342,10 @@ class PortfolioMetrics:
         # was supplied), so a holdings-only summary is unchanged.
         if self.xirr_pct is not None:
             summary["xirr_pct"] = _round_or_none(self.xirr_pct, 6)
-        if self.twror_pct is not None:
-            summary["twror_pct"] = _round_or_none(self.twror_pct, 6)
-            summary["twror_annualized_pct"] = _round_or_none(
-                self.twror_annualized_pct, 6
+        if self.twr_pct is not None:
+            summary["twr_pct"] = _round_or_none(self.twr_pct, 6)
+            summary["twr_annualized_pct"] = _round_or_none(
+                self.twr_annualized_pct, 6
             )
         if self.returns_coverage_pct is not None:
             summary["returns_coverage_pct"] = _round_or_none(self.returns_coverage_pct, 6)

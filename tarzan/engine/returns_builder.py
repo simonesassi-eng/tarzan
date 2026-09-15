@@ -132,7 +132,7 @@ class OrderDerivedSeries:
             to annualize a return over: ``today`` can be a day the market
             never opened, and the chained return then covers one day fewer
             than this counts. ``_returns`` annualizes over the trading-day
-            span of ``portfolio_history`` instead — see the twror call there.
+            span of ``portfolio_history`` instead — see the twr call there.
         daily_series: dense daily-indexed portfolio value over the whole
             window, valued at market on every calendar day. This is the
             series risk metrics (volatility, Sharpe, VaR, beta) must use —
@@ -878,7 +878,7 @@ def build_order_derived_series(
     def value_isin_on(isin: str, d: datetime.date) -> Optional[float]:
         """EUR value of one unit of ``isin`` on ``d`` at market price
         (None if unpriceable). Used to value quantity deltas for the
-        TWROR external flow at the same price basis as the series.
+        TWR external flow at the same price basis as the series.
 
         Flow-date evidence is part of whole-history completeness even when
         offsetting orders leave no end-of-day position to be valued.
@@ -908,7 +908,7 @@ def build_order_derived_series(
         not only the ISINs still open today — otherwise a position opened
         and fully closed inside the window would contribute nothing to the
         historical series and its holding-period market move would be
-        invisible to TWROR. The cum/ex ``open_isins`` gate is only used
+        invisible to TWR. The cum/ex ``open_isins`` gate is only used
         for the "what is open now" coverage snapshot, not for history.
 
         Explicitly equivalent variants that net to ~0 quantity as of ``d``
@@ -944,7 +944,7 @@ def build_order_derived_series(
                 total += value_position(qty, price, instrument_kind=kind)
         return total
 
-    # TWROR external flow per date, valued at MARKET price (same basis as
+    # TWR external flow per date, valued at MARKET price (same basis as
     # the valuation series), not at execution price. For each
     # position-changing order we value its quantity delta at that day's
     # market price; this makes V_before(d) = V_after(d) - flow(d) use one
@@ -957,7 +957,7 @@ def build_order_derived_series(
     # Our series values only the securities, and the income cash is
     # credited to the bank account (net_eur > 0), so from the securities
     # portfolio's perspective the distribution is a *withdrawal*: a
-    # negative external flow of -net_eur. Because TWROR computes
+    # negative external flow of -net_eur. Because TWR computes
     # V_before(d) = V_after(d) - external_flow(d), that withdrawal is
     # added back into the pre-flow value, so the income is captured as
     # return rather than vanishing. (It is the mirror image of XIRR,
@@ -1023,7 +1023,7 @@ def build_order_derived_series(
     # identical trailing NAV points. Measuring a "1 day" (or 7/30-day)
     # move against these stale duplicates would report a fake 0% change,
     # so we cut the series back to the last date that actually moved. The
-    # terminal ``valuations``/``xirr_cashflows`` (which drive XIRR/TWROR)
+    # terminal ``valuations``/``xirr_cashflows`` (which drive XIRR/TWR)
     # are left untouched: their value equals the carried price anyway.
     daily_series = _trim_carried_tail(daily_series)
     actual_value_series = _trim_carried_tail(actual_value_series)
@@ -1133,7 +1133,7 @@ def build_order_derived_series(
             f"sources={source_label}"
         )
         logger.warning(
-            "TWROR/TWR: economic identity %s priced by %s "
+            "TWR/TWR: economic identity %s priced by %s "
             "(no full market history).",
             member_label,
             source_label,
@@ -1415,7 +1415,7 @@ def _build_daily_series(
         flow = external_flows.get(d, 0.0)
         # Chain the sub-period return on the capital that was already in the book
         # at the START of the day: V_before = V_after − that day's external flow.
-        # Same convention ``stats.twror`` applies to the sparse valuations, where a
+        # Same convention ``stats.twr`` applies to the sparse valuations, where a
         # pure deposit correctly yields r = 0.
         #
         # The two zero-value days must be told apart, and the old ``v > 0`` guard
@@ -1443,7 +1443,7 @@ def _build_daily_series(
         # matching real drawdown, no NaN, no crash and nothing in the ledger.
         if priced or not held:
             v_before = v - flow
-            # ``v_before > 0`` is byte-for-byte the guard stats.twror uses, so the
+            # ``v_before > 0`` is byte-for-byte the guard stats.twr uses, so the
             # dense and sparse paths cannot disagree about a wipeout.
             if prev_v > 0 and v_before > 0:
                 nav *= v_before / prev_v

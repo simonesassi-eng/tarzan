@@ -9,7 +9,7 @@ Contains:
   * period returns: ``compute_cagr``, ``compute_period_return``,
     ``compute_ytd_return``
   * money-weighted return: ``xnpv``, ``xirr``
-  * time-weighted return: ``TwrorResult``, ``twror``
+  * time-weighted return: ``TwrResult``, ``twr``
   * risk: ``compute_sharpe``, ``compute_sortino``, ``compute_max_drawdown``,
     ``compute_var``, ``compute_cvar``, ``_compute_beta_alpha``
   * shared constants: ``RISK_FREE_RATE``, ``TRADING_DAYS``, ``DAYS_PER_YEAR``
@@ -29,11 +29,11 @@ from tarzan import config as cfg
 
 # ---------------------------------------------------------------------------
 # Shared constants — the single home for the annualization conventions used
-# across CAGR, XIRR, TWROR and the risk metrics.
+# across CAGR, XIRR, TWR and the risk metrics.
 # ---------------------------------------------------------------------------
 RISK_FREE_RATE = cfg.risk_free_rate() * 100  # e.g. 4.0 = 4%
 TRADING_DAYS = cfg.trading_days()
-# Calendar days per year used for ALL annualization (CAGR, XIRR, TWROR) so
+# Calendar days per year used for ALL annualization (CAGR, XIRR, TWR) so
 # the money-weighted and time-weighted figures are directly comparable.
 DAYS_PER_YEAR = 365.25
 
@@ -336,13 +336,13 @@ def compute_ytd_return(series: pd.Series) -> Optional[float]:
 
 
 # ======================================================================
-# Money-weighted (XIRR) and time-weighted (TWROR) returns
+# Money-weighted (XIRR) and time-weighted (TWR) returns
 # ======================================================================
 
 def xnpv(rate: float, cashflows: list[tuple[datetime.date, float]]) -> float:
     """Net present value of dated ``cashflows`` at a constant annual
     ``rate``, discounting on an actual/365.25 day count from the earliest
-    flow (same convention as CAGR/TWROR so the figures are comparable)."""
+    flow (same convention as CAGR/TWR so the figures are comparable)."""
     if not cashflows:
         return 0.0
     t0 = min(d for d, _ in cashflows)
@@ -377,7 +377,7 @@ def xirr(cashflows: list[tuple[datetime.date, float]]) -> float:
 
 
 @dataclass
-class TwrorResult:
+class TwrResult:
     """Outcome of a time-weighted return computation.
 
     Attributes:
@@ -396,12 +396,12 @@ class TwrorResult:
     periods: list[dict] = field(default_factory=list)
 
 
-def twror(
+def twr(
     valuations: list[tuple[datetime.date, float]],
     external_flows: dict[datetime.date, float],
     span_days: int,
     coverage_pct: float = 100.0,
-) -> TwrorResult:
+) -> TwrResult:
     """Chained time-weighted return, neutral to deposit timing.
 
     Args:
@@ -418,7 +418,7 @@ def twror(
     Between consecutive valuation dates the market return is
     ``r = V_before(d_i) / V_after(d_{i-1}) - 1``; subtracting the day's
     external flow keeps deposits/withdrawals out of the return (that is
-    the whole point of TWROR — a pure deposit yields r = 0).
+    the whole point of TWR — a pure deposit yields r = 0).
     """
     chained = 1.0
     prev_v_after = 0.0
@@ -441,7 +441,7 @@ def twror(
     annualized_pct = (
         (chained ** (DAYS_PER_YEAR / span_days) - 1.0) * 100.0 if span_days > 0 else 0.0
     )
-    return TwrorResult(
+    return TwrResult(
         cumulative_pct=cumulative_pct,
         annualized_pct=annualized_pct,
         coverage_pct=coverage_pct,

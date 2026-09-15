@@ -57,7 +57,7 @@ def _fixture(monkeypatch, *, target_rows=()):
         performance_full = {"period_used": "2.0Y"}
         portfolio_history = None
         xirr_pct = None
-        twror_pct = None
+        twr_pct = None
         returns_provenance = None
         intraday_quotes = {}
         total_value = 30000.0
@@ -281,7 +281,7 @@ def test_a_reference_only_row_is_not_printed_in_the_watchlist(monkeypatch):
         performance_full = {"period_used": "2.0Y"}
         portfolio_history = None
         xirr_pct = None
-        twror_pct = None
+        twr_pct = None
         returns_provenance = None
         intraday_quotes: dict = {}
         total_value = 0.0

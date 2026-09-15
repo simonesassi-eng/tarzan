@@ -68,7 +68,7 @@ class FileSchema:
 ORDER_LIST_SCHEMA = FileSchema(
     file="order_list.csv",
     purpose=("The dated journal of every buy/sell/transfer/coupon/dividend. "
-             "The snapshot, allocations and XIRR/TWROR are all derived from it."),
+             "The snapshot, allocations and XIRR/TWR are all derived from it."),
     columns=(
         ColumnSpec("date", True, "date",
                    "Settlement/value date (YYYY-MM-DD preferred).", example="2025-01-15"),
