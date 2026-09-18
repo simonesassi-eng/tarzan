@@ -60,15 +60,41 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
-    """The first candidate quote whose price agrees with ``reference_price``
-    (the instrument's own last real close) within the sibling tolerance.
+#: How old a quote's OWN observation may be and still be read as current.
+#:
+#: The level gate below cannot see time, and that is not a theoretical gap. NTSG.MI's
+#: quote endpoint has been serving a price observed on 10 Oct 2025 — on 17 Sep 2026 that
+#: is 342 days old. It was caught for a year only because the stale 25.515 sat >10% away
+#: from the fund's real level; as the real price drifted down to 28.345 the deviation
+#: became 9.98% and the quote passed a 10% tolerance by 0.02pp. What it would have priced
+#: is the CURRENT VALUATION (``quantity * price``), ~10% under, and stamped a point on a
+#: session eleven months back.
+#:
+#: Seven days, not one: a thinly traded listing can go a long weekend plus a holiday
+#: without a print, and rejecting those would stop stamping instruments whose quote is
+#: real and merely infrequent. It is two orders of magnitude short of the failure it is
+#: here to catch, which is the margin that matters.
+_MAX_QUOTE_AGE_DAYS = 7
 
-    This is the sanity gate that rejects a corrupt feed: NTSG.MI's quote priced
-    the fund at 25.5 while its own series and its ``.DE`` sibling sat at ~29.4,
-    so the canonical is skipped and the clean sibling supplies the close
-    instead. Returns ``{}`` when nothing agrees, so the caller keeps the feed's
-    own close rather than stamp from bad data.
+
+def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
+    """The first candidate quote that is both RECENT and priced coherently.
+
+    Coherent means its price agrees with ``reference_price`` (the instrument's own last
+    real close) within the sibling tolerance. That is the sanity gate that rejects a
+    corrupt feed: NTSG.MI's quote priced the fund at 25.5 while its own series and its
+    ``.DE`` sibling sat at ~29.4, so the canonical is skipped and the clean sibling
+    supplies the close instead.
+
+    Recent means its own observation timestamp is within ``_MAX_QUOTE_AGE_DAYS``. The
+    level test alone let that same NTSG.MI quote back in once the fund's real price had
+    drifted to within 10% of the stale one — a price observed 342 days earlier, arriving
+    as today's valuation. A quote carrying NO timestamp is judged on level alone, as
+    before: some feeds do not publish one and refusing all of them would stop stamping
+    instruments that are fine.
+
+    Returns ``{}`` when nothing qualifies, so the caller keeps the feed's own close
+    rather than stamp from bad data.
 
     ponytail: the reference is an EUR-per-unit close while the quote is in the
     venue's native units, so a non-EUR listing fails the tolerance by the FX
@@ -82,9 +108,29 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict
         native = quote.get("price")
         if not native:
             continue
+        if _quote_is_stale(quote):
+            continue
         if abs(float(native) / float(reference_price) - 1.0) <= _SIBLING_PRICE_TOLERANCE:
             return quote
     return {}
+
+
+def _quote_is_stale(quote: dict) -> bool:
+    """Whether this quote's own observation is too old to read as current.
+
+    False when the quote carries no timestamp — unknown age is not evidence of age,
+    and the level gate still has to pass. Dated against ``runtime.today()`` rather
+    than the wall clock so a pinned run stays reproducible.
+    """
+    observed = quote_observed_at(quote)
+    if observed is None:
+        return False
+    try:
+        from tarzan import runtime
+
+        return (runtime.today() - observed.date()).days > _MAX_QUOTE_AGE_DAYS
+    except Exception:  # noqa: BLE001 — a clock must never break the gate
+        return False
 
 
 def prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:

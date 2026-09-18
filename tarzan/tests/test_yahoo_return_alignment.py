@@ -19,6 +19,8 @@ Network-free: fixture series and an explicit quote pair.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pandas as pd
 import pytest
 
@@ -367,6 +369,74 @@ class TestPickQuoteSanityGate:
                        {"X.MI": {"price": 10.0, "prev_close": 10.0},
                         "X.DE": {"price": 200.0, "prev_close": 200.0}},
                        29.7)
+        assert q == {}
+
+
+class TestPickQuoteRejectsAStaleObservation:
+    """The level gate cannot see TIME, and a year-old price eventually looks right.
+
+    NTSG.MI's quote endpoint has served a price observed 10 Oct 2025 for a year. The
+    coherence gate caught it only because the stale 25.515 sat more than 10% away from
+    the fund's real level. On 17 Sep 2026 the real close had drifted to 28.345, the
+    deviation became 9.98%, and the quote passed a 10% tolerance by 0.02pp — arriving
+    as the CURRENT VALUATION (``quantity * price``, ~10% under) and as a stamped point
+    on a session eleven months back. The oracle read the same quote and reported the
+    engine's correct +0.5855% as a 1.71pp error against 25.515/25.805 = −1.1238%.
+    """
+
+    def _pick(self, symbols, quotes, ref, today=dt.date(2026, 9, 17)):
+        import tarzan.runtime as runtime
+        from tarzan.data.current_session import pick_quote
+
+        orig = runtime.today
+        runtime.today = lambda: today
+        try:
+            return pick_quote(symbols, quotes, ref)
+        finally:
+            runtime.today = orig
+
+    @staticmethod
+    def _ts(date_):
+        return int(dt.datetime(date_.year, date_.month, date_.day, 15, 35,
+                               tzinfo=dt.timezone.utc).timestamp())
+
+    def test_the_stale_quote_is_skipped_even_inside_the_level_tolerance(self):
+        """The exact 17 Sep 2026 shape: 9.98% out, so the LEVEL gate passes it."""
+        stale = {"price": 25.515, "prev_close": 25.805,
+                 "time": self._ts(dt.date(2025, 10, 10))}
+        assert abs(25.515 / 28.345 - 1) < 0.10, "the fixture must pass the level gate"
+        assert self._pick(["NTSG.MI"], {"NTSG.MI": stale}, 28.345) == {}
+
+    def test_it_falls_through_to_the_fresh_sibling(self):
+        stale = {"price": 25.515, "prev_close": 25.805,
+                 "time": self._ts(dt.date(2025, 10, 10))}
+        fresh = {"price": 28.585, "prev_close": 28.525,
+                 "time": self._ts(dt.date(2026, 9, 17))}
+        q = self._pick(["NTSG.MI", "NTSG.DE"],
+                       {"NTSG.MI": stale, "NTSG.DE": fresh}, 28.345)
+        assert q.get("price") == 28.585
+
+    def test_a_quote_with_no_timestamp_is_judged_on_level_alone(self):
+        """Unknown age is not evidence of age. Some feeds publish no timestamp, and
+        refusing all of them would stop stamping instruments that are fine."""
+        q = self._pick(["EXUS.MI"],
+                       {"EXUS.MI": {"price": 40.3, "prev_close": 40.8}}, 40.31)
+        assert q.get("prev_close") == 40.8
+
+    def test_a_long_weekend_old_quote_is_still_current(self):
+        """A thinly traded listing can go days without a print. Rejecting those would
+        stop stamping quotes that are real and merely infrequent."""
+        q = self._pick(["THIN.MI"],
+                       {"THIN.MI": {"price": 40.3, "prev_close": 40.8,
+                                    "time": self._ts(dt.date(2026, 9, 12))}}, 40.31)
+        assert q.get("prev_close") == 40.8
+
+    def test_a_fresh_but_incoherent_quote_is_still_rejected(self):
+        """The level gate is unchanged; this adds a second reason to skip, not a
+        replacement for the first."""
+        q = self._pick(["X.MI"],
+                       {"X.MI": {"price": 10.0, "prev_close": 10.0,
+                                 "time": self._ts(dt.date(2026, 9, 17))}}, 29.7)
         assert q == {}
 
 
