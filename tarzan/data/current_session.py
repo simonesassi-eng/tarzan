@@ -108,19 +108,23 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict
         native = quote.get("price")
         if not native:
             continue
-        if _quote_is_stale(quote):
+        if quote_is_stale(quote):
             continue
         if abs(float(native) / float(reference_price) - 1.0) <= _SIBLING_PRICE_TOLERANCE:
             return quote
     return {}
 
 
-def _quote_is_stale(quote: dict) -> bool:
+def quote_is_stale(quote: dict) -> bool:
     """Whether this quote's own observation is too old to read as current.
 
     False when the quote carries no timestamp — unknown age is not evidence of age,
-    and the level gate still has to pass. Dated against ``runtime.today()`` rather
-    than the wall clock so a pinned run stays reproducible.
+    and the caller's own checks still have to pass. Dated against ``runtime.today()``
+    rather than the wall clock so a pinned run stays reproducible.
+
+    Public because two layers need the SAME rule: this module's level gate, which
+    decides what today's price is, and the enricher's ISIN ranking, which decides
+    which listing an instrument is read from at all. One threshold, one definition.
     """
     observed = quote_observed_at(quote)
     if observed is None:

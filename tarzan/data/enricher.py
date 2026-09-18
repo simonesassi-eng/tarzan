@@ -725,6 +725,30 @@ def _suffix_priority(symbol: str) -> int:
     return len(ISIN_EXCHANGE_SUFFIXES)
 
 
+def _quote_is_fresh(cand: _Candidate) -> int:
+    """1 when this candidate's quote is recent enough to read as current, else 0.
+
+    The ranking judged a listing on identity (name, currency, venue) and never on
+    whether its data still ARRIVES. NTSG.MI won on suffix priority for a year while
+    its quote endpoint served a price observed 10 Oct 2025 and its daily frame ran two
+    sessions behind — with NTSG.DE sitting there on the same start date, two more bars,
+    the same currency, and a working feed. Identity was never the problem; liveness was,
+    and nothing measured it.
+
+    Costs no extra request: ``_Candidate`` already keeps the whole ``info`` dict, and
+    ``regularMarketTime`` is in it. Same rule and same threshold as the level gate in
+    ``current_session`` — one definition of "stale", so the listing a run reads and the
+    price it stamps cannot disagree about what counts as current.
+
+    A candidate whose ``info`` carries no timestamp scores 1: unknown age is not
+    evidence of age, and demoting every quiet feed would be a worse failure than the
+    one this prevents.
+    """
+    from tarzan.data.current_session import quote_is_stale
+
+    return 0 if quote_is_stale({"time": cand.info.get("regularMarketTime")}) else 1
+
+
 def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> tuple:
     """Deterministic sort key for a candidate (higher tuple = better).
 
@@ -750,9 +774,14 @@ def _rank_key(cand: _Candidate, canonical_name: str, expected_currency: str) -> 
     # otherwise-equivalent listings of the same instrument.
     name_bucket = round(name_score * 4)  # 0..4
     currency_match = 1 if _currency_matches(cand.currency, expected_currency) else 0
+    # Above the suffix, below identity. A stale listing is still the right INSTRUMENT,
+    # so it must not outrank a candidate that is a different fund (curated, name) or in
+    # the wrong currency; but a dead feed on the preferred venue should lose to a live
+    # feed on the next one, which is the ordering the suffix list alone cannot express.
+    quote_fresh = _quote_is_fresh(cand)
     # Negate suffix priority so a lower index sorts higher.
     suffix_rank = -_suffix_priority(cand.symbol)
-    return (curated, name_bucket, currency_match, suffix_rank)
+    return (curated, name_bucket, currency_match, quote_fresh, suffix_rank)
 
 
 def _currency_matches(candidate_ccy: str, expected_ccy: str) -> bool:
@@ -997,8 +1026,29 @@ def _resolve_isin(
             _positive_market_quote(info.get(field))
             for field in ("regularMarketPrice", "previousClose")
         )
-        if _history_visible_at_boundary(history) or (
-            allows_live_transport and has_quote
+        # A cached winner never goes back through the ranking, so the freshness
+        # criterion ``_rank_key`` now applies would be inert for anything already
+        # resolved: a venue whose feed DIES keeps the instrument for the TTL's full
+        # 30 days, and CI restores this cache every run — the same way a poisoned
+        # entry outlived the resolution fix above. NTSG.MI's quote endpoint served a
+        # price observed 10 Oct 2025 for a year; the entry pinning it still had
+        # eleven days to live when the ranking learned to reject it.
+        #
+        # Read off the ``info`` already fetched on the line above, so noticing costs
+        # no request. ``has_quote`` is not this test: it asks whether a number is
+        # present, and a year-old number is present.
+        from tarzan.data.current_session import quote_is_stale
+
+        quote_dead = quote_is_stale({"time": info.get("regularMarketTime")})
+        if quote_dead:
+            logger.info(
+                "Cached symbol %s for ISIN %s has a stale quote (observed %s); "
+                "re-resolving so the ranking can prefer a live listing.",
+                cached_symbol, isin, info.get("regularMarketTime"),
+            )
+        if not quote_dead and (
+            _history_visible_at_boundary(history)
+            or (allows_live_transport and has_quote)
         ):
             logger.info("Resolved ISIN %s → %s (from cache)", isin, cached_symbol)
             if cached_matches_taxonomy:

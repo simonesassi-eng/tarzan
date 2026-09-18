@@ -173,15 +173,38 @@ from tarzan.data.enricher import (  # noqa: E402
 )
 
 
-def _cand(symbol, *, price=10.0, currency="EUR", name=""):
-    """Build a candidate carrying only the info needed for ranking."""
+def _cand(symbol, *, price=10.0, currency="EUR", name="", quote_age_days=0):
+    """Build a candidate carrying only the info needed for ranking.
+
+    ``quote_age_days`` sets ``regularMarketTime`` that many days before the pinned
+    ranking clock, so a test can express "this venue's feed stopped arriving".
+    """
+    import datetime as _dt
+
+    observed = _RANK_TODAY - _dt.timedelta(days=quote_age_days)
     return _Candidate(
         symbol=symbol,
-        info={"currency": currency},
+        info={"currency": currency,
+              "regularMarketTime": int(_dt.datetime(
+                  observed.year, observed.month, observed.day, 15, 35,
+                  tzinfo=_dt.timezone.utc).timestamp())},
         price=price,
         currency=currency,
         name=name,
     )
+
+
+#: The clock every ranking test dates a quote against.
+_RANK_TODAY = __import__("datetime").date(2026, 9, 18)
+
+
+@pytest.fixture(autouse=True)
+def _pin_rank_clock(monkeypatch):
+    """The freshness criterion reads ``runtime.today()``; pin it so the ranking
+    tests do not drift into failure as the wall clock moves."""
+    import tarzan.runtime as runtime
+
+    monkeypatch.setattr(runtime, "today", lambda: _RANK_TODAY)
 
 
 class TestNameMatching:
@@ -246,6 +269,128 @@ class TestRankKey:
                             name="Amundi MSCI USA Dly(2x) Lev.UEA")
         canon = "AMUNDI MSCI USA DAILY 2X LEVERAGED UCITS ETF"
         assert _rank_key(curated, canon, "EUR") > _rank_key(better_name, canon, "EUR")
+
+
+class TestRankKeyDemotesADeadFeed:
+    """The ranking judged a listing on IDENTITY and never on whether its data still
+    arrives.
+
+    NTSG.MI won on suffix priority for a year while its quote endpoint served a price
+    observed 10 Oct 2025 — with NTSG.DE on the same start date, two more bars, the same
+    currency and a working feed. The level gate in ``current_session`` caught the bad
+    PRICE only once it drifted more than 10% from the real level; nothing caught the
+    dead FEED, so the instrument kept being read from that venue.
+    """
+
+    def test_a_stale_quote_loses_to_a_fresh_one_on_a_worse_venue(self):
+        """The real shape: .MI is first in the suffix order and still must lose."""
+        stale_mi = _cand("NTSG.MI", name="WisdomTree Global Efficient Core",
+                         quote_age_days=343)
+        fresh_de = _cand("NTSG.DE", name="WisdomTree Global Efficient Core",
+                         quote_age_days=0)
+        canon = "WISDOMTREE GLOBAL EFFICIENT CORE UCITS ETF"
+        assert _suffix_priority("NTSG.MI") < _suffix_priority("NTSG.DE"), \
+            "the fixture is meaningless unless .MI is the preferred venue"
+        assert _rank_key(fresh_de, canon, "EUR") > _rank_key(stale_mi, canon, "EUR")
+
+    def test_the_preferred_venue_still_wins_when_both_feeds_are_alive(self):
+        """Freshness is a tiebreak, not a new preference. With both quotes current the
+        suffix order decides exactly as before."""
+        mi = _cand("ABC.MI", name="Same Fund", quote_age_days=0)
+        de = _cand("ABC.DE", name="Same Fund", quote_age_days=1)
+        assert _rank_key(mi, "Same Fund", "EUR") > _rank_key(de, "Same Fund", "EUR")
+
+    def test_freshness_ranks_below_identity(self):
+        """A stale listing is still the right INSTRUMENT. It must not lose to a
+        candidate that is a different fund or in the wrong currency — only to a live
+        feed on an otherwise-equal listing."""
+        canon = "AMUNDI MSCI USA DAILY 2X LEVERAGED UCITS ETF"
+        stale_right = _cand("CL2.MI", name="Amundi MSCI USA (2x) Leveraged",
+                            quote_age_days=343)
+        fresh_wrong = _cand("18MF.MU", name="Amundi MSCI USA Dly(2x) Lev.UEA",
+                            quote_age_days=0)
+        assert _rank_key(stale_right, canon, "EUR") > _rank_key(fresh_wrong, canon, "EUR")
+        # ...and currency too: a fresh USD listing must not beat a stale EUR one when
+        # EUR is expected.
+        stale_eur = _cand("ABC.MI", currency="EUR", name="Same Fund",
+                          quote_age_days=343)
+        fresh_usd = _cand("ABC.L", currency="USD", name="Same Fund", quote_age_days=0)
+        assert _rank_key(stale_eur, "Same Fund", "EUR") > \
+            _rank_key(fresh_usd, "Same Fund", "EUR")
+
+    def test_no_timestamp_is_not_treated_as_stale(self):
+        """Unknown age is not evidence of age. Some feeds publish no
+        ``regularMarketTime``, and demoting every quiet one would be a worse failure
+        than the one this prevents."""
+        from tarzan.data.enricher import _Candidate, _quote_is_fresh
+
+        silent = _Candidate(symbol="ABC.MI", info={"currency": "EUR"}, price=10.0,
+                            currency="EUR", name="Same Fund")
+        assert _quote_is_fresh(silent) == 1
+
+
+class TestTheResolutionCacheSelfHealsOnADeadFeed:
+    """A cached winner never goes back through the ranking.
+
+    So the freshness criterion would be INERT for anything already resolved: a venue
+    whose feed dies keeps the instrument for the resolution TTL's full 30 days, and CI
+    restores that cache every run. NTSG.MI's cached entry still had eleven days to live
+    when the ranking learned to reject it — the same shape as the poisoned entry that
+    outlived an earlier resolution fix and kept the rendered mail broken.
+    """
+
+    def _run(self, monkeypatch, *, cached, quote_age_days):
+        import datetime as _dt
+
+        from tarzan.data import price_cache
+
+        observed = _RANK_TODAY - _dt.timedelta(days=quote_age_days)
+        ts = int(_dt.datetime(observed.year, observed.month, observed.day, 15, 35,
+                              tzinfo=_dt.timezone.utc).timestamp())
+        monkeypatch.setattr(price_cache, "load_resolution", lambda isin: cached)
+        monkeypatch.setattr(price_cache, "store_resolution", lambda *a, **kw: None)
+        monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: "SAME FUND")
+        monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: [])
+        monkeypatch.setattr(enricher, "_fetch_ticker_info",
+                            lambda symbol: {"currency": "EUR",
+                                            "regularMarketPrice": 28.0,
+                                            "regularMarketTime": ts})
+        monkeypatch.setattr(enricher, "_fetch_history", lambda symbol: pd.DataFrame())
+        seen: list[str] = []
+
+        def fake_meta(symbol):
+            seen.append(symbol)
+            return _cand(symbol, currency="EUR", name="Same Fund",
+                         quote_age_days=0 if symbol.endswith(".DE") else quote_age_days)
+
+        monkeypatch.setattr(enricher, "_fetch_candidate_meta", fake_meta)
+        result = enricher._resolve_isin("IE00077IIPQ8", hint_ticker="",
+                                        expected_currency="EUR")
+        return result, seen
+
+    def test_a_live_cached_symbol_is_reused_without_re_ranking(self):
+        """The cache still does its job: nothing is re-probed when the feed is fine."""
+        import pytest as _pytest
+
+        mp = _pytest.MonkeyPatch()
+        try:
+            result, seen = self._run(mp, cached="NTSG.MI", quote_age_days=0)
+        finally:
+            mp.undo()
+        assert result is not None and result[1] == "NTSG.MI"
+        assert seen == [], f"re-probed candidates on a healthy cache hit: {seen}"
+
+    def test_a_dead_cached_symbol_is_re_resolved(self):
+        """The point: a year-old quote on the cached venue sends it back through the
+        ranking instead of surviving to the TTL."""
+        import pytest as _pytest
+
+        mp = _pytest.MonkeyPatch()
+        try:
+            result, seen = self._run(mp, cached="NTSG.MI", quote_age_days=343)
+        finally:
+            mp.undo()
+        assert seen, "a stale cached quote must trigger re-resolution"
 
 
 class TestResolveIsinDeterminism:
