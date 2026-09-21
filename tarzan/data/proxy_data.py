@@ -7,7 +7,7 @@ GFC 2008 / COVID 2020 / 2022) even when the actual instruments only have a
 few years of history.
 
 The financing leg uses ^IRX (13-week T-bill). All series are cached on
-disk under a ``PROXYMAX_`` prefix so they never collide with the enricher's
+disk under a ``PROXYMAX2_`` prefix so they never collide with the enricher's
 5-year holding/benchmark histories.
 
 These are deliberately US-listed USD proxies: the output is *modeled*
@@ -23,7 +23,7 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.data import manual_proxies, price_cache
-from tarzan.engine.stats import TRADING_DAYS
+from tarzan.engine.stats import TRADING_DAYS, normalize_session_index
 
 # Approx all-in fee drag (%/yr) for the commodity-carry ETFs (UEQC ~0.34 TER,
 # CRRY ~0.66 TER+swap) applied to the BNP carry index for a net-of-fees proxy.
@@ -156,7 +156,14 @@ def _fetch_max(symbol: str) -> pd.Series:
     but recent sessions stay current. Pinned runs return only cache rows visible
     at ``as_of`` and never attempt Yahoo transport.
     """
-    key = f"PROXYMAX_{symbol}"
+    # PROXYMAX2: the v1 namespace holds indices built by the old tz_convert("UTC")
+    # path, i.e. every European series dated one session early. A cache hit is
+    # returned verbatim (below), so those rows cannot be repaired in place —
+    # re-normalising an already-shifted naive index is a no-op. Bumping the
+    # namespace re-fetches them once on correct dates and leaves the stale v1
+    # rows unreferenced, which is safer than deleting rows out from under a
+    # concurrent reader.
+    key = f"PROXYMAX2_{symbol}"
     cached = price_cache.load_history(key)
     from tarzan import runtime
 
@@ -186,8 +193,12 @@ def _fetch_max(symbol: str) -> pd.Series:
         return cached if cached is not None else pd.Series(dtype=float)
     s = h["Close"].dropna()
     idx = s.index
-    s.index = (idx.tz_convert("UTC").tz_localize(None).normalize()
-               if getattr(idx, "tz", None) is not None else idx.normalize())
+    # A daily bar's date is its VENUE's session date, so the tz is dropped at
+    # local wall time. Converting to UTC first slid every European series one
+    # day into the past — misaligning proxy-driven sleeves against the funds'
+    # own real returns, which take the correct path in
+    # backtest.engine._real_daily_returns. See stats.normalize_session_index.
+    s.index = normalize_session_index(idx)
     s = s[~s.index.duplicated(keep="last")].sort_index()
     if not s.empty:
         price_cache.store_history(key, s)

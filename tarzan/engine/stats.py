@@ -469,10 +469,7 @@ def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
     idx = daily_returns.index
     if isinstance(rf_daily, pd.Series) and not rf_daily.empty:
         def _norm(ix):
-            ix = pd.DatetimeIndex(ix)
-            if getattr(ix, "tz", None) is not None:
-                ix = ix.tz_convert("UTC").tz_localize(None)
-            return ix.normalize()
+            return normalize_session_index(ix)
         r = rf_daily.copy()
         r.index = _norm(r.index)
         r = r[~r.index.duplicated(keep="last")]
@@ -677,13 +674,27 @@ def normalize_index(series: pd.Series, *, drop_duplicates: bool = False) -> pd.S
     +1.79% table cell.
     """
     s = series.copy()
-    idx = s.index
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_localize(None)
-    s.index = idx.normalize()
+    s.index = normalize_session_index(s.index)
     if drop_duplicates:
         s = s[~s.index.duplicated(keep="last")]
     return s
+
+
+def normalize_session_index(index) -> pd.DatetimeIndex:
+    """Collapse a daily-bar index to tz-naive VENUE session dates.
+
+    The index-level core of :func:`normalize_index`, extracted so every caller
+    that has an index rather than a Series shares the one rule instead of
+    re-deriving it. Re-deriving it is what went wrong: four call sites each
+    wrote ``tz_convert("UTC").tz_localize(None)``, which is right for an
+    INSTANT (a quote's observation time) and wrong for a SESSION DATE, and the
+    difference is invisible until a European series slides a day into the past.
+    See :func:`normalize_index` for what that cost.
+    """
+    idx = pd.DatetimeIndex(index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    return idx.normalize()
 
 
 def _compute_beta_alpha(
@@ -798,9 +809,7 @@ def to_business_day_series(series: pd.Series) -> pd.Series:
         return series
     s = series.copy()
     idx = s.index
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_convert("UTC").tz_localize(None)
-        s.index = idx
+    s.index = normalize_session_index(idx)
     return s.resample("B").last().dropna()
 
 

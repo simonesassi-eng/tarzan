@@ -46,9 +46,10 @@ def _clip_to_window(series: pd.Series, start, end) -> pd.Series:
         return pd.Series(dtype=float)
 
     def _naive(ts):
+        # Session date, not instant: see stats.normalize_session_index.
         ts = pd.Timestamp(ts)
         if ts.tz is not None:
-            ts = ts.tz_convert("UTC").tz_localize(None)
+            ts = ts.tz_localize(None)
         return ts.normalize()
 
     s = normalize_index(series)
