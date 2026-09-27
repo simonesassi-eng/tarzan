@@ -266,6 +266,30 @@ class TestReturnsHeat:
         from tarzan.export import _heat
         assert _heat.heat_bg(None, neg=-5.0, pos=5.0) is None
 
+    def test_a_nan_cell_is_a_blank_not_the_worst_loss(self):
+        """A missing figure arrives as NaN from a pandas frame as often as it
+        arrives as None from a dict. It slipped past the None check into the
+        arithmetic, where ``min(1.0, nan)`` is 1.0: the cell with no figure in
+        it was painted the column's most saturated red, the colour of the worst
+        loss, with a dash sitting on it."""
+        import numpy as np
+        from tarzan.export import _heat
+        from tarzan.export._palette import PALETTE
+
+        for blank in (float("nan"), np.nan, np.float64("nan")):
+            bg, ink = _heat.heat(blank, neg=-3.0, pos=3.0)
+            assert bg is None and ink == PALETTE["subtle"]
+            assert _heat.heat_bg(blank, neg=-3.0, pos=3.0, damp=_heat.DAY_DAMP) is None
+        # Nor may a NaN distort the scale the real figures are shaded on.
+        assert _heat.column_scale([np.nan, -2.0, 1.0]) == (-2.0, 1.0)
+
+    def test_a_nan_rank_cell_is_a_blank(self):
+        import numpy as np
+        from tarzan.export import _heat
+        assert _heat.rank_bg(np.nan, lo=0.0, hi=10.0, higher_is_better=True) is None
+        assert _heat.rank_ink(np.nan, lo=0.0, hi=10.0, higher_is_better=True) is None
+        assert _heat.rank_scale([np.nan, 2.0, 8.0]) == (2.0, 8.0)
+
     def test_near_zero_stays_on_the_surface(self):
         """A value a hair off zero must not pick up a tint that reads as a
         signal — the ramp has a dead zone at the bottom."""

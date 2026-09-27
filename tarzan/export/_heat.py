@@ -33,9 +33,26 @@ from tarzan.export._palette import PALETTE
 DAY_DAMP = 2.2
 
 
+def _is_blank(value) -> bool:
+    """A missing figure, whichever way it arrives: ``None`` from a dict lookup
+    or ``NaN`` from a pandas frame. Both must stay unshaded.
+
+    ``NaN`` used to slip past the ``None`` check into the arithmetic below, and
+    ``min(1.0, nan)`` is ``1.0`` (every comparison with NaN is false, so ``min``
+    keeps its first argument): a cell with no figure in it was painted the
+    column's most saturated red, the colour of the worst loss.
+    """
+    if value is None:
+        return True
+    try:
+        return value != value  # only NaN is not equal to itself
+    except Exception:  # noqa: BLE001 — anything exotic is not a number to shade
+        return True
+
+
 def column_scale(values: Iterable[Optional[float]]) -> tuple[float, float]:
     """``(most_negative, most_positive)`` over one column, ignoring blanks."""
-    nums = [float(v) for v in values if v is not None]
+    nums = [float(v) for v in values if not _is_blank(v)]
     neg = min([v for v in nums if v < 0] or [-1.0])
     pos = max([v for v in nums if v > 0] or [1.0])
     return neg, pos
@@ -80,7 +97,7 @@ def heat(value: Optional[float], *, neg: float, pos: float,
     rule: the background says which way and how far, the figure is either ink or
     stepped back.
     """
-    if value is None:
+    if _is_blank(value):
         return None, PALETTE["subtle"]
     span_neg = abs(neg) * damp or 1.0
     span_pos = abs(pos) * damp or 1.0
@@ -115,7 +132,7 @@ def heat_bg(value: Optional[float], *, neg: float, pos: float,
 
 def rank_scale(values: Iterable[Optional[float]]) -> Optional[tuple[float, float]]:
     """``(lo, hi)`` over one column, or None when there is nothing to rank."""
-    nums = [float(v) for v in values if v is not None]
+    nums = [float(v) for v in values if not _is_blank(v)]
     if len(nums) < 2:
         return None
     lo, hi = min(nums), max(nums)
@@ -137,7 +154,7 @@ def rank_bg(value: Optional[float], *, lo: float, hi: float,
     values present, not a threshold anyone set: nothing in the engine says what
     a "good" Sharpe is, and inventing one would print an opinion as a fact.
     """
-    if value is None:
+    if _is_blank(value):
         return None
     span = hi - lo
     if span < 1e-12:
@@ -157,7 +174,7 @@ def rank_ink(value: Optional[float], *, lo: float, hi: float,
              higher_is_better: bool) -> Optional[str]:
     """Palette ink once the rank tint is strong enough to swallow a coloured
     figure, otherwise None so the caller keeps its own colour."""
-    if value is None:
+    if _is_blank(value):
         return None
     span = hi - lo
     if span < 1e-12:
