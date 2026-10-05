@@ -70,7 +70,13 @@ def _mix(base: str, target: str, t: float) -> str:
 # those are the colours a FIGURE is written in, and at full saturation behind a
 # figure they fight it. These are the same hues held back, so a saturated cell
 # still reads as a surface with a number on it.
-_GREEN_END = "#1E8C55"
+#
+# Both ends must hold the ink at 4.5:1 (WCAG AA for text this size): the
+# figure written on the most saturated cell is the column's best or worst,
+# which is the one figure the shading exists to point at. The green end was
+# #1E8C55, 3.6:1 under ink — the best performer in every column was the least
+# legible cell in it. Same hue, one step darker, 4.7:1.
+_GREEN_END = "#1A7748"
 _RED_END = "#962D28"
 
 # Above this share of the ramp a cell carries enough colour to hold the ink;

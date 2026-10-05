@@ -48,7 +48,11 @@
                         {% for t in row %}
                         <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
                           <div style="{{ type.label }}color:{{ palette.muted }};">{{ t.label }}</div>
-                          <div style="margin-top:3px;{{ type.display }}color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
+                          {# nowrap: a figure is one token. In a pane narrower
+                             than the tables a signed P&L (synthetic: "+€12.3k")
+                             broke after the sign and left a "+" alone on its
+                             own line. #}
+                          <div style="margin-top:3px;{{ type.display }}white-space:nowrap;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
                           <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};">{{ t.caption }}</div>
                         </td>
                         {% endfor %}

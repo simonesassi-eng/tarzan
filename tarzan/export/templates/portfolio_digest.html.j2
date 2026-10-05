@@ -91,21 +91,24 @@
                 <tr>
                   <td align="left" style="white-space:nowrap;">{# The wordmark is the scale's one letter-spacing exception: 0.22em is what
                      makes five capitals read as a mark rather than as a word. #}<span style="font-size:{{ type_px.prose }}px;font-weight:700;letter-spacing:0.22em;color:{{ palette.accent }};">TARZAN</span></td>
-                  <td align="right" style="{{ type.data }}color:{{ palette.subtle }};white-space:nowrap;">{{ header.stamp }}</td>
+                  {# The stamp may wrap onto a second line: a 55-character line
+                     set nowrap must never be what decides the document's width. #}
+                  <td align="right" style="{{ type.data }}color:{{ palette.subtle }};">{{ header.stamp }}</td>
                 </tr>
               </table>
               {% if header.status_bar %}
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:9px;">
-                <tr>
-                  {% for b in header.status_bar %}
-                  <td style="padding:0 8px 0 0;white-space:nowrap;">
-                    {# No text-transform: CSS uppercase maps the beta label to a
-                       capital Beta, which renders as a plain "B". The labels are
-                       already written in caps. #}<span style="{{ type.label }}color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="{{ type.data }}font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>{% if not loop.last %}<span style="color:{{ palette.border }};padding-left:8px;">│</span>{% endif %}
-                  </td>
-                  {% endfor %}
-                </tr>
-              </table>
+              {# Inline-block entries in a plain div, not table cells: each entry
+                 keeps its label and value on one line, and the row wraps to a
+                 second line in a narrow pane instead of forcing the width. #}
+              <div style="margin-top:9px;line-height:1.7;">
+                {% for b in header.status_bar %}
+                <span style="display:inline-block;white-space:nowrap;padding-right:8px;">
+                  {# No text-transform: CSS uppercase maps the beta label to a
+                     capital Beta, which renders as a plain "B". The labels are
+                     already written in caps. #}<span style="{{ type.label }}color:{{ palette.subtle }};">{{ b.label }}</span>&nbsp;<span style="{{ type.data }}font-variant-numeric:tabular-nums;color:{% if b.tone == 'pos' %}{{ palette.green }}{% elif b.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ b.value }}</span>{% if not loop.last %}<span style="color:{{ palette.border }};padding-left:8px;">│</span>{% endif %}
+                </span>
+                {% endfor %}
+              </div>
               {% endif %}
             </td>
           </tr>

@@ -30,7 +30,10 @@ PALETTE = {
     "accent": "#6E9BFF",
     "ink": "#E6EDF6",
     "muted": "#8FA3BC",
-    "subtle": "#66798F",
+    # Fine print. Lightened from #66798F, which sat at 3.9:1 on card_alt and
+    # 4.2:1 on card, under the 4.5:1 WCAG AA floor for text this small; this
+    # value clears 4.5:1 on every surface it is set on, accent_bg included.
+    "subtle": "#7C8EA2",
     "page": "#05090D",
     "card": "#0C131B",
     "card_alt": "#111A24",

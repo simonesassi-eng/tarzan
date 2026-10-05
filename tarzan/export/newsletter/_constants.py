@@ -400,10 +400,15 @@ def render_unified_table(first_col_label, columns, groups, *,
             # row was a second, louder statement of the same fact and it made
             # each class read as a separate bordered block.
             out.append(
+                # Mixed case, not the LABEL role's capitals: "Cash & Cash
+                # Equivalents · Cash / Money Market" is forty-five characters,
+                # a phrase rather than a label, and a phrase set in capitals is
+                # read letter by letter.
                 f'<tr><td colspan="{ncols}" style="padding:8px 10px;'
                 f'background:{P["group_bg"]};'
                 f'border-bottom:1px solid {P["border"]};'
-                f'{TYPE["label"]}">'
+                f'font-size:{TYPE_PX["label"]}px;font-weight:700;'
+                f'letter-spacing:0.04em;">'
                 f'<span style="color:{col};font-weight:700;">'
                 f'{escape(str(cls))}</span>{role_html}</td></tr>')
             fw = f'width:{first_col_width}px;' if first_col_width else ""
