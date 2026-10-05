@@ -87,14 +87,20 @@ class InvestorConfig:
 
     # Rebalancing parameters
     rebalancing_lump_sum_amount_eur: float = 0.0
-    # Tolerance band around every allocation target. Used in two
-    # places: (1) as the LP solver's hard ceiling — the optimizer
-    # tries progressively tighter tolerances and stops at this
-    # value, (2) as the dashboard traffic-light threshold (green if
-    # |drift| ≤ tolerance, amber up to 2×, red beyond). Keeping the
-    # same value drives both the math and the visuals from a single
-    # knob, so what the user sees is what the solver enforces.
+    # Tolerance band around every allocation target for the OPTIMIZER: the
+    # LP solver's hard ceiling (it tries progressively tighter tolerances and
+    # stops at this value) and the OK / PARTIAL status of its verifications.
+    # It is the constraint for the day the owner rebalances; the newsletter's
+    # in/out-of-band colours use the 5/25 band below instead.
     rebalancing_target_tolerance_pctg: float = 2.0
+    # The newsletter's display band around a target (the "5/25" rule): a line
+    # is out of band when it is further from its target than the NARROWER of
+    # ``allocation_band_abs_pp`` points and ``allocation_band_rel_pctg`` % of the
+    # target. Target 5% → ±1.25 (3.75–6.25); target 35% → ±5 (30–40). Cash is
+    # banded at ``allocation_band_rel_pctg`` % of its euro target. Display only:
+    # the optimizer does not read these.
+    allocation_band_abs_pp: float = 5.0
+    allocation_band_rel_pctg: float = 25.0
     rebalancing_no_sell: bool = False
     # When the LP is infeasible at ``rebalancing_target_tolerance_pctg``,
     # auto-relax the tolerance up to ``rebalancing_relax_cap_pctg`` to
@@ -193,6 +199,8 @@ class InvestorConfig:
         # Scalar fields
         _set_float(config, rows, "rebalancing_lump_sum_amount_eur")
         _set_float(config, rows, "rebalancing_target_tolerance_pctg")
+        _set_float(config, rows, "allocation_band_abs_pp")
+        _set_float(config, rows, "allocation_band_rel_pctg")
         _set_float(config, rows, "rebalancing_relax_cap_pctg")
         _set_float(config, rows, "rebalancing_transaction_fee_buy_eur")
         _set_float(config, rows, "rebalancing_transaction_fee_sell_eur")
@@ -299,6 +307,8 @@ def _parse_equity_geo(config: InvestorConfig, rows: dict) -> None:
 _KNOWN_SCALAR_KEYS = frozenset({
     "rebalancing_lump_sum_amount_eur",
     "rebalancing_target_tolerance_pctg",
+    "allocation_band_abs_pp",
+    "allocation_band_rel_pctg",
     "rebalancing_relax_cap_pctg",
     "rebalancing_no_sell",
     "rebalancing_auto_relax",

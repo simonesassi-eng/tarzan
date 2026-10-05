@@ -276,9 +276,12 @@ class TestEveryMarkupBoundaryEscapes:
                            .from_string("{{ v|e }}")
                            .render(v="Buy & sell (full rebalance)"))
 
-    def test_the_allocation_row_label_escapes(self):
-        from tarzan.export.newsletter._sections_alloc import _div_label
-        assert self._clean(_div_label("Cash & Cash Eq.", color="#15803D"))
+    def test_the_allocation_bridge_label_escapes(self):
+        from tarzan.export.newsletter._sections_alloc import _bridge_row, _bridge_svg
+        from tarzan.models.investor_config import InvestorConfig as _Cfg
+        row = _bridge_row(key="c", label="Cash & Cash Eq.", colour="#15803D",
+                          now=50.0, target=50.0, base=1000.0)
+        assert self._clean(_bridge_svg([row], [row], 100, _Cfg()))
 
     def test_the_hero_tile_and_status_bar_escape(self):
         """Both go through the template, which does not escape."""

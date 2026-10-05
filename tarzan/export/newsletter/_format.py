@@ -144,21 +144,6 @@ def _display_ticker(symbol: Optional[str]) -> Optional[str]:
         return None
     return base_symbol(ticker) or ticker
 
-def _semaphore(delta: Optional[float], tolerance: float) -> str:
-    """Return 'green' / 'amber' / 'red' based on |delta| vs tolerance."""
-    if is_missing(delta):
-        return "muted"
-    abs_d = abs(delta)
-    if abs_d <= tolerance:
-        return "green"
-    if abs_d <= 2 * tolerance:
-        return "amber"
-    return "red"
-
-def _semaphore_color(sema: str) -> str:
-    return {"green": PALETTE["green"], "amber": PALETTE["amber"],
-            "red": PALETTE["red"], "muted": PALETTE["muted"]}.get(sema, PALETTE["ink"])
-
 def _colorize_pct(text: str) -> str:
     """HTML-escape ``text`` and wrap signed percentages AND percentage-point
     figures (e.g. +0.81%, -1.2%, +0.92pp, -4.53pp) in green/red spans, so both

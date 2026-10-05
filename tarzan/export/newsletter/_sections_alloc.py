@@ -32,13 +32,13 @@ from tarzan.export.newsletter._constants import (
     PALETTE,
     TYPE,
     TYPE_PX,
+    FONT_STACK,
     _NewsletterContext,
     _ordered,
     class_key,
     group_by_class_role,
     render_unified_table,
     role_for,
-    ticker_span,
     uni_cell,
     uni_name,
     geo_label,
@@ -48,8 +48,6 @@ from tarzan.export.newsletter._format import (
     _eur,
     _pct,
     _pct_smart,
-    _semaphore,
-    _semaphore_color,
     _signed_pp,
     is_missing,
 )
@@ -928,8 +926,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     """Build asset-class allocation rows (Excel Dashboard pattern)."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.rebalancing_target_tolerance_pctg
-
     targets = cfg.invested_allocation_targets_pctg or {}
     alloc_df = m.allocation_by_class
 
@@ -959,7 +955,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             continue
         actual = float(match["weight_pct"].iloc[0]) if has_holding else 0.0
         delta = actual - target if target is not None else None
-        sema = _semaphore(delta, tol)
         color = ASSET_COLORS.get(klass, PALETTE["accent"])
         spark_vals = _timeline_vals(asset_series, klass)
         notional_eur = actual / 100.0 * inv_val
@@ -976,7 +971,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
                 if target is not None else None
             ),
             "delta": _signed_pp(delta) if delta is not None else None,
-            "delta_color": _semaphore_color(sema),
+            "delta_color": _band_colour(delta, target, cfg),
             "bar_width": min(max(actual, 1), 100),
             "spark": _spark(spark_vals, target, color) if spark_vals else None,
             "leverage": leverage,
@@ -986,14 +981,13 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     # The bar width is scaled as % of total portfolio so cash visually
     # matches the other rows (it would otherwise dominate the bar
     # because target_cash_buffer_eur is small relative to invested
-    # value). Status color is still driven by the relative deviation
-    # vs the cash target via _semaphore.
+    # value). Status colour: inside ±allocation_band_rel_pctg of the cash
+    # target is green, outside is red.
     if cfg.target_cash_buffer_eur > 0:
         cash_actual = m.cash_value
         cash_tgt = cfg.target_cash_buffer_eur
-        rel_dev = (cash_actual - cash_tgt) / cash_tgt * 100 if cash_tgt > 0 else 0
-        sema = _semaphore(rel_dev, tol)
         delta_eur = cash_actual - cash_tgt
+        cash_band = float(getattr(cfg, "allocation_band_rel_pctg", 25.0)) / 100.0 * cash_tgt
         cash_pct_of_total = (cash_actual / m.total_value * 100) if m.total_value > 0 else 0
         rows.append({
             # Shorter label only inside the Diversification block where
@@ -1006,7 +1000,8 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "actual_pct_raw": cash_pct_of_total,
             "target_pct": _eur_smart(cash_tgt),
             "delta": _eur_smart(delta_eur, signed=True),
-            "delta_color": _semaphore_color(sema),
+            "delta_color": (PALETTE["green"] if abs(delta_eur) <= cash_band + 1e-9
+                            else PALETTE["red"]),
             "bar_width": min(max(cash_pct_of_total, 1), 100),
             "is_eur": True,
             # Raw EUR figures so the diversification table can show cash as a
@@ -1018,7 +1013,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
 
     return {
         "rows": rows,
-        "tolerance": _pct(tol, decimals=1).rstrip("%") + "%",
         "has_timeline": any(r.get("spark") for r in rows),
     }
 
@@ -1026,8 +1020,6 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
     """Build geographic equity rows with target & ACWI ticks."""
     m = ctx.metrics
     cfg = ctx.config
-    tol = cfg.rebalancing_target_tolerance_pctg
-
     targets = cfg.equity_geo_targets_pctg or {}
     geo_df = m.allocation_by_geo
     acwi = m.acwi_geo or {}
@@ -1054,7 +1046,6 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
         target = targets.get(region)
         acwi_v = acwi.get(region)
         delta_target = actual - target if target is not None else None
-        sema = _semaphore(delta_target, tol)
         color = GEO_COLORS.get(region, PALETTE["accent"])
         spark_vals = _timeline_vals(geo_series, region)
         rows.append({
@@ -1065,7 +1056,7 @@ def _build_geography(ctx: _NewsletterContext) -> dict:
             "target_pct": _pct_smart(target) if target is not None else "—",
             "acwi_pct": _pct_smart(acwi_v) if acwi_v is not None else "—",
             "delta": _signed_pp(delta_target) if delta_target is not None else "—",
-            "delta_color": _semaphore_color(sema),
+            "delta_color": _band_colour(delta_target, target, cfg),
             "bar_width": min(max(actual, 1), 100),
             "target_left": min(max(target or 0, 0), 100),
             "acwi_left": min(max(acwi_v or 0, 0), 100),
@@ -1090,224 +1081,6 @@ def _recent_timeline(series: Optional[list], dates: Optional[list],
         keep = list(range(max(0, len(dates) - 5), len(dates)))
     return [series[i] for i in keep]
 
-def _div_label(name: str, color: Optional[str] = None,
-               ticker: Optional[str] = None) -> str:
-    """Row label for the diversification tables: an optional colour swatch, an
-    optional ticker pin, then the name.
-
-    The swatch is only drawn when it keys something: in the asset-class and
-    geography tables it is the colour of that row's trend line. In the
-    per-holding tables every row was the same accent blue, so nine identical
-    squares keyed nothing and took the width the name needed.
-    """
-    P = PALETTE
-    sw = (f'<span style="display:inline-block;width:9px;height:9px;'
-          f'border-radius:2px;background:{color};vertical-align:middle;'
-          f'margin-right:6px;"></span>') if color else ""
-    return (f'{sw}{ticker_span(ticker or "")}'
-            f'<span style="color:{P["ink"]};">{_esc(str(name))}</span>')
-
-def _div_table(rows: list[dict], tol: float, base: Optional[float] = None,
-               show_leverage: bool = False, first_label: str = "Name",
-               subs: bool = True, value_subs: Optional[bool] = None) -> str:
-    """The allocation table: one slice per ROW, one line per row.
-
-    Every column the section has always carried — the weight now, the target, the two
-    against each other on a shared axis, the month's trend and the drift — in about
-    22px instead of 50. The height came from two habits, not from the column count:
-    the percentage stacked over its euro amount, and a 40px sparkline. On one line and
-    at 15px the three tables together take roughly half the page they did.
-
-    The track is a bullet graph: a pale band for the ±tolerance around the target, the
-    weight as a bar over it, the target as a tick. A bar inside its band needs nothing
-    doing, which the reader sees without reading a figure.
-
-    ``show_leverage`` puts each class's notional-per-euro factor INSIDE the Now and
-    Target cells rather than in a column of its own — actual beside the actual weight,
-    the plan's beside the plan's, which is where each belongs. The target factor is
-    ``None`` for a class the plan holds no physical capital in ("synth"): fixed income
-    here is entirely an efficient core's bond overlay, and printing a ratio over a zero
-    denominator would invent one.
-
-    ``subs`` and ``value_subs`` are kept for call-site compatibility and no longer gate
-    a second line, because there is no second line: ``base`` alone decides whether a
-    euro amount appears beside a percentage.
-    """
-    if not rows:
-        return ""
-    P, FS = PALETTE, TYPE_PX["data"]
-    GUT = 8
-
-    # ONE width table for every block, so the three tables' columns line up down the
-    # section. Two of them (one for the leverage variant, one without) put Now, Target
-    # and Trend at different x in each block, and three tables whose columns do not
-    # agree read as three unrelated things.
-    #
-    # Sized on the widest content each column must hold, at ~6px a character in the
-    # 580px content box, minus its 8px gutter:
-    #   name    131px  "NTSG WT Gl. Eff. Core" = 21 chars
-    #   track    50px  a bar and a tick need no more
-    #   now     120px  "114.7% EUR120.0k 1.15x" = 20 chars
-    #   target  108px  "125.5% EUR140k 1.25x"   = 18 chars, and its gutter is 14 so the
-    #                  figures do not touch the sparkline that follows
-    #   trend    73px  27px of sparkline + 4 + "-10.8pp"
-    #   drift    44px  "-10.8pp"
-    #   drift  48px  "-10.8pp" is 42 and its box was exactly 42, so the first rounding
-    #                 pushed the figure outside the table -- fixed layout clips nothing
-    #                 unless told to, and clipping a number is worse than making room.
-    W = {"name": 20, "track": 10, "now": 23, "target": 22, "trend": 14,
-         "drift": 11}
-    #: Inset from the table's own border, on the two columns that touch it. The header
-    #: band and the row tints are backgrounds now, so a label flush against the border
-    #: reads as a rendering slip rather than a column.
-    EDGE = 12
-    #: The gutter after Target, wider than the rest: to its right sits a graphic, and
-    #: 8px between a figure and a sparkline reads as no gap at all.
-    GUT_TARGET = 14
-    #: Trend is the one left-aligned column between two right-aligned ones, so it needs
-    #: its own leading inset or its sparkline starts where Target's figures end.
-    TREND_LEAD = 8
-
-    # The axis every track shares, scaled on the SLICES only. The total row draws no
-    # bar -- it is a sum, not a slice -- but its 114.7% was in this maximum, so every
-    # real class was squashed into the left eighth of its track and Gold, Commodities
-    # and Alternative read as slivers.
-    _scaled = [r for r in rows if not r.get("is_total") and not r.get("eur_row")]
-    top = max([float(r.get("now") or 0.0) for r in _scaled]
-              + [float(r.get("target") or 0.0) for r in _scaled] + [1.0]) * 1.08
-
-    def _fig(pct: Optional[float], lev=None, *, bold: bool, dp: int) -> str:
-        if pct is None:
-            return f'<span style="color:{P["subtle"]};">\u2014</span>'
-        colour = P["ink"] if bold else P["muted"]
-        weight = "700" if bold else "400"
-        out = (f'<span style="color:{colour};font-weight:{weight};">'
-               f'{_pct_smart(float(pct))}</span>')
-        if base:
-            out += (f'<span style="color:{P["subtle"]};"> '
-                    f'{_eur_smart(float(pct) / 100.0 * float(base))}</span>')
-        if show_leverage and lev is not _NO_LEV:
-            out += (f'<span style="color:{P["subtle"]};"> '
-                    f'{"synth" if lev is None else f"{float(lev):.2f}\u00d7"}</span>')
-        return out
-
-    def _track(now: float, target: Optional[float], colour: str) -> str:
-        w_now = max(1, int(round(now / top * 100)))
-        if target is None:
-            band = '<td style="font-size:0;line-height:0;">&nbsp;</td>'
-            tick = ""
-        else:
-            lo = max(0, min(100, int(round((target - tol) / top * 100))))
-            hi = max(0, min(100, int(round((target + tol) / top * 100))))
-            x = max(0, min(100, int(round(target / top * 100))))
-            band = (f'<td width="{lo}%" style="font-size:0;line-height:0;">&nbsp;</td>'
-                    f'<td width="{max(1, hi - lo)}%" style="background:'
-                    f'{_tint(P["accent"], P["card"], 0.20)};font-size:0;'
-                    f'line-height:0;">&nbsp;</td>'
-                    f'<td style="font-size:0;line-height:0;">&nbsp;</td>')
-            tick = (f'<table role="presentation" width="100%" cellpadding="0" '
-                    f'cellspacing="0" border="0"><tr>'
-                    f'<td width="{x}%" style="font-size:0;line-height:0;">&nbsp;</td>'
-                    f'<td width="1" style="height:13px;background:{P["ink"]};'
-                    f'font-size:0;line-height:0;">&nbsp;</td>'
-                    f'<td style="font-size:0;line-height:0;">&nbsp;</td>'
-                    f'</tr></table>')
-        return (
-            f'<div><table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0" border="0" style="height:9px;background:'
-            f'{P["group_bg"]};border-radius:2px;"><tr style="height:9px;">'
-            f'{band}</tr></table>'
-            f'<div style="margin-top:-7px;"><table role="presentation" width="100%" '
-            f'cellpadding="0" cellspacing="0" border="0"><tr>'
-            f'<td width="{w_now}%" style="height:5px;background:{colour};'
-            f'border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>'
-            f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table></div>'
-            f'<div style="margin-top:-9px;">{tick}</div></div>')
-
-    def _th(key: str, label: str, align: str = "left") -> str:
-        gut = GUT_TARGET if key == "target" else GUT
-        left = EDGE if key == "name" else (TREND_LEAD if key == "trend" else 0)
-        right = EDGE if key == "drift" else gut
-        return (f'<td width="{W[key]}%" align="{align}" style="{TYPE["label"]}'
-                f'color:{P["muted"]};padding:5px {right}px 5px {left}px;'
-                f'white-space:nowrap;">{label}</td>')
-
-    # The shell PORTFOLIO MOVERS uses, so the two sections read as one table language:
-    # a rounded border, a header band on ``head_bg``, zebra rows.
-    out = [f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-           f'border="0" style="width:100%;table-layout:fixed;margin-top:10px;'
-           f'border:1px solid {P["border"]};border-radius:8px;'
-           f'border-collapse:separate;border-spacing:0;overflow:hidden;">',
-           f'<tr style="background:{P["head_bg"]};">'
-           + _th("name", _esc(first_label)) + _th("track", "Vs target")
-           + _th("now", "Now", "right") + _th("target", "Target", "right")
-           + _th("trend", "Trend") + _th("drift", "Drift", "right") + '</tr>']
-
-    for i, r in enumerate(rows):
-        zebra = P["zebra"] if i % 2 else P["card"]
-        pad = f'background:{zebra};padding:3px {GUT}px 3px 0;'
-        if r.get("eur_row"):
-            # Cash: an amount, not a share of the invested base, so no track and no
-            # percentage — the row states the two figures and their gap.
-            out.append(
-                f'<tr><td style="{TYPE["data"]}color:{P["ink"]};{pad}'
-                f'white-space:nowrap;overflow:hidden;border-top:1px solid '
-                f'{P["row_rule"]};">{r.get("label_html", "")}</td>'
-                f'<td style="{pad}border-top:1px solid {P["row_rule"]};">&nbsp;</td>'
-                f'<td align="right" style="{TYPE["data"]}color:{P["ink"]};{pad}'
-                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
-                f'border-top:1px solid {P["row_rule"]};">'
-                f'{_eur_smart(float(r.get("now_eur") or 0.0))}</td>'
-                f'<td align="right" style="{TYPE["data"]}color:{P["muted"]};{pad}'
-                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
-                f'border-top:1px solid {P["row_rule"]};">'
-                f'{_eur_smart(float(r.get("target_eur") or 0.0))}</td>'
-                f'<td style="{pad}border-top:1px solid {P["row_rule"]};">&nbsp;</td>'
-                f'<td align="right" style="{TYPE["data"]}'
-                f'color:{r.get("delta_color") or P["muted"]};font-weight:700;'
-                f'background:{zebra};padding:3px {EDGE}px 3px 0;'
-                f'font-variant-numeric:tabular-nums;white-space:nowrap;'
-                f'border-top:1px solid {P["row_rule"]};">'
-                f'{_signed_eur(r.get("delta_eur"))}</td></tr>')
-            continue
-
-        now = float(r.get("now") or 0.0)
-        target = r.get("target")
-        target = None if target is None else float(target)
-        drift = None if target is None else now - target
-        dcol = _semaphore_color(_semaphore(drift, tol)) if drift is not None else P["muted"]
-        colour = r.get("color") or P["accent"]
-        is_total = bool(r.get("is_total"))
-        rule = (f'border-top:1px solid {P["border"]};' if is_total
-                else f'border-top:1px solid {P["row_rule"]};')
-        name_colour = P["accent"] if is_total else P["ink"]
-        lev = r.get("leverage", _NO_LEV) if show_leverage else _NO_LEV
-        tlev = r.get("target_leverage", _NO_LEV) if show_leverage else _NO_LEV
-
-        out.append(
-            f'<tr><td style="{TYPE["data"]}color:{name_colour};'
-            f'{"font-weight:700;" if is_total else ""}{pad}{rule}'
-            f'white-space:nowrap;overflow:hidden;">{r.get("label_html", "")}</td>'
-            f'<td style="{pad}{rule}">'
-            f'{"&nbsp;" if is_total else _track(now, target, dcol)}</td>'
-            f'<td align="right" style="{TYPE["data"]}{pad}{rule}'
-            f'font-variant-numeric:tabular-nums;white-space:nowrap;">'
-            f'{_fig(now, lev, bold=True, dp=1)}</td>'
-            f'<td align="right" style="{TYPE["data"]}{pad}{rule}'
-            f'font-variant-numeric:tabular-nums;white-space:nowrap;">'
-            f'{_fig(target, tlev, bold=False, dp=0)}</td>'
-            f'<td style="{pad}{rule}white-space:nowrap;overflow:hidden;">'
-            f'{_trend_cell(r.get("spark_vals"), target, colour)}</td>'
-            f'<td align="right" style="{TYPE["data"]}color:{dcol};font-weight:700;'
-            f'padding:3px 0;{rule}font-variant-numeric:tabular-nums;'
-            f'white-space:nowrap;">'
-            f'{(_signed_pp(drift) + "pp") if drift is not None else "\u2014"}</td>'
-            f'</tr>')
-
-    out.append("</table>")
-    return "".join(out)
-
-
 def _signed_eur(value) -> str:
     """A signed euro gap: "+EUR2.5k". Cash is held as an amount, not a share, so its
     row's drift cannot be points."""
@@ -1317,103 +1090,347 @@ def _signed_eur(value) -> str:
     return f'{"+" if amount >= 0 else "\u2212"}{_eur_smart(abs(amount))}'
 
 
-#: Sentinel: a row that carries no leverage key at all, as against one that carries
-#: ``None`` to mean "synthetic". The two must render differently -- nothing versus the
-#: word -- and ``None`` cannot express both.
-_NO_LEV = object()
+# ── Allocation: the bridge ───────────────────────────────────────────────────
+#
+# Each block is ONE graphic, and the graphic is the table. Two stacked columns,
+# today and the plan, each slice joined to itself: a band that widens is weight to
+# add, one that narrows is weight to take out. Lines the plan sells funnel into one
+# point; lines the plan buys from nothing grow as a wedge out of it.
+#
+# The figures sit in columns of the graphic itself, each said once:
+#   left of TODAY   name, weight now          /  1M move, euros now
+#   right of PLAN   plan weight, gap (points) /  plan euros
+# A name is written on the side where the line has weight: a line held today is
+# named on the left, a line only the plan holds is named on its own wedge.
+#
+# Drawn in a 350-unit viewBox (a phone's content width) at width:100%, so it is
+# 1:1 on a phone and scales with the column anywhere wider.
+
+_BW = 350.0
+_FS, _FS2 = 12, 11               # label line, its second line
+_CW, _CW2 = 7.25, 6.65           # advance of one monospace character at each
+_SLOT = 32.0                     # vertical room per two-line label
+_BAR, _LEAD, _COLGAP = 10, 6, 9
+_TOP, _GAP = 22.0, 2.0
+#: Successive lines of one asset class step through these, so two names of the
+#: same class stay apart while keeping the class's hue.
+_SHADE_STEPS = (("base", 0.0), ("card", 0.62), ("ink", 0.45), ("card", 0.40),
+                ("ink", 0.22))
+_LEGACY_SHADES = (0.95, 0.62, 0.84, 0.52, 0.74, 0.90, 0.57, 0.80, 0.66, 0.48)
+_ASSET_SHORT = {"Fixed Income": "Fixed inc."}
+_GEO_SHORT = {"Eurozone EMU": "Eurozone", "Dev ex-USA ex-EMU ex-JP": "Other dev",
+              "Emerging Markets": "Emerging"}
 
 
-def _tint(fg: str, bg: str, alpha: float) -> str:
-    """``fg`` over ``bg`` at ``alpha``, as a flat hex.
-
-    Resolved here because an emailed ``rgba()`` is unreliable: several clients drop the
-    declaration entirely and the band would vanish.
-    """
-    a = max(0.0, min(1.0, alpha))
+def _mix(fg: str, bg: str, a: float) -> str:
+    """``fg`` over ``bg`` at ``a``, as a flat hex (an emailed rgba() is unreliable)."""
+    a = max(0.0, min(1.0, a))
     f = [int(fg[i:i + 2], 16) for i in (1, 3, 5)]
     b = [int(bg[i:i + 2], 16) for i in (1, 3, 5)]
     return "#" + "".join(f"{int(round(f[i] * a + b[i] * (1 - a))):02x}" for i in range(3))
 
 
-def _trend_cell(vals, target, colour) -> str:
-    """A 15px sparkline of the last month against its target, plus the move in points.
+def _lift(colour: Optional[str]) -> str:
+    """The class colours were tuned for a light page; lifted toward white they hold
+    on the dark card without changing hue."""
+    if not colour or not str(colour).startswith("#") or len(str(colour)) != 7:
+        return PALETTE["accent"]
+    return _mix("#FFFFFF", str(colour), 0.28)
 
-    15px rather than the 40 this used to draw. The shape is what the column is for and
-    it survives the smaller box; the 25px per row it returns is half of what made the
-    section a thousand pixels tall.
+
+def _shade(base: str, n: int) -> str:
+    toward, a = _SHADE_STEPS[n % len(_SHADE_STEPS)]
+    if toward == "base":
+        return base
+    if toward == "card":
+        return _mix(base, PALETTE["card"], a)
+    return _mix("#FFFFFF", base, a)
+
+
+def _alloc_band(target: Optional[float], cfg) -> float:
+    """The display band around a target: the NARROWER of ±``allocation_band_abs_pp``
+    points and ±``allocation_band_rel_pctg`` % of the target (the 5/25 rule).
+
+    Display only. The optimizer keeps ``rebalancing_target_tolerance_pctg``: it is the
+    solver's constraint for the day the owner rebalances, a different question from
+    "is this line out of band".
     """
-    series = [float(v) for v in (vals or []) if v is not None]
-    if len(series) < 2:
-        return f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};">no series</span>'
+    abs_pp = float(getattr(cfg, "allocation_band_abs_pp", 5.0) or 0.0)
+    rel = float(getattr(cfg, "allocation_band_rel_pctg", 25.0) or 0.0) / 100.0
+    return min(abs_pp, rel * abs(float(target or 0.0)))
+
+
+def _band_colour(drift: Optional[float], target: Optional[float], cfg) -> str:
+    """Green inside the band, red outside it. Two states: outside the band is the
+    rebalancing trigger, and there is no third answer to that question."""
+    if drift is None or is_missing(drift) or target is None:
+        return PALETTE["muted"]
+    return (PALETTE["green"] if abs(float(drift)) <= _alloc_band(target, cfg) + 1e-9
+            else PALETTE["red"])
+
+
+def _dodge(ys: list, gap: float, lo: float, hi: float) -> list:
+    """Push label centres apart to at least ``gap``, inside [lo, hi], keeping order."""
+    order = sorted(range(len(ys)), key=lambda i: ys[i])
+    out = list(ys)
+    for _ in range(80):
+        moved = False
+        for a, b in zip(order, order[1:]):
+            if out[b] - out[a] < gap - 1e-6:
+                push = (gap - (out[b] - out[a])) / 2
+                out[a] -= push
+                out[b] += push
+                moved = True
+        for i in order:
+            out[i] = min(max(out[i], lo), hi)
+        if not moved:
+            break
+    return out
+
+
+def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 400,
+        anchor: str = "start", size: int = _FS) -> str:
+    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" font-weight="{weight}" '
+            f'fill="{fill}" text-anchor="{anchor}">{_esc(str(s))}</text>')
+
+
+def _pc1(v: float) -> str:
+    return f"{float(v):.1f}%"
+
+
+def _move_text(trend: Optional[list]) -> str:
+    tr = [float(x) for x in (trend or []) if x is not None]
+    return f"1M {_signed_pp(tr[-1] - tr[0])}" if len(tr) >= 2 else ""
+
+
+def _bridge_row(*, key: str, label: str, colour: str, now: float,
+                target: Optional[float], base: float, trend=None,
+                legacy: bool = False) -> dict:
+    now = float(now or 0.0)
+    tgt = None if target is None else float(target)
+    return {"key": key, "label": label, "colour": colour, "now": now, "target": tgt,
+            "drift": None if tgt is None else now - tgt,
+            "eur_now": now / 100.0 * base, "eur_tgt": (tgt or 0.0) / 100.0 * base,
+            "trend": trend, "legacy": legacy}
+
+
+def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, tail=(),
+                rule100: bool = False, total_now: Optional[float] = None,
+                total_tgt: Optional[float] = None,
+                aria: str = "Allocation, today against the plan") -> str:
+    """One bridge block. ``left``/``right`` are rows in stack order; ``tail`` rows
+    sit under the stacks in the same columns:
+    (name, 1M text, now text, now euros, plan text, plan euros, gap text, colour)."""
     P = PALETTE
-    w, h = 27, 15
-    pool = series + ([float(target)] if target is not None else [])
-    lo, hi = min(pool), max(pool)
-    if hi - lo < 1e-9:
-        lo, hi = lo - 1.0, hi + 1.0
+    l_rows = [r for r in left if r["now"] > 0]
+    r_rows = [r for r in right if (r["target"] or 0) > 0]
+    if not l_rows and not r_rows:
+        return ""
+    gap_txt = lambda r: _signed_pp(r["drift"]) if r["drift"] is not None else "\u2014"  # noqa: E731
+    w1 = lambda xs: max([len(s) for s in xs] + [0]) * _CW   # noqa: E731
+    w2 = lambda xs: max([len(s) for s in xs] + [0]) * _CW2  # noqa: E731
+    name_w = max(w1([r["label"] for r in l_rows] + [x[0] for x in tail]),
+                 w2([_move_text(r["trend"]) for r in l_rows] + [x[1] for x in tail]))
+    now_w = max(w1([_pc1(r["now"]) for r in l_rows] + [x[2] for x in tail] + ["TODAY"]),
+                w2([_eur_smart(r["eur_now"]) for r in l_rows] + [x[3] for x in tail]))
+    plan_w = max(w1([_pc1(r["target"]) for r in r_rows] + [x[4] for x in tail] + ["PLAN"]),
+                 w2([_eur_smart(r["eur_tgt"]) for r in r_rows] + [x[5] for x in tail]))
+    gap_w = w1([gap_txt(r) for r in r_rows] + [x[6] for x in tail] + ["GAP"])
+    now_end = name_w + _COLGAP + now_w
+    LX0 = now_end + _LEAD
+    LX1 = LX0 + _BAR
+    gap_end = _BW
+    plan_end = gap_end - gap_w - _COLGAP
+    RX1 = plan_end - plan_w - _LEAD
+    RX0 = RX1 - _BAR
+    flow = RX0 - LX1
 
-    def y(v: float) -> float:
-        return h - 1.5 - (v - lo) / (hi - lo) * (h - 3)
+    tn = total_now if total_now is not None else sum(r["now"] for r in l_rows)
+    tt = total_tgt if total_tgt is not None else sum(r["target"] for r in r_rows)
+    span = max(tn, tt, 1e-9)
+    k = (stack_h - (max(len(l_rows), len(r_rows), 1) - 1) * _GAP) / span
 
-    step = (w - 2) / (len(series) - 1)
-    pts = " ".join(f"{1 + i * step:.1f},{y(v):.1f}" for i, v in enumerate(series))
-    dash = ("" if target is None else
-            f'<line x1="1" y1="{y(float(target)):.1f}" x2="{w - 1}" '
-            f'y2="{y(float(target)):.1f}" stroke="{P["subtle"]}" stroke-width="0.7" '
-            f'stroke-dasharray="2,2" stroke-opacity="0.8"/>')
-    move = series[-1] - series[0]
-    return (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
-            f'xmlns="http://www.w3.org/2000/svg" style="display:inline-block;'
-            f'vertical-align:middle;">{dash}'
-            f'<polyline points="{pts}" fill="none" stroke="{colour}" '
-            f'stroke-width="1.3" stroke-linejoin="round"/>'
-            f'<circle cx="{1 + (len(series) - 1) * step:.1f}" '
-            f'cy="{y(series[-1]):.1f}" r="1.6" fill="{colour}"/></svg>'
-            f'<span style="{TYPE["prose"]}color:{P["subtle"]};padding-left:4px;">'
-            f'{_signed_pp(move)}</span>')
+    def stack(rows, key):
+        y, out = _TOP, {}
+        for r in rows:
+            v = r[key] or 0.0
+            out[r["key"]] = (y, v * k)
+            y += v * k + (_GAP if v > 0 else 0)
+        return out
 
-def _ph_target_rows(ctx: _NewsletterContext, tol: float,
-                    hold_inv_series: Optional[list]) -> tuple[list[dict], str]:
-    """Rows (for :func:`_div_table`) for per-holding portfolio targets in
-    ``target_use_per_holding_only`` mode: each targeted instrument's CURRENT
-    weight (% of invested, straight from the rebalancer verification — so a
-    not-yet-held target reads 0%), its target, and a 1-month weight trend on
-    the SAME % of invested basis. Also returns a short "to exit" note for
-    0%-target holdings still held. ``(rows, note)``.
+    L, R = stack(left, "now"), stack(right, "target")
+    bottom = _TOP + stack_h
+    hdr = dict(fill=P["subtle"], weight=700, size=10)
+    g = [_bt(now_end, 11, "TODAY", anchor="end", **hdr),
+         _bt(plan_end, 11, "PLAN", anchor="end", **hdr),
+         _bt(gap_end, 11, "GAP", anchor="end", **hdr)]
 
-    ``hold_inv_series`` is the timeline's ``holding_invested`` series (keyed by
-    ISIN). Verification items carry a ticker/name, so we resolve each to its
-    ISIN via the snapshot to look up the right trend line.
+    leg = [r for r in left if r["legacy"] and r["now"] > 0]
+    fan = None
+    if leg:
+        y0 = L[leg[0]["key"]][0]
+        y1 = L[leg[-1]["key"]][0] + L[leg[-1]["key"]][1]
+        fan = (LX1 + 0.56 * flow, (y0 + y1) / 2)
+    by_key = {r["key"]: r for r in right + left}
+    mid = (LX1 + RX0) / 2
+    flows, bars, inks = [], [], []
+    for key in dict.fromkeys([r["key"] for r in left] + [r["key"] for r in right]):
+        r = by_key[key]
+        ly, lh = L.get(key, (_TOP, 0.0))
+        ry, rh = R.get(key, (_TOP, 0.0))
+        c = r["colour"]
+        if lh > 0 and rh > 0:
+            d = (f'M{LX1:.1f},{ly:.1f} C{mid:.1f},{ly:.1f} {mid:.1f},{ry:.1f} {RX0:.1f},{ry:.1f} '
+                 f'L{RX0:.1f},{ry + rh:.1f} C{mid:.1f},{ry + rh:.1f} {mid:.1f},{ly + lh:.1f} '
+                 f'{LX1:.1f},{ly + lh:.1f} Z')
+        elif lh > 0:
+            # Sold: every legacy line funnels into ONE point, the sale being one
+            # decision. A line with no target at all just tapers off.
+            tx, ty = fan if (fan and r["legacy"]) else (mid, ly + lh / 2)
+            cx = (LX1 + tx) / 2
+            d = (f'M{LX1:.1f},{ly:.1f} C{cx:.1f},{ly:.1f} {tx - 12:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
+                 f'C{tx - 12:.1f},{ty:.1f} {cx:.1f},{ly + lh:.1f} {LX1:.1f},{ly + lh:.1f} Z')
+        elif rh > 0:
+            # Bought from zero: a wedge that starts just past the sale point.
+            tx = (fan[0] + 10) if fan else (RX0 - 0.5 * flow)
+            ty = ry + rh / 2
+            cx = (tx + RX0) / 2
+            d = (f'M{RX0:.1f},{ry:.1f} C{cx:.1f},{ry:.1f} {tx + 12:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
+                 f'C{tx + 12:.1f},{ty:.1f} {cx:.1f},{ry + rh:.1f} {RX0:.1f},{ry + rh:.1f} Z')
+            # Its name on the wedge when the wedge can hold it, else just before
+            # the tip, where nothing else is drawn.
+            if rh >= 13:
+                inks.append(_bt(RX0 - 5, ty + 4, r["label"], fill=P["ink"], weight=700,
+                                anchor="end", size=11))
+            else:
+                inks.append(_bt(tx - 4, ty + 4, r["label"], fill=P["ink"], weight=700,
+                                anchor="end", size=11))
+        else:
+            continue
+        flows.append(f'<path d="{d}" fill="{c}" fill-opacity="0.30"/>')
+        if lh > 0:
+            bars.append(f'<rect x="{LX0:.1f}" y="{ly:.1f}" width="{_BAR}" height="{lh:.1f}" '
+                        f'fill="{c}"/>')
+        if rh > 0:
+            bars.append(f'<rect x="{RX0:.1f}" y="{ry:.1f}" width="{_BAR}" height="{rh:.1f}" '
+                        f'fill="{c}"/>')
+    g += flows + bars + inks
+    if fan:
+        sx = LX1 + 7
+        g += [f'<circle cx="{fan[0]:.1f}" cy="{fan[1]:.1f}" r="2.6" fill="{P["red"]}"/>',
+              _bt(sx, fan[1] - 10, "sell", fill=P["ink"], weight=700, size=11),
+              _bt(sx, fan[1] + 4, _pc1(sum(r["now"] for r in leg)), fill=P["ink"],
+                  weight=700, size=11),
+              _bt(sx, fan[1] + 18, _eur_smart(sum(r["eur_now"] for r in leg)),
+                  fill=P["ink"], weight=700, size=11)]
+    if rule100:
+        y100 = _TOP + 100 * k + _GAP * 3
+        g.append(f'<line x1="{LX0 - 3:.1f}" y1="{y100:.1f}" x2="{RX1 + 3:.1f}" y2="{y100:.1f}" '
+                 f'stroke="{P["ink"]}" stroke-opacity="0.75" stroke-dasharray="3,3"/>'
+                 f'<rect x="{mid - 19:.1f}" y="{y100 - 7.5:.1f}" width="38" height="15" rx="3" '
+                 f'fill="{P["card"]}"/>'
+                 + _bt(mid, y100 + 4, "100%", fill=P["ink"], weight=700, anchor="middle",
+                       size=10))
+
+    def place(rows, stk):
+        y0s = [stk[r["key"]][0] + stk[r["key"]][1] / 2 for r in rows]
+        return y0s, _dodge(y0s, _SLOT, _TOP + 10, bottom + 4)
+
+    low = 0.0
+    y0s, ys = place(l_rows, L)
+    for r, y0, y in zip(l_rows, y0s, ys):
+        if abs(y - y0) > 1.0:
+            g.append(f'<path d="M{now_end + 3:.1f},{y:.1f} L{LX0 - 2:.1f},{y0:.1f}" '
+                     f'stroke="{P["subtle"]}" stroke-width="0.8" fill="none"/>')
+        g += [_bt(0, y - 1, r["label"], fill=P["red"] if r["legacy"] else P["ink"], weight=600),
+              _bt(now_end, y - 1, _pc1(r["now"]), fill=P["ink"], weight=700, anchor="end"),
+              _bt(0, y + 11.5, _move_text(r["trend"]), fill=P["muted"], size=_FS2),
+              _bt(now_end, y + 11.5, _eur_smart(r["eur_now"]), fill=P["muted"],
+                  anchor="end", size=_FS2)]
+        low = max(low, y)
+    y0s, ys = place(r_rows, R)
+    for r, y0, y in zip(r_rows, y0s, ys):
+        if abs(y - y0) > 1.0:
+            g.append(f'<path d="M{RX1 + 2:.1f},{y0:.1f} L{RX1 + _LEAD - 3:.1f},{y:.1f}" '
+                     f'stroke="{P["subtle"]}" stroke-width="0.8" fill="none"/>')
+        g += [_bt(plan_end, y - 1, _pc1(r["target"]), fill=P["ink"], weight=700, anchor="end"),
+              _bt(gap_end, y - 1, gap_txt(r), fill=_band_colour(r["drift"], r["target"], cfg),
+                  weight=700, anchor="end"),
+              _bt(plan_end, y + 11.5, _eur_smart(r["eur_tgt"]), fill=P["muted"],
+                  anchor="end", size=_FS2)]
+        low = max(low, y)
+
+    H = max(bottom + 6, low + 18)
+    if tail:
+        g.append(f'<line x1="0" y1="{H + 2:.1f}" x2="{_BW:.0f}" y2="{H + 2:.1f}" '
+                 f'stroke="{P["border"]}"/>')
+        y = H + 18
+        for nm, mv, npc, neu, ppc, peu, gp, gc in tail:
+            g += [_bt(0, y, nm, fill=P["ink"], weight=600),
+                  _bt(now_end, y, npc, fill=P["ink"], weight=700, anchor="end"),
+                  _bt(plan_end, y, ppc, fill=P["ink"], weight=700, anchor="end"),
+                  _bt(gap_end, y, gp, fill=gc, weight=700, anchor="end")]
+            if mv or neu:
+                g += [_bt(0, y + 13, mv, fill=P["muted"], size=_FS2),
+                      _bt(now_end, y + 13, neu, fill=P["muted"], anchor="end", size=_FS2),
+                      _bt(plan_end, y + 13, peu, fill=P["muted"], anchor="end", size=_FS2)]
+                y += 32
+            else:
+                y += 18
+        H = y - 6
+    H = int(H) + 2
+    return (f'<svg width="100%" viewBox="0 0 {_BW:.0f} {H}" xmlns="http://www.w3.org/2000/svg" '
+            f'role="img" aria-label="{_esc(aria)}" style="display:block;margin-top:10px;" '
+            f'font-family="{FONT_STACK}">{"".join(g)}</svg>')
+
+
+def _alloc_head(title: str, note: str, top: int) -> str:
+    P = PALETTE
+    return (f'<div style="margin-top:{top}px;font-size:11px;font-weight:700;'
+            f'letter-spacing:0.06em;text-transform:uppercase;color:{P["ink"]};">'
+            f'{_esc(title)}</div><div style="margin-top:2px;font-size:12px;'
+            f'line-height:1.45;color:{P["subtle"]};">{_esc(note)}</div>')
+
+
+def _alloc_note(text: str, top: int = 8) -> str:
+    return (f'<div style="margin-top:{top}px;font-size:12px;line-height:1.45;'
+            f'color:{PALETTE["muted"]};">{_esc(text)}</div>')
+
+
+def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
+                         weights: dict, series: Optional[list],
+                         series_key: str) -> tuple[list, list, list]:
+    """(kept, new, sold) bridge rows for one per-holding verification.
+
+    ``weights`` maps an item's ISIN to its CURRENT weight (% of the block's base),
+    from the snapshot, not the verification's post-trade ``actual_pct``. ``series``
+    is the 1-month timeline for the block, keyed by ISIN or ticker (``series_key``).
+    Each line takes its asset class's hue, stepped so two names of a class differ;
+    lines the plan sells are shades of red.
     """
-    P = PALETTE
     m = ctx.metrics
     df = getattr(m, "holdings_df", None)
-
-    # Resolver: ticker (bare + full) and name → ISIN, so a verification item
-    # (which carries h.ticker like "NTSG.DE" and the name) can find its
-    # ISIN-keyed trend line.
-    invested = float(getattr(m, "invested_value", 0.0) or 0.0)
-    if invested <= 0:
-        invested = float(getattr(m, "total_value", 0.0) or 0.0)
     isin_of: dict[str, str] = {}
-    cur_by_isin: dict[str, float] = {}  # CURRENT weight (% of invested) by ISIN
+    class_of: dict[str, str] = {}
+    ticker_of: dict[str, str] = {}
+    name_of: dict[str, str] = {}
     if df is not None and not df.empty:
         for _, row in df.iterrows():
-            _isin = str(row.get("isin", "") or "").strip()
-            if not _isin:
+            isin = str(row.get("isin", "") or "").strip()
+            if not isin:
                 continue
             for key in (row.get("isin"), row.get("ticker"), row.get("name")):
                 if key and str(key).strip():
-                    isin_of[str(key).strip().upper()] = _isin
-            # Also index the exchange-stripped ticker (NTSG.DE → NTSG).
+                    isin_of[str(key).strip().upper()] = isin
             tkr = str(row.get("ticker", "") or "").strip()
             if tkr:
-                isin_of[tkr.upper().split(".")[0]] = _isin
-            val = float(row.get("current_value", 0.0) or 0.0)
-            cur_by_isin[_isin] = (val / invested * 100.0) if invested > 0 else 0.0
+                isin_of[tkr.upper().split(".")[0]] = isin
+            class_of[isin] = str(row.get("asset_class", "") or "")
+            ticker_of[isin] = tkr
+            name_of[isin] = str(row.get("name", "") or "")
 
-    def _isin_for(it) -> str:
-        for key in (it.get("ticker"), it.get("category")):
+    def isin_for(it) -> str:
+        for key in (it.get("isin"), it.get("ticker"), it.get("category")):
             if not key:
                 continue
             k = str(key).strip().upper()
@@ -1423,313 +1440,239 @@ def _ph_target_rows(ctx: _NewsletterContext, tol: float,
                 return isin_of[k.split(".")[0]]
         return ""
 
-    def _trend_for(it) -> Optional[list]:
-        if not hold_inv_series:
+    def trend_for(it, isin) -> Optional[list]:
+        if not series:
             return None
-        isin = _isin_for(it)
-        if not isin:
+        key = isin if series_key == "isin" else str(it.get("ticker") or "")
+        if not key:
             return None
-        xs = [float(pt.get(isin, 0.0)) for pt in hold_inv_series]
-        if any(x > 0 for x in xs) and len(xs) >= 2:
-            return xs
-        return None
+        xs = [float(pt.get(key, 0.0)) for pt in series]
+        return xs if any(x > 0 for x in xs) and len(xs) >= 2 else None
 
-    items = []
-    for v in (m.rebalancing_verifications or []):
-        if v.get("kind") == "per_holding_portfolio":
-            items = v.get("items", []) or []
-            break
-
-    targeted, exits = [], []
+    kept, new, sold = [], [], []
     for it in items:
+        isin = isin_for(it)
         tgt = float(it.get("target_pct", 0.0) or 0.0)
-        (targeted if tgt > 0 else exits).append(it)
-    targeted.sort(key=lambda it: -float(it.get("target_pct", 0.0) or 0.0))
-
-    rows = []
-    for it in targeted:
-        key = it.get("ticker") or it.get("category") or ""
-        tk = _display_ticker(key) or ""
-        # "Now" = the CURRENT weight (% of invested) from the snapshot, so it
-        # matches the By-asset-class table exactly. The verification's
-        # actual_pct is POST-trade (it reflects the plan's buys), which would
-        # not equal the current weight — a not-yet-held target reads 0%.
-        now = cur_by_isin.get(_isin_for(it), 0.0)
-        rows.append({
-            # No swatch: every per-holding row would carry the same accent
-            # square, keying nothing and taking the width the name needs.
-            "label_html": _div_label(
-                # 15, not 42. The name column holds 21 characters and the ticker takes
-                # the first five of them; at 42 the name ran straight into the track
-                # beside it ("AVWS Avant. Gl. Sm Cap Value" overlapping its own bar).
-                display_instrument_name(_isin_for(it), key,
-                                        it.get("category") or key, 10),
-                ticker=tk),
-            "now": now,
-            "target": float(it.get("target_pct", 0.0) or 0.0),
-            "spark_vals": _trend_for(it),
-            "color": P["accent"],
-        })
-
-    note = ""
-    held_exits = [it for it in exits if cur_by_isin.get(_isin_for(it), 0.0) > 0.05]
-    if held_exits:
-        # How much money the instruction actually moves, not just which tickers
-        # it names: a list of seven symbols does not say whether this is a
-        # rounding trim or half the book.
-        #
-        # cur_by_isin holds each position's WEIGHT as a percent of invested
-        # capital, not its euro value (see where it is built above), so the
-        # share is the sum of those weights and the amount is derived from it.
-        # Summing it as euros produced "7 positions worth €54".
-        share = sum(cur_by_isin.get(_isin_for(it), 0.0) for it in held_exits)
-        invested = float(getattr(ctx.metrics, "invested_value", 0.0) or 0.0)
-        exit_eur = invested * share / 100.0 if invested > 0 else None
-        pills = " ".join(
-            f'<span style="display:inline-block;margin:0 4px 4px 0;'
-            f'padding:1px 6px;border-radius:5px;background:{P["red_bg"]};'
-            f'color:{P["red"]};font-size:{TYPE_PX["label"]}px;font-weight:700;'
-            f'white-space:nowrap;">'
-            f'{(_display_ticker(it.get("ticker") or "") or short_instrument_name(it.get("category") or "", 16))}'
-            f'</span>'
-            for it in held_exits)
-        note = (
-            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
-            f'<b style="color:{P["red"]};">Targeted to 0%:</b> '
-            f'{len(held_exits)} position{"s" if len(held_exits) != 1 else ""} '
-            + (f'worth <b style="color:{P["ink"]};">{_eur_smart(exit_eur)}</b>, '
-               if exit_eur is not None else "")
-            + f'{share:.1f}% of invested capital'
-            + f'.<div style="margin-top:5px;">{pills}</div></div>')
-    return rows, note
-
-def _holding_verif_rows(ctx: _NewsletterContext, tol: float,
-                        hold_series: Optional[list], kind: str,
-                        color: str) -> list[dict]:
-    """Rows (for :func:`_div_table`) from an equity/FI per-holding verification
-    (weight is % of the sleeve), used when NOT in per-holding-only mode."""
-    rows = []
-    for v in (ctx.metrics.rebalancing_verifications or []):
-        if v.get("kind") != kind:
+        now = (weights.get(isin, 0.0) if weights is not None
+               else float(it.get("actual_pct", 0.0) or 0.0))
+        if tgt <= 0 and now <= 0.05:
             continue
-        # Sort by weight desc, with ticker as a STABLE tie-break: two holdings
-        # at the same weight would otherwise keep their input order, which
-        # traces back to a set() of open ISINs (hash-randomized per process) —
-        # making the rendered order vary run-to-run and breaking reproducibility.
-        items = sorted(v.get("items", []) or [],
-                       key=lambda it: (-float(it.get("actual_pct", 0.0)),
-                                       str(it.get("ticker", "")),
-                                       str(it.get("category", ""))))
-        for it in items:
-            ticker = it.get("ticker", "")
-            tk = _display_ticker(ticker) or ""
-            vals = None
-            if hold_series:
-                xs = [float(pt.get(ticker, 0.0)) for pt in hold_series]
-                if any(x > 0 for x in xs) and len(xs) >= 2:
-                    vals = xs
-            rows.append({
-                "label_html": _div_label(
-                    display_instrument_name(it.get("isin"), ticker,
-                                            it.get("category") or ticker, 42),
-                    ticker=tk),
-                "now": float(it.get("actual_pct", 0.0)),
-                "target": float(it.get("target_pct", 0.0)),
-                "spark_vals": vals,
-                "color": color,
-            })
-    return rows
+        label = _display_ticker(it.get("ticker") or "") or short_instrument_name(
+            it.get("category") or "", 8)
+        row = dict(item=it, isin=isin, now=now, tgt=tgt, label=label,
+                   cls=class_of.get(isin, "Equities"))
+        (sold if tgt <= 0 else (new if now <= 0.05 else kept)).append(row)
+    if weights is not None:
+        # Every line held today is in TODAY, listed by the check or not. The check
+        # is post-trade, so a line a full rebalance sells outright drops out of it
+        # while the book still holds it -- and by the plan's own rule an unlisted
+        # holding is targeted to zero. Cash is not invested capital.
+        seen = {r["isin"] for r in kept + new + sold if r["isin"]}
+        for isin, w in weights.items():
+            if (isin in seen or w <= 0.05
+                    or class_of.get(isin, "").lower().startswith("cash")):
+                continue
+            tk = ticker_of.get(isin, "")
+            sold.append(dict(item={"ticker": tk, "isin": isin}, isin=isin, now=w,
+                             tgt=0.0, cls=class_of.get(isin, "Equities"),
+                             label=_display_ticker(tk) or short_instrument_name(
+                                 name_of.get(isin) or isin, 8)))
+    kept.sort(key=lambda r: (-r["tgt"], r["label"]))
+    new.sort(key=lambda r: (-r["tgt"], r["label"]))
+    sold.sort(key=lambda r: (-r["now"], r["label"]))
+
+    steps: dict[str, int] = {}
+
+    def colour(cls: str) -> str:
+        n = steps.get(cls, 0)
+        steps[cls] = n + 1
+        return _shade(_lift(ASSET_COLORS.get(cls) or PALETTE["accent"]), n)
+
+    out_kept = [_bridge_row(key=r["isin"] or r["label"], label=r["label"],
+                            colour=colour(r["cls"]), now=r["now"], target=r["tgt"],
+                            base=base, trend=trend_for(r["item"], r["isin"]))
+                for r in kept + new]
+    out_sold = [_bridge_row(key="sell:" + (r["isin"] or r["label"]), label=r["label"],
+                            colour=_mix(PALETTE["red"], PALETTE["card"],
+                                        _LEGACY_SHADES[i % len(_LEGACY_SHADES)]),
+                            now=r["now"], target=0.0, base=base,
+                            trend=trend_for(r["item"], r["isin"]), legacy=True)
+                for i, r in enumerate(sold)]
+    return out_kept[:len(kept)], out_kept[len(kept):], out_sold
+
 
 def _build_diversification(ctx: _NewsletterContext) -> dict:
-    """Pre-render the Diversification section (tile dashboard) as HTML.
+    """Pre-render the Allocation section: three bridges (asset class, equity
+    geography, per-holding targets), each with its figures built in.
 
-    Reuses :func:`_build_allocation` / :func:`_build_geography` for the
-    numbers and semaphore logic, the rebalancer's per-holding checks for the
-    by-holding tiles, ``short_instrument_name`` for labels, the price-cache
-    ISIN→symbol map for clean tickers, and :func:`_spark` for the trends — so
-    this is a presentational layer, not a second source of truth.
+    Reuses :func:`_build_allocation` / :func:`_build_geography` for the numbers,
+    the rebalancer's per-holding checks for the instrument lines and the
+    allocation timeline for the month's move -- a presentational layer, not a
+    second source of truth.
     """
     P = PALETTE
+    cfg = ctx.config
+    m = ctx.metrics
     alloc = _build_allocation(ctx)
     geo = _build_geography(ctx)
-    tol = ctx.config.rebalancing_target_tolerance_pctg
+    if not (alloc.get("rows") or geo.get("rows")):
+        return {"available": False, "html": ""}
 
-    # EUR bases (value of 100%) for the inline absolute amounts: invested
-    # value for asset-class/per-holding-portfolio rows, and the equity/FI
-    # sleeve totals for geography/per-holding-equity/per-holding-FI rows —
-    # matching exactly what each row's % is already a share of.
-    m = ctx.metrics
     invested_base = float(getattr(m, "invested_value", 0.0) or 0.0)
     if invested_base <= 0:
         invested_base = float(getattr(m, "total_value", 0.0) or 0.0)
     # Geography and per-sleeve rows are shares of the NOTIONAL sleeve
-    # (``_compute_geo_allocation`` distributes each holding's notional equity
-    # exposure), so their euro base must be that same notional sleeve — the
-    # class weight × invested capital, exactly as the asset-class table's own
-    # leverage math uses. Multiplying a notional share by the physical market
-    # value instead (Σ current_value) mixes two different denominators: it made
-    # Emerging Markets read fewer euros than its sole holding, XMME, was
-    # worth on its own.
+    # (``_compute_geo_allocation`` distributes each holding's notional exposure), so
+    # their euro base is that same sleeve: the class weight times invested capital.
+    # Multiplying a notional share by the physical market value mixes two
+    # denominators -- it made Emerging Markets read fewer euros than XMME, its only
+    # holding, was worth.
     byclass = getattr(m, "allocation_by_class", None)
 
-    def _notional_sleeve_eur(klass: str) -> float:
+    def notional_sleeve_eur(klass: str) -> float:
         if byclass is None or byclass.empty:
             return 0.0
         row = byclass[byclass["category"] == klass]
-        if row.empty:
-            return 0.0
-        return float(row["weight_pct"].iloc[0]) / 100.0 * invested_base
+        return 0.0 if row.empty else float(row["weight_pct"].iloc[0]) / 100.0 * invested_base
 
-    equity_base = _notional_sleeve_eur("Equities")
+    equity_base = notional_sleeve_eur("Equities")
+    fi_base = notional_sleeve_eur("Fixed Income")
 
-    tl = ctx.metrics.allocation_timeline or {}
+    tl = m.allocation_timeline or {}
     dates = tl.get("dates") or []
     asset_series = _recent_timeline(tl.get("asset"), dates)
     geo_series = _recent_timeline(tl.get("geo"), dates)
     hold_series = _recent_timeline(tl.get("holding"), dates)
     hold_inv_series = _recent_timeline(tl.get("holding_invested"), dates)
 
-    available = bool(alloc.get("rows") or geo.get("rows"))
-    if not available:
-        return {"available": False, "html": ""}
-
-    def swatch(color, sz=10):
-        return (f'<span style="display:inline-block;width:{sz}px;height:{sz}px;'
-                f'border-radius:2px;background:{color};vertical-align:middle;"></span>')
-
-    # The plan's own leverage per class, for the Target cell beside each class's
-    # target weight. Only meaningful because the class targets are DERIVED from the
-    # per-instrument plan: while they came from a separate file the ratio mixed two
-    # sources and Alternative read 11/15 = 0.73x, which is not a leverage but the
-    # distance between two lists that disagreed. From one plan it reads 15/15 = 1.00x.
-    _target_lev: dict = {}
+    # The plan's own leverage per class. Only meaningful because the class targets
+    # are DERIVED from the per-instrument plan; without a plan there is none to show.
+    target_lev: dict = {}
     try:
-        from tarzan.engine.target_derivation import (
-            derive_target_leverage, plan_weights)
+        from tarzan.engine.target_derivation import derive_target_leverage, plan_weights
 
-        _plan, _ = plan_weights(getattr(ctx.metrics, "target_rows", None) or {})
-        if not _plan:
-            # The metrics object does not carry the raw rows; rebuild the plan from the
-            # weights the engine already deduplicated for its own target line.
-            _plan = dict(getattr(ctx.metrics, "target_weights", {}) or {})
-        if _plan:
-            _target_lev = derive_target_leverage(_plan)
-    except Exception:  # noqa: BLE001 — a missing factor must not cost the section
-        _target_lev = {}
+        plan, _ = plan_weights(getattr(m, "target_rows", None) or {})
+        if not plan:
+            plan = dict(getattr(m, "target_weights", {}) or {})
+        if plan:
+            target_lev = derive_target_leverage(plan)
+    except Exception:  # noqa: BLE001 -- a missing factor must not cost the section
+        target_lev = {}
 
-    # ── Asset-class rows (cash folded in as a normal, EUR-native row that
-    #    does NOT participate in the invested base) ──
-    asset_rows = []
-    for r in alloc["rows"]:
-        if r.get("is_eur"):
-            asset_rows.append({
-                "label_html": _div_label(r["name"], r["color"]),
-                "eur_row": True,
-                "now_eur": r.get("cash_actual_eur", 0.0),
-                "target_eur": r.get("cash_target_eur", 0.0),
-                "delta_eur": r.get("cash_delta_eur", 0.0),
-                "delta_color": r.get("delta_color", P["muted"]),
-            })
-            continue
-        asset_rows.append({
-            "target_leverage": _target_lev.get(r["name"]),
-            "label_html": _div_label(r["name"], r["color"]),
-            "now": r.get("actual_pct_raw"),
-            "target": r.get("target_left"),
-            "spark_vals": _timeline_vals(asset_series, r["name"]),
-            "color": r["color"],
-            "leverage": r.get("leverage"),
-        })
-
-    # ── "Invested Portfolio" summary row (notional totals + leverage),
-    # placed BELOW the invested classes and ABOVE cash — cash is a separate
-    # accounting entity that does not participate in the invested base. ──
-    _cls_rows = [r for r in asset_rows if not r.get("eur_row")]
-    _cash_rows = [r for r in asset_rows if r.get("eur_row")]
-    if _cls_rows:
-        _tnow = sum(float(r.get("now") or 0.0) for r in _cls_rows)
-        _ttgt = sum(float(r.get("target") or 0.0) for r in _cls_rows)
-        _ttrend = None
-        if asset_series and len(asset_series) >= 2:
-            _ttrend = [sum(float(x) for x in b.values()) for b in asset_series]
-        total_row = {
-            "is_total": True,
-            "label_html": "\u2605 Total notional",
-            "now": _tnow,
-            "target": _ttgt,
-            "leverage": (_tnow / 100.0) if _tnow else None,
-            # The plan's own leverage: its notional over 100% of capital, the same
-            # ratio the actual side of this row states.
-            "target_leverage": (_ttgt / 100.0) if _ttgt else None,
-            "spark_vals": _ttrend,
-            "color": P["accent"],
-        }
-        # Reorder: classes → Invested Portfolio total → cash.
-        asset_rows = _cls_rows + [total_row] + _cash_rows
-
-    # ── Geography rows ──
-    # geo_label shortens the display form only; the long name stays the
-    # configuration key it is, and _timeline_vals still looks up by that key.
-    geo_rows = [{
-        "label_html": _div_label(geo_label(r["name"]), r["color"]),
-        "now": r.get("actual_pct_raw"),
-        "target": r.get("target_left"),
-        "spark_vals": _timeline_vals(geo_series, r["name"]),
-        "color": r["color"],
-    } for r in geo["rows"]]
-
-    # ── By-holding rows: per-holding-only → portfolio targets (current
-    # weight); otherwise the equity/FI sleeve tables. ──
-    per_holding_only = getattr(ctx.config, "target_use_per_holding_only", False)
-    holding_rows, exits_note, eq_rows, fi_rows = [], "", [], []
-    if per_holding_only:
-        holding_rows, exits_note = _ph_target_rows(ctx, tol, hold_inv_series)
-    else:
-        eq_rows = _holding_verif_rows(ctx, tol, hold_series, "per_holding_equity",
-                                      ASSET_COLORS.get("Equities", P["accent"]))
-        fi_rows = _holding_verif_rows(ctx, tol, hold_series, "per_holding_fi",
-                                      ASSET_COLORS.get("Fixed Income", P["accent"]))
-
-    # The section kicker is the template's job: baked in here it bypassed the
-    # ordinal counter, so this section printed an unnumbered header among
-    # numbered ones.
     html: list[str] = []
+    abs_pp = float(getattr(cfg, "allocation_band_abs_pp", 5.0))
+    rel = float(getattr(cfg, "allocation_band_rel_pctg", 25.0))
+
+    # ── Asset class ──
+    asset_rows, cash, levs = [], None, []
+    for r in alloc.get("rows") or []:
+        if r.get("is_eur"):
+            cash = r
+            continue
+        asset_rows.append(_bridge_row(
+            key=r["name"], label=_ASSET_SHORT.get(r["name"], r["name"]),
+            colour=_lift(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
+            target=r.get("target_left"), base=invested_base,
+            trend=_timeline_vals(asset_series, r["name"])))
+        lev = r.get("leverage")
+        has_plan = bool(target_lev) and (r.get("target_left") or 0) > 0
+        tlev = target_lev.get(r["name"]) if has_plan else None
+        if lev is not None and (abs(lev - 1) > 0.005
+                                or (has_plan and (tlev is None or abs(tlev - 1) > 0.005))):
+            part = f"{_ASSET_SHORT.get(r['name'], r['name']).lower()} {lev:.2f}\u00d7"
+            if has_plan:
+                part += " \u2192 " + ("overlay only" if tlev is None else f"{tlev:.2f}\u00d7")
+            levs.append(part)
     if asset_rows:
-        html.append(_div_table(asset_rows, tol, base=invested_base,
-                               show_leverage=True, first_label="Asset class"))
-        # What the table's own marks mean, in one line: the band, the tick, the
-        # 100% rule and which way a trend colour reads. The sum past 100% needs
-        # no separate sentence -- the total row states it and the x factors in
-        # the drift column say where it comes from.
-        # No caption. The marks it described -- the tolerance band, the target tick,
-        # the leverage factor, "synth" -- are now in a table that reads like the rest of
-        # the issue, and six lines of legend under a seven-row table is more page than
-        # the reader was spending on it.
+        tn = sum(r["now"] for r in asset_rows)
+        tt = sum(r["target"] or 0.0 for r in asset_rows)
+        ttrend = ([sum(float(x) for x in b.values()) for b in asset_series]
+                  if asset_series and len(asset_series) >= 2 else None)
+        tail = [("Total", _move_text(ttrend), _pc1(tn), _eur_smart(tn / 100 * invested_base),
+                 _pc1(tt), _eur_smart(tt / 100 * invested_base), _signed_pp(tn - tt),
+                 _band_colour(tn - tt, tt, cfg))]
+        if cash is not None:
+            # Cash is an amount outside invested capital, so it has no weight: its
+            # row states the two amounts and their gap in euros, banded at
+            # ±allocation_band_rel_pctg of its target.
+            c_now = float(cash.get("cash_actual_eur") or 0.0)
+            c_tgt = float(cash.get("cash_target_eur") or 0.0)
+            c_ok = abs(c_now - c_tgt) <= rel / 100.0 * c_tgt + 1e-9
+            tail.append(("Cash", "", _eur_smart(c_now), "", _eur_smart(c_tgt), "",
+                         _signed_eur(c_now - c_tgt), P["green"] if c_ok else P["red"]))
+        levered = max(tn, tt) > 100.5
+        html.append(_alloc_head("Asset class",
+                                f"notional, % of invested capital \u00b7 "
+                                f"{_eur_smart(invested_base)}", top=6))
+        html.append(_bridge_svg(asset_rows, asset_rows, 270, cfg, tail=tail,
+                                rule100=levered, total_now=tn, total_tgt=tt,
+                                aria="Asset class allocation, today against the plan"))
+        note = []
+        if levered:
+            note.append(f"Past the dashed 100% line is futures overlay: {tn / 100:.2f}\u00d7 "
+                        f"today, {tt / 100:.2f}\u00d7 in the plan.")
+        if levs:
+            note.append(f"By class: {', '.join(levs)}; the rest 1.00\u00d7.")
+        if cash is not None:
+            note.append("Cash is outside invested capital.")
+        if note:
+            html.append(_alloc_note(" ".join(note)))
+
+    # ── Equity geography ──
+    geo_rows = [_bridge_row(
+        key=r["name"], label=_GEO_SHORT.get(r["name"], geo_label(r["name"])),
+        colour=_lift(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
+        target=r.get("target_left"), base=equity_base,
+        trend=_timeline_vals(geo_series, r["name"])) for r in geo.get("rows") or []]
     if geo_rows:
-        html.append(_div_table(geo_rows, tol, base=equity_base,
-                               first_label="Equity geography"))
-        html.append(
-            f'<div style="margin-top:8px;{TYPE["prose"]}color:{P["muted"]};">'
-            f'Geography targets partition the equity sleeve only, so they '
-            f'total 100%.</div>'
-        )
-    if holding_rows:
-        # Now/Target show the euro amount under the percentage, same style
-        # as the asset-class and equity-geography tables above — same
-        # invested-value base, since these rows' percentages are on that
-        # same basis (see _ph_target_rows). The trend sub-line stays off:
-        # this table is a list of targets, not a trend view.
-        html.append(_div_table(holding_rows, tol, base=invested_base,
-                               first_label="Per-holding target", subs=False,
-                               value_subs=True))
-        if exits_note:
-            html.append(exits_note)
-    if eq_rows:
-        html.append(_div_table(eq_rows, tol, base=None,
-                               first_label="Equities holding", subs=False))
-    if fi_rows:
-        html.append(_div_table(fi_rows, tol, base=None,
-                               first_label="Fixed Income holding", subs=False))
+        html.append(_alloc_head("Equity geography",
+                                f"% of the equity sleeve \u00b7 {_eur_smart(equity_base)} "
+                                f"notional", top=30))
+        html.append(_bridge_svg(geo_rows, geo_rows, 200, cfg,
+                                aria="Equity geography, today against the plan"))
+
+    # ── Per-holding targets ──
+    blocks = []
+    verifs = {v.get("kind"): v for v in (m.rebalancing_verifications or [])}
+    if getattr(cfg, "target_use_per_holding_only", False):
+        df = getattr(m, "holdings_df", None)
+        weights: dict[str, float] = {}
+        if df is not None and not df.empty and invested_base > 0:
+            for _, row in df.iterrows():
+                isin = str(row.get("isin", "") or "").strip()
+                if isin:
+                    weights[isin] = (weights.get(isin, 0.0)
+                                     + float(row.get("current_value", 0.0) or 0.0)
+                                     / invested_base * 100.0)
+        v = verifs.get("per_holding_portfolio")
+        if v:
+            blocks.append(("Per-holding target",
+                           f"% of invested capital \u00b7 {_eur_smart(invested_base)}",
+                           _holding_bridge_rows(ctx, v.get("items") or [], base=invested_base,
+                                                weights=weights, series=hold_inv_series,
+                                                series_key="isin")))
+    else:
+        for kind, title, base in (("per_holding_equity", "Equities holdings", equity_base),
+                                  ("per_holding_fi", "Fixed income holdings", fi_base)):
+            v = verifs.get(kind)
+            if v and v.get("items"):
+                blocks.append((title, f"% of the sleeve \u00b7 {_eur_smart(base)} notional",
+                               _holding_bridge_rows(ctx, v.get("items") or [], base=base,
+                                                    weights=None, series=hold_series,
+                                                    series_key="ticker")))
+    for title, note, (kept, new, sold) in blocks:
+        n_left = len(kept) + len(sold)
+        if not (kept or new or sold):
+            continue
+        html.append(_alloc_head(title, note, top=30))
+        html.append(_bridge_svg(kept + sold, kept + new,
+                                max(200.0, _SLOT * n_left + 12), cfg,
+                                aria=f"{title}, today against the plan"))
+
+    html.append(_alloc_note(
+        f"1M: change in weight over the last month, in points. Gap: now minus plan, "
+        f"in points; green inside the band, red outside. Band: the narrower of "
+        f"\u00b1{abs_pp:g} pts and \u00b1{rel:g}% of the target.", top=14))
     return {"available": True, "html": "".join(html)}
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
