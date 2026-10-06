@@ -41,7 +41,12 @@ ASSET_CLASS_COLORS: dict[str, str] = {
     "Gold": "CA8A04",
     "Commodities": "C2410C",
     "Crypto": "7C3AED",
-    "Alternative": "64748B",
+    # A light violet, not slate: on the dark card slate read as "no colour", and
+    # Alternative's lines in the Allocation bridge looked like greyed-out rows. The
+    # deepest violet that keeps ΔE ≥ 15 from Crypto in full colour and ΔE ≥ 10
+    # from every class under protan/deutan/tritan simulation; Crypto's own violet
+    # would have collided with it.
+    "Alternative": "A180F9",
 }
 
 # Soft background tints for asset-class chips/rows in the newsletter.

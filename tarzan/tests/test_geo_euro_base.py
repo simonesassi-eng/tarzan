@@ -75,11 +75,15 @@ def test_geo_euro_uses_the_notional_sleeve_not_the_market_value():
     )
     html = _build_diversification(ctx)["html"]
 
-    # The Emerging Markets row's inline euro must be at least the €20k the
-    # sole EM holding is worth — the invariant the bug violated.
-    match = re.search(r"Emerging[^€]*€([\d.,]+k?)", html)
-    assert match, "no Emerging Markets euro rendered"
-    em_eur = _eur_to_float(match.group(1))
+    # The Emerging Markets row's euro today must be at least what the sole EM
+    # holding is worth — the invariant the bug violated. In the geography card a
+    # label line reads 1M, euros, weight, name, so it is the last euro before the
+    # name.
+    geo = html[html.index('aria-label="Equity geography'):]
+    geo = geo[:geo.index("</svg>")]
+    euros = re.findall(r">€([\d.,]+k?)<", geo[:geo.index(">Emerging<")])
+    assert euros, "no Emerging Markets euro rendered"
+    em_eur = _eur_to_float(euros[-1])
     assert em_eur >= 20000.0 - 500.0, (
         f"Emerging Markets shows €{em_eur:.0f}, below the €20k its only "
         f"holding (XMME) is worth — the notional share was applied to the "

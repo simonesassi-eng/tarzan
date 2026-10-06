@@ -24,7 +24,7 @@ class TestColorTaxonomySingleSource:
 
     def test_crypto_and_alternative_distinct(self):
         # Sanity: the two classes that had drifted are defined and
-        # Alternative is its own (slate) color, not a copy of Crypto.
+        # Alternative is its own (light violet) color, not a copy of Crypto.
         assert _format.ASSET_CLASS_COLORS["Crypto"] != _format.ASSET_CLASS_COLORS["Alternative"]
 
 
