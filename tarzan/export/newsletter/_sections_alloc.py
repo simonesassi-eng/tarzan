@@ -1092,26 +1092,35 @@ def _signed_eur(value) -> str:
 
 # ── Allocation: the bridge ───────────────────────────────────────────────────
 #
-# Each block is ONE graphic, and the graphic is the table. Two stacked columns,
-# today and the plan, each slice joined to itself: a band that widens is weight to
-# add, one that narrows is weight to take out. Lines the plan sells funnel into one
-# point; lines the plan buys from nothing grow as a wedge out of it.
+# Each block is a card in the issue's table shell (a rounded border, a header band
+# with the block's name and the column labels) holding one SVG: two stacked columns,
+# today and the plan, each slice joined to itself. A band that widens is weight to
+# add, one that narrows is weight to take out; the lines the plan sells funnel into
+# one point, and the lines it buys from nothing grow as wedges out of it.
 #
-# The figures sit in columns of the graphic itself, each said once:
-#   left of TODAY   name, weight now          /  1M move, euros now
-#   right of PLAN   plan weight, gap (points) /  plan euros
+# Drawn at the issue's own scale: a 580-unit viewBox, the content column every chart
+# in the digest is drawn for, at width:100% and with the TYPE_PX sizes, so its text
+# matches the tables and charts around it at whatever width the column ends up. The
+# first version was drawn for a phone's 350px; the digest is laid out wider than a
+# phone and shrunk to fit, so its text came out at twice the size of everything
+# around it and the section at three times the height of the tables it replaced.
+#
+# One line per label, in the same columns in every card, each fact said once:
+#   name · 1M · today % · today €   ‖ bars ‖   plan % · plan € · gap
 # A name is written on the side where the line has weight: a line held today is
 # named on the left, a line only the plan holds is named on its own wedge.
-#
-# Drawn in a 350-unit viewBox (a phone's content width) at width:100%, so it is
-# 1:1 on a phone and scales with the column anywhere wider.
 
-_BW = 350.0
-_FS, _FS2 = 12, 11               # label line, its second line
-_CW, _CW2 = 7.25, 6.65           # advance of one monospace character at each
-_SLOT = 32.0                     # vertical room per two-line label
-_BAR, _LEAD, _COLGAP = 10, 6, 9
-_TOP, _GAP = 22.0, 2.0
+_BW = 580.0                      # the content column every chart is drawn for
+_PAD = 10.0                      # inset from the card's border, as a table cell's
+_FD, _FL = TYPE_PX["data"], TYPE_PX["label"]
+_CW = 0.6 * _FD                  # one monospace character at the data size
+_CWL = 0.66 * _FL                # at the label size, with its 0.06em tracking
+_HEAD = 22.0                     # the header band
+_TOP = _HEAD + 9.0               # where the stacks start
+_ROW = 15.0                      # one label line
+_TAIL = 16.0                     # one total row under the stacks
+_BAR, _LEAD, _COLGAP, _PAIRGAP = 8.0, 10.0, 12.0, 6.0
+_GAP = 1.5                       # between stacked slices
 #: Successive lines of one asset class step through these, so two names of the
 #: same class stay apart while keeping the class's hue.
 _SHADE_STEPS = (("base", 0.0), ("card", 0.62), ("ink", 0.45), ("card", 0.40),
@@ -1188,10 +1197,14 @@ def _dodge(ys: list, gap: float, lo: float, hi: float) -> list:
     return out
 
 
-def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 400,
-        anchor: str = "start", size: int = _FS) -> str:
-    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" font-weight="{weight}" '
-            f'fill="{fill}" text-anchor="{anchor}">{_esc(str(s))}</text>')
+def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 600,
+        anchor: str = "start", size: float = _FD, label: bool = False) -> str:
+    """One SVG text at the data size by default. ``label`` adds the LABEL role's
+    tracking; its capitals are written as such, since text-transform does not
+    reach SVG text."""
+    track = f' letter-spacing="{0.06 * size:.2f}"' if label else ""
+    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:g}" font-weight="{weight}" '
+            f'fill="{fill}" text-anchor="{anchor}"{track}>{_esc(str(s))}</text>')
 
 
 def _pc1(v: float) -> str:
@@ -1199,8 +1212,13 @@ def _pc1(v: float) -> str:
 
 
 def _move_text(trend: Optional[list]) -> str:
+    """The month's change in weight, in points; blank without a series."""
     tr = [float(x) for x in (trend or []) if x is not None]
-    return f"1M {_signed_pp(tr[-1] - tr[0])}" if len(tr) >= 2 else ""
+    return _signed_pp(tr[-1] - tr[0]) if len(tr) >= 2 else ""
+
+
+def _gap_text(r: dict) -> str:
+    return _signed_pp(r["drift"]) if r["drift"] is not None else "\u2014"
 
 
 def _bridge_row(*, key: str, label: str, colour: str, now: float,
@@ -1214,41 +1232,84 @@ def _bridge_row(*, key: str, label: str, colour: str, now: float,
             "trend": trend, "legacy": legacy}
 
 
-def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, tail=(),
-                rule100: bool = False, total_now: Optional[float] = None,
-                total_tgt: Optional[float] = None,
+def _bridge_layout(specs: list) -> dict:
+    """Column positions shared by every card, so the cards' columns line up down the
+    section the way the tables' did. Each column is sized on the widest string it
+    holds. A block's name, in the header band, may run on over the empty left part
+    of the 1M column, so a long name does not widen the name column by all of it."""
+    names, titles, moves = [], [], []
+    npc, neu, ppc, peu, gaps = [], [], [], [], []
+    for sp in specs:
+        titles.append(str(sp.get("title") or "").upper())
+        for r in sp["left"]:
+            if r["now"] > 0:
+                names.append(r["label"])
+                moves.append(_move_text(r["trend"]))
+                npc.append(_pc1(r["now"]))
+                neu.append(_eur_smart(r["eur_now"]))
+        for r in sp["right"]:
+            if (r["target"] or 0) > 0:
+                ppc.append(_pc1(r["target"]))
+                peu.append(_eur_smart(r["eur_tgt"]))
+                gaps.append(_gap_text(r))
+        for t in sp.get("tail") or ():
+            names.append(t["name"])
+            moves.append(t["move"])
+            npc.append(t["now_pc"])
+            neu.append(t["now_eur"])
+            ppc.append(t["plan_pc"])
+            peu.append(t["plan_eur"])
+            gaps.append(t["gap"])
+
+    def w(xs: list, cw: float = _CW) -> float:
+        return max([len(s) for s in xs] + [0]) * cw
+
+    m1_w = max(w(moves), w(["1M"], _CWL))
+    # Three characters clear of the 1M label: at less, "PER-HOLDING TARGET 1M"
+    # read as one label.
+    room = _COLGAP + m1_w - w(["1M"], _CWL) - 18.0
+    name_w = max(w(names), w(titles, _CWL) - room)
+    npc_w, neu_w = w(npc), max(w(neu), w(["TODAY"], _CWL))
+    ppc_w, peu_w = w(ppc), max(w(peu), w(["PLAN"], _CWL))
+    gap_w = max(w(gaps), w(["GAP"], _CWL))
+    x = {"name": _PAD}
+    x["m1"] = _PAD + name_w + _COLGAP + m1_w          # right edges from here on
+    x["npc0"] = x["m1"] + _COLGAP                     # left edge of the today pair
+    x["npc"] = x["npc0"] + npc_w
+    x["neu"] = x["npc"] + _PAIRGAP + neu_w
+    x["LX0"] = x["neu"] + _LEAD
+    x["LX1"] = x["LX0"] + _BAR
+    x["gap"] = _BW - _PAD
+    x["peu"] = x["gap"] - gap_w - _COLGAP
+    x["ppc"] = x["peu"] - peu_w - _PAIRGAP
+    x["ppc0"] = x["ppc"] - ppc_w                      # left edge of the plan pair
+    x["RX1"] = x["ppc0"] - _LEAD
+    x["RX0"] = x["RX1"] - _BAR
+    return x
+
+
+def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = "",
+                tail=(), rule100: bool = False, total_now: Optional[float] = None,
+                total_tgt: Optional[float] = None, layout: Optional[dict] = None,
                 aria: str = "Allocation, today against the plan") -> str:
-    """One bridge block. ``left``/``right`` are rows in stack order; ``tail`` rows
-    sit under the stacks in the same columns:
-    (name, 1M text, now text, now euros, plan text, plan euros, gap text, colour)."""
+    """One card's SVG: the header band, the two stacks and their ribbons, one label
+    line per slice in ``layout``'s columns, then ``tail`` rows under the stacks in the
+    same columns (dicts: name, move, now_pc, now_eur, plan_pc, plan_eur, gap, colour).
+    """
     P = PALETTE
     l_rows = [r for r in left if r["now"] > 0]
     r_rows = [r for r in right if (r["target"] or 0) > 0]
     if not l_rows and not r_rows:
         return ""
-    gap_txt = lambda r: _signed_pp(r["drift"]) if r["drift"] is not None else "\u2014"  # noqa: E731
-    w1 = lambda xs: max([len(s) for s in xs] + [0]) * _CW   # noqa: E731
-    w2 = lambda xs: max([len(s) for s in xs] + [0]) * _CW2  # noqa: E731
-    name_w = max(w1([r["label"] for r in l_rows] + [x[0] for x in tail]),
-                 w2([_move_text(r["trend"]) for r in l_rows] + [x[1] for x in tail]))
-    now_w = max(w1([_pc1(r["now"]) for r in l_rows] + [x[2] for x in tail] + ["TODAY"]),
-                w2([_eur_smart(r["eur_now"]) for r in l_rows] + [x[3] for x in tail]))
-    plan_w = max(w1([_pc1(r["target"]) for r in r_rows] + [x[4] for x in tail] + ["PLAN"]),
-                 w2([_eur_smart(r["eur_tgt"]) for r in r_rows] + [x[5] for x in tail]))
-    gap_w = w1([gap_txt(r) for r in r_rows] + [x[6] for x in tail] + ["GAP"])
-    now_end = name_w + _COLGAP + now_w
-    LX0 = now_end + _LEAD
-    LX1 = LX0 + _BAR
-    gap_end = _BW
-    plan_end = gap_end - gap_w - _COLGAP
-    RX1 = plan_end - plan_w - _LEAD
-    RX0 = RX1 - _BAR
+    x = layout or _bridge_layout([{"title": title, "left": left, "right": right,
+                                   "tail": tail}])
+    LX0, LX1, RX0, RX1 = x["LX0"], x["LX1"], x["RX0"], x["RX1"]
     flow = RX0 - LX1
+    mid = (LX1 + RX0) / 2
 
     tn = total_now if total_now is not None else sum(r["now"] for r in l_rows)
     tt = total_tgt if total_tgt is not None else sum(r["target"] for r in r_rows)
-    span = max(tn, tt, 1e-9)
-    k = (stack_h - (max(len(l_rows), len(r_rows), 1) - 1) * _GAP) / span
+    k = (stack_h - (max(len(l_rows), len(r_rows), 1) - 1) * _GAP) / max(tn, tt, 1e-9)
 
     def stack(rows, key):
         y, out = _TOP, {}
@@ -1260,19 +1321,29 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, tail=(),
 
     L, R = stack(left, "now"), stack(right, "target")
     bottom = _TOP + stack_h
-    hdr = dict(fill=P["subtle"], weight=700, size=10)
-    g = [_bt(now_end, 11, "TODAY", anchor="end", **hdr),
-         _bt(plan_end, 11, "PLAN", anchor="end", **hdr),
-         _bt(gap_end, 11, "GAP", anchor="end", **hdr)]
+
+    # Header band, the same as a table's: the block's name over the name column,
+    # then the column labels. Rounded at the top to sit inside the card's corners.
+    lab = {"fill": P["muted"], "weight": 700, "size": _FL, "label": True}
+    hy = _HEAD / 2 + 3.2
+    g = [f'<path d="M0,{_HEAD:g} V7 Q0,0 7,0 H{_BW - 7:g} Q{_BW:g},0 {_BW:g},7 '
+         f'V{_HEAD:g} Z" fill="{P["head_bg"]}"/>',
+         f'<line x1="0" y1="{_HEAD:g}" x2="{_BW:g}" y2="{_HEAD:g}" stroke="{P["border"]}"/>',
+         _bt(x["name"], hy, title.upper(), **lab),
+         _bt(x["m1"], hy, "1M", anchor="end", **lab),
+         # TODAY and PLAN each head a pair, the weight and its euros: centred over
+         # both, not over the euros alone.
+         _bt((x["npc0"] + x["neu"]) / 2, hy, "TODAY", anchor="middle", **lab),
+         _bt((x["ppc0"] + x["peu"]) / 2, hy, "PLAN", anchor="middle", **lab),
+         _bt(x["gap"], hy, "GAP", anchor="end", **lab)]
 
     leg = [r for r in left if r["legacy"] and r["now"] > 0]
     fan = None
     if leg:
         y0 = L[leg[0]["key"]][0]
         y1 = L[leg[-1]["key"]][0] + L[leg[-1]["key"]][1]
-        fan = (LX1 + 0.56 * flow, (y0 + y1) / 2)
+        fan = (LX1 + min(flow - 45.0, max(0.5 * flow, 100.0)), (y0 + y1) / 2)
     by_key = {r["key"]: r for r in right + left}
-    mid = (LX1 + RX0) / 2
     flows, bars, inks = [], [], []
     for key in dict.fromkeys([r["key"] for r in left] + [r["key"] for r in right]):
         r = by_key[key]
@@ -1291,110 +1362,120 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, tail=(),
             d = (f'M{LX1:.1f},{ly:.1f} C{cx:.1f},{ly:.1f} {tx - 12:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
                  f'C{tx - 12:.1f},{ty:.1f} {cx:.1f},{ly + lh:.1f} {LX1:.1f},{ly + lh:.1f} Z')
         elif rh > 0:
-            # Bought from zero: a wedge that starts just past the sale point.
+            # Bought from zero: a wedge that starts just past the sale point, named
+            # on the wedge when it can hold the name, else just before its tip.
             tx = (fan[0] + 10) if fan else (RX0 - 0.5 * flow)
             ty = ry + rh / 2
             cx = (tx + RX0) / 2
             d = (f'M{RX0:.1f},{ry:.1f} C{cx:.1f},{ry:.1f} {tx + 12:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
                  f'C{tx + 12:.1f},{ty:.1f} {cx:.1f},{ry + rh:.1f} {RX0:.1f},{ry + rh:.1f} Z')
-            # Its name on the wedge when the wedge can hold it, else just before
-            # the tip, where nothing else is drawn.
-            if rh >= 13:
-                inks.append(_bt(RX0 - 5, ty + 4, r["label"], fill=P["ink"], weight=700,
-                                anchor="end", size=11))
-            else:
-                inks.append(_bt(tx - 4, ty + 4, r["label"], fill=P["ink"], weight=700,
-                                anchor="end", size=11))
+            inks.append(_bt((RX0 - 4) if rh >= 11 else (tx - 4), ty + 3.5, r["label"],
+                            fill=P["ink"], weight=700, anchor="end"))
         else:
             continue
         flows.append(f'<path d="{d}" fill="{c}" fill-opacity="0.30"/>')
         if lh > 0:
-            bars.append(f'<rect x="{LX0:.1f}" y="{ly:.1f}" width="{_BAR}" height="{lh:.1f}" '
+            bars.append(f'<rect x="{LX0:.1f}" y="{ly:.1f}" width="{_BAR:g}" height="{lh:.1f}" '
                         f'fill="{c}"/>')
         if rh > 0:
-            bars.append(f'<rect x="{RX0:.1f}" y="{ry:.1f}" width="{_BAR}" height="{rh:.1f}" '
+            bars.append(f'<rect x="{RX0:.1f}" y="{ry:.1f}" width="{_BAR:g}" height="{rh:.1f}" '
                         f'fill="{c}"/>')
     g += flows + bars + inks
     if fan:
-        sx = LX1 + 7
-        g += [f'<circle cx="{fan[0]:.1f}" cy="{fan[1]:.1f}" r="2.6" fill="{P["red"]}"/>',
-              _bt(sx, fan[1] - 10, "sell", fill=P["ink"], weight=700, size=11),
-              _bt(sx, fan[1] + 4, _pc1(sum(r["now"] for r in leg)), fill=P["ink"],
-                  weight=700, size=11),
-              _bt(sx, fan[1] + 18, _eur_smart(sum(r["eur_now"] for r in leg)),
-                  fill=P["ink"], weight=700, size=11)]
+        sold_pc = _pc1(sum(r["now"] for r in leg))
+        sx = LX1 + 6
+        g += [f'<circle cx="{fan[0]:.1f}" cy="{fan[1]:.1f}" r="2.4" fill="{P["red"]}"/>',
+              _bt(sx, fan[1] - 3, "sell", fill=P["ink"], weight=700),
+              _bt(sx, fan[1] + 10, sold_pc, fill=P["ink"], weight=700),
+              _bt(sx + len(sold_pc) * _CW + 5, fan[1] + 10,
+                  _eur_smart(sum(r["eur_now"] for r in leg)), fill=P["ink"], weight=700)]
     if rule100:
-        y100 = _TOP + 100 * k + _GAP * 3
-        g.append(f'<line x1="{LX0 - 3:.1f}" y1="{y100:.1f}" x2="{RX1 + 3:.1f}" y2="{y100:.1f}" '
-                 f'stroke="{P["ink"]}" stroke-opacity="0.75" stroke-dasharray="3,3"/>'
-                 f'<rect x="{mid - 19:.1f}" y="{y100 - 7.5:.1f}" width="38" height="15" rx="3" '
-                 f'fill="{P["card"]}"/>'
-                 + _bt(mid, y100 + 4, "100%", fill=P["ink"], weight=700, anchor="middle",
-                       size=10))
+        # Where today's stack reaches 100% of capital: past it is futures overlay.
+        y100, cum = None, 0.0
+        for r in l_rows:
+            ly, lh = L[r["key"]]
+            if cum + r["now"] >= 100.0:
+                y100 = ly + (100.0 - cum) * k
+                break
+            cum += r["now"]
+        if y100 is not None:
+            g.append(f'<line x1="{LX0 - 3:.1f}" y1="{y100:.1f}" x2="{RX1 + 3:.1f}" '
+                     f'y2="{y100:.1f}" stroke="{P["ink"]}" stroke-opacity="0.75" '
+                     f'stroke-dasharray="3,3"/>'
+                     f'<rect x="{mid - 17:.1f}" y="{y100 - 6.5:.1f}" width="34" height="13" '
+                     f'rx="3" fill="{P["card"]}"/>'
+                     + _bt(mid, y100 + 3.2, "100%", fill=P["ink"], weight=700,
+                           anchor="middle", size=_FL, label=True))
 
     def place(rows, stk):
         y0s = [stk[r["key"]][0] + stk[r["key"]][1] / 2 for r in rows]
-        return y0s, _dodge(y0s, _SLOT, _TOP + 10, bottom + 4)
+        return y0s, _dodge(y0s, _ROW, _TOP + 4, bottom + 5)
 
     low = 0.0
     y0s, ys = place(l_rows, L)
     for r, y0, y in zip(l_rows, y0s, ys):
         if abs(y - y0) > 1.0:
-            g.append(f'<path d="M{now_end + 3:.1f},{y:.1f} L{LX0 - 2:.1f},{y0:.1f}" '
+            g.append(f'<path d="M{x["neu"] + 3:.1f},{y:.1f} L{LX0 - 1:.1f},{y0:.1f}" '
                      f'stroke="{P["subtle"]}" stroke-width="0.8" fill="none"/>')
-        g += [_bt(0, y - 1, r["label"], fill=P["red"] if r["legacy"] else P["ink"], weight=600),
-              _bt(now_end, y - 1, _pc1(r["now"]), fill=P["ink"], weight=700, anchor="end"),
-              _bt(0, y + 11.5, _move_text(r["trend"]), fill=P["muted"], size=_FS2),
-              _bt(now_end, y + 11.5, _eur_smart(r["eur_now"]), fill=P["muted"],
-                  anchor="end", size=_FS2)]
+        b = y + 3.5
+        g += [_bt(x["name"], b, r["label"], fill=P["red"] if r["legacy"] else P["ink"]),
+              _bt(x["m1"], b, _move_text(r["trend"]), fill=P["muted"], weight=400,
+                  anchor="end"),
+              _bt(x["npc"], b, _pc1(r["now"]), fill=P["ink"], weight=700, anchor="end"),
+              _bt(x["neu"], b, _eur_smart(r["eur_now"]), fill=P["muted"], weight=400,
+                  anchor="end")]
         low = max(low, y)
     y0s, ys = place(r_rows, R)
     for r, y0, y in zip(r_rows, y0s, ys):
         if abs(y - y0) > 1.0:
-            g.append(f'<path d="M{RX1 + 2:.1f},{y0:.1f} L{RX1 + _LEAD - 3:.1f},{y:.1f}" '
+            g.append(f'<path d="M{RX1 + 1:.1f},{y0:.1f} L{RX1 + _LEAD - 3:.1f},{y:.1f}" '
                      f'stroke="{P["subtle"]}" stroke-width="0.8" fill="none"/>')
-        g += [_bt(plan_end, y - 1, _pc1(r["target"]), fill=P["ink"], weight=700, anchor="end"),
-              _bt(gap_end, y - 1, gap_txt(r), fill=_band_colour(r["drift"], r["target"], cfg),
-                  weight=700, anchor="end"),
-              _bt(plan_end, y + 11.5, _eur_smart(r["eur_tgt"]), fill=P["muted"],
-                  anchor="end", size=_FS2)]
+        b = y + 3.5
+        g += [_bt(x["ppc"], b, _pc1(r["target"]), fill=P["ink"], weight=700, anchor="end"),
+              _bt(x["peu"], b, _eur_smart(r["eur_tgt"]), fill=P["muted"], weight=400,
+                  anchor="end"),
+              _bt(x["gap"], b, _gap_text(r), fill=_band_colour(r["drift"], r["target"], cfg),
+                  weight=700, anchor="end")]
         low = max(low, y)
 
-    H = max(bottom + 6, low + 18)
+    H = max(bottom + 7.0, low + 11.0)
     if tail:
-        g.append(f'<line x1="0" y1="{H + 2:.1f}" x2="{_BW:.0f}" y2="{H + 2:.1f}" '
-                 f'stroke="{P["border"]}"/>')
-        y = H + 18
-        for nm, mv, npc, neu, ppc, peu, gp, gc in tail:
-            g += [_bt(0, y, nm, fill=P["ink"], weight=600),
-                  _bt(now_end, y, npc, fill=P["ink"], weight=700, anchor="end"),
-                  _bt(plan_end, y, ppc, fill=P["ink"], weight=700, anchor="end"),
-                  _bt(gap_end, y, gp, fill=gc, weight=700, anchor="end")]
-            if mv or neu:
-                g += [_bt(0, y + 13, mv, fill=P["muted"], size=_FS2),
-                      _bt(now_end, y + 13, neu, fill=P["muted"], anchor="end", size=_FS2),
-                      _bt(plan_end, y + 13, peu, fill=P["muted"], anchor="end", size=_FS2)]
-                y += 32
-            else:
-                y += 18
-        H = y - 6
-    H = int(H) + 2
-    return (f'<svg width="100%" viewBox="0 0 {_BW:.0f} {H}" xmlns="http://www.w3.org/2000/svg" '
-            f'role="img" aria-label="{_esc(aria)}" style="display:block;margin-top:10px;" '
-            f'font-family="{FONT_STACK}">{"".join(g)}</svg>')
+        g.append(f'<line x1="0" y1="{H:.1f}" x2="{_BW:g}" y2="{H:.1f}" stroke="{P["border"]}"/>')
+        b = H + 14.0
+        for t in tail:
+            g += [_bt(x["name"], b, t["name"], fill=P["ink"]),
+                  _bt(x["m1"], b, t["move"], fill=P["muted"], weight=400, anchor="end"),
+                  _bt(x["npc"], b, t["now_pc"], fill=P["ink"], weight=700, anchor="end"),
+                  _bt(x["neu"], b, t["now_eur"],
+                      fill=P["muted"] if t["now_pc"] else P["ink"],
+                      weight=400 if t["now_pc"] else 700, anchor="end"),
+                  _bt(x["ppc"], b, t["plan_pc"], fill=P["ink"], weight=700, anchor="end"),
+                  _bt(x["peu"], b, t["plan_eur"],
+                      fill=P["muted"] if t["plan_pc"] else P["ink"],
+                      weight=400 if t["plan_pc"] else 700, anchor="end"),
+                  _bt(x["gap"], b, t["gap"], fill=t["colour"], weight=700, anchor="end")]
+            b += _TAIL
+        H = b - _TAIL + 7.0
+    H = int(H) + 1
+    return (f'<svg width="100%" viewBox="0 0 {_BW:g} {H}" preserveAspectRatio="xMidYMid meet" '
+            f'xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{_esc(aria)}" '
+            f'style="display:block;width:100%;" font-family="{FONT_STACK}">{"".join(g)}</svg>')
 
 
-def _alloc_head(title: str, note: str, top: int) -> str:
+def _bridge_card(svg: str) -> str:
+    """The shell every table in the issue sits in: a 1px border and 8px corners."""
+    if not svg:
+        return ""
     P = PALETTE
-    return (f'<div style="margin-top:{top}px;font-size:11px;font-weight:700;'
-            f'letter-spacing:0.06em;text-transform:uppercase;color:{P["ink"]};">'
-            f'{_esc(title)}</div><div style="margin-top:2px;font-size:12px;'
-            f'line-height:1.45;color:{P["subtle"]};">{_esc(note)}</div>')
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'border="0" style="width:100%;margin-top:10px;border:1px solid {P["border"]};'
+            f'border-radius:8px;border-collapse:separate;border-spacing:0;overflow:hidden;">'
+            f'<tr><td style="padding:0;font-size:0;line-height:0;">{svg}</td></tr></table>')
 
 
 def _alloc_note(text: str, top: int = 8) -> str:
-    return (f'<div style="margin-top:{top}px;font-size:12px;line-height:1.45;'
-            f'color:{PALETTE["muted"]};">{_esc(text)}</div>')
+    return (f'<div style="margin-top:{top}px;{TYPE["prose"]}color:{PALETTE["muted"]};">'
+            f'{_esc(text)}</div>')
 
 
 def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
@@ -1502,8 +1583,9 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
 
 
 def _build_diversification(ctx: _NewsletterContext) -> dict:
-    """Pre-render the Allocation section: three bridges (asset class, equity
-    geography, per-holding targets), each with its figures built in.
+    """Pre-render the Allocation section: three bridge cards (asset class, equity
+    geography, per-holding targets), each with its figures built in, their columns
+    shared so they line up down the section.
 
     Reuses :func:`_build_allocation` / :func:`_build_geography` for the numbers,
     the rebalancer's per-holding checks for the instrument lines and the
@@ -1559,9 +1641,9 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     except Exception:  # noqa: BLE001 -- a missing factor must not cost the section
         target_lev = {}
 
-    html: list[str] = []
     abs_pp = float(getattr(cfg, "allocation_band_abs_pp", 5.0))
     rel = float(getattr(cfg, "allocation_band_rel_pctg", 25.0))
+    specs: list[dict] = []
 
     # ── Asset class ──
     asset_rows, cash, levs = [], None, []
@@ -1588,9 +1670,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         tt = sum(r["target"] or 0.0 for r in asset_rows)
         ttrend = ([sum(float(x) for x in b.values()) for b in asset_series]
                   if asset_series and len(asset_series) >= 2 else None)
-        tail = [("Total", _move_text(ttrend), _pc1(tn), _eur_smart(tn / 100 * invested_base),
-                 _pc1(tt), _eur_smart(tt / 100 * invested_base), _signed_pp(tn - tt),
-                 _band_colour(tn - tt, tt, cfg))]
+        tail = [{"name": "Total", "move": _move_text(ttrend),
+                 "now_pc": _pc1(tn), "now_eur": _eur_smart(tn / 100 * invested_base),
+                 "plan_pc": _pc1(tt), "plan_eur": _eur_smart(tt / 100 * invested_base),
+                 "gap": _signed_pp(tn - tt), "colour": _band_colour(tn - tt, tt, cfg)}]
         if cash is not None:
             # Cash is an amount outside invested capital, so it has no weight: its
             # row states the two amounts and their gap in euros, banded at
@@ -1598,25 +1681,24 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             c_now = float(cash.get("cash_actual_eur") or 0.0)
             c_tgt = float(cash.get("cash_target_eur") or 0.0)
             c_ok = abs(c_now - c_tgt) <= rel / 100.0 * c_tgt + 1e-9
-            tail.append(("Cash", "", _eur_smart(c_now), "", _eur_smart(c_tgt), "",
-                         _signed_eur(c_now - c_tgt), P["green"] if c_ok else P["red"]))
+            tail.append({"name": "Cash", "move": "", "now_pc": "",
+                         "now_eur": _eur_smart(c_now), "plan_pc": "",
+                         "plan_eur": _eur_smart(c_tgt), "gap": _signed_eur(c_now - c_tgt),
+                         "colour": P["green"] if c_ok else P["red"]})
         levered = max(tn, tt) > 100.5
-        html.append(_alloc_head("Asset class",
-                                f"notional, % of invested capital \u00b7 "
-                                f"{_eur_smart(invested_base)}", top=6))
-        html.append(_bridge_svg(asset_rows, asset_rows, 270, cfg, tail=tail,
-                                rule100=levered, total_now=tn, total_tgt=tt,
-                                aria="Asset class allocation, today against the plan"))
-        note = []
+        note = [f"Notional, % of invested capital ({_eur_smart(invested_base)})."]
         if levered:
-            note.append(f"Past the dashed 100% line is futures overlay: {tn / 100:.2f}\u00d7 "
-                        f"today, {tt / 100:.2f}\u00d7 in the plan.")
-        if levs:
-            note.append(f"By class: {', '.join(levs)}; the rest 1.00\u00d7.")
+            note.append(f"Past the dashed 100% line is futures overlay, "
+                        f"{tn / 100:.2f}\u00d7 today and {tt / 100:.2f}\u00d7 in the plan"
+                        + (f": {', '.join(levs)}, the rest 1.00\u00d7." if levs else "."))
+        elif levs:
+            note.append(f"Leverage by class: {', '.join(levs)}, the rest 1.00\u00d7.")
         if cash is not None:
             note.append("Cash is outside invested capital.")
-        if note:
-            html.append(_alloc_note(" ".join(note)))
+        specs.append({"title": "Asset class", "left": asset_rows, "right": asset_rows,
+                      "tail": tail, "stack_h": 120.0, "rule100": levered,
+                      "total_now": tn, "total_tgt": tt, "note": " ".join(note),
+                      "aria": "Asset class allocation, today against the plan"})
 
     # ── Equity geography ──
     geo_rows = [_bridge_row(
@@ -1625,15 +1707,15 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         target=r.get("target_left"), base=equity_base,
         trend=_timeline_vals(geo_series, r["name"])) for r in geo.get("rows") or []]
     if geo_rows:
-        html.append(_alloc_head("Equity geography",
-                                f"% of the equity sleeve \u00b7 {_eur_smart(equity_base)} "
-                                f"notional", top=30))
-        html.append(_bridge_svg(geo_rows, geo_rows, 200, cfg,
-                                aria="Equity geography, today against the plan"))
+        specs.append({"title": "Equity geography", "left": geo_rows, "right": geo_rows,
+                      "stack_h": 100.0,
+                      "note": (f"% of the equity sleeve ({_eur_smart(equity_base)} "
+                               f"notional), so each side totals 100%."),
+                      "aria": "Equity geography, today against the plan"})
 
     # ── Per-holding targets ──
-    blocks = []
     verifs = {v.get("kind"): v for v in (m.rebalancing_verifications or [])}
+    holding_blocks = []
     if getattr(cfg, "target_use_per_holding_only", False):
         df = getattr(m, "holdings_df", None)
         weights: dict[str, float] = {}
@@ -1646,33 +1728,43 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                                      / invested_base * 100.0)
         v = verifs.get("per_holding_portfolio")
         if v:
-            blocks.append(("Per-holding target",
-                           f"% of invested capital \u00b7 {_eur_smart(invested_base)}",
-                           _holding_bridge_rows(ctx, v.get("items") or [], base=invested_base,
-                                                weights=weights, series=hold_inv_series,
-                                                series_key="isin")))
+            holding_blocks.append((
+                "Per-holding target", "Market value, % of invested capital.",
+                _holding_bridge_rows(ctx, v.get("items") or [], base=invested_base,
+                                     weights=weights, series=hold_inv_series,
+                                     series_key="isin")))
     else:
-        for kind, title, base in (("per_holding_equity", "Equities holdings", equity_base),
-                                  ("per_holding_fi", "Fixed income holdings", fi_base)):
+        for kind, title, base in (("per_holding_equity", "Equities holding", equity_base),
+                                  ("per_holding_fi", "Fixed income holding", fi_base)):
             v = verifs.get(kind)
             if v and v.get("items"):
-                blocks.append((title, f"% of the sleeve \u00b7 {_eur_smart(base)} notional",
-                               _holding_bridge_rows(ctx, v.get("items") or [], base=base,
-                                                    weights=None, series=hold_series,
-                                                    series_key="ticker")))
-    for title, note, (kept, new, sold) in blocks:
-        n_left = len(kept) + len(sold)
+                holding_blocks.append((
+                    title, f"% of the sleeve ({_eur_smart(base)} notional).",
+                    _holding_bridge_rows(ctx, v.get("items") or [], base=base,
+                                         weights=None, series=hold_series,
+                                         series_key="ticker")))
+    for title, note, (kept, new, sold) in holding_blocks:
         if not (kept or new or sold):
             continue
-        html.append(_alloc_head(title, note, top=30))
-        html.append(_bridge_svg(kept + sold, kept + new,
-                                max(200.0, _SLOT * n_left + 12), cfg,
-                                aria=f"{title}, today against the plan"))
+        specs.append({"title": title, "left": kept + sold, "right": kept + new,
+                      "stack_h": max(140.0, _ROW * (len(kept) + len(sold)) + 4.0),
+                      "note": note, "aria": f"{title}, today against the plan"})
 
-    html.append(_alloc_note(
-        f"1M: change in weight over the last month, in points. Gap: now minus plan, "
-        f"in points; green inside the band, red outside. Band: the narrower of "
-        f"\u00b1{abs_pp:g} pts and \u00b1{rel:g}% of the target.", top=14))
+    legend = (f"1M: change in weight over the last month. Gap: now minus plan. Both in "
+              f"points; green inside the band, red outside. Band: the narrower of "
+              f"\u00b1{abs_pp:g} pts and \u00b1{rel:g}% of the target.")
+    layout = _bridge_layout(specs)
+    html: list[str] = []
+    for i, sp in enumerate(specs):
+        html.append(_bridge_card(_bridge_svg(
+            sp["left"], sp["right"], sp["stack_h"], cfg, title=sp["title"],
+            tail=sp.get("tail") or (), rule100=sp.get("rule100", False),
+            total_now=sp.get("total_now"), total_tgt=sp.get("total_tgt"),
+            layout=layout, aria=sp["aria"])))
+        # The last card's caption carries the legend, which every card shares.
+        last = i == len(specs) - 1
+        text = f'{sp["note"]} {legend}' if last else sp["note"]
+        html.append(_alloc_note(text))
     return {"available": True, "html": "".join(html)}
 
 def _build_holdings(ctx: _NewsletterContext) -> dict:
