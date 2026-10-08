@@ -735,3 +735,191 @@ class TestAWindowEdgeIsASessionDateNotATimestamp:
         # The series' last observation is Mon 24 Aug, and five sessions back
         # from it is Mon 17 Aug — the anchor Yahoo's own page uses.
         assert window_anchor(converted, "5d", "RSSY").date() == _dt.date(2026, 8, 17)
+
+
+class TestVenueConsensus:
+    """8 Oct 2026, 11:08: a sleeve published at -4.38% off ONE trade.
+
+    The fund trades thinly on every venue (EUR 50-90k a day in total). Its Xetra line
+    printed a single trade at 28.07 at 09:21 against a 29.355 previous close; Paris
+    quoted 28.99 at the same time; Milan's quote endpoint was dead (observed 10 Oct
+    2025). The level gate admitted 28.07 — 4.4% from the last close is well inside
+    10% — and the run valued the holding, stamped its tape and printed its 1D from that
+    one print. Neither check before this one looked at the OTHER venue.
+    """
+
+    _TODAY = dt.date(2026, 10, 8)
+
+    def _ts(self, h, m, day=None):
+        d = day or self._TODAY
+        return int(dt.datetime(d.year, d.month, d.day, h - 2, m,
+                               tzinfo=dt.timezone.utc).timestamp())   # Rome = UTC+2
+
+    def _pick(self, symbols, quotes, ref, history=None):
+        import tarzan.runtime as runtime
+        from tarzan.data.current_session import pick_quote
+
+        orig = runtime.today
+        runtime.today = lambda: self._TODAY
+        try:
+            return pick_quote(symbols, quotes, ref, history=history)
+        finally:
+            runtime.today = orig
+
+    @staticmethod
+    def _history(level=29.4, sigma=0.0088, n=260, seed=7):
+        """A tape with the fund's real daily volatility (~14% a year)."""
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        r = rng.normal(0.0, sigma, n)
+        idx = pd.bdate_range(end="2026-10-07", periods=n)
+        return pd.Series(level * np.cumprod(1 + r) / np.prod(1 + r), index=idx)
+
+    def _the_8_oct_quotes(self):
+        return {
+            "ABC.DE": {"price": 28.07, "prev_close": 29.355, "time": self._ts(9, 21)},
+            "ABC.PA": {"price": 28.99, "prev_close": 29.01, "time": self._ts(10, 26)},
+            "ABC.MI": {"price": 25.515, "prev_close": 25.805,
+                        "time": self._ts(17, 35, dt.date(2025, 10, 10))},
+        }
+
+    def test_the_off_market_print_loses_to_the_venue_near_the_last_close(self):
+        q = self._pick(["ABC.DE", "ABC.MI", "ABC.PA"],
+                       self._the_8_oct_quotes(), 29.445)
+        assert q.get("price") == 28.99, q
+        # The 1D the issue would now print: the Paris pair, -0.07%, not -4.38%.
+        assert round((q["price"] / q["prev_close"] - 1) * 100, 2) == -0.07
+
+    def test_a_genuine_move_on_every_venue_keeps_the_preferred_one(self):
+        """Consensus is a tiebreak for DISAGREEMENT, not a new preference: when the
+        venues agree, the caller's priority order decides exactly as before."""
+        quotes = {
+            "ABC.DE": {"price": 28.05, "prev_close": 29.35, "time": self._ts(10, 30)},
+            "ABC.PA": {"price": 28.10, "prev_close": 29.40, "time": self._ts(10, 31)},
+        }
+        assert self._pick(["ABC.DE", "ABC.PA"], quotes, 29.40)["price"] == 28.05
+
+    def test_venues_in_different_sessions_do_not_vote(self):
+        """A venue that has not traded today still carries yesterday's quote. Its price
+        is not a vote on today's — comparing them would call every real move a
+        disagreement."""
+        quotes = {
+            "ABC.DE": {"price": 28.05, "prev_close": 29.35, "time": self._ts(10, 30)},
+            "ABC.PA": {"price": 29.40, "prev_close": 29.30,
+                       "time": self._ts(17, 35, dt.date(2026, 10, 7))},
+        }
+        assert self._pick(["ABC.DE", "ABC.PA"], quotes, 29.40)["price"] == 28.05
+
+    def test_an_unconfirmed_extreme_print_is_rejected(self):
+        """One venue only, -4.4% on a fund whose daily sigma is 0.6%: over seven sigmas
+        with nobody to confirm it. The holding keeps its last close instead."""
+        quotes = {"ABC.DE": {"price": 28.07, "prev_close": 29.355,
+                              "time": self._ts(9, 21)}}
+        assert self._pick(["ABC.DE"], quotes, 29.445,
+                          history=self._history(sigma=0.006)) == {}
+
+    def test_a_bad_previous_close_is_a_dispute_too(self):
+        """The same afternoon, 11:18: today's PRICES agreed (28.865 vs 28.975, 0.4%),
+        but the thin venue's previous close did not (29.355 vs 29.01). The 1D still
+        read -1.67% against -0.12%. Consensus has to be on the MOVE, not the level."""
+        quotes = {
+            "ABC.DE": {"price": 28.865, "prev_close": 29.355, "time": self._ts(10, 35),
+                       "volume": 403},
+            "ABC.PA": {"price": 28.975, "prev_close": 29.01, "time": self._ts(11, 18),
+                       "volume": 473},
+        }
+        q = self._pick(["ABC.DE", "ABC.PA"], quotes, 29.445, history=self._history())
+        assert q.get("price") == 28.975
+
+    def test_the_busier_venue_wins_even_when_it_shows_the_larger_move(self):
+        """The other fund that day, with the two venues inside one hour: the SMALLER
+        move (-0.92%) rested on a previous close of ONE share at the open, the larger
+        (-3.65%) on a full session of trading. "Keep the smaller move" would be wrong
+        here; "keep the venue that traded more today" is right in every case measured."""
+        quotes = {
+            "DEF.DE": {"price": 110.74, "prev_close": 114.94, "time": self._ts(11, 44),
+                       "volume": 188},
+            "DEF.PA": {"price": 111.93, "prev_close": 112.97, "time": self._ts(11, 10),
+                       "volume": 175},
+        }
+        q = self._pick(["DEF.PA", "DEF.DE"], quotes, 112.02)
+        assert q.get("price") == 110.74
+
+    def test_without_volumes_the_smaller_move_is_the_fallback(self):
+        quotes = {
+            "ABC.DE": {"price": 28.865, "prev_close": 29.355, "time": self._ts(10, 35)},
+            "ABC.PA": {"price": 28.975, "prev_close": 29.01, "time": self._ts(11, 18)},
+        }
+        q = self._pick(["ABC.DE", "ABC.PA"], quotes, 29.445, history=self._history())
+        assert q.get("price") == 28.975
+
+    def test_an_hour_older_quote_is_superseded(self):
+        """A second instrument that day: its thin Paris line last traded at 09:28,
+        Xetra at 11:44. Two hours apart is not a disagreement between venues, it is
+        old information against new — the fresher venue speaks."""
+        quotes = {
+            "DEF.DE": {"price": 110.74, "prev_close": 114.94, "time": self._ts(11, 44)},
+            "DEF.PA": {"price": 111.93, "prev_close": 112.97, "time": self._ts(9, 28)},
+        }
+        q = self._pick(["DEF.PA", "DEF.DE"], quotes, 112.02)
+        assert q.get("price") == 110.74
+
+    def test_three_venues_take_the_median_mover(self):
+        quotes = {
+            "GHI.MI": {"price": 97.0, "prev_close": 100.0, "time": self._ts(11, 0)},
+            "GHI.DE": {"price": 99.4, "prev_close": 100.0, "time": self._ts(11, 5)},
+            "GHI.PA": {"price": 99.6, "prev_close": 100.0, "time": self._ts(11, 10)},
+        }
+        q = self._pick(["GHI.MI", "GHI.DE", "GHI.PA"], quotes, 100.0)
+        assert q.get("price") == 99.4
+
+    def test_a_second_venue_confirming_the_move_lets_it_through(self):
+        """A real crash shows on every venue, so it is never mistaken for a bad print."""
+        quotes = {
+            "ABC.DE": {"price": 28.07, "prev_close": 29.355, "time": self._ts(9, 21)},
+            "ABC.PA": {"price": 28.10, "prev_close": 29.38, "time": self._ts(9, 25)},
+        }
+        q = self._pick(["ABC.DE", "ABC.PA"], quotes, 29.445, history=self._history())
+        assert q.get("price") == 28.07
+
+    def test_an_ordinary_move_needs_no_confirmation(self):
+        quotes = {"ABC.DE": {"price": 29.20, "prev_close": 29.355, "time": self._ts(10, 0)}}
+        q = self._pick(["ABC.DE"], quotes, 29.445, history=self._history())
+        assert q.get("price") == 29.20
+
+    def test_too_little_history_never_blocks(self):
+        """Under a month of returns there is no sigma worth the name; the gate stands
+        aside rather than refuse to stamp a young holding."""
+        quotes = {"ABC.DE": {"price": 28.07, "prev_close": 29.355, "time": self._ts(9, 21)}}
+        q = self._pick(["ABC.DE"], quotes, 29.445, history=self._history(n=10))
+        assert q.get("price") == 28.07
+
+
+class TestTheEighthOfOctoberEndToEnd:
+    """Through ``apply_to_holdings`` — the stamp the valuation, the tape and the 1D all
+    read — rather than through ``pick_quote`` alone."""
+
+    def test_the_holding_is_priced_from_the_venue_the_market_agrees_with(self, monkeypatch):
+        import tarzan.runtime as runtime
+        from tarzan.data import current_session, market_quotes
+        from tarzan.models.holding import Holding
+
+        quotes = TestVenueConsensus()._the_8_oct_quotes()
+        monkeypatch.setattr(runtime, "today", lambda: dt.date(2026, 10, 8))
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        monkeypatch.setattr(market_quotes, "official_quotes",
+                            lambda syms: {s: quotes[s] for s in syms if s in quotes})
+        monkeypatch.setattr(market_quotes, "_sibling_symbols",
+                            lambda tk: ["ABC.MI", "ABC.PA"])
+        tape = TestVenueConsensus._history(level=29.445)
+        h = Holding(isin="IE0000000001", ticker="ABC.DE", quantity=100.0,
+                    cost_basis_eur=2800.0, market_value_eur=2944.5, currency="EUR")
+        h.price_history = tape.copy()
+        h.price_history_native = tape.copy()
+        current_session.apply_to_holdings([h])
+
+        s = h.price_history.dropna()
+        one_day = (s.iloc[-1] / s.iloc[-2] - 1) * 100
+        assert s.index[-1].date() == dt.date(2026, 10, 8)
+        assert abs(one_day - (-0.07)) < 0.01, f"1D {one_day:+.2f}% (the bad print gave -4.38%)"

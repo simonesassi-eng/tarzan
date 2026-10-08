@@ -1286,6 +1286,15 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
                     fields["time"] = int(observed)
             except (TypeError, ValueError):
                 pass
+            # Today's traded volume on this venue: the evidence ``pick_quote`` weighs
+            # when two venues dispute an instrument's 1D. Already in this response,
+            # so carrying it costs no request.
+            try:
+                volume = q.get("regularMarketVolume")
+                if volume is not None and float(volume) >= 0:
+                    fields["volume"] = float(volume)
+            except (TypeError, ValueError):
+                pass
             if fields.get("price") or fields.get("prev_close"):
                 out[sym] = fields
         missing = [s for s in symbols if s not in out]

@@ -1385,7 +1385,7 @@ class MetricsEngine:
                     return None
                 q = current_session.pick_quote(
                     candidates.get(record.ticker, []), quotes,
-                    float(clean.iloc[-1]))
+                    float(clean.iloc[-1]), history=clean)
                 p = q.get("price")
                 if not p:
                     return None

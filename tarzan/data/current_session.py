@@ -77,24 +77,79 @@ logger = logging.getLogger(__name__)
 _MAX_QUOTE_AGE_DAYS = 7
 
 
-def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict:
-    """The first candidate quote that is both RECENT and priced coherently.
+#: A venue observed this long before the freshest venue of the same instrument is
+#: superseded: its quote is older information about the same price. On 8 Oct 2026 the
+#: off-market Xetra print was observed at 09:21 while Paris had been trading since;
+#: on a thin line the gap between two venues' last trades is routinely an hour.
+_CONSENSUS_WINDOW_MINUTES = 60
 
-    Coherent means its price agrees with ``reference_price`` (the instrument's own last
-    real close) within the sibling tolerance. That is the sanity gate that rejects a
-    corrupt feed: NTSG.MI's quote priced the fund at 25.5 while its own series and its
-    ``.DE`` sibling sat at ~29.4, so the canonical is skipped and the clean sibling
-    supplies the close instead.
+#: Two venues' 1D for the same instrument and session may differ by this much (in pp)
+#: before the figure is DISPUTED: the larger of a 1pp floor and 1.5 of the instrument's
+#: own daily sigmas. Honest cross-venue noise sits well inside it — over 462 shared
+#: sessions one fund's Milan and Xetra closes differed by a sd of 0.35% — and the three
+#: disputes measured on 8 Oct 2026 sat far outside it (4.31, 1.55 and 2.73pp).
+_MOVE_TOLERANCE_FLOOR_PP = 1.0
+_MOVE_TOLERANCE_SIGMAS = 1.5
 
-    Recent means its own observation timestamp is within ``_MAX_QUOTE_AGE_DAYS``. The
-    level test alone let that same NTSG.MI quote back in once the fund's real price had
-    drifted to within 10% of the stale one — a price observed 342 days earlier, arriving
-    as today's valuation. A quote carrying NO timestamp is judged on level alone, as
-    before: some feeds do not publish one and refusing all of them would stop stamping
-    instruments that are fine.
+#: An uncorroborated move beyond this many of the instrument's OWN daily standard
+#: deviations is treated as a bad print rather than as the market. Five, so a real
+#: crash day on a diversified fund still passes (5 sigmas of a 14%-vol fund is -4.4%),
+#: and a single fat-finger on a thin venue does not.
+_MAX_UNCONFIRMED_SIGMAS = 5.0
 
-    Returns ``{}`` when nothing qualifies, so the caller keeps the feed's own close
-    rather than stamp from bad data.
+
+def _daily_sigma(history) -> Optional[float]:
+    """The instrument's own daily return standard deviation (a fraction), or None
+    when there is too little history — under a month — to measure one."""
+    if history is None:
+        return None
+    try:
+        r = pd.Series(history).dropna().astype(float).pct_change().dropna().tail(252)
+    except Exception:  # noqa: BLE001 — a sanity check must never break a stamp
+        return None
+    if len(r) < 20:
+        return None
+    sigma = float(r.std())
+    return sigma if sigma > 0 else None
+
+
+def _move(quote: dict) -> Optional[float]:
+    price, prev = quote.get("price"), quote.get("prev_close")
+    if not price or not prev:
+        return None
+    return float(price) / float(prev) - 1.0
+
+
+def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
+               history=None) -> dict:
+    """The quote that today's valuation, stamp and 1D are read from — or ``{}``.
+
+    Four gates, in order, and every one of them was added after a real issue went out
+    wrong:
+
+    1. **Recent** — its own observation is within ``_MAX_QUOTE_AGE_DAYS``. A dead feed
+       served a price observed 342 days earlier and, once the real price drifted close
+       enough, it arrived as today's valuation.
+    2. **Coherent** — its level agrees with ``reference_price`` (the instrument's own
+       last real close) within the sibling tolerance. Rejects a corrupt feed priced on
+       a different scale.
+    3. **Consensus** — among the venues observed in the newest session, one observed
+       more than ``_CONSENSUS_WINDOW_MINUTES`` before the freshest is superseded. If the
+       rest disagree on the 1D beyond the move tolerance, the figure is disputed: with
+       three or more venues the MEDIAN mover is kept, with two the venue that has
+       TRADED more today (``_better_evidenced``). A genuine move shows on every venue
+       and never trips this.
+    4. **Corroborated** — with ``history`` given, a move beyond
+       ``_MAX_UNCONFIRMED_SIGMAS`` of the instrument's own daily returns is accepted
+       only if a second same-session venue confirms it. Uncorroborated, it is rejected:
+       the holding keeps its last close and the issue's "priced today" coverage says
+       so, an honest gap instead of a wrong number.
+
+    Without a dispute the caller's priority order decides exactly as before. A quote
+    with no timestamp is judged on level alone and takes no part in a consensus,
+    having no session to share.
+
+    Returns ``{}`` when nothing qualifies, so the caller keeps the feed's own close.
 
     ponytail: the reference is an EUR-per-unit close while the quote is in the
     venue's native units, so a non-EUR listing fails the tolerance by the FX
@@ -103,16 +158,103 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float) -> dict
     """
     from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
 
-    for symbol in symbols:
+    ref = float(reference_price)
+    eligible: list[tuple[str, dict]] = []
+    for symbol in dict.fromkeys(symbols):
         quote = quotes.get(symbol) or {}
         native = quote.get("price")
-        if not native:
+        if not native or quote_is_stale(quote):
             continue
-        if quote_is_stale(quote):
-            continue
-        if abs(float(native) / float(reference_price) - 1.0) <= _SIBLING_PRICE_TOLERANCE:
-            return quote
-    return {}
+        if abs(float(native) / ref - 1.0) <= _SIBLING_PRICE_TOLERANCE:
+            eligible.append((symbol, quote))
+    if not eligible:
+        return {}
+
+    observed = {sym: quote_observed_at(q) for sym, q in eligible}
+    newest_day = max((o.date() for o in observed.values() if o is not None), default=None)
+    same_session = [(sym, q) for sym, q in eligible
+                    if observed[sym] is not None and observed[sym].date() == newest_day]
+    freshest = max((observed[sym] for sym, _q in same_session), default=None)
+    peers = [(sym, q) for sym, q in same_session
+             if (freshest - observed[sym]).total_seconds() / 60.0
+             <= _CONSENSUS_WINDOW_MINUTES]
+    superseded = {sym for sym, _q in same_session} - {sym for sym, _q in peers}
+
+    # Priority order, with superseded venues out of the running.
+    ranked = [(sym, q) for sym, q in eligible if sym not in superseded]
+    chosen_sym, chosen = ranked[0]
+
+    sigma = _daily_sigma(history)
+    tolerance = max(_MOVE_TOLERANCE_FLOOR_PP / 100.0,
+                    _MOVE_TOLERANCE_SIGMAS * sigma if sigma else 0.0)
+    moves = {sym: _move(q) for sym, q in peers}
+    voting = [(sym, q) for sym, q in peers if moves[sym] is not None]
+    if len(voting) >= 2:
+        spread = max(moves[s] for s, _q in voting) - min(moves[s] for s, _q in voting)
+        if spread > tolerance:
+            if len(voting) >= 3:
+                ordered = sorted(voting, key=lambda sq: moves[sq[0]])
+                chosen_sym, chosen = ordered[(len(ordered) - 1) // 2]
+            else:
+                chosen_sym, chosen = _better_evidenced(voting, moves)
+            logger.warning(
+                "Venues dispute the 1D of %s (%s; spread %.2fpp > %.2fpp); kept %s",
+                symbols[0] if symbols else "?",
+                ", ".join(f"{s} {moves[s] * 100:+.2f}%" for s, _q in voting),
+                spread * 100, tolerance * 100, chosen_sym)
+
+    if sigma is not None and not _move_is_plausible(
+            chosen, chosen_sym, voting, moves, sigma, tolerance):
+        return {}
+    return chosen
+
+
+def _better_evidenced(voting, moves: dict):
+    """The better-evidenced of two venues that dispute an instrument's 1D.
+
+    The one that traded more TODAY. Either end of a venue's 1D can be wrong on a thin
+    line, and the three disputes measured on 8 Oct 2026 had their error at different
+    ends — which is why neither "the smaller move" nor "the more liquid venue on
+    average" survives all three, while today's volume does:
+
+    * 11:08, a single off-market trade at 09:21 on one venue (-4.38%) against a venue
+      that had kept trading (-0.07%): the busier venue is right.
+    * 11:18, the quieter venue's PREVIOUS CLOSE was not a traded price — 29.355 against
+      a session that traded only between 28.985 and 29.160 — so its -1.67% was
+      measured from a number nobody dealt at; the other venue (473 vs 403 traded)
+      said -0.12%. The busier venue is right.
+    * a second fund, the other way round: the venue showing the SMALLER move (-0.92%)
+      had a previous close made of ONE share at the open, while the larger mover
+      (-3.65%) had traded 898 units through its whole previous session. The busier
+      venue (188 vs 175 today) is right, and "the smaller move" would have been wrong.
+
+    Volume missing on either side falls back to the smaller move, the weaker rule, so
+    the choice is still deterministic. Ties keep the caller's priority order.
+    """
+    vols = [q.get("volume") for _s, q in voting]
+    if all(v is not None for v in vols) and vols[0] != vols[1]:
+        return max(voting, key=lambda sq: float(sq[1]["volume"]))
+    return min(voting, key=lambda sq: abs(moves[sq[0]]))
+
+
+def _move_is_plausible(quote: dict, symbol: str, voting, moves: dict,
+                       sigma: float, tolerance: float) -> bool:
+    """Gate 4 of :func:`pick_quote`: is this quote's own published move believable?
+
+    Believable when it is within ``_MAX_UNCONFIRMED_SIGMAS`` of the instrument's own
+    daily returns, OR when another same-session venue's move confirms it within the
+    move tolerance. Never blocks on missing evidence: no previous close reads as
+    plausible — this gate exists to stop a bad print, not to stop stamping.
+    """
+    move = _move(quote)
+    if move is None or abs(move) <= _MAX_UNCONFIRMED_SIGMAS * sigma:
+        return True
+    if any(s != symbol and abs(moves[s] - move) <= tolerance for s, _q in voting):
+        return True
+    logger.warning(
+        "Rejected an unconfirmed %+.2f%% print on %s (%.1f sigmas, no second venue "
+        "agrees); the holding keeps its last close", move * 100, symbol, abs(move) / sigma)
+    return False
 
 
 def quote_is_stale(quote: dict) -> bool:
@@ -357,7 +499,7 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             if clean is None or len(clean) == 0:
                 return None, None
             q = pick_quote(candidates.get(str(holding.ticker), []), quotes,
-                           float(clean.iloc[-1]))
+                           float(clean.iloc[-1]), history=clean)
             p = q.get("price")
             if not p:
                 return None, None
@@ -374,7 +516,7 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             continue
         quote = pick_quote(
             candidates.get(str(holding.ticker), []), quotes,
-            float(usable.iloc[-1]),
+            float(usable.iloc[-1]), history=usable,
         )
         price = quote.get("price")
         if not price:
