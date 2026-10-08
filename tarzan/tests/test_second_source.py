@@ -160,3 +160,60 @@ class TestTheEngineStage:
         ctx = {"holding_performance": hp}
         MetricsEngine([h], InvestorConfig())._second_source(ctx)   # must not raise
         assert "xc_1m" in ctx["holding_performance"].columns
+
+
+class TestASplitIsBackAdjustedByItsRoundRatio:
+    """CL2.MI, 10 Oct 2023: a 1:300 split that Yahoo did not record.
+
+    The repair used the raw close-to-close jump, 4017.15 -> 13.79 = 1:291.31. That jump is
+    the split TIMES the session's real move — the 2x line also rose ~3% that day, +2.69%
+    on its Paris listing — so every earlier price came out 3% high and the 5Y return ~10pp
+    low. Two other sources (the Paris listing and justETF) agreed with each other and not
+    with us; the second-source check is what surfaced it.
+    """
+
+    def _cl2_frame(self):
+        pre = pd.bdate_range("2023-09-01", "2023-10-09")
+        post = pd.bdate_range("2023-10-10", "2023-11-30")
+        rng = np.random.default_rng(1)
+        pre_px = 4017.15 * np.cumprod(1 + rng.normal(0, 0.006, len(pre)))[::-1] / \
+            np.cumprod(1 + rng.normal(0, 0.006, len(pre)))[::-1][0]
+        pre_px[-1] = 4017.15
+        post_px = 13.79 * np.cumprod(1 + rng.normal(0, 0.006, len(post)))
+        post_px[0] = 13.79
+        idx = pre.append(post)
+        return pd.DataFrame({"Close": np.concatenate([pre_px, post_px])}, index=idx)
+
+    def test_the_factor_is_the_split_not_the_split_times_the_session(self):
+        from tarzan.data.price_cache import repair_split_jumps
+
+        raw = self._cl2_frame()
+        out = repair_split_jumps(raw)
+        before = out.loc["2023-10-09", "Close"]
+        assert before == pytest.approx(4017.15 / 300.0, rel=1e-9)
+        # ...so the split session keeps its real move instead of being erased.
+        assert out.loc["2023-10-10", "Close"] / before - 1 == pytest.approx(0.0298, abs=0.0005)
+
+    def test_a_ratio_that_is_not_round_is_not_forced_onto_one(self):
+        from tarzan.data.price_cache import _snap_split_ratio
+
+        assert _snap_split_ratio(1 / 3.4) == pytest.approx(1 / 3.4)
+        assert _snap_split_ratio(1 / 291.31) == pytest.approx(1 / 300)
+        assert _snap_split_ratio(2.07) == pytest.approx(2.0)
+
+    def test_histories_repaired_the_old_way_are_refetched(self, tmp_path, monkeypatch):
+        """A history is cached AFTER repair, so a repaired series has no jump left for a
+        better repair to find. Without a version on the payload the 1:291.31 history
+        would have kept that factor forever."""
+        from tarzan.data import price_cache
+
+        monkeypatch.setenv("TARZAN_CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(price_cache, "is_enabled", lambda: True)
+        frame = self._cl2_frame()
+        price_cache.store_history("ABC.MI", frame)
+        assert price_cache.load_history("ABC.MI") is not None
+        path = price_cache._history_path("ABC.MI")
+        payload = price_cache._read_json(path, "history", None)
+        payload.pop("repair_version")
+        price_cache._atomic_write_json(path, "history", payload)
+        assert price_cache.load_history("ABC.MI") is None

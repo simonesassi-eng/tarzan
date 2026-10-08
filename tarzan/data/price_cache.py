@@ -74,6 +74,14 @@ _INSTRUMENT_PROFILE_NAMESPACE = "instrument_profiles_v1"
 
 _DISABLED_ENV = "TARZAN_DISABLE_CACHE"
 _CACHE_SCHEMA_VERSION = "1"
+
+#: Bumped when ``repair_split_jumps`` changes what a stored history contains. Histories
+#: are cached AFTER repair, so a repaired series has no jump left for a better repair
+#: to find: without this, the CL2.MI history repaired with 1:291.31 would have kept
+#: that factor forever. A history without the current version is refetched once.
+#: History-only on purpose: the global schema version would also throw away the ISIN
+#: resolutions, geographies and TERs, which nothing here invalidates.
+_HISTORY_REPAIR_VERSION = "2"
 _LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 
@@ -213,6 +221,8 @@ def load_history(symbol: str) -> Optional[pd.DataFrame]:
     payload = _read_json(path, "history", None)
     if not isinstance(payload, dict) or payload.get("kind") not in ("dataframe", "series"):
         return None
+    if payload.get("repair_version") != _HISTORY_REPAIR_VERSION:
+        return None
     try:
         table = payload.get("table")
         frame = pd.read_json(io.StringIO(json.dumps(table)), orient="table")
@@ -248,6 +258,7 @@ def store_history(symbol: str, df: pd.DataFrame) -> None:
             "kind": "series" if is_series else "dataframe",
             "name": str(df.name) if is_series and df.name is not None else None,
             "index_freq": getattr(frame.index, "freqstr", None),
+            "repair_version": _HISTORY_REPAIR_VERSION,
             "table": table,
         }
         path = _history_path(symbol)
@@ -278,6 +289,49 @@ def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.Dat
 # past it is an unadjusted split/denomination change, which we back-adjust.
 SPLIT_JUMP_LO = 0.5
 SPLIT_JUMP_HI = 2.0
+
+
+#: How far a measured close-to-close jump may sit from a round split ratio and still be
+#: that split. The remainder is the real market move of the split session, which a
+#: diversified ETF does not exceed in a day (a 2x line's worst sessions are well inside).
+_SPLIT_SNAP_TOLERANCE = 0.12
+
+#: The mantissas real split and consolidation ratios are made of: 1:2, 1:3, 1:10, 1:25,
+#: 1:300, 5:1, ...
+_SPLIT_MANTISSAS = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 7.5, 8.0, 9.0)
+
+
+def _snap_split_ratio(r: float) -> float:
+    """The split ratio a measured close-to-close jump ``r`` stands for.
+
+    The raw jump is the split TIMES the session's real move, and back-adjusting by the
+    raw jump books that move into every earlier price. CL2.MI is the case that measured
+    it: a 1:300 split on 10 Oct 2023 read as 1:291.31, because the 2x line also rose
+    ~3% that session (its Paris listing: +2.69%). The 9-day-old history was therefore
+    3% high and the 5Y return ~10pp low — confirmed against two other sources, which
+    agreed with each other and not with us.
+
+    Snapped to the nearest round ratio in log space when within
+    ``_SPLIT_SNAP_TOLERANCE``; otherwise the raw jump is kept, so an unusual ratio is
+    never forced onto a round one it is not.
+    """
+    import math
+
+    if r <= 0:
+        return r
+    big = 1.0 / r if r < 1.0 else r
+    best, best_err = None, None
+    for exp in range(0, 5):
+        for m in _SPLIT_MANTISSAS:
+            cand = m * 10 ** exp
+            if cand < 2.0:
+                continue
+            err = abs(math.log(big / cand))
+            if best_err is None or err < best_err:
+                best, best_err = cand, err
+    if best is None or best_err > math.log(1.0 + _SPLIT_SNAP_TOLERANCE):
+        return r
+    return (1.0 / best) if r < 1.0 else best
 
 
 def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -325,7 +379,7 @@ def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
             # both surrounding levels are real prices (not a near-zero tick).
             if (expected > 0 and after > 0 and before > min_level and after > min_level
                     and abs(after - expected) / expected <= 0.35):
-                cum *= r
+                cum *= _snap_split_ratio(r)
                 splits += 1
         factor[i] = cum
     if splits == 0:
