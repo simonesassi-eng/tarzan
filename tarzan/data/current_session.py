@@ -120,8 +120,15 @@ def _move(quote: dict) -> Optional[float]:
     return float(price) / float(prev) - 1.0
 
 
+#: How far a venue's published previous close may sit from an INDEPENDENT previous close
+#: of the same session before it stops being a valid 1D baseline. Honest cross-venue
+#: noise on closes has a sd of 0.35%; the fictitious Xetra close of 8 Oct 2026 sat 1.19%
+#: from the traded one.
+_BASELINE_TOLERANCE = 0.0075
+
+
 def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
-               history=None) -> dict:
+               history=None, referee: Optional[dict] = None) -> dict:
     """The quote that today's valuation, stamp and 1D are read from — or ``{}``.
 
     Four gates, in order, and every one of them was added after a real issue went out
@@ -196,7 +203,7 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
                 ordered = sorted(voting, key=lambda sq: moves[sq[0]])
                 chosen_sym, chosen = ordered[(len(ordered) - 1) // 2]
             else:
-                chosen_sym, chosen = _better_evidenced(voting, moves)
+                chosen_sym, chosen = _better_evidenced(voting, moves, referee, newest_day)
             logger.warning(
                 "Venues dispute the 1D of %s (%s; spread %.2fpp > %.2fpp); kept %s",
                 symbols[0] if symbols else "?",
@@ -209,8 +216,16 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
     return chosen
 
 
-def _better_evidenced(voting, moves: dict):
+def _better_evidenced(voting, moves: dict, referee: Optional[dict] = None,
+                      session=None):
     """The better-evidenced of two venues that dispute an instrument's 1D.
+
+    First, with an independent ``referee`` (justETF's quote for the same session), the
+    venue whose PREVIOUS CLOSE disagrees with the referee's beyond
+    ``_BASELINE_TOLERANCE`` is not a valid baseline and loses. That is the failure today's
+    volume cannot see: later on 8 Oct 2026 the venue with the fictitious 29.355 close had
+    out-traded the other, so "busier" picked the broken baseline (-1.23% against a real
+    -0.28%) — while the referee's traded close was 29.01, exactly the other venue's.
 
     The one that traded more TODAY. Either end of a venue's 1D can be wrong on a thin
     line, and the three disputes measured on 8 Oct 2026 had their error at different
@@ -231,6 +246,18 @@ def _better_evidenced(voting, moves: dict):
     Volume missing on either side falls back to the smaller move, the weaker rule, so
     the choice is still deterministic. Ties keep the caller's priority order.
     """
+    ref_prev = (referee or {}).get("prev_close")
+    if ref_prev and (referee or {}).get("date") == session:
+        valid = [(s, q) for s, q in voting
+                 if q.get("prev_close")
+                 and abs(float(q["prev_close"]) / float(ref_prev) - 1.0)
+                 <= _BASELINE_TOLERANCE]
+        if len(valid) == 1:
+            logger.warning(
+                "Baseline of %s rejected: its previous close disagrees with the "
+                "independent %.4f", ", ".join(s for s, _q in voting if (s, _q) not in valid),
+                float(ref_prev))
+            return valid[0]
     vols = [q.get("volume") for _s, q in voting]
     if all(v is not None for v in vols) and vols[0] != vols[1]:
         return max(voting, key=lambda sq: float(sq[1]["volume"]))
@@ -479,6 +506,20 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
     if not quotes:
         return ()
 
+    # An independent previous close per holding, to arbitrate a disputed 1D baseline
+    # (see ``_better_evidenced``). One justETF quote per ISIN, fetched in the same
+    # pass; when justETF is unavailable the referee is simply absent.
+    referees: dict[str, dict] = {}
+    try:
+        from tarzan.data import justetf
+
+        by_isin = {str(h.ticker): h.isin for h in holdings if h.ticker and h.isin}
+        justetf.prefetch(by_isin.values())
+        referees = {tk: q for tk, isin in by_isin.items()
+                    if (q := justetf.quote(isin))}
+    except Exception as e:  # noqa: BLE001 — a referee must never block a stamp
+        logger.info("No independent baseline this run: %s", e)
+
     stamped: list[str] = []
     for holding in holdings:
 
@@ -499,7 +540,8 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             if clean is None or len(clean) == 0:
                 return None, None
             q = pick_quote(candidates.get(str(holding.ticker), []), quotes,
-                           float(clean.iloc[-1]), history=clean)
+                           float(clean.iloc[-1]), history=clean,
+                           referee=referees.get(str(holding.ticker)))
             p = q.get("price")
             if not p:
                 return None, None
@@ -517,6 +559,7 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         quote = pick_quote(
             candidates.get(str(holding.ticker), []), quotes,
             float(usable.iloc[-1]), history=usable,
+            referee=referees.get(str(holding.ticker)),
         )
         price = quote.get("price")
         if not price:

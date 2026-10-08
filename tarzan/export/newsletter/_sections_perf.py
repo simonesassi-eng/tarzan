@@ -1297,9 +1297,48 @@ def _bar_session_span(quote, raw_ticker: str):
         return None
 
 
+#: Appended to a figure the second source disagrees on. A question mark rather than a
+#: colour: the cell's colour already carries the heat ramp, and a mark survives a
+#: plain-text client.
+_UNVERIFIED_MARK = "?"
+
+
+def _unverified_note(perf_by_ticker: dict, keys) -> str:
+    """The note under the holdings table naming every figure the sources disagree on.
+
+    Both figures and the gap, so the reader can judge it rather than take a mark on
+    trust. Empty when everything that could be checked agreed — a note saying "all
+    verified" would be one more line that is true almost every day and therefore read
+    by nobody. Instruments justETF does not cover are not listed: unchecked is the
+    default state of the rest of the issue, and the check names only disagreements.
+    """
+    lines = []
+    for ticker, row in perf_by_ticker.items():
+        for key in keys:
+            status, alt, ours, at = (tuple((row.get("_xc") or {}).get(key) or ())
+                                     + (None,) * 4)[:4]
+            if status != "diverged" or alt is None or alt != alt:
+                continue
+            label = _display_ticker(ticker) or ticker
+            # The like-for-like pair the verdict was reached on — same span, same last
+            # close — and that close's date. The printed cell ends today; quoting it
+            # beside a figure that ends yesterday would show a gap that is the clock.
+            when = f" to {at:%d %b}" if hasattr(at, "strftime") else ""
+            lines.append(
+                f"{label} {key.upper()}{when}: Yahoo "
+                + ("" if ours is None or ours != ours else f"{float(ours):+.2f}%, ")
+                + f"justETF {float(alt):+.2f}%")
+    if not lines:
+        return ""
+    P = PALETTE
+    return (f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
+            f'{_UNVERIFIED_MARK} Not verified — two independent sources disagree: '
+            + _esc("; ".join(lines)) + ".</div>")
+
+
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
                      bg: Optional[str] = None,
-                     live: bool = False) -> tuple:
+                     live: bool = False, unverified: bool = False) -> tuple:
     """Render the 1D cell: a sign-colored % pill (the change vs the previous
     close) above a Markets-style intraday sparkline (green above the previous
     close, red below).
@@ -1317,7 +1356,7 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
         dv = None
     else:
         dv = float(day_val)
-        pill_txt = _pct_compact(dv, signed=True)
+        pill_txt = _pct_compact(dv, signed=True) + (_UNVERIFIED_MARK if unverified else "")
         pill_col = P["green"] if dv >= 0 else P["red"]
         pill_bg = P["green_bg"] if dv >= 0 else P["red_bg"]
     pill = (f'<span style="{TYPE["data"]}color:{pill_col};'
@@ -1715,8 +1754,11 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
                 continue
             color = (_vs_bench_color(v, ab_bench_returns.get(key)) if is_portfolio
                      else (PALETTE["green"] if v >= 0 else PALETTE["red"]))
-            out[key] = {"value": _pct_compact(v, signed=True), "color": color,
-                        "raw": v}
+            text = _pct_compact(v, signed=True)
+            status = (((source or {}).get("_xc") or {}).get(key) or (None,))[0]
+            if status == "diverged":
+                text += _UNVERIFIED_MARK
+            out[key] = {"value": text, "color": color, "raw": v}
         return out
 
     df = m.holdings_df
@@ -1738,6 +1780,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             # it is named.
             projected = {k: pr.get(k) for k in period_keys}
             projected["currency"] = pr.get("currency")
+            projected["_1d"] = pr.get("1d")
+            # The second source's verdict per window (``MetricsEngine._second_source``):
+            # a figure justETF disagrees on is printed MARKED, never as settled.
+            projected["_xc"] = {
+                k: (pr.get(f"xc_{k}"), pr.get(f"xc_{k}_alt"),
+                    pr.get(f"xc_{k}_ours"), pr.get(f"xc_{k}_at"))
+                for k in ["1d", *period_keys] if pr.get(f"xc_{k}") is not None}
             perf_by_ticker[str(pr.get("ticker", ""))] = projected
 
     # Curated taxonomy (asset_class already on df) for the shared grouping
@@ -1784,7 +1833,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         row_intraday.append(bool(_intraday.get(ticker, False)))
         _, inner = _perf_spark_cell(
             _raw1d.get(ticker), ticker, _snap_intraday,
-            live=bool(_live1d.get(ticker, False)))
+            live=bool(_live1d.get(ticker, False)),
+            unverified=(((perf_by_ticker.get(ticker, {}).get("_xc") or {})
+                         .get("1d") or (None,))[0] == "diverged"))
         row_items.append({
             "_ac": h.get("asset_class"),
             "_isin": isin, "_ticker": ticker,
@@ -1804,13 +1855,14 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         row_items, asset_class=lambda r: r["_ac"],
         isin=lambda r: r["_isin"], ticker=lambda r: r["_ticker"], taxonomy=_tax)
 
+    unverified_note = _unverified_note(perf_by_ticker, ["1d", *period_keys])
     return {
         "available": True,
         "table_html": _returns_table_html(
             period_keys, portfolio, groups,
             day_label=day_column_label(
                 m, live=_intraday_column(
-                    [bool(port_full.get("1d_intraday"))] + row_intraday))),
+                    [bool(port_full.get("1d_intraday"))] + row_intraday))) + unverified_note,
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }

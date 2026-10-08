@@ -119,6 +119,7 @@ class MetricsEngine:
             self._holding_performance,
             self._live_1d,
             self._session_coverage,
+            self._second_source,
             self._geo_benchmark,
             self._holding_histories,
             self._target_history,
@@ -1359,6 +1360,25 @@ class MetricsEngine:
             sorted({s for group in candidates.values() for s in group})
         )
 
+        # A benchmark row that IS a held listing must be stamped exactly like the
+        # holding, or the same instrument prints two 1Ds in one issue (it did: the
+        # holding row arbitrated its disputed baseline, its watchlist twin did not).
+        # Benchmarks carry no ISIN, so it is borrowed from the holding; the justETF
+        # quote is already memoized from the holdings' stamp, so this costs nothing.
+        isin_of = {str(h.ticker): h.isin
+                   for h in list(self.holdings) + list(getattr(self, "rebalance_seeds", []) or [])
+                   if getattr(h, "ticker", None) and getattr(h, "isin", None)}
+
+        def _referee(ticker):
+            isin = isin_of.get(str(ticker))
+            if not isin:
+                return None
+            try:
+                from tarzan.data import justetf
+                return justetf.quote(isin)
+            except Exception:  # noqa: BLE001
+                return None
+
         stamped: list[str] = []
         for name, record in list(catalog.items()):
             series = record.history
@@ -1385,7 +1405,8 @@ class MetricsEngine:
                     return None
                 q = current_session.pick_quote(
                     candidates.get(record.ticker, []), quotes,
-                    float(clean.iloc[-1]), history=clean)
+                    float(clean.iloc[-1]), history=clean,
+                    referee=_referee(record.ticker))
                 p = q.get("price")
                 if not p:
                     return None
@@ -1669,6 +1690,80 @@ class MetricsEngine:
             if isinstance(projection, dict):
                 projection["1d_coverage_pct"] = coverage
                 projection["1d_intraday"] = intraday
+
+    def _second_source(self, ctx: dict) -> None:
+        """Check every printed holding return against justETF, an independent source.
+
+        Writes ``xc_<window>`` (``ok`` / ``diverged`` / ``na``) and ``xc_<window>_alt``
+        (the second source's figure) onto each "In portfolio" row of
+        ``holding_performance``, for 1D and every long window, so the issue can mark a
+        figure the two sources disagree on instead of printing it as settled. See
+        ``tarzan.engine.cross_check`` for what is compared and why the threshold is
+        what it is.
+
+        A referee, never a supplier: no figure changes here. And it cannot fail a run:
+        justETF down, slow, or without data for an ISIN reads as ``na`` — not
+        cross-checked — and the issue goes out. Skipped on a pinned or transport-less
+        run, which must not reach the network.
+        """
+        hp = ctx.get("holding_performance")
+        if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
+            return
+        from tarzan import runtime
+        from tarzan.data import justetf
+        from tarzan.engine import cross_check as xc
+
+        windows = ("1d",) + xc.LONG_WINDOWS
+        for w in windows:
+            hp[f"xc_{w}"] = xc.UNAVAILABLE
+            hp[f"xc_{w}_alt"] = float("nan")
+            hp[f"xc_{w}_ours"] = float("nan")
+            hp[f"xc_{w}_at"] = None
+        if not runtime.allows_live_transport():
+            ctx["holding_performance"] = hp
+            return
+        try:
+            today = runtime.today()
+            by_ticker = {str(h.ticker): h for h in self.holdings if h.ticker and h.isin}
+            justetf.prefetch(h.isin for h in by_ticker.values())
+            checked = diverged = 0
+            for i, row in hp.iterrows():
+                h = by_ticker.get(str(row.get("ticker") or ""))
+                if h is None or row.get("type") != "In portfolio":
+                    continue
+                tape, ccy = self._own_tape(h.price_history, h.price_history_native,
+                                           h.price_currency)
+                if tape is None or str(ccy or "").upper() != "EUR":
+                    continue   # the second source is a EUR series
+                # The SAME capped tape ``_holding_performance`` computes the printed
+                # figures from: the cap moves the 5Y anchor, and checking an uncapped
+                # tape would referee a number the issue never printed.
+                tape = _cap_to_years(tape, 5)
+                verdicts = xc.check_windows(tape, justetf.series(h.isin), h.ticker)
+                verdicts["1d"] = xc.check_one_day(row.get("1d"), justetf.quote(h.isin),
+                                                   today, tape)
+                verdicts["1d"].update(ours=row.get("1d"), at=today)
+                for w in windows:
+                    v = verdicts.get(w) or {}
+                    hp.at[i, f"xc_{w}"] = v.get("status", xc.UNAVAILABLE)
+                    if v.get("alt") is not None:
+                        hp.at[i, f"xc_{w}_alt"] = float(v["alt"])
+                    if v.get("ours") is not None:
+                        hp.at[i, f"xc_{w}_ours"] = float(v["ours"])
+                    hp.at[i, f"xc_{w}_at"] = v.get("at")
+                    if v.get("status") == xc.DIVERGED:
+                        diverged += 1
+                        logger.warning(
+                            "Second source disagrees on %s %s to %s: ours %+.2f%%, "
+                            "justETF %+.2f%%", h.ticker, w, v.get("at"),
+                            float(v["ours"]), float(v["alt"]))
+                    elif v.get("status") == xc.OK:
+                        checked += 1
+            logger.info("Second-source check: %d figure(s) corroborated, %d diverged",
+                        checked, diverged)
+        except Exception as e:  # noqa: BLE001 — a referee must never fail the issue
+            logger.warning("Second-source check skipped: %s", e)
+        ctx["holding_performance"] = hp
 
     def _today_priced_share(self) -> Optional[float]:
         """Share of the book BY VALUE whose price series carries a today point.

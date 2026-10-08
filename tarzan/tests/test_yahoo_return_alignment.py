@@ -846,6 +846,52 @@ class TestVenueConsensus:
         q = self._pick(["DEF.PA", "DEF.DE"], quotes, 112.02)
         assert q.get("price") == 110.74
 
+    def _afternoon(self):
+        """Later on 8 Oct: the venue with the fictitious 29.355 close has now out-traded
+        the other, so today's volume alone picks the broken baseline."""
+        return {
+            "ABC.DE": {"price": 28.99, "prev_close": 29.355, "time": self._ts(13, 5),
+                       "volume": 900},
+            "ABC.PA": {"price": 29.04, "prev_close": 29.01, "time": self._ts(12, 50),
+                       "volume": 520},
+        }
+
+    def test_an_independent_previous_close_rejects_the_fictitious_baseline(self):
+        referee = {"price": 28.93, "prev_close": 29.01, "date": self._TODAY}
+        import tarzan.runtime as runtime
+        from tarzan.data.current_session import pick_quote
+
+        orig = runtime.today
+        runtime.today = lambda: self._TODAY
+        try:
+            q = pick_quote(["ABC.DE", "ABC.PA"], self._afternoon(), 29.445,
+                           history=self._history(), referee=referee)
+        finally:
+            runtime.today = orig
+        assert q.get("price") == 29.04
+
+    def test_without_a_referee_volume_decides_as_before(self):
+        q = self._pick(["ABC.DE", "ABC.PA"], self._afternoon(), 29.445,
+                       history=self._history())
+        assert q.get("price") == 28.99
+
+    def test_a_referee_from_another_session_is_ignored(self):
+        """Its previous close belongs to a different session than the venues', so it
+        cannot judge their baseline."""
+        referee = {"price": 28.93, "prev_close": 29.01,
+                   "date": self._TODAY - dt.timedelta(days=1)}
+        import tarzan.runtime as runtime
+        from tarzan.data.current_session import pick_quote
+
+        orig = runtime.today
+        runtime.today = lambda: self._TODAY
+        try:
+            q = pick_quote(["ABC.DE", "ABC.PA"], self._afternoon(), 29.445,
+                           history=self._history(), referee=referee)
+        finally:
+            runtime.today = orig
+        assert q.get("price") == 28.99
+
     def test_without_volumes_the_smaller_move_is_the_fallback(self):
         quotes = {
             "ABC.DE": {"price": 28.865, "prev_close": 29.355, "time": self._ts(10, 35)},
