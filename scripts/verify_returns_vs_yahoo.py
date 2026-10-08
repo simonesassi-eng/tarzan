@@ -189,6 +189,49 @@ _HEADER_TO_KEY = {"intraday": "1d", "1d": "1d", "5d": "5d", "1m": "1m", "3m": "3
 _SECTION_RE = (r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>%s</span>')
 
 
+def intraday_offside(ours: float, venues: dict, sigma_pp: float) -> dict:
+    """Check 3's verdict for one holding: how far our live 1D sits from the venues'
+    CONSENSUS, and how far it may.
+
+    ``venues`` is ``{symbol: (1D in pp, observed datetime[, volume today])}`` — every venue of the
+    instrument that traded this session, fetched fresh by the oracle and never through
+    ``pick_quote``: the engine's choice is the thing under test.
+
+    The consensus follows the policy the engine documents, reimplemented here so a
+    regression in one cannot hide in the other: a venue observed over an hour before
+    the freshest is superseded; if the rest disagree beyond the allowance the figure is
+    DISPUTED and the consensus is the median mover (three or more venues) or, with two,
+    the venue that traded more today (the smaller mover when volumes are missing or
+    equal). Agreeing venues give their median.
+
+    The allowance absorbs the clock — minutes separate our quote from these, and a 2x
+    leveraged line legitimately moved 1.3pp in such a gap — so it scales with the
+    instrument's daily volatility in pp, floored at 1pp.
+
+    It used to measure distance from the SPAN of the venues, which always contains the
+    engine's own venue, so the check could never fire: the 8 Oct 11:08 figure (-4.38%,
+    with the other venue at -0.07%) sat inside its own span.
+    """
+    allowance = max(1.0, 1.5 * float(sigma_pp))
+    rows = {v: (t[0], t[1], t[2] if len(t) > 2 else None) for v, t in venues.items()}
+    freshest = max(obs for _m, obs, _vol in rows.values())
+    live = {v: (m, vol) for v, (m, obs, vol) in rows.items()
+            if (freshest - obs).total_seconds() / 60.0 <= 60.0}
+    ordered = sorted(m for m, _vol in live.values())
+    disputed = len(ordered) >= 2 and ordered[-1] - ordered[0] > allowance
+    if disputed and len(live) == 2:
+        (m1, v1), (m2, v2) = live.values()
+        if v1 is not None and v2 is not None and v1 != v2:
+            consensus = m1 if v1 > v2 else m2
+        else:
+            consensus = min((m1, m2), key=abs)
+    else:
+        consensus = ordered[(len(ordered) - 1) // 2]
+    return {"off": abs(ours - consensus), "allowance": allowance,
+            "consensus": consensus, "disputed": disputed,
+            "live": {v: m for v, (m, _vol) in live.items()}}
+
+
 def _section(html: str, label: str) -> str:
     """The markup of the section titled ``label``, up to the next section header."""
     m = re.search(_SECTION_RE % re.escape(label), html)
@@ -517,7 +560,7 @@ def main() -> int:
         # engine was right and the oracle was reading garbage.
         candidates = [tk, *_sibling_symbols(tk)]
         cand_quotes = official_quotes(candidates)
-        quote = pick_quote(candidates, cand_quotes, reference)
+        quote = pick_quote(candidates, cand_quotes, reference, history=closes.dropna())
         source_symbol = next(
             (c for c in candidates
              if (cand_quotes.get(c) or {}).get("price")
@@ -597,6 +640,65 @@ def main() -> int:
                 findings.append(
                     f"YAHOO {tk} {w}: engine {float(ours):+.4f}% vs Yahoo "
                     f"{theirs:+.4f}% ({gap:+.4f}pp, anchor {anchor})")
+
+    # [3] Mid-session, check 2 abstains — and that left every intraday figure the issue
+    # sends between the open and the close verified by nothing. On 8 Oct 2026 the 11:08
+    # issue valued a sleeve at -4.38% off a single off-market trade on a thin venue.
+    # Check 2 would not have caught it even if it ran: Yahoo's own pair for that venue
+    # said exactly -4.38%, so "engine == Yahoo" held. The question that catches it is
+    # different: does our 1D agree with what EVERY venue of the instrument says?
+    #
+    # Deliberately NOT through ``pick_quote``: that is the engine's choice, and an
+    # oracle that re-asks the engine's question gets the engine's answer. Every venue's
+    # pair is fetched fresh and judged on its own. Only same-session quotes vote.
+    #
+    # The allowance absorbs the clock — minutes separate our quote from this one, and a
+    # 2x leveraged line legitimately moved 1.3pp in that gap — so it scales with the
+    # instrument's own daily volatility, with a 1pp floor. A gross bad print is far
+    # outside it: the -4.38% sat 2.7pp below the lowest venue.
+    if session_open:
+        import tarzan.data.market_quotes as _mq
+        from tarzan.data.current_session import quote_observed_at
+        print(f"\n[3] INTRADAY 1D vs EVERY VENUE  ({len(sample)} instruments)")
+        _mq.reset_quote_memo()
+        for tk in sample:
+            row = next((r for _i, r in hp.iterrows()
+                        if str(r.get("ticker") or "") == tk), None)
+            ours = None if row is None else row.get("1d")
+            if ours is None or ours != ours:
+                inconclusive.append(f"{tk} 1d intraday: no engine figure")
+                continue
+            venues = [tk, *[v for v in _sibling_symbols(tk) if v != tk]]
+            vq = official_quotes(venues)
+            seen = {}
+            for v in venues:
+                q = vq.get(v) or {}
+                obs = quote_observed_at(q)
+                if (obs is None or obs.date() != today
+                        or not q.get("price") or not q.get("prev_close")):
+                    continue
+                seen[v] = (_pct(q["price"], q["prev_close"]), obs, q.get("volume"))
+            if not seen:
+                inconclusive.append(f"{tk} 1d intraday: no venue has traded this session")
+                continue
+            closes = frames.get(tk)
+            sigma_pp = (float(closes.pct_change().dropna().tail(252).std()) * 100
+                        if closes is not None and len(closes) > 21 else 1.0)
+            v3 = intraday_offside(float(ours), seen, sigma_pp)
+            say(f"    {tk:<10} engine {float(ours):+.3f}%   consensus {v3['consensus']:+.3f}%"
+                f"{'  DISPUTED' if v3['disputed'] else ''}   venues "
+                + ", ".join(f"{v} {t[0]:+.3f}%@{t[1]:%H:%M}" for v, t in seen.items())
+                + f"   allowance {v3['allowance']:.2f}pp")
+            if v3["disputed"]:
+                # Not a failure: the engine resolved it by the same policy. Reported so a
+                # disputed figure is never mistaken for a settled one.
+                inconclusive.append(
+                    f"{tk} 1d intraday: venues dispute the move "
+                    + ", ".join(f"{m:+.2f}%" for m in v3["live"].values()))
+            if v3["off"] > v3["allowance"]:
+                findings.append(
+                    f"INTRADAY {tk} 1d: engine {float(ours):+.3f}% vs venue consensus "
+                    f"{v3['consensus']:+.3f}% ({v3['off']:.2f}pp > {v3['allowance']:.2f}pp)")
 
     print("\n" + "=" * 70)
     if inconclusive:

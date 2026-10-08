@@ -127,3 +127,73 @@ class TestFindingTheReturnsTable:
             "<td>Instrument</td><td>1D</td><td>5D</td><td>1M</td><td>3Y</td>"
             "</tr></table>"))
         assert oracle._header_keys(html) == ["1d", "5d", "1m", "3y"]
+
+
+class TestIntradayEveryVenue:
+    """Check 3: a holding's live 1D against the CONSENSUS of the instrument's venues.
+
+    Rebuilt from 8 Oct 2026. At 11:08 the issue printed -4.38% for a sleeve whose Xetra
+    line had made one off-market trade at 09:21; Paris, trading since, said -0.07%.
+    Check 2 could never see this — Yahoo's own pair for that venue said -4.38% too.
+
+    The first version of this check measured distance from the SPAN of the venues and
+    could never fire: the span always contains the engine's own venue. These tests use
+    the real 11:08 numbers, which is what would have caught that.
+    """
+
+    SIGMA_PP = 0.88   # the fund's daily volatility, ~14% a year
+
+    @staticmethod
+    def _at(h, m):
+        return dt.datetime(2026, 10, 8, h, m, tzinfo=dt.timezone.utc)
+
+    def test_the_8_oct_figure_is_a_finding(self, oracle):
+        v = oracle.intraday_offside(
+            -4.38, {"X.DE": (-4.38, self._at(7, 21)), "X.PA": (-0.07, self._at(8, 26))},
+            self.SIGMA_PP)
+        assert v["consensus"] == pytest.approx(-0.07)
+        assert v["off"] > v["allowance"], v
+
+    def test_the_corrected_figure_is_not(self, oracle):
+        v = oracle.intraday_offside(
+            -0.07, {"X.DE": (-4.38, self._at(7, 21)), "X.PA": (-0.07, self._at(8, 26))},
+            self.SIGMA_PP)
+        assert v["off"] == pytest.approx(0.0)
+
+    def test_a_dispute_between_live_venues_is_reported_and_resolved_small(self, oracle):
+        """11:18 the same day: 43 minutes apart, so both venues vote; 1.55pp apart, so
+        the figure is disputed and the smaller mover is the consensus."""
+        venues = {"X.DE": (-1.67, self._at(8, 35), 403), "X.PA": (-0.12, self._at(9, 18), 473)}
+        v = oracle.intraday_offside(-0.12, venues, self.SIGMA_PP)
+        assert v["disputed"] and v["consensus"] == pytest.approx(-0.12)
+        assert v["off"] == pytest.approx(0.0)
+        # ...and the engine's ORIGINAL -1.67% would now be a finding.
+        bad = oracle.intraday_offside(-1.67, venues, self.SIGMA_PP)
+        assert bad["off"] > bad["allowance"]
+
+    def test_the_busier_venue_is_the_consensus_even_with_the_larger_move(self, oracle):
+        """The second fund that day: the smaller mover's previous close was one share."""
+        venues = {"Y.DE": (-3.65, self._at(9, 44), 188), "Y.PA": (-0.92, self._at(9, 10), 175)}
+        v = oracle.intraday_offside(-3.65, venues, 1.25)
+        assert v["disputed"] and v["consensus"] == pytest.approx(-3.65)
+        assert v["off"] == pytest.approx(0.0)
+
+    def test_agreeing_venues_are_not_a_dispute(self, oracle):
+        v = oracle.intraday_offside(
+            -0.85, {"Y.MI": (-0.79, self._at(9, 40)), "Y.DE": (-0.91, self._at(9, 42))},
+            0.8)
+        assert not v["disputed"] and v["off"] <= v["allowance"]
+
+    def test_the_clock_between_two_observations_is_tolerated(self, oracle):
+        """The case the oracle's own history documents: a 2x line read -0.36% on our
+        tape and +0.94% on a quote fetched moments later. That 1.30pp is the clock,
+        and a 2x line's sigma carries it."""
+        v = oracle.intraday_offside(-0.36, {"CL.MI": (0.94, self._at(7, 33))}, 2.4)
+        assert v["off"] == pytest.approx(1.30, abs=0.01)
+        assert v["off"] <= v["allowance"]
+
+    def test_a_low_volatility_line_still_gets_the_floor(self, oracle):
+        """A money-market fund's sigma is a few basis points; 1.5 sigmas of it would
+        flag any quote two minutes apart. The 1pp floor is what stops that."""
+        v = oracle.intraday_offside(0.01, {"M.MI": (0.0, self._at(9, 0))}, 0.01)
+        assert v["allowance"] == 1.0

@@ -35,6 +35,15 @@ on:
     - cron: "47 5 * * 1-5"
     - cron: "47 16 * * 1-5"
     - cron: "17 20 * * 1-5"
+    # And two INSIDE the session, for check 3: every intraday figure the issue sends
+    # was verified by nothing, because check 2 abstains while a session is open. On
+    # 8 Oct 2026 the 11:08 issue valued a sleeve at -4.38% off one off-market trade
+    # on a thin venue, and no run could have said so. Check 3 compares each holding's
+    # 1D against every venue of the instrument, so it is MEANT to run mid-session. A
+    # delay that pushes one of these past the close is harmless: check 3 then stands
+    # aside and check 2 decides instead.
+    - cron: "43 8 * * 1-5"
+    - cron: "13 11 * * 1-5"
   workflow_dispatch:
 
 permissions:
