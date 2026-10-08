@@ -84,7 +84,7 @@ class TestTheSubjectNamesWhatItShows:
     shut, nothing is stamped and the same expression measures the last completed
     session. One expression, both cases — that part never needed a branch.
 
-    What did need one is the word in front of it. There is a third state the old
+    What did need one is the word in front of it — now always the session DATE. There is a third state the old
     reasoning missed and it is the one the reader meets every morning: the venue is
     OPEN and no bar exists yet. At 09:12 on Tue 15 Sep 2026 every tape ended on Mon
     14 Sep, so "1D −0.59%" was Monday's completed session under today's name.
@@ -107,9 +107,22 @@ class TestTheSubjectNamesWhatItShows:
         assert "+1.00%" in self._subject(closed, **{"1d_intraday": True})
         assert "+1.50%" in self._subject(live, **{"1d_intraday": True})
 
-    def test_an_intraday_figure_is_labelled_1d(self):
+    def test_an_intraday_figure_is_labelled_with_todays_date_too(self):
+        """Always the day, intraday included. While a session is live the tape's
+        terminal point is stamped onto today, so the same read names today — and a
+        reader can tell the basis from the date alone, rather than from which of two
+        vocabularies ("1D" vs a date) the subject happened to use."""
         nav = self._nav([100.0] * 20 + [101.0])
-        assert self._subject(nav, **{"1d_intraday": True}) == "P - 19:35 - 1D +1.00%"
+        assert self._subject(nav, **{"1d_intraday": True}) == \
+            "P - 19:35 - 29 Jun +1.00%"
+
+    def test_live_and_completed_differ_only_by_the_session_they_name(self):
+        """The 09:12 morning: the tape still ends on yesterday, so the subject names
+        yesterday. Same format either way; the DATE is the whole signal."""
+        yesterday = self._nav([100.0] * 20 + [100.75])          # ends Mon 29 Jun
+        today = self._nav([100.0] * 21 + [100.40])               # ends Tue 30 Jun
+        assert self._subject(yesterday).endswith("29 Jun +0.75%")
+        assert self._subject(today, **{"1d_intraday": True}).endswith("30 Jun +0.40%")
 
     def test_a_completed_session_is_labelled_with_its_DATE(self):
         """Not "1D". The fixture's tape ends Mon 29 Jun, so that is what the subject

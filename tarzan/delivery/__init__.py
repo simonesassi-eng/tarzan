@@ -89,8 +89,13 @@ def now_local() -> datetime:
     return datetime.now(ZoneInfo("Europe/Rome"))
 
 
-def _completed_session_label(metrics) -> str:
-    """The date of the session a close-to-close 1D describes, e.g. "14 Sep".
+def _session_label(metrics) -> str:
+    """The date of the session the 1D figure ENDS on, e.g. "14 Sep".
+
+    Live or completed alike: while a session is in progress the NAV's terminal point
+    is stamped onto today, so the same read names today; before the book prints, or
+    after every venue has shut, it names the last completed session. One rule for both
+    is what lets the subject always carry the day.
 
     Read through ``session_span_labels``, the same helper the STATE tile's caption
     uses, so the subject and the body name one session. Empty when it cannot be
@@ -113,9 +118,11 @@ def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     ``metrics.performance["1d"]`` — the SAME expression the STATE "Session" tile
     prints, so the subject and the body cannot disagree about the day.
 
-    The LABEL names what the figure is. "1D" only when the tape actually reaches
-    today; otherwise the SESSION DATE the figure describes, e.g.
-    "Portfolio Digest - 09:12 - 14 Sep −0.59%".
+    The LABEL is always the SESSION DATE the figure describes — the session in
+    progress while the book is printing, the last completed one otherwise — e.g.
+    "Portfolio Digest - 10:35 - 08 Oct +0.31%" or
+    "Portfolio Digest - 09:12 - 14 Sep −0.59%". "1D" survives only as the fallback
+    when no session date can be read off the series.
 
     This used to say "1D" unconditionally, on the reasoning that the figure is live
     whenever a venue the book trades on is open and the previous close when none is.
@@ -134,10 +141,13 @@ def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
     gain_pct, label = perf.get("1d"), "1D"
     if gain_pct is None or gain_pct != gain_pct:      # None or NaN
         gain_pct, label = (metrics.unrealized_pnl_pct or 0.0), "uP&L"
-    elif not perf.get("1d_intraday"):
-        # Name the session the figure ENDS on, read off the same series the figure
-        # is computed from. Unnamed, it reads as today's.
-        label = _completed_session_label(metrics) or label
+    else:
+        # Always the session's DATE, intraday included. It used to be "1D" while a
+        # session was live and the date only for a completed one, which made the
+        # reader infer the basis from which of two vocabularies the subject used.
+        # The date answers it directly: a subject sent at 10:35 reading today's date
+        # is the session in progress, one reading yesterday's is the last close.
+        label = _session_label(metrics) or label
     gain_pct = float(gain_pct)
     generated_at = now_local().strftime("%H:%M")
     sign = "+" if gain_pct >= 0 else "−"
