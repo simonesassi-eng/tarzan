@@ -41,6 +41,10 @@ _ONE_DAY_FLOOR_PP = 1.0
 _ONE_DAY_SIGMAS = 1.5
 
 OK, DIVERGED, UNAVAILABLE = "ok", "diverged", "na"
+#: A disagreement settled by a third source in the engine's favour: printed as is.
+CONFIRMED = "confirmed"
+#: A disagreement settled AGAINST the engine: the printed figure is replaced.
+CORRECTED = "corrected"
 
 
 def _naive_days(s: pd.Series) -> pd.Series:
@@ -90,7 +94,58 @@ def check_windows(tape: pd.Series, ref: Optional[pd.Series],
         alt = (r.iloc[-1] / ref_at.iloc[-1] - 1.0) * 100.0
         limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0)
         out[w] = {"status": DIVERGED if abs(ours - alt) > limit else OK,
-                  "alt": alt, "ours": ours, "at": end.date()}
+                  "alt": alt, "ours": ours, "at": end.date(), "anchor": a}
+    return out
+
+
+def _return_between(series: pd.Series, anchor, end) -> Optional[float]:
+    s = _naive_days(series)
+    a, e = pd.Timestamp(anchor).normalize(), pd.Timestamp(end).normalize()
+    if a.tzinfo is not None:
+        a = a.tz_localize(None)
+    at_a, at_e = s[s.index <= a], s[s.index <= e]
+    if not len(at_a) or not len(at_e) or s.index[0] > a + pd.Timedelta(days=7):
+        return None
+    if at_e.index[-1] < e - pd.Timedelta(days=4):
+        return None          # this source stops well before the shared close
+    return (at_e.iloc[-1] / at_a.iloc[-1] - 1.0) * 100.0
+
+
+def settle(verdict: dict, tape: pd.Series, third_sources) -> dict:
+    """Settle a DIVERGED window with third sources, by majority. Returns the verdict
+    updated: ``confirmed`` (the engine agrees with a third source), ``corrected`` with
+    ``corrected_value`` (the two outside sources agree with each other and not with the
+    engine), or still ``diverged`` (nobody agrees: no right number exists to print).
+
+    The third sources are the same instrument on OTHER venues, read over the very span
+    the verdict was reached on (same anchor, same last close). A correction keeps the
+    engine's own move from that close to today, so only the disputed part is replaced:
+    ``(1 + agreed) x (tape today / tape at the shared close) - 1``.
+    """
+    if verdict.get("status") != DIVERGED:
+        return verdict
+    ours, alt, anchor, at = (verdict.get(k) for k in ("ours", "alt", "anchor", "at"))
+    if None in (ours, alt, anchor, at):
+        return verdict
+    limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0)
+    votes = [v for v in (_return_between(src, anchor, at) for src in third_sources or ())
+             if v is not None]
+    out = dict(verdict, third=votes)
+    if any(abs(v - ours) <= limit for v in votes):
+        out["status"] = CONFIRMED
+        return out
+    agreeing = [v for v in votes if abs(v - alt) <= limit]
+    if not agreeing:
+        return out
+    agreed = (alt + sum(agreeing)) / (1 + len(agreeing))
+    t = _naive_days(tape)
+    shared = t[t.index <= pd.Timestamp(at)]
+    if not len(shared):
+        return out
+    tail = float(t.iloc[-1]) / float(shared.iloc[-1])
+    out.update(status=CORRECTED,
+               corrected_value=((1.0 + agreed / 100.0) * tail - 1.0) * 100.0,
+               agreed=agreed)
     return out
 
 

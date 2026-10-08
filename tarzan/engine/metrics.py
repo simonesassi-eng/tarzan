@@ -1713,12 +1713,31 @@ class MetricsEngine:
         from tarzan.data import justetf
         from tarzan.engine import cross_check as xc
 
+        def _third_sources(ticker):
+            """The same instrument's other venues, as daily closes, for a vote."""
+            try:
+                from tarzan.data.enricher import _sibling_close_series
+                from tarzan.data.market_quotes import _sibling_symbols
+
+                out = []
+                for sym in _sibling_symbols(ticker):
+                    if sym == ticker:
+                        continue
+                    closes = _sibling_close_series(sym)
+                    if closes is not None and len(closes):
+                        out.append(closes)
+                return out
+            except Exception as e:  # noqa: BLE001 — a vote must never fail the issue
+                logger.info("No third source for %s: %s", ticker, e)
+                return []
+
         windows = ("1d",) + xc.LONG_WINDOWS
         for w in windows:
             hp[f"xc_{w}"] = xc.UNAVAILABLE
             hp[f"xc_{w}_alt"] = float("nan")
             hp[f"xc_{w}_ours"] = float("nan")
             hp[f"xc_{w}_at"] = None
+            hp[f"xc_{w}_was"] = float("nan")
         if not runtime.allows_live_transport():
             ctx["holding_performance"] = hp
             return
@@ -1743,6 +1762,16 @@ class MetricsEngine:
                 verdicts["1d"] = xc.check_one_day(row.get("1d"), justetf.quote(h.isin),
                                                    today, tape)
                 verdicts["1d"].update(ours=row.get("1d"), at=today)
+                # A disagreement is not left for the reader to adjudicate: the same
+                # instrument's OTHER venues vote, fetched only when there is something
+                # to settle (cached after the first time, so this is free on days with
+                # no dispute and a few history reads on the days with one).
+                disputed = [w for w in xc.LONG_WINDOWS
+                            if verdicts[w].get("status") == xc.DIVERGED]
+                if disputed:
+                    thirds = _third_sources(h.ticker)
+                    for w in disputed:
+                        verdicts[w] = xc.settle(verdicts[w], tape, thirds)
                 for w in windows:
                     v = verdicts.get(w) or {}
                     hp.at[i, f"xc_{w}"] = v.get("status", xc.UNAVAILABLE)
@@ -1751,6 +1780,21 @@ class MetricsEngine:
                     if v.get("ours") is not None:
                         hp.at[i, f"xc_{w}_ours"] = float(v["ours"])
                     hp.at[i, f"xc_{w}_at"] = v.get("at")
+                    if v.get("status") == xc.CORRECTED:
+                        # The printed figure itself is replaced, here, so the Returns
+                        # table, the movers grid and every other reader of this frame
+                        # print the one corrected number.
+                        hp.at[i, f"xc_{w}_was"] = row.get(w)
+                        hp.at[i, w] = float(v["corrected_value"])
+                        logger.warning(
+                            "Corrected %s %s: %+.2f%% -> %+.2f%% (justETF and another "
+                            "venue agree to %s on %+.2f%%; ours was %+.2f%%)",
+                            h.ticker, w, float(row.get(w)), float(v["corrected_value"]),
+                            v.get("at"), float(v["agreed"]), float(v["ours"]))
+                    elif v.get("status") == xc.CONFIRMED:
+                        checked += 1
+                        logger.info("Confirmed %s %s by a third source against justETF",
+                                    h.ticker, w)
                     if v.get("status") == xc.DIVERGED:
                         diverged += 1
                         logger.warning(

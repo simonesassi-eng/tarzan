@@ -1312,11 +1312,16 @@ def _unverified_note(perf_by_ticker: dict, keys) -> str:
     by nobody. Instruments justETF does not cover are not listed: unchecked is the
     default state of the rest of the issue, and the check names only disagreements.
     """
-    lines = []
+    lines, fixed = [], []
     for ticker, row in perf_by_ticker.items():
         for key in keys:
-            status, alt, ours, at = (tuple((row.get("_xc") or {}).get(key) or ())
-                                     + (None,) * 4)[:4]
+            status, alt, ours, at, was = (tuple((row.get("_xc") or {}).get(key) or ())
+                                          + (None,) * 5)[:5]
+            if status == "corrected" and was is not None and was == was:
+                label = _display_ticker(ticker) or ticker
+                fixed.append(f"{label} {key.upper()} {float(was):+.2f}% \u2192 "
+                             f"{float(row.get(key)):+.2f}%")
+                continue
             if status != "diverged" or alt is None or alt != alt:
                 continue
             label = _display_ticker(ticker) or ticker
@@ -1328,12 +1333,19 @@ def _unverified_note(perf_by_ticker: dict, keys) -> str:
                 f"{label} {key.upper()}{when}: Yahoo "
                 + ("" if ours is None or ours != ours else f"{float(ours):+.2f}%, ")
                 + f"justETF {float(alt):+.2f}%")
-    if not lines:
-        return ""
     P = PALETTE
-    return (f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
-            f'{_UNVERIFIED_MARK} Not verified — two independent sources disagree: '
-            + _esc("; ".join(lines)) + ".</div>")
+    out = ""
+    if fixed:
+        # A replaced figure says so, with the number it replaced. A correction the
+        # reader cannot see is a number that changed for no visible reason.
+        out += (f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
+                'Corrected before sending — Yahoo disagreed with two other sources that '
+                'agree with each other: ' + _esc("; ".join(fixed)) + ".</div>")
+    if lines:
+        out += (f'<div style="margin-top:6px;{TYPE["prose"]}color:{P["subtle"]};">'
+                f'{_UNVERIFIED_MARK} Not verified — the sources disagree and no two agree: '
+                + _esc("; ".join(lines)) + ".</div>")
+    return out
 
 
 def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
@@ -1785,7 +1797,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             # a figure justETF disagrees on is printed MARKED, never as settled.
             projected["_xc"] = {
                 k: (pr.get(f"xc_{k}"), pr.get(f"xc_{k}_alt"),
-                    pr.get(f"xc_{k}_ours"), pr.get(f"xc_{k}_at"))
+                    pr.get(f"xc_{k}_ours"), pr.get(f"xc_{k}_at"),
+                    pr.get(f"xc_{k}_was"))
                 for k in ["1d", *period_keys] if pr.get(f"xc_{k}") is not None}
             perf_by_ticker[str(pr.get("ticker", ""))] = projected
 

@@ -217,3 +217,63 @@ class TestASplitIsBackAdjustedByItsRoundRatio:
         payload.pop("repair_version")
         price_cache._atomic_write_json(path, "history", payload)
         assert price_cache.load_history("ABC.MI") is None
+
+
+class TestADisagreementIsSettledByMajority:
+    """Two sources disagreeing is not a result to hand the reader. A third — the same
+    instrument on another venue, over the same span — decides."""
+
+    def _setup(self, *, third_follows):
+        tape = _tape(end="2026-10-08")
+        ref = _second_source_of(tape, noise=0.0)
+        ref = ref[ref.index <= "2026-10-07"]
+        ref[ref.index > ref.index[-25]] *= 0.95           # justETF reads 5% lower
+        if third_follows == "engine":
+            third = _second_source_of(tape, noise=0.0, seed=9)
+        elif third_follows == "justetf":
+            third = ref.copy() * 1.001     # a level offset: same returns as justETF
+        else:
+            # A third, different story: its RECENT path differs from both. (Scaling the
+            # whole series would not do it — returns are scale-free.)
+            third = _second_source_of(tape, noise=0.0, seed=9)
+            third[third.index > third.index[-25]] *= 1.06
+        verdict = xc.check_windows(tape, ref)["1m"]
+        assert verdict["status"] == xc.DIVERGED
+        return tape, verdict, third
+
+    def test_a_third_source_with_the_engine_confirms_it(self):
+        tape, v, third = self._setup(third_follows="engine")
+        assert xc.settle(v, tape, [third])["status"] == xc.CONFIRMED
+
+    def test_two_outside_sources_against_the_engine_correct_it(self):
+        tape, v, third = self._setup(third_follows="justetf")
+        out = xc.settle(v, tape, [third])
+        assert out["status"] == xc.CORRECTED
+        # The corrected figure is the agreed span x the engine's own move since the
+        # shared close: only the disputed part is replaced.
+        t = xc._naive_days(tape)
+        tail = t.iloc[-1] / t[t.index <= pd.Timestamp(v["at"])].iloc[-1]
+        assert out["corrected_value"] == pytest.approx(
+            ((1 + out["agreed"] / 100) * tail - 1) * 100)
+        assert abs(out["agreed"] - v["alt"]) < 0.5
+
+    def test_three_different_stories_stay_unverified(self):
+        """Nobody agrees with anybody: there is no right number to print."""
+        tape, v, third = self._setup(third_follows="neither")
+        assert xc.settle(v, tape, [third])["status"] == xc.DIVERGED
+
+    def test_no_third_source_leaves_it_unverified(self):
+        tape, v, _third = self._setup(third_follows="engine")
+        assert xc.settle(v, tape, [])["status"] == xc.DIVERGED
+
+    def test_the_note_discloses_a_correction_with_the_number_it_replaced(self):
+        from tarzan.export.newsletter._sections_perf import _unverified_note
+
+        note = _unverified_note(
+            {"ABC.MI": {"5y": 164.93,
+                        "_xc": {"5y": ("corrected", 169.46, 157.26,
+                                       dt.date(2026, 10, 7), 157.26)}}},
+            ["5y"])
+        assert "Corrected before sending" in note
+        assert "+157.26%" in note and "+164.93%" in note
+        assert "Not verified" not in note
