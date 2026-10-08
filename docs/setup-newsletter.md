@@ -6,8 +6,9 @@ with on-demand "Update" replies wired in.
 
 > **Time required:** ~30 minutes the first time.
 > **What you'll have at the end:**
-> - Scheduled sends at Italian market hours (08:00 pre-open, a 90-minute
->   cadence from 09:05 to the 17:35 post-close wrap-up, 23:00 recap;
+> - Scheduled sends at Italian market hours (08:00 pre-open, a first
+>   digest at 09:45 then a 90-minute cadence to the 17:35 wrap-up, the
+>   18:00 official-close digest, 23:00 recap;
 >   weekends 08:00 / 13:05 / 23:00), driven by the Gmail Apps Script —
 >   never duplicated, never bursty
 > - Reply "Update" to any newsletter → fresh send within ~5 minutes
@@ -253,8 +254,9 @@ have sensible defaults — leave them blank.
 
 That's it. Going forward:
 
-- **Scheduled sends, automatic** (08:00 pre-open, the 09:05–17:35 market
-  cadence on weekdays / 13:05 on weekends, 23:00 recap — Europe/Rome),
+- **Scheduled sends, automatic** (08:00 pre-open, the 09:45–17:35 market
+  cadence and the 18:00 official close on weekdays / 13:05 on weekends,
+  23:00 recap — Europe/Rome),
   each fired at most once per day — no duplicates, no bursts.
 - **Reply "Update"** → fresh send within ~8 minutes total.
 - **Click "Run workflow"** in the Actions UI for an instant manual send.
@@ -282,8 +284,9 @@ is no UTC double-cron and no DST guard to maintain.
 | Slot      | Italian time                        | Days       |
 |-----------|-------------------------------------|------------|
 | preopen   | 08:00                               | every day  |
-| wd-HHMM   | 09:05 → 16:35, every 90 min         | weekdays   |
+| wd-HHMM   | 09:45, then 10:35 → 16:35 every 90 min | weekdays |
 | close     | 17:35                               | weekdays   |
+| official-close | 18:00 (closes visible ~17:51)  | weekdays   |
 | weekend   | 13:05                               | weekends   |
 | night     | 23:00                               | every day  |
 

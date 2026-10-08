@@ -9,10 +9,11 @@
  *   1. checkSchedule() — fires the market-hours slots at their
  *      Europe/Rome local time, AT MOST ONCE PER DAY PER SLOT. Every day
  *      opens with an 08:00 pre-open briefing and closes with a 23:00
- *      recap. In between, weekdays get one digest every 90 minutes
- *      across Borsa Italiana continuous trading (09:05 up to the 17:30
- *      close) plus a post-close wrap-up at 17:35; on weekends a single
- *      midday digest (13:05) goes out. This replaces GitHub Actions' cron,
+ *      recap. In between, weekdays get a first digest at 09:45, once the
+ *      book has actually printed, then one every 90 minutes across Borsa
+ *      Italiana continuous trading (10:35 up to the 17:30 close), a
+ *      wrap-up at 17:35 and the official-close digest at 18:00; on
+ *      weekends a single midday digest (13:05) goes out. This replaces GitHub Actions' cron,
  *      which was best-effort: it queued runs under load and released
  *      them in a burst, causing several newsletters to arrive
  *      back-to-back.
@@ -92,14 +93,42 @@ const SCHEDULE_TZ = 'Europe/Rome';
 //   hour/minute  Europe/Rome local time of the slot.
 //   days   'weekday' (Mon–Fri), 'weekend' (Sat–Sun), or 'all'.
 const SLOT_INTERVAL_MINUTES = 90;   // 1.5h cadence between weekday sends
-const SLOT_START_MINUTE = 9 * 60 + 5;   // first slot: 09:05
+const SLOT_START_MINUTE = 9 * 60 + 5;   // cadence anchor: 09:05, 10:35, 12:05, …
 const MARKET_CLOSE_MINUTE = 17 * 60 + 30;   // 17:30 Borsa Italiana close
+
+// The FIRST weekday digest goes at 09:45, not at the 09:05 the cadence would put
+// it — only that one slot moves; 10:35 onwards are unchanged.
+//
+// Measured, not guessed. Two delays stack after the 09:00 open:
+//   * the book's own first trades — over 60 sessions of 5-minute bars, the
+//     value-weighted share of the portfolio with at least one trade is 0% at
+//     09:00, a median 63% at 09:15, 77% at 09:30, 81% at 09:45;
+//   * Yahoo's publication delay — 15-16 minutes, measured live on 8 Oct 2026:
+//     quotes observed at 09:04-09:05 first became visible at 09:20:32.
+// Plus the run's own latency (one 5-minute tick, ~3 minutes to the quote
+// snapshot). At 09:05 a run therefore sees NOTHING of today — every surviving CI
+// log shows the tape still on the previous session — and the issue can only
+// restate yesterday. At 09:45 it sees a median 77% of the book, and more than
+// half of it on every one of the 60 sessions. Later buys ~1pp per 5 minutes: the
+// stragglers are thin sleeves that print between 10:00 and 12:30.
+const FIRST_SLOT_MINUTE = 9 * 60 + 45;
+
+// The official-close digest. Borsa Italiana, Xetra and Euronext all end their
+// closing auction at 17:35 (every holding's quote is stamped 17:35:xx), and with
+// Yahoo's ~15-minute delay those closes become visible at about 17:51. 18:00
+// leaves margin for the auction's random end and the run's own latency.
+//
+// It exists because the 17:35 wrap-up cannot carry them: it fires as the auction
+// ENDS and sees prices from ~17:20. Measured on Wed 7 Oct 2026: the 17:37 digest
+// reported the session at -0.49%, the 23:02 one — the real closes — at -0.26%.
+const OFFICIAL_CLOSE_MINUTE = 18 * 60;
 
 function _buildSlots_() {
   const slots = [];
-  // Weekday cadence: 09:05, 10:35, 12:05, … up to (and including) the
-  // last step at or before the 17:30 close.
-  for (let m = SLOT_START_MINUTE; m <= MARKET_CLOSE_MINUTE; m += SLOT_INTERVAL_MINUTES) {
+  // Weekday cadence: 09:45 (see FIRST_SLOT_MINUTE), 10:35, 12:05, … up to
+  // (and including) the last step at or before the 17:30 close.
+  for (let step = SLOT_START_MINUTE; step <= MARKET_CLOSE_MINUTE; step += SLOT_INTERVAL_MINUTES) {
+    const m = step === SLOT_START_MINUTE ? FIRST_SLOT_MINUTE : step;
     const h = Math.floor(m / 60);
     const min = m % 60;
     const hh = (h < 10 ? '0' : '') + h;
@@ -108,6 +137,10 @@ function _buildSlots_() {
   }
   // Post-close wrap-up just after the 17:30 close.
   slots.push({ name: 'close', label: 'close', hour: 17, minute: 35, days: 'weekday' });
+  // The official closes, once Yahoo publishes them (see OFFICIAL_CLOSE_MINUTE).
+  slots.push({ name: 'official-close', label: 'official close',
+               hour: Math.floor(OFFICIAL_CLOSE_MINUTE / 60),
+               minute: OFFICIAL_CLOSE_MINUTE % 60, days: 'weekday' });
   // Weekend: a single midday digest.
   slots.push({ name: 'weekend', label: 'weekend', hour: 13, minute: 5, days: 'weekend' });
   // Pre-open briefing and end-of-day recap, every day of the week.
@@ -146,9 +179,13 @@ function validateSlots() {
 // Past the window it is skipped (avoids stale, bursty sends if the
 // trigger was delayed or paused). It MUST stay smaller than the gap
 // between any two consecutive slots so two never fire in the same tick;
-// the tightest gap is the last cadence slot (16:35) to the post-close
-// wrap-up (17:35) = 60 min. 25 minutes still comfortably catches every
-// slot given the 5-minute polling cadence.
+// the tightest gap is the 17:35 wrap-up to the 18:00 official-close
+// digest = 25 min, exactly the limit (validateSlots() rejects < 25). The
+// window is half-open — a slot is too late at slotMin + MAX_LAG_MINUTES —
+// so at 18:00 a 17:35 that never fired has already expired and the two
+// cannot go out in one tick.
+// 25 minutes still comfortably catches every slot given the 5-minute
+// polling cadence.
 const MAX_LAG_MINUTES = 25;
 
 // Script Property key prefix for per-(date, slot) idempotency markers.
