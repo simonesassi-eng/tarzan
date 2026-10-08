@@ -213,15 +213,13 @@ fire the same GitHub workflow via `repository_dispatch`.
 4. Rename the project to `Tarzan Scheduler` (top-left).
 
 > **Updating the script later.** Pushing to GitHub does NOT deploy it. Open the
-> editor — the live project is
-> <https://script.google.com/home/projects/1fKI_H4mfiKCuxtrmxOJOPcW5-7BspDbSXu68SJjLVmUjVXLZOXO4TPf7/edit>
-> — replace the whole of `Code.gs` with the repo's
+> project from <https://script.google.com/home>, replace the whole of `Code.gs` with
+> the repo's
 > `scripts/apps_script/Code.gs`, and **Save**. The `tick()` trigger runs the
 > latest *saved* code, so no Deploy and no trigger reinstall are needed; then
 > run `validateSlots` once and expect `N slots OK.` in the log. (Only the
 > web-app `/exec` endpoint, used by the dormant `doPost`, needs an explicit
-> Deploy.) The editor URL is safe to publish: it opens only for the owning
-> Google account.
+> Deploy.)
 
 ### 6c. Set Script Properties
 
