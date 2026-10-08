@@ -108,7 +108,7 @@ class TestBridge:
 
     def test_weight_and_euros_side_by_side_and_the_gap_in_points(self):
         svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        for figure in ("30.0%", "\u20ac30k", "50.0%", "\u20ac50k"):  # synthetic
+        for figure in ("(30.0%)", "\u20ac30k", "(50.0%)", "\u20ac50k"):  # synthetic
             assert f">{figure}<" in svg, figure
         assert re.search(rf'fill="{RED}"[^>]*>\u221220.0<', svg)
         assert re.search(rf'fill="{GREEN}"[^>]*>0.0<', svg)
@@ -118,3 +118,37 @@ class TestBridge:
         beyond = _block(_build_diversification(_ctx(cash=5100.0))["html"], "Asset class")
         assert re.search(rf'fill="{GREEN}"[^>]*>\+\u20ac900<', within)
         assert re.search(rf'fill="{RED}"[^>]*>\+\u20ac1.1k<', beyond)  # synthetic
+
+
+class TestLabelsSitOnTheirPills:
+    """Every label stands level with its own pill, however thin, so nothing has to
+    tie the two together: a thin pill gets the room its label needs around it."""
+
+    _PILL = re.compile(r'<rect x="([\d.]+)" y="([\d.]+)" width="8" height="([\d.]+)"')
+    _TAG = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
+                      r'<tspan')
+
+    def _check(self, svg: str) -> None:
+        pills: dict = {}
+        for px, py, ph in self._PILL.findall(svg):
+            pills.setdefault(float(px), []).append(float(py) + float(ph) / 2)
+        left_x, right_x = min(pills), max(pills)
+        tags = self._TAG.findall(svg)
+        left = [float(y) - 3.5 for _, y, a in tags if a == "end"]
+        right = [float(y) - 3.5 for _, y, a in tags if a == "start"]
+        assert len(left) == len(pills[left_x]) and len(right) == len(pills[right_x])
+        for centres, labels in ((pills[left_x], left), (pills[right_x], right)):
+            for c, y in zip(centres, labels):
+                assert abs(c - y) < 0.2, (c, y)
+            assert all(b - a >= 15.0 - 0.2 for a, b in zip(centres, centres[1:])), centres
+        # Bands are filled paths; a stroke tying a label to its pill was an unfilled one.
+        assert not re.search(r'<path[^>]*fill="none"', svg), "a leader stroke is back"
+
+    def test_per_holding_card(self):
+        self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"))
+
+    def test_asset_class_card(self):
+        svg = _block(_build_diversification(_ctx())["html"], "Asset class")
+        # The tail rows (Total, Cash) carry tags too but no pill: check up to the rule
+        # that separates them from the stacks.
+        self._check(svg[:svg.index('<line x1="0"')])

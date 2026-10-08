@@ -1094,29 +1094,31 @@ def _signed_eur(value) -> str:
 # ── Allocation: the bridge ───────────────────────────────────────────────────
 #
 # Each block is a card in the issue's table shell (a rounded border) holding its
-# name and one SVG: two stacks of pill bars, today and the plan, a slice per line,
-# each slice joined to itself by a band in the line's colour. The column labels
-# stand once, above the first card. A band that widens is weight to add, one that narrows is
-# weight to take out; the bands the plan sells narrow into one point, the sale, and
-# the lines it buys from nothing widen out of it.
+# name and one SVG: two stacks of pill bars, today and the plan, a pill per line,
+# each pill joined to itself by a band in the line's colour. The column labels
+# stand once, above the first card. A band that widens is weight to add, one that
+# narrows is weight to take out; the bands the plan sells narrow into one point,
+# the sale, and the lines it buys from nothing widen out of it.
 #
-# The bands are opaque, in the line's own colour, and keep half their slice's
+# The bands are opaque, in the line's own colour, and keep half their pill's
 # height. Drawn translucent over the near-black card they came out as a dull
-# grey-blue; drawn opaque at full height and the issue's full chroma they made the
-# section the loudest thing in the digest. Every hue shares one lightness and one
-# chroma, and the lines the plan sells share one calm red.
+# grey-blue; drawn opaque, at full height and the issue's full chroma, they made
+# the section the loudest thing in the digest. Every hue shares one lightness and
+# one chroma, a step darker than the class swatches, and the lines the plan sells
+# share one calm red.
 #
-# A line's name is written at both ends, against its bar, and each label is tied to
-# its slice by a stroke in the line's colour, so a row reads straight across. The
-# first version named a line on one side only, and the right-hand figures could be
-# attributed only by tracing a band.
+# A line is named at both ends with its weight in parentheses against the bar,
+# "NTSG (14.6%)" today and "(35.0%) NTSG" in the plan, and every label sits level
+# with its own pill. A pill is as tall as its weight; a thin one gets the room its
+# label line needs around it, so no label is pushed off its pill and nothing has
+# to tie the two together.
 #
 # Drawn at the issue's own scale: a 580-unit viewBox, the content column every chart
 # in the digest is drawn for, at width:100% and with the TYPE_PX sizes, so its text
 # matches the tables and charts around it at whatever width the column ends up.
 #
 # The columns, the same in every card:
-#   1M (sparkline, move) · today € · today % · name ‖bar ··· bar‖ name · plan % ·
+#   1M (sparkline, move) · today € · name (today %) ‖pill ··· pill‖ (plan %) name ·
 #   plan € · gap
 # Every column stands at the same x in all three cards.
 
@@ -1126,21 +1128,22 @@ _FD, _FL = TYPE_PX["data"], TYPE_PX["label"]
 _CW = 0.6 * _FD                  # one monospace character at the data size
 _CWL = 0.66 * _FL                # at the label size, with its 0.06em tracking
 _TOP = 26.0                      # where the stacks start, under the card's name
-_ROW = 15.0                      # one label line
+_ROW = 15.0                      # one label line: the least distance between pill centres
 _TAIL = 16.0                     # one total row under the stacks
-_BAR, _LEAD, _COLGAP, _PAIRGAP = 8.0, 7.0, 9.0, 5.0
+_BAR, _LEAD, _COLGAP = 8.0, 5.0, 8.0
 _SPK_W, _SPK_H, _SPK_GAP = 28.0, 9.0, 4.0    # the month's sparkline in the 1M column
 _GAP_1M = 18.0                   # the 1M column stands apart from today's figures
-_GAP = 2.5                       # between stacked slices: the bars read as pills
+_GAP = 2.5                       # the least space between two pills
 _BAR_RX = 3.0                    # a pill bar's corner
-_BAND = 0.45                     # the share of its slice's height a band keeps
-_BRIDGE_L, _BRIDGE_C = 0.72, 0.10  # OKLCH lightness and chroma of every hue
-_SEAM = 1.5                      # card between a bar and its band
-#: Successive lines of one asset class step toward white through these, so two
-#: names of a class stay apart and keep its hue. Never toward the card: on the dark
-#: surface a darker step read as grey.
-_SHADE_STEPS = (("base", 0.0), ("ink", 0.30), ("ink", 0.55), ("ink", 0.15),
-                ("ink", 0.42))
+_BAND = 0.45                     # the share of its pill's height a band keeps
+#: OKLCH lightness and chroma shared by every hue. At 0.72 the pills and bands were
+#: the brightest thing in the issue: large light areas on a near-black card.
+_BRIDGE_L, _BRIDGE_C = 0.62, 0.085
+_SEAM = 1.5                      # card between a pill and its band
+#: Lightness steps for the successive lines of one class, at the class's own hue
+#: and chroma, so two names of a class stay apart and keep its colour. Mixing toward
+#: the card greyed them; mixing toward white turned them pastel.
+_SHADE_DL = (0.0, -0.07, 0.06, -0.12, 0.03)
 _ASSET_SHORT = {"Fixed Income": "Fixed inc."}
 _GEO_SHORT = {"Eurozone EMU": "Eurozone", "Dev ex-USA ex-EMU ex-JP": "Other dev",
               "Emerging Markets": "Emerging"}
@@ -1163,12 +1166,9 @@ def _lift(colour: Optional[str]) -> str:
 
 
 def _shade(base: str, n: int) -> str:
-    toward, a = _SHADE_STEPS[n % len(_SHADE_STEPS)]
-    if toward == "base":
-        return base
-    if toward == "card":
-        return _mix(base, PALETTE["card"], a)
-    return _mix("#FFFFFF", base, a)
+    """The n-th line of a class: the class's hue and chroma, its lightness stepped."""
+    lum, chroma, hue = _oklch(base)
+    return _from_oklch(lum + _SHADE_DL[n % len(_SHADE_DL)], chroma, hue)
 
 
 def _alloc_band(target: Optional[float], cfg) -> float:
@@ -1193,33 +1193,18 @@ def _band_colour(drift: Optional[float], target: Optional[float], cfg) -> str:
             else PALETTE["red"])
 
 
-def _dodge(ys: list, gap: float, lo: float, hi: float) -> list:
-    """Push label centres apart to at least ``gap``, inside [lo, hi], keeping order."""
-    order = sorted(range(len(ys)), key=lambda i: ys[i])
-    out = list(ys)
-    for _ in range(80):
-        moved = False
-        for a, b in zip(order, order[1:]):
-            if out[b] - out[a] < gap - 1e-6:
-                push = (gap - (out[b] - out[a])) / 2
-                out[a] -= push
-                out[b] += push
-                moved = True
-        for i in order:
-            out[i] = min(max(out[i], lo), hi)
-        if not moved:
-            break
-    return out
-
-
 def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 600,
-        anchor: str = "start", size: float = _FD, label: bool = False) -> str:
+        anchor: str = "start", size: float = _FD, label: bool = False,
+        halo: bool = False) -> str:
     """One SVG text at the data size by default. ``label`` adds the LABEL role's
     tracking; its capitals are written as such, since text-transform does not
-    reach SVG text."""
+    reach SVG text. ``halo`` outlines it in the card's colour, so it reads over the
+    bands it sits on without a patch hiding them."""
     track = f' letter-spacing="{0.06 * size:.2f}"' if label else ""
+    ring = (f' stroke="{PALETTE["card"]}" stroke-width="3" stroke-linejoin="round" '
+            f'paint-order="stroke"' if halo else "")
     return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:g}" font-weight="{weight}" '
-            f'fill="{fill}" text-anchor="{anchor}"{track}>{_esc(str(s))}</text>')
+            f'fill="{fill}" text-anchor="{anchor}"{track}{ring}>{_esc(str(s))}</text>')
 
 
 def _pc1(v: float) -> str:
@@ -1256,18 +1241,30 @@ def _bridge_row(*, key: str, label: str, colour: str, now: float,
             "trend": trend, "legacy": legacy}
 
 
+def _paren(s: str) -> str:
+    return f"({s})" if s else ""
+
+
+def _tag(name: str, pc: str, side: str) -> str:
+    """A line's label with its weight against the bar: "NTSG (14.6%)" on the TODAY
+    side, "(35.0%) NTSG" on the PLAN side, the name alone when there is no weight."""
+    if not pc:
+        return name
+    return f"{name} {_paren(pc)}" if side == "left" else f"{_paren(pc)} {name}"
+
+
 def _bridge_texts(left: list, right: list, tail=()) -> dict:
     """Every string a card prints, by column, to size the columns on."""
     lr = [r for r in left if r["now"] > 0]
     rr = [r for r in right if (r["target"] or 0) > 0]
     tail = list(tail or ())
     return {
-        "lname": [r["label"] for r in lr] + [t["name"] for t in tail],
         "move": [_move_text(r["trend"]) for r in lr] + [t["move"] for t in tail],
-        "npc": [_pc1(r["now"]) for r in lr] + [t["now_pc"] for t in tail],
         "neu": [_eur_smart(r["eur_now"]) for r in lr] + [t["now_eur"] for t in tail],
-        "rname": [r["label"] for r in rr],
-        "ppc": [_pc1(r["target"]) for r in rr] + [t["plan_pc"] for t in tail],
+        "llab": ([_tag(r["label"], _pc1(r["now"]), "left") for r in lr]
+                 + [_tag(t["name"], t["now_pc"], "left") for t in tail]),
+        "rlab": ([_tag(r["label"], _pc1(r["target"]), "right") for r in rr]
+                 + [_tag(t["name"], t["plan_pc"], "right") for t in tail]),
         "peu": [_eur_smart(r["eur_tgt"]) for r in rr] + [t["plan_eur"] for t in tail],
         "gap": [_gap_text(r) for r in rr] + [t["gap"] for t in tail],
     }
@@ -1282,19 +1279,14 @@ def _bridge_widths(tx: dict) -> dict:
     w = {k: _tw(v) for k, v in tx.items()}
     w["m1"] = max(_SPK_W + _SPK_GAP + w["move"], _tw(["1M"], _CWL))
     w["gap"] = max(w["gap"], _tw(["GAP"], _CWL))
-    w["left"] = (w["m1"] + _COLGAP + w["neu"] + _PAIRGAP + w["npc"] + _COLGAP
-                 + w["lname"] + _LEAD)
-    w["right"] = (_LEAD + w["rname"] + _COLGAP + w["ppc"] + _PAIRGAP + w["peu"]
-                  + _COLGAP + w["gap"])
     return w
 
 
 def _bridge_layout(specs: list) -> dict:
     """Column positions shared by every card, so all three cards' columns line up
-    down the section the way the tables' did, each sized on the widest string it
-    holds in any card. The 1M column stands apart at the far left; the figures
-    either side of the bridge are mirror images -- euros outside, weight next to
-    the name, the name against its bar."""
+    down the section, each sized on the widest string it holds in any card. The 1M
+    column stands apart at the far left. The two sides mirror each other: euros
+    outside, then the name with its weight, the weight against the bar."""
     tx: dict = {}
     for sp in specs:
         for k, v in _bridge_texts(sp["left"], sp["right"], sp.get("tail") or ()).items():
@@ -1302,17 +1294,14 @@ def _bridge_layout(specs: list) -> dict:
     w = _bridge_widths(tx)
     x = {"spk0": _PAD, "m1": _PAD + w["m1"]}           # right edge of the month's move
     x["neu0"] = x["m1"] + _GAP_1M                      # left edge of today's euros
-    x["neu"] = x["neu0"] + w["neu"]                    # right edges from here on
-    x["npc"] = x["neu"] + _PAIRGAP + w["npc"]
-    x["lname"] = x["npc"] + _COLGAP + w["lname"]
-    x["LX0"] = x["lname"] + _LEAD
+    x["neu"] = x["neu0"] + w["neu"]                    # right edge of today's euros
+    x["llab"] = x["neu"] + _COLGAP + w["llab"]         # right edge of "NTSG (14.6%)"
+    x["LX0"] = x["llab"] + _LEAD
     x["LX1"] = x["LX0"] + _BAR
-    x["gap"] = _BW - _PAD
-    x["peu"] = x["gap"] - w["gap"] - _COLGAP
-    x["ppc"] = x["peu"] - w["peu"] - _PAIRGAP
-    x["ppc0"] = x["ppc"] - w["ppc"]                    # left edge of the plan's weight
-    x["rname"] = x["ppc0"] - _COLGAP - w["rname"]      # a left edge
-    x["RX1"] = x["rname"] - _LEAD
+    x["gap"] = _BW - _PAD                              # right edge of the gap
+    x["peu"] = x["gap"] - w["gap"] - _COLGAP           # right edge of the plan's euros
+    x["rlab"] = x["peu"] - w["peu"] - _COLGAP - w["rlab"]  # left edge of "(35.0%) NTSG"
+    x["RX1"] = x["rlab"] - _LEAD
     x["RX0"] = x["RX1"] - _BAR
     return x
 
@@ -1357,7 +1346,7 @@ def _bridge_hue(colour: Optional[str]) -> str:
 
 
 #: Every line the plan sells, one calm red: ten alternating reds read as alarm.
-_SELL_COLOUR = _from_oklch(0.62, 0.11, _oklch(PALETTE["red"])[2])
+_SELL_COLOUR = _from_oklch(0.56, 0.10, _oklch(PALETTE["red"])[2])
 
 
 def _bridge_spark(vals, x0: float, ymid: float, colour: str) -> str:
@@ -1412,12 +1401,28 @@ def _bridge_head(x: dict) -> str:
     the name and the labels on two lines and took more room than it gave."""
     lab = {"fill": PALETTE["muted"], "weight": 700, "size": _FL, "label": True}
     cols = [((x["spk0"] + x["m1"]) / 2, "1M", "middle"),
-            ((x["neu0"] + x["npc"]) / 2, "TODAY", "middle"),
-            ((x["ppc0"] + x["peu"]) / 2, "PLAN", "middle"), (x["gap"], "GAP", "end")]
+            ((x["neu0"] + x["llab"]) / 2, "TODAY", "middle"),
+            ((x["rlab"] + x["peu"]) / 2, "PLAN", "middle"), (x["gap"], "GAP", "end")]
     body = "".join(_bt(cx, 11.0, s, anchor=a, **lab) for cx, s, a in cols)
     return (f'<svg width="100%" viewBox="0 0 {_BW:g} 16" xmlns="http://www.w3.org/2000/svg" '
             f'aria-hidden="true" style="display:block;width:100%;margin-top:12px;" '
             f'font-family="{FONT_STACK}">{body}</svg>')
+
+
+def _tag_text(x: float, y: float, name: str, pc: str, side: str, *,
+              name_fill: str) -> str:
+    """A label's name and weight as one text, one space apart whatever their
+    lengths: right-aligned against the TODAY pills, left-aligned against the PLAN
+    pills."""
+    nm = f'<tspan fill="{name_fill}">{_esc(name)}</tspan>'
+    if pc:
+        wt = f'<tspan fill="{PALETTE["ink"]}">{_esc(_paren(pc))}</tspan>'
+        body = f"{nm} {wt}" if side == "left" else f"{wt} {nm}"
+    else:
+        body = nm
+    anchor = "end" if side == "left" else "start"
+    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{_FD:g}" font-weight="600" '
+            f'text-anchor="{anchor}">{body}</text>')
 
 
 def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = "",
@@ -1425,9 +1430,10 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = ""
                 total_tgt: Optional[float] = None, layout: Optional[dict] = None,
                 aria: str = "Allocation, today against the plan") -> str:
     """One card's SVG: its name, the two stacks of pill bars and the bands between
-    them, a label line per slice on each side, then ``tail`` rows under the stacks
-    in the same columns (dicts: name, trend, move, now_pc, now_eur, plan_pc,
-    plan_eur, gap, colour). ``layout`` is :func:`_bridge_layout` over every card,
+    them, a label line level with each pill, then ``tail`` rows under the stacks in
+    the same columns (dicts: name, trend, move, now_pc, now_eur, plan_pc, plan_eur,
+    gap, colour). ``stack_h`` sets the scale, the height the larger side's weights
+    would take as one stack. ``layout`` is :func:`_bridge_layout` over every card,
     so the columns line up; :func:`_bridge_head` labels them once."""
     P = PALETTE
     l_rows = [r for r in left if r["now"] > 0]
@@ -1435,7 +1441,7 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = ""
     if not l_rows and not r_rows:
         return ""
     x = layout or _bridge_layout([{"left": left, "right": right, "tail": tail}])
-    LX0, LX1, RX0, RX1 = x["LX0"], x["LX1"], x["RX0"], x["RX1"]
+    LX0, LX1, RX0 = x["LX0"], x["LX1"], x["RX0"]
     flow = RX0 - LX1
     mid = (LX1 + RX0) / 2
 
@@ -1444,27 +1450,40 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = ""
     k = (stack_h - (max(len(l_rows), len(r_rows), 1) - 1) * _GAP) / max(tn, tt, 1e-9)
 
     def stack(rows, key):
-        y, out = _TOP, {}
+        """(top, height) of each pill. A pill is as tall as its weight and starts a
+        _GAP below the pill above it, or lower: far enough that its centre is a
+        label line below that pill's centre. Every label then sits level with its
+        own pill, however thin."""
+        out, prev = {}, None
         for r in rows:
             v = r[key] or 0.0
-            out[r["key"]] = (y, v * k)
-            y += v * k + (_GAP if v > 0 else 0)
+            if v <= 0:
+                continue
+            h = v * k
+            y = _TOP if prev is None else max(prev[0] + prev[1] + _GAP,
+                                              prev[0] + prev[1] / 2 + _ROW - h / 2)
+            out[r["key"]] = prev = (y, h)
         return out
 
     L, R = stack(left, "now"), stack(right, "target")
-    bottom = _TOP + stack_h
+    bottom = max([y + h for y, h in [*L.values(), *R.values()]] + [_TOP])
     g = [_bt(_PAD, 15.0, title.upper(), fill=P["ink"], weight=700, size=_FL, label=True)]
 
     leg = [r for r in left if r["legacy"] and r["now"] > 0]
-    hub = None
+    hub, sold, bw = None, (), 0.0
     if leg:
         y0 = L[leg[0]["key"]][0]
         y1 = L[leg[-1]["key"]][0] + L[leg[-1]["key"]][1]
-        hub = (LX1 + min(flow - 40.0, max(0.5 * flow, 100.0)), (y0 + y1) / 2)
+        sold = ("sell", _pc1(sum(r["now"] for r in leg)),
+                _eur_smart(sum(r["eur_now"] for r in leg)))
+        # The sale's figures stack left of the point the bands meet at, clear of
+        # the TODAY pills.
+        bw = max(len(s) for s in sold) * _CW + 8.0
+        hub = (LX1 + max(min(flow - 40.0, max(0.5 * flow, 100.0)), bw + 12.0),
+               (y0 + y1) / 2)
     by_key = {r["key"]: r for r in right + left}
-    # A band keeps _BAND of its slice's height, about its middle: the colour stays
-    # whole but covers half the card it used to. Bands stop a seam short of the
-    # bars, so the two columns still read as columns.
+    # A band keeps _BAND of its pill's height, about its middle, and stops a seam
+    # short of the pills so the two stacks still read as stacks.
     s0, s1 = LX1 + _SEAM, RX0 - _SEAM
     lo_f, hi_f = (1 - _BAND) / 2, (1 + _BAND) / 2
     bands, bars = [], []
@@ -1486,11 +1505,11 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = ""
                  f'C{tx - 12:.1f},{ty:.1f} {cx:.1f},{lb:.1f} {s0:.1f},{lb:.1f} Z')
         elif rh > 0:
             # Bought from nothing: it widens out of the sale that pays for it.
-            tx = (hub[0] + 8.0) if hub else (RX0 - 0.5 * flow)
+            tx = (hub[0] + 5.0) if hub else (RX0 - 0.5 * flow)
             ty = ry + rh / 2
             cx = (tx + s1) / 2
-            d = (f'M{s1:.1f},{ra:.1f} C{cx:.1f},{ra:.1f} {tx + 10:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
-                 f'C{tx + 10:.1f},{ty:.1f} {cx:.1f},{rb:.1f} {s1:.1f},{rb:.1f} Z')
+            d = (f'M{s1:.1f},{ra:.1f} C{cx:.1f},{ra:.1f} {tx + 8:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
+                 f'C{tx + 8:.1f},{ty:.1f} {cx:.1f},{rb:.1f} {s1:.1f},{rb:.1f} Z')
         else:
             continue
         bands.append(f'<path d="{d}" fill="{r["colour"]}"/>')
@@ -1501,67 +1520,46 @@ def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = ""
                             f'fill="{r["colour"]}"/>')
     g += bands + bars
     if hub:
-        sold = _pc1(sum(r["now"] for r in leg))
-        sold_eur = _eur_smart(sum(r["eur_now"] for r in leg))
+        # Haloed rather than on a patch: a patch cut the bands short of the point
+        # they meet at, leaving stubs.
         ex = hub[0] - 6.0
-        # The sale's figures sit where the bands converge, on a patch of the card
-        # so the bands pass behind them rather than through them.
-        bw = max(len(sold) + 5, len(sold_eur)) * _CW + 6.0
-        g += [f'<rect x="{ex - bw + 2:.1f}" y="{hub[1] - 13:.1f}" width="{bw:.1f}" '
-              f'height="27" rx="4" fill="{P["card"]}" fill-opacity="0.92"/>',
-              f'<circle cx="{hub[0]:.1f}" cy="{hub[1]:.1f}" r="2.4" fill="{P["red"]}"/>',
-              _bt(ex - len(sold) * _CW - 5.0, hub[1] - 3, "sell", fill=P["ink"], anchor="end"),
-              _bt(ex, hub[1] - 3, sold, fill=P["ink"], anchor="end"),
-              _bt(ex, hub[1] + 10, sold_eur, fill=P["ink"], anchor="end")]
+        g.append(f'<circle cx="{hub[0]:.1f}" cy="{hub[1]:.1f}" r="2.4" fill="{P["red"]}"/>')
+        g += [_bt(ex, hub[1] - 9.5 + 13.0 * i, s, fill=P["ink"], anchor="end", halo=True)
+              for i, s in enumerate(sold)]
 
-    def place(rows, stk):
-        y0s = [stk[r["key"]][0] + stk[r["key"]][1] / 2 for r in rows]
-        return y0s, _dodge(y0s, _ROW, _TOP + 4, bottom + 5)
-
-    # Each label is tied to its slice by a stroke in the line's own colour, light
-    # enough to guide the eye without drawing it.
-    lead = 'stroke-width="1" stroke-opacity="0.6" fill="none"'
-    low = 0.0
-    y0s, ys = place(l_rows, L)
-    for r, y0, y in zip(l_rows, y0s, ys):
+    for r in l_rows:
+        ly, lh = L[r["key"]]
+        y = ly + lh / 2
         b = y + 3.5
-        g += [f'<path d="M{x["lname"] + 2:.1f},{y:.1f} L{LX0 - 1:.1f},{y0:.1f}" '
-              f'stroke="{r["colour"]}" {lead}/>',
-              _bridge_spark(r["trend"], x["spk0"], y, r["colour"]),
+        g += [_bridge_spark(r["trend"], x["spk0"], y, r["colour"]),
               _bt(x["m1"], b, _move_text(r["trend"]), fill=_move_colour(r["trend"]),
                   weight=400, anchor="end"),
               _bt(x["neu"], b, _eur_smart(r["eur_now"]), fill=P["muted"], weight=400,
                   anchor="end"),
-              _bt(x["npc"], b, _pc1(r["now"]), fill=P["ink"], anchor="end"),
-              _bt(x["lname"], b, r["label"], fill=P["red"] if r["legacy"] else P["ink"],
-                  anchor="end")]
-        low = max(low, y)
-    y0s, ys = place(r_rows, R)
-    for r, y0, y in zip(r_rows, y0s, ys):
-        b = y + 3.5
-        g += [f'<path d="M{RX1 + 1:.1f},{y0:.1f} L{x["rname"] - 2:.1f},{y:.1f}" '
-              f'stroke="{r["colour"]}" {lead}/>',
-              _bt(x["rname"], b, r["label"], fill=P["ink"]),
-              _bt(x["ppc"], b, _pc1(r["target"]), fill=P["ink"], anchor="end"),
+              _tag_text(x["llab"], b, r["label"], _pc1(r["now"]), "left",
+                        name_fill=P["red"] if r["legacy"] else P["ink"])]
+    for r in r_rows:
+        ry, rh = R[r["key"]]
+        b = ry + rh / 2 + 3.5
+        g += [_tag_text(x["rlab"], b, r["label"], _pc1(r["target"]), "right",
+                        name_fill=P["ink"]),
               _bt(x["peu"], b, _eur_smart(r["eur_tgt"]), fill=P["muted"], weight=400,
                   anchor="end"),
               _bt(x["gap"], b, _gap_text(r), fill=_band_colour(r["drift"], r["target"], cfg),
                   weight=700, anchor="end")]
-        low = max(low, y)
 
-    H = max(bottom + 7.0, low + 11.0)
+    H = bottom + 7.0
     if tail:
         g.append(f'<line x1="0" y1="{H:.1f}" x2="{_BW:g}" y2="{H:.1f}" stroke="{P["border"]}"/>')
         b = H + 14.0
         for t in tail:
-            g += [_bt(x["lname"], b, t["name"], fill=P["ink"], anchor="end"),
-                  _bridge_spark(t.get("trend"), x["spk0"], b - 3.5, P["ink"]),
+            g += [_bridge_spark(t.get("trend"), x["spk0"], b - 3.5, P["ink"]),
                   _bt(x["m1"], b, t["move"], fill=_move_colour(t.get("trend")), weight=400,
                       anchor="end"),
                   _bt(x["neu"], b, t["now_eur"], fill=P["muted"] if t["now_pc"] else P["ink"],
                       weight=400 if t["now_pc"] else 600, anchor="end"),
-                  _bt(x["npc"], b, t["now_pc"], fill=P["ink"], anchor="end"),
-                  _bt(x["ppc"], b, t["plan_pc"], fill=P["ink"], anchor="end"),
+                  _tag_text(x["llab"], b, t["name"], t["now_pc"], "left", name_fill=P["ink"]),
+                  _tag_text(x["rlab"], b, t["name"], t["plan_pc"], "right", name_fill=P["ink"]),
                   _bt(x["peu"], b, t["plan_eur"], fill=P["muted"] if t["plan_pc"] else P["ink"],
                       weight=400 if t["plan_pc"] else 600, anchor="end"),
                   _bt(x["gap"], b, t["gap"], fill=t["colour"], weight=700, anchor="end")]
