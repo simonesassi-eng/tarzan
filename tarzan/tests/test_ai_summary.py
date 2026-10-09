@@ -348,10 +348,24 @@ def test_divergence_note_uses_ai_prose_when_available(monkeypatch):
     monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
     monkeypatch.setattr(
         "tarzan.export.ai_summary._call_gemini",
+        # Figures taken from this fixture's own digest (gap -6.0pp, realized beta
+        # 1.2, market risk +8.8pp): prose stating numbers the digest does not contain
+        # is replaced by the deterministic note, which the next test pins.
+        lambda system, user, use_search=True: "You trail ACWI by -6.0pp; beta 1.20 explains +8.8pp.",
+    )
+    note = ai_summary.divergence_note(_divergence_metrics(), _config())
+    assert "beta 1.20 explains" in note          # the mocked model prose, not the fallback
+
+
+def test_divergence_prose_with_an_invented_figure_falls_back(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.delenv("TARZAN_DISABLE_AI", raising=False)
+    monkeypatch.setattr(
+        "tarzan.export.ai_summary._call_gemini",
         lambda system, user, use_search=True: "You trail ACWI by -6.0pp; beta 1.15 explains +6.6pp.",
     )
     note = ai_summary.divergence_note(_divergence_metrics(), _config())
-    assert "beta 1.15 explains" in note          # the mocked model prose, not the fallback
+    assert "1.15" not in note and "-6.0pp" in note   # the deterministic note, not the model's
 
 
 def test_divergence_note_falls_back_when_ai_returns_nothing(monkeypatch):
