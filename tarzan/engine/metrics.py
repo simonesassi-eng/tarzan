@@ -1743,15 +1743,46 @@ class MetricsEngine:
             return
         try:
             today = runtime.today()
-            by_ticker = {str(h.ticker): h for h in self.holdings if h.ticker and h.isin}
-            justetf.prefetch(h.isin for h in by_ticker.values())
+            # EVERY row the issue prints, each with the tape its figures came from:
+            # holdings (Returns), target sleeves not held (Target instruments) and the
+            # tracked catalog (Watchlist). Benchmarks carry no ISIN, so it comes from
+            # the curated taxonomy, or from a holding of the same listing.
+            subjects: dict[tuple[str, str], tuple] = {}
+            for h in self.holdings:
+                if h.ticker and h.isin:
+                    subjects[(str(h.ticker), "In portfolio")] = (
+                        h.isin, h.price_history, h.price_history_native, h.price_currency)
+            for h in getattr(self, "rebalance_seeds", None) or []:
+                if h.ticker and h.isin:
+                    subjects[(str(h.ticker), "Target not held")] = (
+                        h.isin, h.price_history, h.price_history_native, h.price_currency)
+            isin_of = {t: v[0] for (t, _kind), v in subjects.items()}
+            # The curated taxonomy is keyed by BARE ticker ("XDEV"), the catalog by
+            # listing ("XDEV.MI"). ``resolve_taxonomy_identity`` keeps a curated
+            # identity rather than returning an ISIN for a listing, so it left 32 of 40
+            # EUR watchlist rows unchecked; the bare-ticker map is the direct lookup.
+            from tarzan.models.instrument_key import normalize_ticker
+            frame = cfg._load_indexes_csv()
+            curated = ({str(t).strip().upper(): str(i or "").strip()
+                        for t, i in zip(frame.get("ticker", []), frame.get("isin", []))
+                        if str(i or "").strip() and str(i).strip().lower() != "nan"}
+                       if frame is not None and not frame.empty else {})
+            for record in (ctx.get("_benchmark_catalog") or {}).values():
+                isin = (isin_of.get(str(record.ticker))
+                        or curated.get(normalize_ticker(str(record.ticker)).upper()) or "")
+                if isin:
+                    subjects[(str(record.ticker), "Benchmark index")] = (
+                        isin, record.history, record.history_native, record.currency)
+            justetf.prefetch(v[0] for v in subjects.values())
             checked = diverged = 0
             for i, row in hp.iterrows():
-                h = by_ticker.get(str(row.get("ticker") or ""))
-                if h is None or row.get("type") != "In portfolio":
+                subject = subjects.get((str(row.get("ticker") or ""), str(row.get("type") or "")))
+                if subject is None:
                     continue
-                tape, ccy = self._own_tape(h.price_history, h.price_history_native,
-                                           h.price_currency)
+                isin, eur_tape, native_tape, listing_ccy = subject
+                from types import SimpleNamespace
+                h = SimpleNamespace(ticker=str(row.get("ticker")), isin=isin)
+                tape, ccy = self._own_tape(eur_tape, native_tape, listing_ccy)
                 if tape is None or str(ccy or "").upper() != "EUR":
                     continue   # the second source is a EUR series
                 # The SAME capped tape ``_holding_performance`` computes the printed

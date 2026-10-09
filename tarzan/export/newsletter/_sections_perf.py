@@ -2318,14 +2318,33 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         }
 
     def _build_bench_returns_dict(source: dict) -> dict:
+        # A figure the sources could not settle is marked here exactly as in the
+        # holdings table (``_returns_dict``); a corrected one is printed as corrected
+        # (the frame already carries the replaced value) and named in the note.
         return {
             p: {
-                "value": _pct_compact(source.get(p), signed=True),
+                "value": _pct_compact(source.get(p), signed=True)
+                + (_UNVERIFIED_MARK if source.get(f"xc_{p}") == "diverged"
+                   and not is_missing(source.get(p)) else ""),
                 "color": _color_sign(source.get(p)),
                 "raw": _as_float(source.get(p)),
             }
             for p in periods
         }
+
+    def _note_for(rows: list) -> str:
+        """The same disclosure the holdings table carries, for this table's rows."""
+        projected = {}
+        for r in rows:
+            src = r.get("_src") or {}
+            projected[str(r.get("raw_ticker") or "")] = {
+                **{k: src.get(k) for k in periods},
+                "_xc": {k: (src.get(f"xc_{k}"), src.get(f"xc_{k}_alt"),
+                            src.get(f"xc_{k}_ours"), src.get(f"xc_{k}_at"),
+                            src.get(f"xc_{k}_was"))
+                        for k in periods if src.get(f"xc_{k}") is not None},
+            }
+        return _unverified_note(projected, list(periods))
 
     # Portfolio row
     portfolio_row = {
@@ -2390,6 +2409,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "tag": None,
                 "is_portfolio": False,
                 "returns": _build_bench_returns_dict(r.to_dict()),
+                "_src": r.to_dict(),
             })
 
     # A target instrument that is ALSO a curated benchmark (most of them are)
@@ -2454,6 +2474,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 "tag": tags[0] if tags else None,
                 "is_portfolio": False,
                 "returns": _build_bench_returns_dict(r.to_dict()),
+                "_src": r.to_dict(),
             })
 
     # Risk metrics are STATE tiles now (``_risk_tiles``); no chip data here.
@@ -2559,7 +2580,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 m, live=_intraday_column(
                     [bool((m.performance_full or m.performance or {})
                           .get("1d_intraday"))]
-                    + [bool(r.get("intraday")) for r in rows])))
+                    + [bool(r.get("intraday")) for r in rows]))) + _note_for(rows)
 
     table_html = _table_for(benchmark_rows)
     target_table_html = _table_for(target_rows) if target_rows else ""
