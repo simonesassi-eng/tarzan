@@ -460,3 +460,65 @@ class TestTheDocumentIsWellFormed:
         assert self._ENTITY.search('<td>Cash & Cash Equivalents</td>')
         assert not self._ENTITY.search('<td>Cash &amp; Cash Equivalents</td>')
         assert not self._ENTITY.search('<td>&nbsp;&#8364;&minus;1</td>')
+
+
+class TestTheReturnsTablePrintsTheEngine:
+    """Every figure in RETURNS is the engine's own number, formatted.
+
+    This was check 1 of the out-of-band oracle (``verify-returns.yml``): it re-read the
+    sent issue's HTML and compared each cell with ``holding_performance``. A mismatch is
+    a CODE bug — a column read out of order, a stale projection — and no run can correct
+    a code bug by itself; it would print the same wrong cell every time. So it lives here,
+    in the suite that runs on every commit, where such a bug stops before it reaches any
+    issue.
+    """
+
+    _SECTION = r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>Returns</span>'
+    _KEY = {"intraday": "1d", "1d": "1d", "5d": "5d", "1m": "1m", "3m": "3m",
+            "ytd": "ytd", "1y": "1y", "3y": "3y", "5y": "5y"}
+
+    def _table(self, html):
+        import re
+
+        m = re.search(self._SECTION, html)
+        assert m, "no Returns section in the issue"
+        rest = html[m.end():]
+        nxt = re.search(r'\[\d\d\]</span>&nbsp;&nbsp;<span', rest)
+        sec = rest[:nxt.start()] if nxt else rest
+        header, rows = [], {}
+        for tr in re.findall(r"<tr>.*?</tr>", sec, re.S):
+            cells = [re.sub(r"<[^>]+>", "", c).strip()
+                     for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
+            if cells and cells[0].lower().startswith("instrument"):
+                header = [self._KEY.get(c.lower(), c.lower()) for c in cells[1:]]
+            elif len([c for c in cells if c]) >= 3:
+                rows[cells[0]] = cells[1:]
+        return header, rows
+
+    def test_every_printed_cell_is_the_engine_figure(self, rendered):
+        from tarzan.export.newsletter._format import _pct_compact
+
+        html, metrics, _config = rendered
+        hp = metrics.holding_performance
+        held = hp[hp["type"] == "In portfolio"]
+        header, rows = self._table(html)
+        assert header, "the Returns header was not found"
+        checked = 0
+        for _i, row in held.iterrows():
+            bare = str(row["ticker"]).split(".")[0].upper()
+            printed = next((v for k, v in rows.items() if k.upper().startswith(bare)), None)
+            assert printed is not None, f"{row['ticker']} has no row in Returns"
+            for key, cell in zip(header, printed):
+                if key == "1d" or key not in hp.columns:
+                    continue      # the 1D cell is a pill + sparkline, checked elsewhere
+                value = row.get(key)
+                if value is None or value != value:
+                    assert cell in ("—", ""), f"{bare} {key}: engine has none, printed {cell!r}"
+                    continue
+                assert cell.rstrip("?") == _pct_compact(float(value)), (
+                    f"{bare} {key}: printed {cell!r}, engine {float(value):+.4f}%")
+                checked += 1
+        # Zero comparisons is a broken check, not a clean bill of health: the oracle's
+        # version once printed "0 figures compared, 0 disagreeing" after the section
+        # ordinals shifted and the slice landed on the wrong section.
+        assert checked >= 5, f"only {checked} figures compared"

@@ -96,8 +96,6 @@ def install(*, enabled: bool | None = None) -> RedactingFilter | None:
     Call AFTER ``basicConfig``/``setup_logging``: the filter goes on the
     handlers that exist, so a handler added later is not covered.
 
-    Matches ``scripts/verify_returns_vs_yahoo.py``, which gates its own
-    per-instrument redaction on ``$CI`` for the same reason.
     """
     if enabled is None:
         enabled = bool(os.environ.get("CI"))
