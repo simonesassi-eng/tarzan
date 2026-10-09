@@ -298,3 +298,31 @@ class TestANavReferee:
         ref[ref.index > ref.index[-260]] *= 0.90          # 10%: not a premium
         v = xc.check_windows(tape, ref, extra_pp=xc.NAV_PREMIUM_ALLOWANCE_PP)["1y"]
         assert v["status"] == xc.DIVERGED
+
+
+class TestTheOneDayComparesTheSameSession:
+    def test_an_untraded_rows_previous_session_is_not_compared_with_today(self, monkeypatch):
+        """9 Oct 10:25: a thin fund untraded that morning showed Thursday's -3.45% — its
+        last session, correctly — and was flagged against the second source's quote for
+        FRIDAY. Two sessions are not a disagreement."""
+        import tarzan.runtime as runtime
+        from tarzan.data import justetf
+        from tarzan.engine.metrics import MetricsEngine
+        from tarzan.models.holding import Holding
+        from tarzan.models.investor_config import InvestorConfig
+
+        today = dt.date(2026, 10, 9)
+        monkeypatch.setattr(runtime, "allows_live_transport", lambda: True)
+        monkeypatch.setattr(runtime, "today", lambda: today)
+        monkeypatch.setattr(justetf, "prefetch", lambda *a, **k: None)
+        monkeypatch.setattr(justetf, "series", lambda isin: None)
+        monkeypatch.setattr(justetf, "quote", lambda isin: {
+            "price": 111.5, "prev_close": 110.88, "date": today, "venue": "XETRA"})
+        h = Holding(isin="IE0000000001", ticker="ABC.DE", quantity=1.0,
+                    cost_basis_eur=1.0, market_value_eur=1.0, currency="EUR")
+        h.price_history = _tape(end="2026-10-08")          # no point for today
+        h.price_currency = "EUR"
+        hp = pd.DataFrame([{"ticker": "ABC.DE", "type": "In portfolio", "1d": -3.45}])
+        ctx = {"holding_performance": hp}
+        MetricsEngine([h], InvestorConfig())._second_source(ctx)
+        assert ctx["holding_performance"].loc[0, "xc_1d"] == xc.UNAVAILABLE

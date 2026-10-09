@@ -1794,8 +1794,14 @@ class MetricsEngine:
                 verdicts = xc.check_windows(
                     tape, justetf.series(h.isin), h.ticker,
                     extra_pp=xc.NAV_PREMIUM_ALLOWANCE_PP if is_nav else 0.0)
-                verdicts["1d"] = xc.check_one_day(row.get("1d"), justetf.quote(h.isin),
-                                                   today, tape)
+                # The 1D compares SESSIONS, so only a row whose own tape reaches today
+                # can be compared with today's quote. An untraded row's 1D is the
+                # PREVIOUS session's move: on 9 Oct at 10:25 a thin fund's -3.45%
+                # (Thursday, correct) was flagged against justETF's +0.56% for Friday.
+                verdicts["1d"] = (
+                    xc.check_one_day(row.get("1d"), justetf.quote(h.isin), today, tape)
+                    if _tape_ends_today(tape, today)
+                    else {"status": xc.UNAVAILABLE, "alt": None})
                 verdicts["1d"].update(ours=row.get("1d"), at=today)
                 # A disagreement is not left for the reader to adjudicate: the same
                 # instrument's OTHER venues vote, fetched only when there is something
