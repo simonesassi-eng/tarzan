@@ -683,6 +683,35 @@ def store_instrument_profile(isin: str, profile: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Timed provider answers that are not market data
+# ---------------------------------------------------------------------------
+# An answer that does not change from one issue to the next (an OpenFIGI mapping,
+# "Yahoo lists no such venue") was re-asked on every run: a warm run spent ~100s of
+# request time re-probing eight bonds on nine exchanges, all 404, every time.
+
+def _timed_path(name: str) -> Path:
+    return _subdir("timed") / f"{_safe(name)}.json"
+
+
+def load_timed(name: str, key: str, ttl_days: float):
+    """The value stored under ``key`` in map ``name``, or None when absent/expired."""
+    if not is_enabled() or not key:
+        return None
+    entry = _read_map(_timed_path(name), name).get(key)
+    if not isinstance(entry, dict) or time.time() - entry.get("ts", 0) > ttl_days * 86400:
+        return None
+    return entry.get("value")
+
+
+def store_timed(name: str, key: str, value) -> None:
+    if not is_enabled() or not key:
+        return
+    try:
+        _update_map(_timed_path(name), name, key, {"value": value, "ts": time.time()})
+    except Exception as exc:  # noqa: BLE001 — a cache write never fails a run
+        logger.debug("Timed cache write failed for %s/%s: %s", name, key, exc)
+
+
 # Geographic breakdown (ISIN/ticker → {geo_name: pct})
 # ---------------------------------------------------------------------------
 # An ETF's geographic allocation is near-immutable (it drifts only as slowly

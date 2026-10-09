@@ -1125,6 +1125,19 @@ def _resolve_isin(
         logger.debug("Pinned run has no cached market history for ISIN %s", isin)
         return None
 
+    # A bond Yahoo lists on no venue is asked again on every run otherwise: eight
+    # held bonds x nine exchanges, all 404, ~100s of request time per warm run, for
+    # an answer (carry-flat pricing) that was the same each time. Bonds only: an ETF
+    # that fails to resolve is a real defect and keeps being retried every run.
+    from tarzan.instruments.registry import InstrumentKind
+
+    is_bond = _profile_kind(price_cache.load_instrument_profile(clean_isin)) \
+        is InstrumentKind.BOND
+    if is_bond and price_cache.load_timed(_NO_LISTING, clean_isin, _NO_LISTING_TTL_DAYS):
+        logger.info("ISIN %s: a bond Yahoo listed nowhere when last asked; not re-probed",
+                    clean_isin)
+        return None
+
     canonical_name = _openfigi_name(clean_isin)
 
     # ISIN-only broker rows commonly carry the ISIN itself as their temporary
@@ -1164,7 +1177,13 @@ def _resolve_isin(
         # Every candidate's metadata was throttled away. Rather than surrender
         # the curated identity to the raw ISIN (no quote, no siblings, no 1D),
         # confirm a EUR venue through the sturdier v7 quote batch.
-        return _resolve_via_taxonomy_quote(clean_isin, taxonomy_ticker)
+        resolved = _resolve_via_taxonomy_quote(clean_isin, taxonomy_ticker)
+        # ponytail: a fully THROTTLED probe is recorded too, so a bond Yahoo does
+        # list would sit on carry-flat for up to the TTL; none of the held bonds is
+        # listed. Record only definitive 404s if one ever is.
+        if resolved is None and is_bond:
+            price_cache.store_timed(_NO_LISTING, clean_isin, True)
+        return resolved
 
     # An ISIN may only resolve to a symbol something POSITIVELY identifies. The
     # ranking has no floor, so a candidate that is not curated, whose name matches
@@ -1459,6 +1478,9 @@ def _sibling_close_series(symbol: str):
     """
     try:
         cached = price_cache.load_history(symbol)
+        if cached is None and price_cache.load_timed(
+                _NO_LISTING, symbol, _NO_LISTING_TTL_DAYS):
+            return None
         start = price_cache.refresh_start(cached)
 
         def _call():
@@ -1470,6 +1492,10 @@ def _sibling_close_series(symbol: str):
                                   auto_adjust=True)
 
         fresh = _retry(_call, what=f"sibling history {symbol}")
+        if cached is None and fresh is not None and fresh.empty:
+            # Yahoo ANSWERED, with no data, for a venue never seen trading. (A
+            # throttled call returns None, not an empty frame, and is not recorded.)
+            price_cache.store_timed(_NO_LISTING, symbol, True)
         if fresh is None:
             fresh = pd.DataFrame()
         merged = price_cache.merge_history(cached, fresh)
@@ -1757,6 +1783,11 @@ _FIGI_MIC_MAP = cfg.figi_mic_map()
 
 _OPENFIGI_BATCH_SIZE = 10
 
+#: Timed-cache maps. An ISIN's OpenFIGI mapping is its identity, which does not
+#: change; "Yahoo has no such listing" is re-checked weekly.
+_OPENFIGI_CACHE, _OPENFIGI_TTL_DAYS = "openfigi", 30
+_NO_LISTING, _NO_LISTING_TTL_DAYS = "no_listing", 7
+
 
 def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
     """Fetch uncached ISIN mappings in bounded OpenFIGI request batches."""
@@ -1772,6 +1803,13 @@ def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
 
     with _net_lock:
         missing = [isin for isin in ordered if isin not in _openfigi_memo]
+    stored = {isin: price_cache.load_timed(_OPENFIGI_CACHE, isin, _OPENFIGI_TTL_DAYS)
+              for isin in missing}
+    with _net_lock:
+        for isin, value in stored.items():
+            if value:
+                _openfigi_memo[isin] = value
+    missing = [isin for isin in missing if not stored[isin]]
 
     for offset in range(0, len(missing), _OPENFIGI_BATCH_SIZE):
         batch = missing[offset:offset + _OPENFIGI_BATCH_SIZE]
@@ -1814,6 +1852,11 @@ def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
                 _openfigi_memo[isin] = (
                     [response[index]] if valid_response else []
                 )
+        if valid_response:
+            for index, isin in enumerate(batch):
+                # Only a mapping is an identity; an error/warning entry is retried.
+                if isinstance(response[index], dict) and response[index].get("data"):
+                    price_cache.store_timed(_OPENFIGI_CACHE, isin, [response[index]])
 
     with _net_lock:
         return {isin: _openfigi_memo.get(isin, []) for isin in ordered}
