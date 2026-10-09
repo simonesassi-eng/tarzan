@@ -91,3 +91,22 @@ def test_geo_euro_uses_the_notional_sleeve_not_the_market_value():
     )
     # And it equals the notional EM sleeve (9.09% × €220k), not 9.09% × €120k.
     assert abs(em_eur - 20000.0) < 800.0, em_eur
+
+
+def test_the_plan_side_is_sized_on_the_plans_own_sleeve():
+    """The PLAN column is the plan's sleeve, not today's. With Equities at 183.33%
+    today and 150% in the plan, a region the plan puts at 50% holds 50% of the PLAN's
+    sleeve; 50% of today's sleeve is not a figure the plan contains, and the plan
+    column then did not add up to the asset-class card. (Synthetic book, above.)"""
+    cfg = InvestorConfig()
+    cfg.invested_allocation_targets_pctg = {"Equities": 150.0}
+    cfg.equity_geo_targets_pctg = {"USA": 50.0, "Emerging Markets": 50.0}
+    ctx = _NewsletterContext(metrics=_levered_metrics(), config=cfg, issue_number=1,
+                             benchmark_alpha_beta="S&P 500", benchmark_geo="MSCI ACWI")
+    html = _build_diversification(ctx)["html"]
+    geo = html[html.index('aria-label="Equity geography'):]
+    geo = geo[:geo.index("</svg>")]
+    plan_side = geo[geo.index(">USA<", geo.index(">Emerging<")):]   # right-hand labels
+    euros = [_eur_to_float(e) for e in re.findall(r">€([\d.,]+k?)<", plan_side)]
+    assert euros and abs(euros[0] - 90000.0) < 1000.0, euros
+    assert "€220k notional today, €180k in the plan" in html   # synthetic

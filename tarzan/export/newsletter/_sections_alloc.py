@@ -1168,13 +1168,24 @@ def _gap_text(r: dict) -> str:
 
 def _bridge_row(*, key: str, label: str, colour: str, now: float,
                 target: Optional[float], base: float, trend=None,
-                legacy: bool = False) -> dict:
+                legacy: bool = False, plan_base: Optional[float] = None) -> dict:
+    """``plan_base`` is the euro base of the PLAN side when it differs from today's:
+    a sleeve the plan sizes differently from what is held."""
     now = float(now or 0.0)
+    plan_base = base if plan_base is None else plan_base
     tgt = None if target is None else float(target)
     return {"key": key, "label": label, "colour": colour, "now": now, "target": tgt,
             "drift": None if tgt is None else now - tgt,
-            "eur_now": now / 100.0 * base, "eur_tgt": (tgt or 0.0) / 100.0 * base,
+            "eur_now": now / 100.0 * base, "eur_tgt": (tgt or 0.0) / 100.0 * plan_base,
             "trend": trend, "legacy": legacy}
+
+
+def _sleeve_note(what: str, today: float, plan: float, tail: str = ".") -> str:
+    """The "% of the sleeve" caption, naming the plan's euro base when it differs."""
+    bases = f"{_eur_smart(today)} notional"
+    if abs(plan - today) >= 0.5:
+        bases += f" today, {_eur_smart(plan)} in the plan"
+    return f"% of {what} ({bases}){tail}"
 
 
 def _paren(s: str) -> str:
@@ -1524,6 +1535,7 @@ def _alloc_note(text: str, top: int = 8) -> str:
 
 
 def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
+                         plan_base: Optional[float] = None,
                          weights: dict, series: Optional[list],
                          series_key: str) -> tuple[list, list, list]:
     """(kept, new, sold) bridge rows for one per-holding verification.
@@ -1616,7 +1628,8 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
 
     out_kept = [_bridge_row(key=r["isin"] or r["label"], label=r["label"],
                             colour=colour(r["cls"]), now=r["now"], target=r["tgt"],
-                            base=base, trend=trend_for(r["item"], r["isin"]))
+                            base=base, plan_base=plan_base,
+                            trend=trend_for(r["item"], r["isin"]))
                 for r in kept + new]
     out_sold = [_bridge_row(key="sell:" + (r["isin"] or r["label"]), label=r["label"],
                             colour=_SELL_COLOUR,
@@ -1663,6 +1676,17 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
 
     equity_base = notional_sleeve_eur("Equities")
     fi_base = notional_sleeve_eur("Fixed Income")
+    # The PLAN side of a sleeve is the plan's sleeve, not today's: a region's plan
+    # weight times TODAY's equity sleeve is not a figure the plan contains, and the
+    # plan column then did not add up to the asset-class card's own Equities plan.
+    class_targets = cfg.invested_allocation_targets_pctg or {}
+
+    def plan_sleeve_eur(klass: str, today: float) -> float:
+        t = class_targets.get(klass)
+        return today if t is None else float(t) / 100.0 * invested_base
+
+    equity_plan_base = plan_sleeve_eur("Equities", equity_base)
+    fi_plan_base = plan_sleeve_eur("Fixed Income", fi_base)
 
     tl = m.allocation_timeline or {}
     dates = tl.get("dates") or []
@@ -1748,13 +1772,13 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     geo_rows = [_bridge_row(
         key=r["name"], label=_GEO_SHORT.get(r["name"], geo_label(r["name"])),
         colour=_bridge_hue(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
-        target=r.get("target_left"), base=equity_base,
+        target=r.get("target_left"), base=equity_base, plan_base=equity_plan_base,
         trend=_timeline_vals(geo_series, r["name"])) for r in geo.get("rows") or []]
     if geo_rows:
         specs.append({"title": "Equity geography", "left": geo_rows, "right": geo_rows,
                       "stack_h": 100.0,
-                      "note": (f"% of the equity sleeve ({_eur_smart(equity_base)} "
-                               f"notional), so each side totals 100%."),
+                      "note": _sleeve_note("the equity sleeve", equity_base,
+                                           equity_plan_base, ", so each side totals 100%."),
                       "aria": "Equity geography, today against the plan"})
 
     # ── Per-holding targets ──
@@ -1778,13 +1802,15 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                                      weights=weights, series=hold_inv_series,
                                      series_key="isin")))
     else:
-        for kind, title, base in (("per_holding_equity", "Equities holding", equity_base),
-                                  ("per_holding_fi", "Fixed income holding", fi_base)):
+        for kind, title, base, plan_base in (
+                ("per_holding_equity", "Equities holding", equity_base, equity_plan_base),
+                ("per_holding_fi", "Fixed income holding", fi_base, fi_plan_base)):
             v = verifs.get(kind)
             if v and v.get("items"):
                 holding_blocks.append((
-                    title, f"% of the sleeve ({_eur_smart(base)} notional).",
+                    title, _sleeve_note("the sleeve", base, plan_base),
                     _holding_bridge_rows(ctx, v.get("items") or [], base=base,
+                                         plan_base=plan_base,
                                          weights=None, series=hold_series,
                                          series_key="ticker")))
     for title, note, (kept, new, sold) in holding_blocks:
