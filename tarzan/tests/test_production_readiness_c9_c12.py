@@ -67,19 +67,21 @@ def test_c10_workflow_validates_without_credentials_before_publication():
         if line.strip() and not line.lstrip().startswith("#")
         and (">=" in line or "~=" in line or "==" not in line or "--hash=sha256:" not in line)
     ]
-    has_validation_job = bool(re.search(r"(?m)^\s{2}validate:\s*$", workflow))
-    publication_depends_on_validation = bool(re.search(r"(?m)^\s+needs:\s*validate\s*$", workflow))
+    # The gate (compile + dependency check) runs before the step that holds the
+    # credentials; the test suite runs on push, in checks.yml.
+    publish_at = workflow.index("- name: Render & send newsletter")
+    gated_before_publication = all(
+        0 <= workflow.find(cmd) < publish_at
+        for cmd in ("python -m compileall -q tarzan scripts", "python -m pip check"))
     job_scoped_secrets = bool(re.search(r"(?ms)^\s{4}env:\s*\n(?:\s{6}.+secrets\.)", workflow))
 
     assert {
-        "has_validation_job": has_validation_job,
-        "publication_depends_on_validation": publication_depends_on_validation,
+        "gated_before_publication": gated_before_publication,
         "job_scoped_secrets": job_scoped_secrets,
         "mutable_actions": mutable_actions,
         "open_dependencies": open_dependencies,
     } == {
-        "has_validation_job": True,
-        "publication_depends_on_validation": True,
+        "gated_before_publication": True,
         "job_scoped_secrets": False,
         "mutable_actions": [],
         "open_dependencies": [],

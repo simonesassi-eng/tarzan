@@ -405,7 +405,6 @@ def test_apps_script_claim_adapter_and_workflow_share_the_durable_contract(
     assert "DELIVERY_CLAIM_PREFIX = 'delivery_claim:'" in script
     assert "SENT_MARKER_PREFIX = 'sent:'" in script
     assert "SMTP_INVOCATION_STARTED: ['ACKNOWLEDGED_SUCCESS', 'UNCERTAIN']" in script
-    assert "needs: validate" in workflow
     assert "TARZAN_STABLE_EVENT_ID:" in workflow
     assert "DELIVERY_CLAIM_ENDPOINT:" in workflow
     assert "DELIVERY_CLAIM_TOKEN:" in workflow

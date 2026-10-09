@@ -22,9 +22,12 @@ real reason:
 
 The manifest and the validator are gone, so the expiring-gate failure is now
 structurally impossible rather than guarded against. What was genuinely load
-bearing lives here instead, in the suite — which runs on every push AND in the
-delivery gate, so these properties are enforced in both places rather than only
-where a declaration audit happened to be wired.
+bearing lives here instead, in the suite, which runs on every push (checks.yml).
+
+On 2026-10-09 the suite itself left the delivery path too: re-running it before each
+issue cost ~2 min per send, and a red test on main withheld every digest although the
+code had already been tested when it was pushed. The send job is gated only on the
+code compiling and its pinned dependencies agreeing.
 """
 
 from __future__ import annotations
@@ -56,14 +59,13 @@ def _requirement_lines(relative: str) -> list[str]:
 
 
 class TestOnlyDeliveryReasonsCanStopADelivery:
-    def test_the_gate_runs_behaviour_not_declarations(self):
+    def test_the_suite_runs_on_every_push_not_before_every_issue(self):
         workflow = _text(".github/workflows/newsletter.yml")
+        checks = _text(".github/workflows/checks.yml")
 
-        assert "python -m pytest tarzan/tests -q" in workflow, (
-            "publication is no longer gated on the test suite"
-        )
-        assert re.search(r"(?m)^    needs:\s*validate\s*$", workflow), (
-            "publication no longer depends on validation"
+        assert "python -m pytest tarzan/tests -q" in checks, "the suite no longer runs on push"
+        assert "pytest" not in workflow, (
+            "the test suite is back in the delivery path: one red test withholds every digest"
         )
         assert "validate_release" not in workflow, (
             "a declaration audit is back in the delivery path: a stale manifest, "
@@ -79,19 +81,20 @@ class TestOnlyDeliveryReasonsCanStopADelivery:
     def test_the_delivery_gate_reads_no_clock(self):
         """Every step the gate runs, in order, and none of them consults a date.
 
-        The gate is now three behavioural commands. Pinning the list is what keeps
-        a future "check the pins are fresh" step from being added back to the one
-        job whose failure costs a digest.
+        The gate is two commands after the install. Pinning the job's whole list is
+        what keeps a future "check the pins are fresh" step from being added back to
+        the one job whose failure costs a digest. (The cache date only names a key.)
         """
         workflow = _text(".github/workflows/newsletter.yml")
-        validate = workflow.split("  validate:")[1].split("\n  send:")[0]
-        commands = re.findall(r"(?m)^        run:\s*(.+?)\s*$", validate)
+        commands = re.findall(r"(?m)^        run:\s*(.+?)\s*$", workflow)
 
         assert commands == [
+            "|",                                  # resolve the trigger label
             "python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt",
             "python -m compileall -q tarzan scripts",
             "python -m pip check",
-            "python -m pytest tarzan/tests -q",
+            'echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"',
+            "python scripts/send_newsletter.py",
         ], commands
 
 
@@ -130,11 +133,6 @@ class TestCredentialsReachOnlyThePublicationStep:
         workflow = _text(".github/workflows/newsletter.yml")
         assert not re.search(r"(?ms)^    env:\s*\n(?:      .+\n)*?      .+secrets\.",
                              workflow)
-
-    def test_the_validate_job_sees_no_secret_at_all(self):
-        workflow = _text(".github/workflows/newsletter.yml")
-        validate = workflow.split("  validate:")[1].split("\n  send:")[0]
-        assert "secrets." not in validate
 
 
 class TestTheSupplyChainIsPinned:
