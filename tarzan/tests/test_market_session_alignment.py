@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
+import pytest
 
 import tarzan.data.market_quotes as mq
 from tarzan.data.market_quotes import fetch_market_quotes  # real impl, bound now
@@ -980,3 +981,24 @@ class TestTheOpenMarketWithNoBarsYet:
             runtime.today = orig
         assert ctx["performance"]["1d_coverage_pct"] == 0.0
         assert ctx["performance"]["1d_intraday"] is False
+
+
+class TestACorruptOfficialPreviousCloseIsNotABaseline:
+    """9 Oct 2026: Yahoo served the SSE Composite's regularMarketPreviousClose as
+    0.000205 against a 3,813.79 level, and the Markets strip printed
+    "+1860826815.15%". The daily history's own close (3,811.90) gives the real +0.05%."""
+
+    def test_the_corrupt_baseline_falls_back_to_the_daily_close(self):
+        idx = pd.to_datetime(["2026-09-30", "2026-10-08", "2026-10-09"])
+        daily = pd.DataFrame({"Close": [3842.1951, 3811.9041, 3813.7913]}, index=idx)
+        q = mq._quote(daily["Close"], None, official_prev=0.00020505048)
+        assert q is not None
+        assert q["pct"] == pytest.approx((3813.7913 / 3811.9041 - 1) * 100, abs=1e-6)
+
+    def test_a_sound_official_close_is_still_preferred(self):
+        """The reason the official close exists: a future's daily close can sit ~1.3%
+        off its settlement, and that is well inside the 25% sanity band."""
+        idx = pd.to_datetime(["2026-10-08", "2026-10-09"])
+        daily = pd.DataFrame({"Close": [4361.8, 4400.0]}, index=idx)
+        q = mq._quote(daily["Close"], None, official_prev=4419.7)
+        assert q["pct"] == pytest.approx((4400.0 / 4419.7 - 1) * 100, abs=1e-6)

@@ -1342,6 +1342,16 @@ def _quote(dclose, intra, spark_points: int = 40,
     it is today's."""
     spark_series = None
     official = official_prev if (official_prev and official_prev > 0) else None
+    # A published previous close is only a baseline if it is on the level's own
+    # scale. On 9 Oct 2026 Yahoo served the SSE Composite's as 0.000205 against a
+    # 3,813.79 level, and the strip printed "+1860826815.15%". No index or future moves
+    # 25% in a session, so a baseline that far from the level is corrupt and the daily
+    # history's own close (3,811.90 there: +0.05%, which Yahoo's own changePercent also
+    # said) is used instead.
+    _level = (float(intra.iloc[-1]) if intra is not None and len(intra)
+              else float(dclose.iloc[-1]) if dclose is not None and len(dclose) else None)
+    if official is not None and _level and abs(official / _level - 1.0) > 0.25:
+        official = None
 
     def _close_before(day):
         if dclose is None or not len(dclose) or day is None:
