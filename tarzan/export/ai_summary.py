@@ -279,6 +279,15 @@ def divergence_note(metrics, config, benchmark_geo: Optional[str] = None) -> Opt
         # of the investor's own figures, not a macro-news note.
         text = _call_gemini(system, user, use_search=False)
         note = _sanitize(text) if text else None
+        # "Invent nothing" is an instruction to the model, not a check. This note
+        # is quantitative and sits beside the figures it explains, so every number
+        # it prints must BE one of the digest's numbers; one that is not means the
+        # model computed or misread something, and the deterministic note — built
+        # from the same digest — is published instead. Corrected, never blocked.
+        if note and not _numbers_are_grounded(note, digest):
+            logger.warning("Divergence note rejected: it states a figure the "
+                           "digest does not contain; using the rule-based note.")
+            note = None
         # Never leave the section blank: fall back to the quant note if the
         # model returned nothing usable.
         return note or _fallback_divergence_note(digest)
@@ -568,6 +577,46 @@ def _pp(v) -> str:
     """Signed percentage points, 1 dp (e.g. -3.2pp)."""
     n = _num(v)
     return "n/a" if n is None else f"{n:+.1f}pp"
+
+
+def _numbers_are_grounded(text: str, digest) -> bool:
+    """Whether every figure ``text`` states is a number in ``digest``.
+
+    Checked: numbers carrying a unit (``%``, ``pp``) and bare two-decimal numbers
+    (the beta). Each must equal a digest value — or its magnitude, since prose says
+    "a 0.30pp drag" for -0.30 — to the precision the text printed it at. Bare
+    integers ("30-day", "6 sentences") carry no claim and are not checked.
+    """
+    values: list[float] = []
+
+    def _walk(o):
+        if isinstance(o, bool):
+            return
+        if isinstance(o, (int, float)):
+            if o == o:
+                values.append(float(o))
+        elif isinstance(o, dict):
+            for v in o.values():
+                _walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                _walk(v)
+
+    _walk(digest)
+    pattern = re.compile(
+        r"([+\-\u2212]?)(\d+(?:\.\d+)?)\s*(%|pp)|(?<![\d.])(\d+\.\d{2})(?![\d%])")
+    for m in pattern.finditer(text):
+        num = m.group(2) or m.group(4)
+        if m.group(4) is None and m.group(3) is None:
+            continue
+        x = float(num)
+        if m.group(1) in ("-", "\u2212"):
+            x = -x
+        decimals = len(num.split(".")[1]) if "." in num else 0
+        tol = 0.5 * 10 ** -decimals + 1e-9
+        if not any(abs(x - v) <= tol or abs(abs(x) - abs(v)) <= tol for v in values):
+            return False
+    return True
 
 
 def _divergence_system_prompt(language: str) -> str:

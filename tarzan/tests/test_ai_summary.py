@@ -364,3 +364,33 @@ def test_divergence_note_falls_back_when_ai_returns_nothing(monkeypatch):
     note = ai_summary.divergence_note(_divergence_metrics(), _config())
     # Never blank: the quant fallback fills in.
     assert note and "-6.0pp" in note
+
+
+class TestTheDivergenceNoteOnlyStatesDigestFigures:
+    """The divergence note is written by a model from a JSON digest and printed beside
+    the figures it explains. "Invent nothing" was an instruction, not a check; a note
+    stating a number the digest does not contain is now replaced by the deterministic
+    note built from the same digest — corrected before sending, never blocked."""
+
+    DIGEST = {"since_inception": {"portfolio_pct": 14.66, "benchmark_pct": 19.12, "gap_pp": -4.46},
+              "window_30d": {"portfolio_pct": 3.46, "benchmark_pct": 3.65, "gap_pp": -0.19},
+              "risk_vs_selection": {"realized_beta": 0.76, "market_risk_contribution_pp": -4.6}}
+
+    def test_a_note_built_from_the_digest_passes(self):
+        from tarzan.export.ai_summary import _numbers_are_grounded
+        text = ("Since inception +14.66% vs +19.12%: -4.46pp. Last 30 days +3.46% vs "
+                "+3.65%, -0.19pp. Realized beta 0.76: risk level explains -4.6pp.")
+        assert _numbers_are_grounded(text, self.DIGEST)
+
+    def test_rounding_and_a_drag_stated_as_a_magnitude_pass(self):
+        from tarzan.export.ai_summary import _numbers_are_grounded
+        assert _numbers_are_grounded("Behind by 4.5pp; +14.7% since inception.", self.DIGEST)
+
+    def test_an_invented_figure_fails(self):
+        from tarzan.export.ai_summary import _numbers_are_grounded
+        assert not _numbers_are_grounded("Since inception +15.12% vs +19.12%.", self.DIGEST)
+        assert not _numbers_are_grounded("Realized beta 0.91.", self.DIGEST)
+
+    def test_bare_integers_carry_no_claim(self):
+        from tarzan.export.ai_summary import _numbers_are_grounded
+        assert _numbers_are_grounded("Over the last 30 days, in 6 sentences.", self.DIGEST)
