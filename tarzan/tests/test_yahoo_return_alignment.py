@@ -1016,3 +1016,55 @@ class TestARolledPreviousCloseDoesNotOverwriteHistory:
                            "time": self._ts(2026, 10, 9, 10, 5)})
         assert float(out.loc[pd.Timestamp("2026-10-08")]) == pytest.approx(110.98)
         assert float(out.loc[pd.Timestamp("2026-10-09")]) == 111.50
+
+
+class TestTheIndependentBaselineAlwaysApplies:
+    """9 Oct 2026, 09:28. Xetra published 29.28 as the previous close of a session whose
+    last trade there was 28.995; the independent close was 28.94. The two venues' 1Ds
+    (-0.73% vs -0.29%) were 0.44pp apart — inside the dispute tolerance — so the referee,
+    which then only acted inside a dispute, never looked, and the issue measured from a
+    number nobody dealt at."""
+
+    _TODAY = dt.date(2026, 10, 9)
+
+    def _ts(self, h, m):
+        return int(dt.datetime(2026, 10, 9, h - 2, m, tzinfo=dt.timezone.utc).timestamp())
+
+    def _pick(self, symbols, quotes, ref, referee):
+        import tarzan.runtime as runtime
+        from tarzan.data.current_session import pick_quote
+
+        orig = runtime.today
+        runtime.today = lambda: self._TODAY
+        try:
+            return pick_quote(symbols, quotes, ref, referee=referee)
+        finally:
+            runtime.today = orig
+
+    def test_a_fictitious_baseline_inside_the_tolerance_is_rejected(self):
+        quotes = {
+            "ABC.DE": {"price": 29.065, "prev_close": 29.28, "volume": 9, "time": self._ts(9, 5)},
+            "ABC.PA": {"price": 28.995, "prev_close": 29.08, "volume": 2756, "time": self._ts(9, 4)},
+        }
+        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY, "venue": "XETRA"}
+        q = self._pick(["ABC.DE", "ABC.PA"], quotes, 29.28, referee)
+        assert q.get("price") == 28.995
+
+    def test_a_single_venue_keeps_its_price_and_takes_the_independent_baseline(self):
+        quotes = {"ABC.DE": {"price": 29.065, "prev_close": 29.28, "time": self._ts(9, 5)}}
+        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY, "venue": "XETRA"}
+        q = self._pick(["ABC.DE"], quotes, 29.28, referee)
+        assert q.get("price") == 29.065
+        assert q.get("prev_close") == 28.94
+
+    def test_a_nav_referee_does_not_judge_market_baselines(self):
+        """justETF serves the issuer's NAV, dated days back, for a fund not on Xetra."""
+        quotes = {"ABC.PA": {"price": 137.5, "prev_close": 135.57, "time": self._ts(9, 22)}}
+        referee = {"price": 133.91, "prev_close": 132.9, "date": self._TODAY, "venue": "NAV"}
+        q = self._pick(["ABC.PA"], quotes, 135.57, referee)
+        assert q.get("prev_close") == 135.57
+
+    def test_a_sound_baseline_is_left_alone(self):
+        quotes = {"ABC.MI": {"price": 74.41, "prev_close": 74.34, "time": self._ts(9, 33)}}
+        referee = {"price": 74.38, "prev_close": 74.35, "date": self._TODAY, "venue": "XETRA"}
+        assert self._pick(["ABC.MI"], quotes, 74.34, referee).get("prev_close") == 74.34

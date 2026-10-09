@@ -65,8 +65,16 @@ def _anchor(tape: pd.Series, bucket: str, ticker: Optional[str]):
     return window_anchor(tape, bucket, ticker)
 
 
+#: Extra allowance (pp) when the second source is the issuer's NAV rather than a market
+#: price. justETF serves a NAV for a fund that does not trade on Xetra, and a market
+#: return differs from a NAV return by the change in the premium/discount, which this
+#: comparison cannot separate from an error: one managed-futures fund's 1Y differed by
+#: 2.4pp on that account alone. Against a NAV the check can only catch a GROSS error.
+NAV_PREMIUM_ALLOWANCE_PP = 3.0
+
+
 def check_windows(tape: pd.Series, ref: Optional[pd.Series],
-                  ticker: Optional[str] = None) -> dict:
+                  ticker: Optional[str] = None, extra_pp: float = 0.0) -> dict:
     """``{bucket: {"status", "alt", "ours", "at"}}`` for every long window.
 
     ``ours`` and ``alt`` are the two sources' returns (%) over the SAME span, ending on
@@ -92,7 +100,7 @@ def check_windows(tape: pd.Series, ref: Optional[pd.Series],
             continue
         ours = (t.iloc[-1] / t.loc[a] - 1.0) * 100.0
         alt = (r.iloc[-1] / ref_at.iloc[-1] - 1.0) * 100.0
-        limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0)
+        limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0) + extra_pp
         out[w] = {"status": DIVERGED if abs(ours - alt) > limit else OK,
                   "alt": alt, "ours": ours, "at": end.date(), "anchor": a}
     return out

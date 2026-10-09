@@ -189,6 +189,32 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
 
     # Priority order, with superseded venues out of the running.
     ranked = [(sym, q) for sym, q in eligible if sym not in superseded]
+
+    # An independent previous close for the same session judges every venue's 1D
+    # BASELINE, not only in a dispute. A fictitious close inside the move tolerance
+    # passed silently: on 9 Oct 2026 Xetra's published close was 29.28 for a session
+    # whose last trade was 28.995 (the independent one: 28.94), the 1D stayed within
+    # 1.1pp of the other venue's, and the issue measured from a number nobody dealt at.
+    # A NAV is not a market price, so a referee that is one does not judge baselines.
+    baseline = _independent_baseline(referee, newest_day)
+    if baseline is not None:
+        sound = [(s, q) for s, q in ranked
+                 if not q.get("prev_close")
+                 or abs(float(q["prev_close"]) / baseline - 1.0) <= _BASELINE_TOLERANCE]
+        if sound and len(sound) < len(ranked):
+            logger.warning(
+                "Baseline of %s rejected: its previous close disagrees with the "
+                "independent %.4f", ", ".join(s for s, _q in ranked if (s, _q) not in sound),
+                baseline)
+            ranked = sound
+            peers = [(s, q) for s, q in peers if (s, q) in sound]
+        elif not sound:
+            # The only venue's baseline is the broken one. Keep its price — it is the
+            # market — and measure from the independent close instead.
+            logger.warning("Baseline of %s replaced by the independent %.4f",
+                           ranked[0][0], baseline)
+            ranked = [(ranked[0][0], dict(ranked[0][1], prev_close=baseline))]
+            peers = [(s, q) for s, q in peers if s != ranked[0][0]] + [ranked[0]]
     chosen_sym, chosen = ranked[0]
 
     sigma = _daily_sigma(history)
@@ -214,6 +240,21 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
             chosen, chosen_sym, voting, moves, sigma, tolerance):
         return {}
     return chosen
+
+
+def _independent_baseline(referee: Optional[dict], session) -> Optional[float]:
+    """The referee's previous close, when it can judge this session's baselines.
+
+    Only a MARKET quote for the same session can: justETF serves the issuer's NAV for a
+    fund that does not trade on Xetra (``venue`` "NAV", dated days back), and a NAV is a
+    different measure from any venue's close.
+    """
+    r = referee or {}
+    if not r.get("prev_close") or r.get("date") != session:
+        return None
+    if str(r.get("venue") or "").upper() == "NAV":
+        return None
+    return float(r["prev_close"])
 
 
 def _better_evidenced(voting, moves: dict, referee: Optional[dict] = None,
@@ -246,18 +287,6 @@ def _better_evidenced(voting, moves: dict, referee: Optional[dict] = None,
     Volume missing on either side falls back to the smaller move, the weaker rule, so
     the choice is still deterministic. Ties keep the caller's priority order.
     """
-    ref_prev = (referee or {}).get("prev_close")
-    if ref_prev and (referee or {}).get("date") == session:
-        valid = [(s, q) for s, q in voting
-                 if q.get("prev_close")
-                 and abs(float(q["prev_close"]) / float(ref_prev) - 1.0)
-                 <= _BASELINE_TOLERANCE]
-        if len(valid) == 1:
-            logger.warning(
-                "Baseline of %s rejected: its previous close disagrees with the "
-                "independent %.4f", ", ".join(s for s, _q in voting if (s, _q) not in valid),
-                float(ref_prev))
-            return valid[0]
     vols = [q.get("volume") for _s, q in voting]
     if all(v is not None for v in vols) and vols[0] != vols[1]:
         return max(voting, key=lambda sq: float(sq[1]["volume"]))

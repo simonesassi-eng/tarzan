@@ -277,3 +277,24 @@ class TestADisagreementIsSettledByMajority:
         assert "Corrected before sending" in note
         assert "+157.26%" in note and "+164.93%" in note
         assert "Not verified" not in note
+
+
+class TestANavReferee:
+    def test_a_premium_drift_is_not_a_divergence_against_a_nav(self):
+        """One managed-futures fund trades on Paris only, so the second source is its
+        issuer NAV. Its 1Y differed by 2.4pp from the market's — the premium moving, not
+        an error. Against a NAV the check catches only gross errors."""
+        tape = _tape()
+        ref = _second_source_of(tape, noise=0.0)
+        ref[ref.index > ref.index[-260]] *= 0.98          # premium drifted ~2.4pp
+        v_market = xc.check_windows(tape, ref)["1y"]
+        v_nav = xc.check_windows(tape, ref, extra_pp=xc.NAV_PREMIUM_ALLOWANCE_PP)["1y"]
+        assert v_market["status"] == xc.DIVERGED
+        assert v_nav["status"] == xc.OK
+
+    def test_a_gross_error_still_shows_against_a_nav(self):
+        tape = _tape()
+        ref = _second_source_of(tape, noise=0.0)
+        ref[ref.index > ref.index[-260]] *= 0.90          # 10%: not a premium
+        v = xc.check_windows(tape, ref, extra_pp=xc.NAV_PREMIUM_ALLOWANCE_PP)["1y"]
+        assert v["status"] == xc.DIVERGED

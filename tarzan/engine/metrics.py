@@ -1789,7 +1789,11 @@ class MetricsEngine:
                 # figures from: the cap moves the 5Y anchor, and checking an uncapped
                 # tape would referee a number the issue never printed.
                 tape = _cap_to_years(tape, 5)
-                verdicts = xc.check_windows(tape, justetf.series(h.isin), h.ticker)
+                ref_quote = justetf.quote(h.isin) or {}
+                is_nav = str(ref_quote.get("venue") or "").upper() == "NAV"
+                verdicts = xc.check_windows(
+                    tape, justetf.series(h.isin), h.ticker,
+                    extra_pp=xc.NAV_PREMIUM_ALLOWANCE_PP if is_nav else 0.0)
                 verdicts["1d"] = xc.check_one_day(row.get("1d"), justetf.quote(h.isin),
                                                    today, tape)
                 verdicts["1d"].update(ours=row.get("1d"), at=today)
