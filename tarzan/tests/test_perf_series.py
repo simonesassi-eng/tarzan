@@ -533,3 +533,24 @@ def test_full_series_only_solves_the_mwr_when_asked():
         index=m.actual_value_series.index)}
     assert _perf_full_series(m, "ACWI")["mwr"] is None
     assert _perf_full_series(m, "ACWI", with_mwr=True)["mwr"] is not None
+
+
+def test_a_window_longer_than_the_book_has_no_panel():
+    """9 Oct 2026: a 290-day book drew a panel headed "1Y" whose lines were the
+    since-inception ones (benchmark +19.12%, TWR +14.66%), because the window was
+    anchored on the BENCHMARK's years of history and the book's own series was then
+    silently clipped to inception. "ACWI 1Y +19.12%" read as the index's one-year
+    return, which it was not."""
+    bench_idx = pd.date_range("2024-10-01", "2026-10-09", freq="B")
+    book_idx = pd.date_range("2025-12-23", "2026-10-09", freq="D")
+    m = PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0,
+                         holdings_df=pd.DataFrame([{"cost_basis_eur": 1.0}]))
+    m.actual_value_series = pd.Series(np.linspace(100, 115, len(book_idx)), index=book_idx)
+    m.portfolio_history = pd.Series(np.linspace(100, 114.7, len(book_idx)), index=book_idx)
+    m.pnl_series = pd.Series(np.linspace(0, 15, len(book_idx)), index=book_idx)
+    m.unrealized_series = m.pnl_series
+    m.benchmark_histories = {"ACWI": pd.Series(np.linspace(80, 110, len(bench_idx)), index=bench_idx)}
+    assert _perf_window(m, 30, "ACWI", bucket="1y") is None
+    # ...while a window the book DOES cover is drawn as before.
+    assert _perf_window(m, 30, "ACWI", bucket="3m") is not None
+    assert _perf_window(m, 30, "ACWI", bucket="ytd") is not None

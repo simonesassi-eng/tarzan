@@ -1927,7 +1927,7 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _target_history(self, ctx: dict) -> None:
         """NAV of the TARGET portfolio: the per-instrument ``target_portfolio``
-        weights held over their whole common window, rebalanced quarterly.
+        weights held CONSTANT, every day, over their whole common window.
 
         Built here because this is the only scope holding BOTH the real book and
         the rebalance seeds. Nearly a quarter of the current target sits in

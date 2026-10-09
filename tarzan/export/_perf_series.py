@@ -287,6 +287,15 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         if start.tz is not None:
             start = start.tz_localize(None)
         start = start.normalize()
+        # The anchor is the BENCHMARK's, and the benchmark has years of history. A
+        # book younger than the window then had its own series silently clipped to
+        # inception: on 9 Oct 2026 a 290-day book drew a panel headed "1Y" whose
+        # lines were the since-inception ones (benchmark +19.12%, TWR +14.66%), so
+        # "ACWI 1Y +19.12%" read as the index's one-year return, which it is not. The
+        # same rule as a missing anchor: the book does not reach back that far, so
+        # there is no window (a week of slack, as ``window_anchor`` allows).
+        if bucket != "1m" and val_all.index[0] > start + pd.Timedelta(days=7):
+            return None
     val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
     if len(val) < 2:
         return None
