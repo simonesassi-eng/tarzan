@@ -1,10 +1,9 @@
 # Ordinary CI, deliberately OUTSIDE the delivery path.
 #
-# This exists so a broken commit costs a red tick now, instead of surfacing in
-# tomorrow morning's digest. Nothing here can stop a newsletter from going out,
-# and nothing here is required for one to go out: the delivery workflow runs its
-# own copy of the same behavioural gate, so a dispatch on a commit whose CI has
-# not finished (or never ran) still validates itself before sending.
+# This is the ONLY place the test suite runs. Nothing here can stop a newsletter
+# from going out: the delivery workflow only compiles and runs `pip check` (since
+# d4e0788), and an issue built from a commit whose run here FAILED is still sent,
+# with a one-line warning above it (tarzan.delivery._failed_checks_sha).
 #
 # It used to also audit declarations — a release manifest, its pins, a positive
 # scope, documentation claims — via scripts/validate_release.py. Both are gone:
@@ -12,7 +11,7 @@
 # checked a copy against its original, and one of its assertions was that this
 # workflow runs the audit. What was load bearing (credential placement, action
 # SHA pinning, dependency hash locking, one version authority) is asserted in
-# tarzan/tests/test_delivery_gates.py, which runs in BOTH workflows.
+# tarzan/tests/test_delivery_gates.py.
 name: Checks
 
 on:

@@ -54,7 +54,7 @@ back-to-back.
                                                 ┌─────────┴──────────┐
                                                 │ Gmail Apps Script  │
                                                 │ tick() every 5 min:│
-                                                │ • checkSchedule()  │ ← 3 daily slots,
+                                                │ • checkSchedule()  │ ← market slots,
                                                 │     (Europe/Rome)  │   idempotent per
                                                 │ • processInbox()   │   (date, slot)
                                                 │     ("Update")     │
@@ -339,14 +339,14 @@ For local development, keep using `input/order_list.csv` and
   says that, the issue is on Gmail's side — check Spam.
 - If a scheduled slot didn't fire at all, open Apps Script →
   **Executions** and check the recent `tick()` runs. A slot is skipped
-  (logged `too-late`) if the trigger didn't run within 90 minutes of the
-  slot time; trigger manually with "Run workflow" if you need that send.
+  (logged `too-late`) if the trigger didn't run within `MAX_LAG_MINUTES`
+  (25) of the slot time; trigger manually with "Run workflow" if you need that send.
 
 ### A scheduled send was missed
 - Apps Script triggers are reliable but not instantaneous; a slot fires
-  on the first `tick()` at or after its time, within a 90-minute window.
+  on the first `tick()` at or after its time, within a 25-minute window.
 - Check Apps Script → **Executions** for `checkSchedule` log lines like
-  `Dispatched slot "midday" ...` or `Slot "..." skipped: ...`.
+  `Dispatched slot "wd-1205" ...` or `Slot "..." skipped: ...`.
 - To force a slot to re-send today, delete its `sent:YYYY-MM-DD:slot`
   entry under **Project Settings → Script Properties**, or just use the
   "Run workflow" button.
