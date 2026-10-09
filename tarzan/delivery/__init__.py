@@ -345,6 +345,57 @@ def _delivery_claim_store() -> DeliveryClaimStore:
     return LocalJsonDeliveryClaimStore(path)
 
 
+def _failed_checks_sha() -> str:
+    """The short SHA this issue was built from when its ``Checks`` run FAILED, else "".
+
+    The test suite no longer gates a send (d4e0788: a red test withheld every digest),
+    so a broken commit would otherwise reach the reader with no sign of it. Asked of
+    the GitHub API with the run's own token; still running, not found, unreachable or
+    outside Actions all read as "" -- this can only add a line, never stop an issue.
+    """
+    import json
+    from urllib.request import Request, urlopen
+
+    token, repo, sha = (os.environ.get(k, "") for k in
+                        ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "GITHUB_SHA"))
+    if not (token and repo and sha):
+        return ""
+    request = Request(
+        f"https://api.github.com/repos/{repo}/actions/runs?head_sha={sha}&per_page=20",
+        headers={"Authorization": f"Bearer {token}",
+                 "Accept": "application/vnd.github+json"})
+    try:
+        with urlopen(request, timeout=5) as response:
+            runs = json.loads(response.read().decode("utf-8")).get("workflow_runs") or []
+    except Exception as e:  # noqa: BLE001 — a notice must never fail an issue
+        logger.info("Checks status unavailable: %s", type(e).__name__)
+        return ""
+    latest = next((r for r in runs if r.get("name") == "Checks"), None)   # newest first
+    return sha[:7] if latest and latest.get("conclusion") == "failure" else ""
+
+
+def _with_ci_notice(html: str, failed_sha: str) -> str:
+    """``html`` with a one-line warning above the issue when its code failed Checks.
+
+    Inserted before the issue's first table, i.e. after the hidden preheader, so the
+    inbox preview text is unchanged.
+    """
+    if not failed_sha:
+        return html
+    from tarzan.export._palette import PALETTE as P
+
+    notice = (
+        f'<div style="max-width:620px;margin:16px auto 0;padding:10px 14px;'
+        f'border:1px solid {P["red"]};border-radius:8px;background:{P["red_bg"]};'
+        f'color:{P["ink"]};font-size:13px;line-height:1.5;">'
+        f'&#9888; The tests failed on the code that built this issue (commit '
+        f'{html_lib.escape(failed_sha)}): some figures may be wrong until it is fixed.'
+        f'</div>')
+    body = html.find("<body")
+    at = html.find("<table", body if body >= 0 else 0)
+    return html[:at] + notice + html[at:] if at >= 0 else notice + html
+
+
 def _failure_notification_html(result) -> str:
     """Render a minimal sanitized notification with no portfolio payload."""
     critical = [
@@ -539,6 +590,7 @@ def run_and_send() -> int:
                 "\n".join(f"  [{i}] {e}" for i, e in enumerate(semantic_errors, 1)),
             )
         subject = build_subject(metrics, subject_prefix, trigger_label)
+        html = _with_ci_notice(html, _failed_checks_sha())
 
     # Rendering can add a fail-closed semantic failure. Evaluate and record the
     # single authoritative publication outcome only after that gate completes.

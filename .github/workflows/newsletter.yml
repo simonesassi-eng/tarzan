@@ -28,6 +28,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
+      actions: read      # the issue reads its own commit's Checks result
     steps:
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -108,4 +109,5 @@ jobs:
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
           DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
           DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/send_newsletter.py
