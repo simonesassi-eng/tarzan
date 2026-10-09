@@ -425,7 +425,20 @@ def stamp_today(series: pd.Series, today, today_value: float,
     out = series.copy()
     stamp = day.tz_localize(series.index.tz) if series.index.tz else day
     prev_eur = prev_close_eur(quote, today_value)
-    if prev_eur is not None:
+    # Once today's session has opened, Yahoo ROLLS ``regularMarketPreviousClose`` onto
+    # the last session that traded — even for an instrument that has not printed today.
+    # Its quote is then the previous session's (observed yesterday), with price and
+    # "previous close" both that session's close. Writing it on the session BEFORE the
+    # observed one overwrote a real close with the next day's: on Fri 9 Oct 2026 at 09:28
+    # a thin fund untraded since Thursday had its Wednesday close (114.94, a full session
+    # of trades between 114.50 and 116.00) replaced by Thursday's 110.98, so Thursday's
+    # -3.4% session vanished from its tape, and the same happened, by smaller amounts, to
+    # every holding untraded at that minute. Pre-open the field is not rolled yet (price
+    # and previous close differ), so that case keeps its repair.
+    observed_prior_session = pd.Timestamp(day).date() < pd.Timestamp(today).date()
+    rolled = (observed_prior_session and prev_eur is not None
+              and abs(prev_eur / float(today_value) - 1.0) < 1e-9)
+    if prev_eur is not None and not rolled:
         # Dated on the venue's OWN calendar: the session before the Tuesday
         # after Easter Monday is the Thursday before it, and a Mon-Fri rule
         # would have written the published close onto the closed Monday.

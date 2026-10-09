@@ -969,3 +969,50 @@ class TestTheEighthOfOctoberEndToEnd:
         one_day = (s.iloc[-1] / s.iloc[-2] - 1) * 100
         assert s.index[-1].date() == dt.date(2026, 10, 8)
         assert abs(one_day - (-0.07)) < 0.01, f"1D {one_day:+.2f}% (the bad print gave -4.38%)"
+
+
+class TestARolledPreviousCloseDoesNotOverwriteHistory:
+    """Fri 9 Oct 2026, 09:28: a thin fund had not traded yet that morning.
+
+    Its quote was Thursday's (observed Thu 17:36), and because Friday's session had
+    opened Yahoo had already ROLLED ``regularMarketPreviousClose`` onto Thursday too:
+    price 110.98, previous close 110.98. The stamp read that previous close as "the
+    session before Thursday" and wrote it on Wednesday, replacing a real 114.94 close (a
+    full session of trades between 114.50 and 116.00) — so Thursday's -3.4% vanished
+    from the tape.
+    """
+
+    def _stamp(self, series, today, value, quote, ticker="ABC.DE"):
+        from tarzan.data.current_session import stamp_today
+        return stamp_today(series, pd.Timestamp(today), value, quote, ticker=ticker)
+
+    @staticmethod
+    def _ts(y, m, d, h, mi):
+        return int(dt.datetime(y, m, d, h - 2, mi, tzinfo=dt.timezone.utc).timestamp())
+
+    def test_the_real_previous_close_survives(self):
+        s = _closes([("2026-10-06", 112.02), ("2026-10-07", 114.94)])   # Thu bar missing
+        out = self._stamp(s, "2026-10-09", 110.98,
+                          {"price": 110.98, "prev_close": 110.98,
+                           "time": self._ts(2026, 10, 8, 17, 36)})
+        assert float(out.loc[pd.Timestamp("2026-10-07")]) == 114.94
+        assert float(out.loc[pd.Timestamp("2026-10-08")]) == 110.98
+        # ...so Thursday's real session survives in the tape.
+        assert (110.98 / 114.94 - 1) * 100 == pytest.approx(-3.445, abs=0.01)
+
+    def test_a_pre_open_quote_still_repairs_the_prior_session(self):
+        """Before the open the field is NOT rolled — price and previous close differ —
+        and the published previous close is still written on the session before."""
+        s = _closes([("2026-10-06", 112.02), ("2026-10-07", 115.10)])
+        out = self._stamp(s, "2026-10-09", 110.98,
+                          {"price": 110.98, "prev_close": 114.94,
+                           "time": self._ts(2026, 10, 8, 17, 36)})
+        assert float(out.loc[pd.Timestamp("2026-10-07")]) == pytest.approx(114.94)
+
+    def test_a_quote_from_today_is_unaffected(self):
+        s = _closes([("2026-10-07", 114.94), ("2026-10-08", 110.98)])
+        out = self._stamp(s, "2026-10-09", 111.50,
+                          {"price": 111.50, "prev_close": 110.98,
+                           "time": self._ts(2026, 10, 9, 10, 5)})
+        assert float(out.loc[pd.Timestamp("2026-10-08")]) == pytest.approx(110.98)
+        assert float(out.loc[pd.Timestamp("2026-10-09")]) == 111.50
