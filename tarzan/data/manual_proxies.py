@@ -1,22 +1,23 @@
-"""Ad-hoc historical-series inputs, stored in Tarzan's own cache DB.
+"""Explicit local historical-series inputs, stored in Tarzan's JSON cache.
 
 Some exposures (commodity carry, certain CTA/trend indices) have NO yfinance
 ticker and are only published as downloadable files behind a login/licence, so
 they cannot be fetched live. Rather than read such files on every run, Tarzan
-keeps them in its on-disk cache DB (``price_cache``, namespaced ``MANUAL_<key>``)
-and the script reads ONLY from that cache at launch.
+keeps operator-supplied snapshots in ``price_cache`` under ``MANUAL_<key>``.
+Optional local backtests read that cache; newsletter delivery neither reads
+these series nor automatically ingests their source files.
 
 Two clearly separated paths:
 
   * ``get_series(key)`` — the RUNTIME read. Cache-only. It never opens a source
-    file, so a normal ``scripts.whatif`` run has no file-ingestion routine at
-    all. A missing key simply returns None and the caller falls back to its
+    file, so the CLI's optional ``--what-if`` work has no automatic source-file
+    ingestion. A missing key simply returns None and the caller falls back to its
     generic proxy.
 
   * ``ingest(key, path)`` — the AD-HOC write, run by hand (CLI below), NOT at
-    launch. It parses a source file once and stores the daily LEVEL series in
-    the cache DB. Historical index data is immutable, so this is a one-off per
-    series; the recent period is taken over by the real fund's own returns
+    launch. It parses a source file and stores its daily LEVEL snapshot.
+    A corrected source may be re-ingested explicitly; vendor history is not
+    assumed immutable. The recent period uses the real fund's own returns
     through the per-instrument splice downstream.
 
 Populate the DB ad-hoc, e.g.::
@@ -179,8 +180,7 @@ def ingest(key: str, path: Optional[str] = None) -> Optional[pd.Series]:
     if path is not None:
         p = Path(path).expanduser()
         # Use the dedicated parser for a known key (e.g. the BNP xlsx layout),
-        # even when the file comes from an explicit path (e.g. downloaded from
-        # the private Drive in CI); fall back to the generic parser otherwise.
+        # even for an explicit local path; use the generic parser otherwise.
         src = _SOURCES.get(key)
         parser = _PARSERS[src[1]] if src else _PARSERS["generic"]
     else:

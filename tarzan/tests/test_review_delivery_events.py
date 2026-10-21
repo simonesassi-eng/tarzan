@@ -294,7 +294,9 @@ def test_last_moment_expiry_never_invokes_native_send_message(monkeypatch, tmp_p
 def test_fresh_request_preserves_delivery_and_never_seeds_optional_manual_series(monkeypatch, tmp_path, live_delivery):
     _, store = live_delivery
     sent = []
-    monkeypatch.setattr(delivery, "_seed_manual_proxies", lambda: pytest.fail("optional manual source fetched"))
+    from tarzan.data import manual_proxies
+    monkeypatch.setattr(manual_proxies, "ingest", lambda *a, **k: pytest.fail("optional manual source ingested"))
+    monkeypatch.setattr(manual_proxies, "get_series", lambda *a, **k: pytest.fail("optional manual source read"))
 
     def transport(**kwargs):
         kwargs["before_invoke"]()

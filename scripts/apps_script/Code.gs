@@ -6,33 +6,30 @@
  * *runner*. A single time-driven trigger calls tick() every few
  * minutes, and tick() does two independent jobs:
  *
- *   1. checkSchedule() — fires the market-hours slots at their
- *      Europe/Rome local time, AT MOST ONCE PER DAY PER SLOT. Every day
- *      opens with an 08:00 pre-open briefing and closes with a 23:00
- *      recap. In between, weekdays get a first digest at 09:45, once the
- *      book has actually printed, then one every 90 minutes across Borsa
- *      Italiana continuous trading (10:35 up to the 17:30 close), a
- *      wrap-up at 17:35 and the official-close digest at 18:00; on
- *      weekends a single midday digest (13:05) goes out. This replaces GitHub Actions' cron,
- *      which was best-effort: it queued runs under load and released
- *      them in a burst, causing several newsletters to arrive
- *      back-to-back.
+ *   1. checkSchedule() — attempts market-hour dispatches in Europe/Rome
+ *      within the bounded slot window. Targets include 08:00 and 23:00
+ *      every day; on weekdays 09:45, the unchanged 10:35–16:35 cadence,
+ *      17:35 wrap-up and 18:00 official-close target; on weekends 13:05.
+ *      Per-slot markers suppress ordinary repeated dispatches, not every
+ *      possible duplicate or closely arriving message. This script owns
+ *      the schedule; the workflow has no second GitHub cron scheduler.
  *
- *   2. processInbox() — the original on-demand path: when you reply
- *      "Update" to a newsletter, it dispatches an extra send.
+ *   2. processInbox() — authenticates a recent unquoted owner "Update"
+ *      reply using native Gmail profile/message SENT evidence, then
+ *      requests another run subject to the delivery gates.
  *
  * Both jobs trigger the same GitHub workflow via a repository_dispatch
- * event (event_type: send_now). The slot label travels in
- * client_payload.label and ends up in the email subject.
+ * event (event_type: send_now). The slot label travels in client_payload.label
+ * as operational metadata, not appended to the subject.
  *
- * Why this fixes the duplicate/burst problem
- * ------------------------------------------
- * - Google's time-driven triggers are punctual and run in the
- *   Europe/Rome timezone, so DST is handled natively — no more
- *   winter/summer double-cron hack.
+ * Dispatch controls and their limits
+ * ---------------------------------
+ * - The scheduler evaluates slots in Europe/Rome, including DST. The
+ *   every-5-minute trigger is best-effort, not a punctual-delivery SLA.
  * - Each slot is guarded by an idempotency marker keyed on
- *   (date, slot) stored in Script Properties. Polling jitter, retries,
- *   or two overlapping trigger runs can never send the same slot twice.
+ *   (date, slot) stored in Script Properties. It avoids ordinary repeated
+ *   dispatches; GitHub dispatch and that marker are not one transaction.
+ *   Durable delivery claims separately protect the shared SMTP boundary.
  * - A slot only fires inside a bounded window after its target time
  *   (MAX_LAG_MINUTES). If the script was down past the window, the slot
  *   is skipped rather than sent stale — we prefer a missed hourly
@@ -45,11 +42,10 @@
  * 3. In Project Settings, set the following Script Properties:
  *      GH_OWNER       Your GitHub username or org (e.g. "simonsa")
  *      GH_REPO        Repository name (e.g. "Tarzan-personal")
- *      GH_TOKEN       Fine-grained PAT on this repo with BOTH
- *                     "Contents: Read and write" AND "Actions: Read and
- *                     write". Contents R/W is required for
- *                     repository_dispatch — "Actions" alone returns
- *                     HTTP 403.
+ *      GH_TOKEN       Fine-grained PAT scoped to this repo, with
+ *                     "Contents: Read and write" for repository_dispatch.
+ *                     Actions write is not needed by this script.
+ *                     Choose a bounded expiration and rotate before expiry.
  *      LABEL_NAME     Optional Gmail label applied to processed
  *                     "Update" threads. Default "tarzan-update-handled".
  *      SUBJECT_MATCH  Optional. Default "Portfolio Digest" — only
@@ -74,9 +70,8 @@
 // Scheduling configuration
 // ---------------------------------------------------------------------------
 
-// The timezone all slot times are expressed in. zoneinfo/Java handle
-// DST automatically, so a slot fires at the same wall-clock time
-// year-round.
+// Native date formatting evaluates each slot's wall-clock target in this
+// timezone, including DST. It does not promise a punctual trigger.
 const SCHEDULE_TZ = 'Europe/Rome';
 
 // Daily market slots. Times are Europe/Rome local. Every day gets an
@@ -91,8 +86,8 @@ const SCHEDULE_TZ = 'Europe/Rome';
 //
 // Each slot carries:
 //   name   unique id — used for the per-(date, slot) idempotency marker,
-//          so every send fires at most once per day.
-//   label  shown in the email subject (need NOT be unique).
+//          to suppress ordinary repeated slot dispatches.
+//   label  operational GitHub event metadata (need NOT be unique).
 //   hour/minute  Europe/Rome local time of the slot.
 //   days   'weekday' (Mon–Fri), 'weekend' (Sat–Sun), or 'all'.
 const SLOT_INTERVAL_MINUTES = 90;   // 1.5h cadence between weekday sends
@@ -102,28 +97,16 @@ const MARKET_CLOSE_MINUTE = 17 * 60 + 30;   // 17:30 Borsa Italiana close
 // The FIRST weekday digest goes at 09:45, not at the 09:05 the cadence would put
 // it — only that one slot moves; 10:35 onwards are unchanged.
 //
-// Measured, not guessed. Two delays stack after the 09:00 open:
-//   * the book's own first trades — over 60 sessions of 5-minute bars, the
-//     value-weighted share of the portfolio with at least one trade is 0% at
-//     09:00, a median 63% at 09:15, 77% at 09:30, 81% at 09:45;
-//   * Yahoo's publication delay — 15-16 minutes, measured live on 8 Oct 2026:
-//     quotes observed at 09:04-09:05 first became visible at 09:20:32.
-// Plus the run's own latency (one 5-minute tick, ~3 minutes to the quote
-// snapshot). At 09:05 a run therefore sees NOTHING of today — every surviving CI
-// log shows the tape still on the previous session — and the issue can only
-// restate yesterday. At 09:45 it sees a median 77% of the book, and more than
-// half of it on every one of the 60 sessions. Later buys ~1pp per 5 minutes: the
-// stragglers are thin sleeves that print between 10:00 and 12:30.
+// First trades on thin listings, provider publication lag, trigger polling
+// and pipeline work can leave an early-open snapshot on the previous session.
+// 09:45 retains the chosen margin, not a promise that every holding has traded
+// or that the provider is real-time. Runtime evidence determines the session
+// actually described; personal coverage statistics do not belong in source.
 const FIRST_SLOT_MINUTE = 9 * 60 + 45;
 
-// The official-close digest. Borsa Italiana, Xetra and Euronext all end their
-// closing auction at 17:35 (every holding's quote is stamped 17:35:xx), and with
-// Yahoo's ~15-minute delay those closes become visible at about 17:51. 18:00
-// leaves margin for the auction's random end and the run's own latency.
-//
-// It exists because the 17:35 wrap-up cannot carry them: it fires as the auction
-// ENDS and sees prices from ~17:20. Measured on Wed 7 Oct 2026: the 17:37 digest
-// reported the session at -0.49%, the 23:02 one — the real closes — at -0.26%.
+// The official-close target leaves additional margin after the wrap-up for
+// closing-auction publication and pipeline latency. It does not guarantee
+// final closes: the actual provider timestamps and session evidence decide.
 const OFFICIAL_CLOSE_MINUTE = 18 * 60;
 
 function _buildSlots_() {
@@ -140,7 +123,7 @@ function _buildSlots_() {
   }
   // Post-close wrap-up just after the 17:30 close.
   slots.push({ name: 'close', label: 'close', hour: 17, minute: 35, days: 'weekday' });
-  // The official closes, once Yahoo publishes them (see OFFICIAL_CLOSE_MINUTE).
+  // Official-close target; actual provider timestamps still decide its evidence.
   slots.push({ name: 'official-close', label: 'official close',
                hour: Math.floor(OFFICIAL_CLOSE_MINUTE / 60),
                minute: OFFICIAL_CLOSE_MINUTE % 60, days: 'weekday' });
@@ -157,8 +140,8 @@ const SLOTS = _buildSlots_();
  * Run this from the editor after editing _buildSlots_(). It asserts the
  * one invariant a new slot can silently break: two slots on the same day
  * closer together than MAX_LAG_MINUTES would both come due inside a
- * single tick and send two emails back-to-back — the exact burst this
- * scheduler exists to prevent.
+ * single tick and dispatch both. This invariant separates slot admission
+ * windows; it does not control pipeline latency or inbox arrival.
  */
 function validateSlots() {
   const names = {};
@@ -187,8 +170,8 @@ function validateSlots() {
 // window is half-open — a slot is too late at slotMin + MAX_LAG_MINUTES —
 // so at 18:00 a 17:35 that never fired has already expired and the two
 // cannot go out in one tick.
-// 25 minutes still comfortably catches every slot given the 5-minute
-// polling cadence.
+// A nominal 5-minute polling cadence has room inside the window, but trigger
+// delays or outages can still miss it.
 const MAX_LAG_MINUTES = 25;
 
 // Script Property key prefix for per-(date, slot) idempotency markers.
@@ -662,9 +645,8 @@ function _threadHasUpdateRequest_(thread, wordMatch) {
  * .github/workflows/newsletter.yml listens for `event_type: send_now`
  * and runs the pipeline immediately.
  *
- * @param {string} dispatchLabel  value placed in client_payload.label,
- *   surfaced in the email subject ("morning"/"midday"/"close" for
- *   scheduled slots, "on-demand" for an "Update" reply).
+ * @param {string} dispatchLabel  operational value in client_payload.label,
+ *   not appended to the email subject.
  * @param {string} summary  short human context for the logs.
  */
 function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId, requestedAt) {

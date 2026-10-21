@@ -10,7 +10,7 @@ The recent tail is re-fetched on every run. Historical adjusted prices CAN
 change after dividends, splits and provider corrections; price-history
 consumers must verify overlapping rows before reusing an older head.
 
-Three things are cached:
+Four kinds of data are cached:
   * per-symbol daily price history (the heavy multi-year download);
   * FX pair history (currency→EUR series);
   * the deterministic ISIN→symbol resolution (skips the OpenFIGI + probe

@@ -189,7 +189,6 @@ def _fetch_max(symbol: str) -> pd.Series:
         if (pd.Timestamp.now().normalize() - last).days <= _STALE_DAYS:
             return cached
     try:
-        import yfinance as yf
         from tarzan.data import _yf_net
         # auto_adjust=True is set EXPLICITLY: it makes fund/ETF closes
         # dividend- and split-adjusted (total return). The yfinance default has

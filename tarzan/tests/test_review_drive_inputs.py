@@ -212,7 +212,6 @@ def test_delivery_closes_only_its_owned_input_set_even_on_failure(
         orders="orders.csv", config="targets.csv", targets_per_holding=None,
     ))
     monkeypatch.setattr(delivery, "render_newsletter", lambda **k: "<html>synthetic</html>")
-    monkeypatch.setattr(delivery, "_seed_manual_proxies", lambda: None)
 
     def run(**kwargs):
         if analysis_failure:

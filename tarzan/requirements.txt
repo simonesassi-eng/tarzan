@@ -1,8 +1,3 @@
-pandas>=2.1.0
-numpy>=1.26.0
-yfinance>=0.2.36
-openpyxl>=3.1.0
-python-dateutil>=2.8.0
-requests>=2.31.0
-pyyaml>=6.0.0
-scipy>=1.11.0
+# Compatibility entry point only; the root hash lock is the sole authority.
+# Install with: python -m pip install --require-hashes -r requirements.txt
+-r ../requirements.txt

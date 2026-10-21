@@ -9,21 +9,27 @@ Tarzan is a serialized, single-user portfolio analyzer with market-data enrichme
 - **Effective orders** — one immutable order snapshot drives holdings, costs, returns, tax, history, and planning. Pinned runs exclude post-boundary orders.
 - **Market evidence** — provider/cache attempts and provenance are recorded with `AVAILABLE`, `DEGRADED`, or `UNAVAILABLE` status. A valid cache selected after a preferred source fails is degraded.
 - **Risk and returns** — CAGR, Sharpe, Sortino, drawdown, VaR/CVaR, volatility, Beta/Alpha, XIRR, and TWR.
-- **Second source** — every printed instrument return (1D to 5Y) is checked against justETF in the same run. When two outside sources agree against Yahoo the figure is corrected before sending, with a note; when no two sources agree it is marked "?".
+- **Second source** — eligible instrument returns are checked against available independent sources. Corroborated corrections are labeled; disagreement without corroboration remains flagged, not silently “fixed”.
 - **Canonical exposure** — asset-class, geography, sector, optimization, and verification share one capital/notional projection. Legitimate notional exposure above 100% is preserved.
 - **Explicit capabilities** — Stock, ETF, Bond, and Cash mechanics are resolved independently from Equities, Fixed Income, Cash & Cash Equivalents, Gold, Commodities, Crypto, and Alternative exposure categories. Unsupported behavior is Unavailable, never guessed or represented as zero.
 - **Rebalancing** — deterministic local-search plans model protected/deployable cash, contributions, sales, tax, and fees. Only rounded final actions that pass exact funding and position proof are executable.
 
 ## Quickstart
 
-Tarzan targets Python 3.12. The generated lock pins every transitive dependency and artifact hash.
+Run from the repository root with Python 3.12. Use an isolated environment;
+`requirements.txt` is the sole supported lock, including native Google clients.
+The legacy `tarzan/requirements.txt` delegates to it, not to floating versions.
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install --require-hashes -r requirements.txt
+python -m pip check
 
 python -m tarzan.main \
   --input_orders input/order_list.csv \
   --input_config input/targets.csv \
+  --input_targets_per_holding input/targets_per_holding.csv \
   --output output/
 ```
 
@@ -36,10 +42,14 @@ output/<effective-or-live-date>/<attempt-id>/
   ledger.jsonl
   report.html
   newsletter.html       # when normal/degraded rendering is allowed
-  what_if.xlsx          # optional, local-only
 ```
 
 The manifest maps the operational Attempt ID to the deterministic Analysis ID and declares `storage_scope=local`, ephemerality, checksums, and `retention_guarantee=none`. Automation-local files are ephemeral; no workflow uploads them or promises remote recovery.
+
+Optional candidate backtests/workbooks require `--what-if`. They run after the
+core manifest commits, under `output/<date>/what-if/<attempt-id>/`, and cannot
+overwrite or invalidate the core newsletter. Manual/licensed proxy ingestion
+is an explicit local CLI workflow, never an automatic newsletter dependency.
 
 ## Run modes
 
@@ -66,16 +76,34 @@ The order list is the single source of truth. Minimum case-insensitive columns:
 | `net_eur` | float | yes | Net EUR cash flow |
 
 Optional aliases and columns are defined by the executable contract in `tarzan/contracts/`. `--strict` rejects unknown columns; lenient mode records them.
+Economic cash-sign errors reject the complete input in both modes; signs are
+never auto-flipped. Equal legitimate broker fills remain separate orders.
 
 `targets.csv` configures cash, allocation, and rebalancing. Invested class targets use a **notional** nonnegative domain and may total above 100%; equity-geography targets are a partition. Blank optional targets remain absent. `targets_per_holding.csv` preserves source rows: every equivalent or conflicting duplicate canonical instrument emits `DUPLICATE_TARGET_ROW`, invalidates the complete target set for planning, and leaves independent analytics available.
+Absent, valid and invalid target plans are distinct. An unreadable present file
+or an unknown protection boolean suppresses planning rather than removing a
+constraint or creating an empty executable plan.
 
 ## Availability, valuation, and publication
 
 A successful numeric zero is distinct from Unavailable. Every failure/fallback has a stable ledger identity, ordered remedies, selected resolution, provenance, affected outputs, analytical impact, and publication impact.
 
-Provider freshness, coverage, timeout, retry budget, fallback allowance, and valuation materiality are validated from explicit instrument/data-class policy in `tarzan/config/constants.yaml`. Primary, fallback, stale, missing, and unsupported valuation evidence remain labeled. A material or indeterminate gap makes the trustworthy total Unavailable, retains only a labeled known subtotal, suppresses optimization/rebalancing, and produces `BLOCK_NORMAL_AND_NOTIFY_FAILURE`.
+Provider transport policies in `tarzan/config/constants.yaml` enforce native
+I/O timeouts, bounded retries and a shared run deadline. They are separate from
+instrument/data-class acceptance policies for freshness, coverage and permitted
+fallbacks. The deadline does not forcibly terminate arbitrary Python/CPU work.
 
-Publication decisions are `SEND_NORMAL`, `SEND_DEGRADED_NORMAL`, or `BLOCK_NORMAL_AND_NOTIFY_FAILURE`. Critical runs never send the normal portfolio newsletter; they create a separate sanitized failure-notification intent.
+Primary, fallback, stale, missing and unsupported valuations remain labeled.
+An anchor cannot become primary because display taxonomy changes. Accepted
+valuation coverage is not market-history coverage: synthetic/carry-flat bond
+series and unavailable independent prices remain explicit limitations.
+Material or indeterminate valuation gaps withhold the trustworthy total and
+planning, retaining only a labeled known subtotal.
+
+Publication has an independent materiality policy. Decisions include
+`SEND_NORMAL`, `SEND_DEGRADED_NORMAL`, `BLOCK_NORMAL_AND_NOTIFY_FAILURE`
+and `BLOCK_ALL_DELIVERY`. Critical runs do not send the normal newsletter;
+rendered semantic contradictions block SMTP entirely.
 
 ## Gemini boundary
 
@@ -83,18 +111,57 @@ Gemini receives only typed portfolio/analysis domain content and explicit instru
 
 ## Delivery safety
 
-Each normal or critical-failure intent has a purpose-specific stable logical identity. The final publication step must create a durable transactional claim before SMTP, checkpoint local evidence, and mark `SMTP_INVOCATION_STARTED` immediately before `send_message`. Duplicate claims suppress SMTP. A post-invocation interruption becomes `UNCERTAIN` and is never retried automatically. A human-authorized resend requires a new audited token and therefore a new identity.
+Each normal or failure-notification intent has a purpose-specific stable
+identity. Delivery claims before SMTP, checkpoints local evidence and consumes
+the claim by compare-and-swap immediately before `send_message`. A duplicate
+still in `CLAIMED` may proceed only through that same CAS; consumed duplicates
+and conflicts suppress SMTP. `UNCERTAIN` never authorizes an automatic resend.
+A human-authorized resend requires a new audited identity.
 
-GitHub validation is credential-free and must pass before the final publication step receives Drive, Gemini, claim-service, recipient, or SMTP secrets. Workflow actions use full commit SHAs; Python installation uses `--require-hashes`. Pins are refreshed for a reason — an applicable advisory or a dependency need — never on a clock that can expire between two digests. There is no release manifest and no declaration audit: the properties that mattered (credentials confined to the final publication step, action SHA pinning, dependency hash locking, one version authority) are assertions in the test suite. What gates publication is that the code compiles and its pinned dependencies agree (`compileall`, `pip check`). The full test suite runs on every push in the `Checks` workflow, not before each send: the code only changes on a push, and a red test must never withhold a digest. An issue built from a commit whose `Checks` run failed is still sent, with a one-line warning above it.
+Configured remote claim storage coordinates separate runners and fails closed
+when unavailable. With neither endpoint nor credential configured, the
+deliberate fallback is host-local: an ephemeral runner then has no cross-run
+deduplication guarantee. Partial remote configuration rejects delivery. SMTP
+acknowledgment means server acceptance, not inbox receipt or exactly-once delivery.
+
+Apps Script owns the schedule and authenticated per-message Update requests.
+Actions uses a bounded native queue and checks the oldest request/run age
+through the final SMTP boundary; a request older than 45 minutes is skipped.
+This is not a timing/receipt SLA. Only one fixed macro-price projection is
+publicly cached, never portfolio queries, identities or manual/licensed data.
+Public console output contains fixed status codes, not financial prose or
+tracebacks. Older public logs/history do not become private retroactively.
+
+The standalone `Checks` workflow runs the full suite on pushes/pull requests.
+Newsletter preflight validates native event metadata, compilation and installed
+dependency consistency, without Drive/Gemini/claim/recipient/SMTP credentials.
+Those secrets are scoped to the publication step. Actions are SHA-pinned;
+installation enforces package hashes. A failed `Checks` run adds a notice rather
+than itself withholding a digest; operational freshness, financial/semantic
+gates, claims and SMTP can still block it. Dependency pins do not expire merely
+because a calendar date passes.
+
+See [automation setup](docs/setup-newsletter.md) for the actual schedule,
+permissions and the separate Apps Script update/deployment steps.
 
 ## Development and evidence
 
+The full suite also requires Node.js for the Apps Script harnesses (verified
+with Node 22). Missing Node or native Google dependencies is a test failure,
+not a reason to silently skip those boundaries.
+
 ```bash
+node --version
 python -m compileall -q tarzan scripts
+python -m pip check
 python -m pytest tarzan/tests -q
 ```
 
 The ledger records bounded descriptive workload observations (orders, holdings, history points, provider/cache attempts, capabilities, stage outcomes/duration, and plan-search counts). They describe exercised fixtures; they are not a portfolio-size, latency, throughput, availability, or unlimited-scale claim.
+See [the implementation register](docs/REVIEW_IMPLEMENTATION.md) and
+[frozen KPI verification](docs/FROZEN_KPI_VERIFICATION.md). A before/after
+financial comparison uses the same inputs, observations and time boundary;
+two separate live runs are not evidence of a code-induced return.
 
 See [`tarzan/README.md`](tarzan/README.md) for package details.
 

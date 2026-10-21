@@ -60,7 +60,6 @@ def test_c14_replayed_logical_event_invokes_smtp_only_once(monkeypatch, tmp_path
     monkeypatch.setattr("tarzan.delivery.run", lambda **kwargs: (metrics, config))
     monkeypatch.setattr("tarzan.delivery.render_newsletter", lambda **kwargs: "<html>ok</html>")
     monkeypatch.setattr("tarzan.delivery.build_subject", lambda *args: "subject")
-    monkeypatch.setattr("tarzan.delivery._seed_manual_proxies", lambda: None)
     monkeypatch.setattr("tarzan.backtest.newsletter_portfolios", lambda: [])
     monkeypatch.setattr("tarzan.delivery.now_local", lambda: datetime(2025, 6, 30, 12, 0))
     monkeypatch.setattr(
@@ -133,7 +132,6 @@ def test_c14_claim_re_read_as_duplicate_in_CLAIMED_still_sends(monkeypatch, tmp_
     monkeypatch.setattr("tarzan.delivery.run", lambda **kwargs: (metrics, config))
     monkeypatch.setattr("tarzan.delivery.render_newsletter", lambda **kwargs: "<html>ok</html>")
     monkeypatch.setattr("tarzan.delivery.build_subject", lambda *args: "subject")
-    monkeypatch.setattr("tarzan.delivery._seed_manual_proxies", lambda: None)
     monkeypatch.setattr("tarzan.backtest.newsletter_portfolios", lambda: [])
     monkeypatch.setattr("tarzan.delivery.now_local", lambda: datetime(2025, 6, 30, 12, 0))
     monkeypatch.setattr("tarzan.delivery._delivery_claim_store", lambda: LostResponseStore())

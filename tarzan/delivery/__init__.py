@@ -4,9 +4,8 @@ This is the importable, testable home for what used to live in
 ``scripts/send_newsletter.py``. The script is now a thin shim that calls
 :func:`run_and_send`; CI invokes the shim unchanged.
 
-Kept here (not in ``scripts/``) so the multi-tenant loop (Track B) can call
-``run_and_send`` per tenant rather than shelling out, and so the subject/
-input-resolution logic is unit-testable.
+Kept here (not in ``scripts/``) so the supported serialized single-user
+lifecycle and its subject/input-resolution logic are importable and testable.
 
 Input CSVs are resolved in priority order:
     1. Drive mode — if GOOGLE_DRIVE_CREDENTIALS_JSON and DRIVE_FOLDER_ID are
@@ -29,7 +28,7 @@ Environment variables (provided by GitHub Actions secrets in CI):
     ISSUE_NUMBER               Default 1
     SUBJECT_PREFIX             Default "Portfolio Digest"
     DRY_RUN                    If "1", render only, do not send
-    TRIGGER_LABEL              Free-form tag (currently not appended to subject)
+    TRIGGER_LABEL              Operational tag (not appended to subject)
 
 The order list is the single source of truth: the snapshot (positions,
 valuation, allocations) is derived from it, and it also drives the historical
@@ -331,79 +330,17 @@ def resolve_inputs() -> ResolvedInputSet:
     })
 
 
-# Manual-proxy source files (third-party index levels) that feed the carry /
-# CTA backtest sleeves. Never committed to the repo; carried in the SAME private
-# Drive folder as the personal inputs. filename → manual_proxies cache key.
-_MANUAL_PROXY_SOURCES = {
-    "US_BNPIF73P.xlsx": "CRRYSIM",   # BNP Enhanced Commodity Carry (UEQC/CRRY)
-    "NHIndexMonthly.csv": "NHCTA",   # NilssonHedge CTA index
-}
-
-
-def _seed_manual_proxies() -> None:
-    """Populate the manual-proxy cache (carry / CTA index levels) for the
-    backtest, WITHOUT committing third-party data to the repo.
-
-    Idempotent and fully guarded: a series already in the cache (warm via
-    actions/cache) is left alone; a missing one is sourced — first from the
-    private Drive folder (same channel as the personal inputs), then from a
-    local path — and ingested. If neither is available the backtest simply
-    uses its generic fallback for that sleeve. Never raises.
-    """
-    downloaded = {}
-    try:
-        from tarzan.data import manual_proxies as mp
-        missing = {fn: key for fn, key in _MANUAL_PROXY_SOURCES.items()
-                   if mp.get_series(key) is None}
-        if not missing:
-            return  # all warm (e.g. restored from actions/cache)
-
-        downloaded: dict[str, Path] = {}
-        drive_folder = _env("DRIVE_FOLDER_ID")
-        drive_creds = _env("GOOGLE_DRIVE_CREDENTIALS_JSON")
-        if drive_folder and drive_creds:
-            try:
-                from tarzan.delivery.drive_loader import download_files
-                downloaded = download_files(
-                    folder_id=drive_folder, credentials_json=drive_creds,
-                    filenames=list(missing),
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.info("Manual-proxy Drive fetch skipped (%s): %s",
-                            type(e).__name__, e)
-
-        for fn, key in missing.items():
-            path = downloaded.get(fn)
-            if path is None:
-                candidate = ROOT / ".private" / fn
-                if candidate.exists():
-                    path = candidate
-            if path is None:
-                logger.info("Manual proxy %s: source %s not available — "
-                            "backtest uses the generic fallback.", key, fn)
-                continue
-            try:
-                mp.ingest(key, str(path))
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Manual proxy ingest failed for %s: %s", key, e)
-    except Exception as e:  # noqa: BLE001
-        logger.info("Manual-proxy seeding skipped (%s): %s", type(e).__name__, e)
-    finally:
-        if hasattr(downloaded, "close"):
-            downloaded.close()
-
-
 def _delivery_claim_store() -> DeliveryClaimStore:
     """Select the delivery-claim store.
 
-    A durable Apps Script endpoint (when configured) gives cross-run
-    exactly-once. Without it we fall back to the host-local store rather than
-    hard-failing: it still dedups within a run and across local re-runs, but on
-    an ephemeral GitHub runner it starts empty every run (no cross-run dedup),
-    so a re-run workflow can send twice. That best-effort trade-off is
-    deliberate — previously this raised on GitHub, so a down or absent claim
-    endpoint blocked *every* send (the HTTP 404 / CONDITIONAL_TRANSITION_FAILED
-    outages). A rare duplicate for a personal newsletter beats no newsletter.
+    A configured durable endpoint coordinates claim/CAS state across runners;
+    it does not guarantee receipt or exactly-once delivery. Its failure blocks
+    SMTP and never selects a local fallback. An incomplete endpoint/credential
+    pair also fails closed.
+
+    If neither setting is present, the explicit best-effort fallback is the
+    host-local store. It persists across local re-runs, but an ephemeral Actions
+    runner starts empty: cross-run deduplication is then not guaranteed.
     """
     endpoint = _env("DELIVERY_CLAIM_ENDPOINT")
     token = _env("DELIVERY_CLAIM_TOKEN")
@@ -919,9 +856,9 @@ def _publish_and_deliver(
     # store's first response is lost (5xx/timeout) after it committed and the
     # silent client retry reads the claim back as a "duplicate". So we suppress
     # only past-CLAIMED states and otherwise adopt the CLAIMED claim and send.
-    # Double-send stays impossible: the transition is a compare-and-swap (under
-    # the Apps Script lock), so a genuinely concurrent claimer loses the CAS and
-    # never sends.
+    # For callers sharing the same transactional store, a competing claimer
+    # loses the CAS and never invokes SMTP. This is not an inbox-receipt or
+    # cross-run guarantee when an ephemeral runner has only a local store.
     if claim.duplicate and claim.state is not DeliveryState.CLAIMED:
         result.ledger.append(LedgerEntryType.DELIVERY, {
             "state": "SUPPRESSED_DUPLICATE",

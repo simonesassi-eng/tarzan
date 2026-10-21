@@ -1,6 +1,20 @@
 # Tarzan — Data Model Hardening & Global-Launch Readiness
 
-**Status:** DRAFT for review · **Author:** (eng) · **Reviewers:** (Principal SDE)
+**Status:** ARCHIVED historical proposal — not the current-state model.
+Archived on 21 October 2026. The original text below predates the supported
+serialized single-user runtime and subsequent integrity fixes. Its “no primary
+key”, “unversioned”, timing estimates and global-launch claims are historical,
+not current guarantees or a compliance assessment. Proposed Tracks B/C are not
+implemented or authorized by retaining this document.
+
+For current behavior, use [the root README](../README.md),
+[the package reference](../tarzan/README.md),
+[automation setup](setup-newsletter.md) and
+[the implementation register](REVIEW_IMPLEMENTATION.md).
+
+---
+
+**Original draft metadata:** for review · **Author:** (eng) · **Reviewers:** (Principal SDE)
 **Target:** public/global launch in ~8 weeks · **Scope of this doc:** the data
 structures, plus the launch-blocking work those structures must support
 (multi-tenancy, privacy, correctness guarantees).
@@ -39,7 +53,7 @@ horizontal-scale work behind that.
 
 ---
 
-## 1. Current-state data model (accurate)
+## 1. Historical data model at the original draft boundary
 
 ### Entities ("tables")
 

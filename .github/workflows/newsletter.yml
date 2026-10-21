@@ -2,10 +2,10 @@
 # Scheduling remains external: Apps Script dispatches named market slots and
 # this workflow serializes them without cancelling an active run.
 #
-# One job. Publication is gated on the code compiling and its pinned dependencies
-# agreeing -- seconds. Behaviour (the test suite) and declaration audits run on
-# every push in checks.yml, which is where the code changes: re-running 1400 tests
-# before each issue cost ~2 min per send and let one red test withhold every digest.
+# One job. Native event context, compilation and installed dependency consistency
+# are checked before publication credentials are bound. Full behavioral tests
+# run separately in checks.yml, not before each issue. Runtime freshness,
+# financial/semantic gates, delivery claims and SMTP still govern publication.
 name: Tarzan Newsletter
 
 on:

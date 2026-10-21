@@ -14,12 +14,17 @@ tarzan/
 │   ├── schema.py                # executable input schema/version
 │   ├── validation.py            # boundary validation
 │   ├── targets.py               # typed target domains and duplicate outcomes
+│   ├── report.py                # immutable defensive ReportView
+│   ├── reference.py             # prepared immutable display references
+│   ├── events.py                # closed event metadata and operational freshness
 │   └── exceptions.py            # domain exception hierarchy
 ├── runtime/
 │   ├── session.py               # RunAttemptEnvelope, RunContext, RunSession, FIFO gate
 │   ├── ledger.py                # append-only failures, remedies, stages, and evidence
 │   ├── summary.py               # immutable VersionedRunSummary shared by entry points
 │   ├── provider.py              # quality policy and valuation completeness gate
+│   ├── transport.py             # native timeout/retry ports and shared run deadline
+│   ├── memo.py                  # per-key single-flight provider results
 │   ├── workload.py              # bounded descriptive telemetry and local harness
 │   ├── artifacts.py             # atomic local artifact set; checksum manifest last
 │   ├── publication.py           # explicit publication decisions
@@ -28,16 +33,19 @@ tarzan/
 │   ├── data_quality.py          # compatibility projection onto run-owned diagnostics
 │   └── audit.py                 # compatibility projection onto run-owned plan evidence
 ├── instruments/
-│   └── registry.py              # explicit kinds, capabilities, and tracked categories
+│   ├── registry.py              # explicit kinds, capabilities, and tracked categories
+│   └── valuation.py             # retained type resolution and valuation origin
 ├── delivery/
 │   ├── __init__.py              # publication intent, claim, checkpoint, and SMTP boundary
 │   ├── claims.py                # durable purpose-specific claim state machine
 │   └── drive_loader.py          # read-only private Drive input adapter
 ├── data/
 │   ├── loader.py                # CSV/XLSX contracts and row-preserving target loading
+│   ├── identity_catalog.py      # shared causal target identity catalog
 │   ├── enricher.py              # explicit kind/capability-aware enrichment
 │   ├── market_quotes.py         # structured market-provider results
 │   ├── price_cache.py           # versioned checksummed JSON with atomic replacement
+│   ├── public_cache.py          # fixed macro-only public snapshot projection
 │   ├── geo_resolver.py          # geographic allocation resolver
 │   ├── bond_fetcher.py          # fixed-income price fallback and value math
 │   └── proxy_data.py            # configured asset-class simulation proxies
@@ -59,16 +67,29 @@ tarzan/
 `RunSession` is the sole owner of analysis state after the process-local FIFO
 lease is acquired. Provider-wide rate limiting may remain process-shared as a
 transport safeguard, but clocks, configuration, diagnostics, plan audit,
-ledger, identity, and memoization are run-owned.
+ledger, identity, and memoization are run-owned. Completed output reacquires the
+original lease/clock/ledger and uses defensive `ReportView` facts. Display names,
+roles, benchmark identities, watchlist and risk bands are prepared during analysis;
+rendering never silently re-resolves them from later global taxonomy. Per-key
+provider misses coalesce without serializing unrelated network keys. Owned
+clients close at the end of analysis and outer completed-output scopes.
 
 ## Installation
 
-Tarzan targets Python 3.12. The generated lock contains exact transitive pins
-and SHA-256 artifact hashes.
+Run from the repository root with Python 3.12 and an isolated environment.
+The root lock contains exact transitive pins and SHA-256 artifact hashes,
+including native Drive clients required by the full test suite.
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install --require-hashes -r requirements.txt
+python -m pip check
 ```
+
+`tarzan/requirements.txt` is only a relative include of the root lock. It
+supports legacy installation paths, not a different environment. Do not install
+only a few floating packages or skip native SDK tests to mask missing dependencies.
 
 ## CLI
 
@@ -98,10 +119,11 @@ python -m tarzan.main --input_orders input/order_list.csv \
   --deterministic --as_of 2026-06-30
 ```
 
-A deterministic Analysis ID is derived from effective inputs, policy/schema
-versions, valuation evidence, and the versioned summary. Attempt ID, wall time,
-latency, retry delay, diagnostic prose, and workload telemetry do not affect
-it.
+A deterministic Analysis ID covers effective orders/targets/configuration,
+policy/schema versions, retained resolution/valuation evidence, every financial
+table and full series, and prepared report references—not just the narrow
+versioned summary. Attempt ID, wall time, latency, retry delay, diagnostic prose
+and workload telemetry do not affect it.
 
 ## Inputs and executable contracts
 
@@ -132,6 +154,8 @@ mode records unknown columns; `--strict` rejects them and rejects a partially
 invalid ledger rather than committing only its valid rows. Pinned runs build
 one immutable effective-order snapshot and exclude every post-boundary order
 from holdings, cost, returns, tax, history, targets, and planning.
+Invalid economic cash-flow signs reject the entire ledger in both modes; they
+are never auto-flipped. Identical legitimate broker fills retain distinct IDs.
 
 ### Portfolio and per-holding targets
 
@@ -151,6 +175,10 @@ Every equivalent or conflicting duplicate canonical key emits
 `DUPLICATE_TARGET_ROW`, invalidates the complete target set for planning, and
 leaves independent analytics available. No duplicate is silently overwritten,
 normalized, or discarded.
+An immutable `TargetPlan` distinguishes absence from invalid input. Read/parse
+failures and unknown protection booleans cannot become an empty valid plan.
+All planning is suppressed for an invalid set; target join and seeding share
+one collision-aware identity catalog with a historical observation boundary.
 
 ## Financial authorities
 
@@ -190,10 +218,11 @@ protected-cash, frozen-position, no-oversell, and canonical post-plan checks are
 
 ## Provider, cache, and valuation evidence
 
-Freshness, coverage, timeout, retry budget, fallback allowance, valuation
-materiality, and publication materiality are validated per instrument kind and
-data class from `config/constants.yaml`. Tarzan does not invent a universal
-numeric quality policy.
+Transport policy in `config/constants.yaml` governs native provider timeouts,
+bounded retries and a shared deadline. It does not forcibly kill arbitrary
+Python/CPU work. Acceptance policy separately governs freshness, within-kind
+materiality-weighted coverage and permitted anchors/stale fallbacks.
+Valuation and publication materiality thresholds are independent.
 
 Provider/cache attempts record source, operation, times/age, ordinal, latency,
 fallback rung, coverage, outcome, applied policy, and failure/remedy links. A
@@ -202,12 +231,25 @@ source failure is Degraded. The disk cache is versioned, checksummed,
 non-code-executing JSON committed by synchronized temporary write, flush, and
 atomic replacement. Corrupt, incompatible, malicious, or truncated content is
 a recorded safe miss and is never executed.
+Corporate-action repair requires a declared split or an exact curated event,
+never a persistent price loss alone. Provider histories are stored before local
+repair; identity profiles/xrefs retain causal observation boundaries. Checksums
+detect corruption, not authenticity of the provider's price observations.
+
+The runtime cache is private/ephemeral in Actions and never archived wholesale.
+Only schema-validated fixed Markets-universe numeric price tables may enter the
+single public macro snapshot. Identity profiles, holdings and manual/licensed
+histories are excluded. New private directories/locks use private creation
+permissions without chmodding existing caller-owned paths.
 
 A material or indeterminate valuation gap makes the trustworthy total
 Unavailable, preserves only a labeled known subtotal, suppresses optimizer and
 rebalancing output, and creates critical publication evidence. A non-material
 gap remains explicitly Degraded with its own failure record; it is never a
 false clean run.
+An accepted anchor is valuation evidence, not primary pricing or real market
+history. Synthetic/carry-flat series and unresolved independent-source
+disagreements are not certified merely because the software tests pass.
 
 ## Failure, summary, report, and publication
 
@@ -224,9 +266,14 @@ ledger lifecycle. Publication is one of:
 - `SEND_NORMAL`
 - `SEND_DEGRADED_NORMAL`
 - `BLOCK_NORMAL_AND_NOTIFY_FAILURE`
+- `BLOCK_ALL_DELIVERY`
 
 An uncorrected critical failure never sends the normal newsletter; it creates a
 separate sanitized critical-failure notification intent.
+Semantic rendering contradictions use `BLOCK_ALL_DELIVERY`. Ledger entries,
+failure records and order snapshots cannot be mutated through their projections;
+failure projection indexes one consistent entry snapshot rather than rescanning
+the whole log per failure.
 
 ## Local artifact lifecycle
 
@@ -239,7 +286,6 @@ output/<effective-or-live-date>/<attempt-id>/
   ledger.jsonl
   report.html
   newsletter.html       # only when rendered
-  what_if.xlsx          # optional and structurally local-only
 ```
 
 Files are rendered in memory, written to sibling temporary files, flushed,
@@ -249,6 +295,18 @@ execution environment, automation ephemerality, and
 `retention_guarantee=none`. Automation-local artifacts are ephemeral: there is
 no upload, remote recovery, or retention promise. The What-If workbook cannot
 be attached to email or sent through normal, degraded, or failure publication.
+`--what-if` is opt-in and runs after core finalization; its separate set lives
+at `output/<date>/what-if/<attempt-id>/`, including its own manifest/report
+and optional `what_if.xlsx`. Optional failure leaves the committed core intact.
+CLI success requires successful core artifact finalization, not merely a render.
+
+Drive lists all bounded pages, rejects ambiguous names before staging and
+validates native size/checksum evidence before publishing private paths.
+The staging owner survives the last CSV consumer and releases before SMTP;
+cleanup failures remain retryable and privately recorded, never replacing a
+primary error or an acknowledged delivery state. Caller-owned inputs are not deleted.
+Newsletter text in `.html.j2` templates is autoescaped; prebuilt HTML is an
+explicit builder boundary, not a blanket trust of broker/provider content.
 
 ## Gemini boundary
 
@@ -273,17 +331,36 @@ logical identities. The delivery path must:
 3. transition to `SMTP_INVOCATION_STARTED` immediately before SMTP;
 4. record `ACKNOWLEDGED_SUCCESS` only after definitive return.
 
-Duplicate/conflicting claims suppress SMTP. A provable pre-invocation failure is
+Consumed duplicate/conflicting claims suppress SMTP. A duplicate in `CLAIMED`
+may proceed only by the same transactional pre-invocation CAS.
+A provable pre-invocation failure is
 `DEFINITE_PRE_SEND_FAILURE`; an interruption after invocation begins is
 `UNCERTAIN` and is never retried automatically. An authorized resend requires a
 new audited token and therefore a distinct logical identity.
+SMTP acknowledgment does not prove inbox receipt or exactly-once delivery.
+Configured remote storage failures and incomplete endpoint/credential pairs
+block SMTP without local fallback. With neither setting configured, the
+deliberate host-local fallback has no cross-run guarantee on an ephemeral runner.
 
-GitHub automation uses a credential-free validation predecessor, full-SHA
-action pins, hash-enforced Python installation, and one final step scoped to the
+GitHub automation uses standalone push/PR Checks, native event preflight,
+compilation/dependency consistency checks, full-SHA action pins,
+hash-enforced Python installation, and one final step scoped to the
 Drive, Gemini, claim-service, recipient, and SMTP secrets it consumes. The Apps
 Script claim endpoint uses `LockService` plus a separate `delivery_claim:`
 Properties namespace and retains hashed control records beyond the declared
 reconciliation window.
+Actions uses a native bounded queue of at most 100 pending runs. The oldest
+request/native-run timestamp authorizes at most a 45-minute delivery window,
+rechecked through the last SMTP boundary. Old/invalid requests cannot authorize
+send; no punctual-delivery or durable queue SLA is claimed.
+
+Update authorization uses the native Gmail profile and the individual recent
+message's `SENT` label plus exact owner From, not a thread-level sent folder.
+Unquoted literal commands and bounded per-message markers permit a later reply
+in the same thread. Missing native authorization fails closed. GitHub dispatches
+contain opaque IDs/times, not subjects or mailbox content.
+Automation console formatting exposes fixed status codes while preserving
+original records for private run evidence. Historical public logs are not erased.
 
 ## Bounded workload evidence
 
@@ -303,8 +380,14 @@ python scripts/observe_workload.py
 
 ## Validation
 
+The complete test suite also requires Node.js for the production Apps Script
+harnesses; verification used Node 22. Missing Node/native Google clients is
+reported as a failure rather than silently skipped.
+
 ```bash
+node --version
 python -m compileall -q tarzan scripts
+python -m pip check
 python -m pytest tarzan/tests -q
 ```
 
@@ -315,3 +398,6 @@ standalone release validator and its manifest are gone: the manifest restated
 constants that live in the code, and its positive-scope check validated the shape
 of each declared path but never its existence — which is how `tarzan/backtest.py`
 stayed declared long after the module became the `tarzan/backtest/` package.
+See [the implementation register](../docs/REVIEW_IMPLEMENTATION.md) for the
+tested review fixes and [frozen verification](../docs/FROZEN_KPI_VERIFICATION.md)
+for private same-evidence KPI comparisons.

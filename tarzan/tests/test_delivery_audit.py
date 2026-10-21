@@ -45,7 +45,6 @@ def isolated_delivery(monkeypatch, tmp_path):
     monkeypatch.setattr(delivery, "ROOT", tmp_path)
     monkeypatch.setattr(delivery, "now_local", lambda: dt.datetime(2025, 1, 3, 12))
     monkeypatch.setattr(delivery, "_failed_checks_sha", lambda: None)
-    monkeypatch.setattr(delivery, "_seed_manual_proxies", lambda: None)
     yield
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Optional
 
 import pandas as pd
@@ -51,9 +52,8 @@ def reset_caches() -> None:
     Called at the start of each pipeline run so a user's edited input
     files (instrument_taxonomy.csv, constants) are re-read fresh — the same "inputs
     are never shadowed" guarantee the enricher's run-memos provide. This
-    matters when several runs happen in one process (e.g. an interactive
-    dashboard refresh, or a multi-tenant service where each user supplies
-    their own Drive inputs)."""
+    matters when several serialized single-user runs happen in one process
+    (for example, an interactive dashboard refresh)."""
     global _GEO_MAP, _ASSET_GEO_DF
     _GEO_MAP = None
     _ASSET_GEO_DF = None
@@ -76,9 +76,6 @@ def _load_asset_geo() -> Optional[pd.DataFrame]:
     except Exception as e:
         logger.warning("Failed to load instrument_taxonomy.csv: %s", e)
         return None
-
-
-import re
 
 
 def _normalize_index_str(s: str) -> str:
@@ -202,8 +199,6 @@ def _geo_from_own_country(ticker: str, isin: str = "") -> Optional[tuple[dict[Ge
     if not runtime.allows_live_transport():
         return None
     try:
-        import yfinance as yf
-
         from tarzan.data import _yf_net
 
         info = _yf_net.fetch_yf(lambda: _yf_net.ticker(str(ticker)).info,
@@ -256,7 +251,6 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
     if not runtime.allows_live_transport():
         return None
     try:
-        import yfinance as yf
         from tarzan.data import _yf_net
         t = _yf_net.ticker(ticker)
 
@@ -374,7 +368,6 @@ def resolve_isin(symbol: str) -> Optional[str]:
     if not runtime.allows_live_transport():
         return None
     try:
-        import yfinance as yf
         from tarzan.data import _yf_net
         ticker = _yf_net.ticker(symbol)
         raw = _yf_net.fetch_yf(lambda: ticker.isin,

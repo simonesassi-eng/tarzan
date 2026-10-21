@@ -998,7 +998,6 @@ def _fetch_intraday(symbols: list[str]) -> dict:
     out: dict = {}
     try:
         import warnings
-        import yfinance as yf
         from tarzan.data import _yf_net
 
         def _download():

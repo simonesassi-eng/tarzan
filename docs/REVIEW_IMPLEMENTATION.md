@@ -19,7 +19,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R17 | Authenticated Update messages | Implemented locally; native Gmail owner/message-level SENT verification, unquoted commands and bounded per-message idempotency; Gmail API service/authorization needed on deployment |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Implemented locally; fixed macro projection only, unique per-run snapshots, native bounded queue and repeated age checks before SMTP |
 | R26 | Domain/report boundaries and shared identity catalog | Implemented; shared target identity catalog, defensive ReportView/RunRenderContext and immutable prepared display references; real section builders/semantic gate do not consult later global taxonomy |
-| R27 | Consistent installation/docs | Pending |
+| R27 | Consistent installation/docs | Implemented locally; one root hash lock with a legacy include, archived historical design, truthful current setup/reference docs and dead delivery seeding removed |
 | Additional boundary check | HTML text escaping | Implemented locally; .html.j2 autoescaping enabled, typed escaped text preserves single escaping, plain notes/feed metadata cannot inject markup |
 
 Remote legacy-market cache cleanup was explicitly authorized. Only the eight
@@ -247,3 +247,48 @@ checkpoint has no financial changes, network attempts or semantic errors;
 its parsed structure, attributes and whitespace-normalized text are unchanged.
 MarkupSafe is now declared as a direct dependency at its already-locked version;
 no dependency version was upgraded for this fix.
+
+R27 retains the root dependency pins/hashes unchanged. The legacy package-level
+manifest now delegates to that same file rather than eight floating/incomplete
+requirements. Supported verification uses a clean Python 3.12 environment with
+the complete lock, including native Google clients; missing host dependencies
+are not suppressed with skipped tests. Native pip dry runs verify both legacy
+working-directory paths with indexes/network disabled.
+
+The global-launch design is explicitly archived, not a current-state guarantee
+or a legal/compliance assessment. READMEs/setup now describe the isolated opt-in
+What-If paths, complete analysis digest, real provider budgets, invalid-target
+gate, private staging/logging and fixed public macro cache. They distinguish
+dispatch from CAS/SMTP acknowledgment and inbox receipt, explain the configured
+remote versus ephemeral-local deduplication trade-off, and make the native
+45-minute delivery window explicit. Saving Apps Script/authorizing Gmail/
+installing its trigger is separate from updating a configured web-app deployment.
+The script's native repository dispatch needs only Contents-write permission;
+the redundant Actions-write recommendation is removed, without changing a
+production token or its existing claim/auth protocol.
+
+Unused direct Yahoo imports and obsolete automatic manual-Drive seeding code
+are removed. The explicit local manual-ingestion/list CLI remains functional;
+the newsletter regression now forbids actual manual read/ingest ports instead
+of patching a dead helper. Personal reference-portfolio percentages/coverage
+statistics were removed from explanatory code comments without changing the
+schedule or rewriting public git history.
+
+Final verification uses the unchanged complete root lock in an isolated Python
+3.12 environment and Node 22. All 1,937 tests pass normally and with Actions
+logging context, without warnings or skips; all 21 original review probes pass. The production
+Apps Script source is exercised by both native-service Node harnesses. The final
+actual-portfolio replay matches the previous commit and the review base across
+all financial KPI fields and complete series, using the same 1,366 sealed raw
+responses, with zero network attempts or semantic errors. Input file hashes are
+unchanged. These results do not certify the provider's observations or claim a
+live speed improvement, profitability, inbox receipt or absence of other bugs.
+
+The final whole-project security sweep found no exposed listeners, wildcard
+binds, disabled TLS verification or artifact-upload step. Native Gmail/Drive
+authorization remains fail-closed; the existing claim-token/CAS protocol is
+retained, not replaced with a newly invented authenticator. New private files
+and the public macro allowlist follow their separate boundaries. No listener,
+SMTP invocation, push or production deployment was started. Live Gmail, Drive,
+claim endpoint and SMTP integration remain operator verification steps after
+deployment; no anonymous-denial check against a deployed web app is claimed.
