@@ -26,7 +26,7 @@ from tarzan.runtime.effective_orders import EffectiveOrderSnapshot
 logger = logging.getLogger(__name__)
 
 
-def _apply_per_holding_targets(holdings, targets: dict) -> None:
+def _apply_per_holding_targets(holdings, targets: dict, *, catalog=None) -> None:
     """Attach per-holding rebalancing targets in place.
 
     Every direct, cross-reference, and taxonomy-resolved match contributes a
@@ -41,21 +41,11 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     if not targets:
         return
 
-    from tarzan import config as cfg
-    from tarzan.data import price_cache
-    from tarzan.models.instrument_key import (
-        instrument_key,
-        normalize_isin,
-        normalize_ticker,
-    )
+    from tarzan.data.identity_catalog import TargetIdentityCatalog, identity_aliases
+    from tarzan.models.instrument_key import normalize_isin
 
-    def _identity_aliases(isin, ticker) -> set[str]:
-        return {
-            instrument_key(isin, ticker),
-            normalize_isin(isin),
-            normalize_ticker(ticker),
-            str(ticker or "").strip().upper(),
-        } - {""}
+    catalog = catalog or TargetIdentityCatalog()
+    _identity_aliases = identity_aliases
 
     def _usable_isin(value) -> str:
         normalized = normalize_isin(value)
@@ -76,11 +66,7 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
         if row_id in seen_rows:
             continue
         seen_rows.add(row_id)
-        resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity(
-            row.get("isin"),
-            row.get("ticker"),
-            row.get("name"),
-        )
+        resolved_isin, resolved_ticker = catalog.resolve_row(row)
         target_isins[row_id] = (
             _usable_isin(row.get("isin")) or _usable_isin(resolved_isin)
         )
@@ -90,8 +76,9 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     matched = 0
     for h in holdings:
         candidates: dict[int, dict] = {}
-        holding_aliases = _identity_aliases(h.isin, h.ticker)
-        holding_isin = _usable_isin(h.isin)
+        identity = catalog.holding(h)
+        holding_aliases = set(identity.aliases)
+        holding_isin = _usable_isin(identity.isin)
 
         def _add_target_keys(keys: set[str]) -> None:
             for key in keys - {""}:
@@ -103,47 +90,6 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
         # winner. A second row discovered below must make the match ambiguous.
         _add_target_keys(holding_aliases)
 
-        # Cross-identifier bridge for broker imports that carry only one side
-        # of ISIN↔ticker. Publish the xref aliases to both direct and resolved
-        # lookup paths so all sources participate in the same uniqueness check.
-        if h.isin:
-            xref_ticker = price_cache.load_ticker_isin_reverse(h.isin)
-            if xref_ticker:
-                xref_aliases = (
-                    _identity_aliases("", xref_ticker)
-                    | _identity_aliases(h.isin, xref_ticker)
-                )
-                holding_aliases.update(xref_aliases)
-                _add_target_keys(xref_aliases)
-            profile = price_cache.load_instrument_profile(h.isin, allow_stale=True)
-            if profile and profile.get("tickers"):
-                for tick in profile["tickers"]:
-                    xref_aliases = (
-                        _identity_aliases("", tick)
-                        | _identity_aliases(h.isin, tick)
-                    )
-                    holding_aliases.update(xref_aliases)
-                    _add_target_keys(xref_aliases)
-        if h.ticker:
-            xref_isin = price_cache.load_ticker_isin(h.ticker)
-            if xref_isin:
-                if not holding_isin:
-                    holding_isin = _usable_isin(xref_isin)
-                xref_aliases = (
-                    _identity_aliases(xref_isin, "")
-                    | _identity_aliases(xref_isin, h.ticker)
-                )
-                holding_aliases.update(xref_aliases)
-                _add_target_keys(xref_aliases)
-
-        resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity(
-            h.isin,
-            h.ticker,
-            h.name,
-        )
-        if not holding_isin:
-            holding_isin = _usable_isin(resolved_isin)
-        holding_aliases.update(_identity_aliases(resolved_isin, resolved_ticker))
         for alias in holding_aliases:
             candidates.update(resolved_aliases.get(alias, {}))
 
@@ -178,11 +124,7 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
         target = next(iter(candidates.values()))
         requested_ticker = str(target.get("ticker") or "").strip()
         if requested_ticker:
-            _, target_ticker = cfg.resolve_taxonomy_identity(
-                target.get("isin"),
-                requested_ticker,
-                target.get("name"),
-            )
+            _, target_ticker = catalog.resolve_row(target)
             h.ticker_requested = requested_ticker
             if target_ticker:
                 # A matched target row is explicit user ticker authority. Feed
@@ -201,7 +143,7 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     logger.info("Applied per-holding targets to %d/%d holdings", matched, len(holdings))
 
 
-def _seed_missing_targets(holdings, targets: dict) -> list:
+def _seed_missing_targets(holdings, targets: dict, *, catalog=None) -> list:
     """Create enriched zero-value holdings for target instruments not held.
 
     Target rows may intentionally carry a bare ticker. Before constructing a
@@ -209,10 +151,11 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     evidence wins; a suffixed ticker requires an exact listing match; bare
     matching is reserved for tickers that remain genuinely unresolved.
     """
-    from tarzan import config as cfg
-    from tarzan.data import price_cache
+    from tarzan.data.identity_catalog import TargetIdentityCatalog
     from tarzan.models.holding import Holding
     from tarzan.models.instrument_key import instrument_key
+
+    catalog = catalog or TargetIdentityCatalog()
 
     def _norm(value) -> str:
         return str(value or "").strip().upper()
@@ -221,13 +164,7 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
         return _norm(ticker).split(".")[0]  # NTSG.DE → NTSG
 
     def _resolved_identity(row: dict) -> tuple[str, str]:
-        raw_isin = (row.get("isin") or "").strip()
-        raw_ticker = (row.get("ticker") or "").strip()
-        name = (row.get("name") or "").strip()
-        # The persisted cross-reference is intentionally bare-ticker keyed and
-        # therefore cannot prove identity across venues for a not-yet-held
-        # target. Use only curated taxonomy evidence here.
-        return cfg.resolve_taxonomy_identity(raw_isin, raw_ticker, name)
+        return catalog.resolve_row(row)
 
     # Detect many-to-one target rows before creating any synthetic holding.
     # Canonical/legacy aliases of the same row share object identity and count
@@ -271,38 +208,8 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
     # sets happen to contain both values.
     held_identities: list[tuple[str, set[str], set[str], str]] = []
     for holding in holdings:
-        identity_isin = _norm(holding.isin)
-        exact_tickers: set[str] = set()
-        holding_ticker = _norm(holding.ticker)
-        if holding_ticker and holding_ticker != identity_isin:
-            exact_tickers.add(holding_ticker)
-
-        if identity_isin:
-            xref_ticker = price_cache.load_ticker_isin_reverse(holding.isin)
-            if xref_ticker:
-                exact_tickers.add(_norm(xref_ticker))
-            profile = price_cache.load_instrument_profile(holding.isin, allow_stale=True)
-            if profile and profile.get("tickers"):
-                for tick in profile["tickers"]:
-                    exact_tickers.add(_norm(tick))
-            # This runs before enrichment (see the call order below), so an
-            # ISIN-only holding's real venue ticker (from the enricher's
-            # resolver) does not exist yet -- exact_tickers/bare_tickers can
-            # be empty even for an already-held position. The taxonomy's own
-            # curated ticker needs only the ISIN, not a resolved venue, so
-            # resolve it here too: this is what lets a bare-ticker target row
-            # (e.g. "CL2", whose taxonomy row itself carries no ISIN) match
-            # an already-held ISIN-only order and skip creating a duplicate
-            # seed for it.
-            _, curated_ticker = cfg.resolve_taxonomy_identity(
-                holding.isin, holding.ticker, holding.name)
-            if curated_ticker:
-                exact_tickers.add(_norm(curated_ticker))
-        elif holding.ticker:
-            xref_isin = price_cache.load_ticker_isin(holding.ticker)
-            if xref_isin:
-                identity_isin = _norm(xref_isin)
-
+        identity = catalog.holding(holding)
+        identity_isin, exact_tickers = identity.isin, set(identity.tickers)
         bare_tickers = {_bare(ticker) for ticker in exact_tickers if ticker}
         held_identities.append(
             (identity_isin, exact_tickers, bare_tickers, _norm(holding.name))
@@ -359,15 +266,6 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
                     and _bare(held_ticker) == target_bare
                     for held_ticker in exact_tickers
                 )
-                or (
-                    not exact_tickers
-                    and bool(normalized_name)
-                    and len(normalized_name) >= 8
-                    and (
-                        held_name.startswith(normalized_name)
-                        or normalized_name.startswith(held_name)
-                    )
-                )
                 for _, exact_tickers, _, held_name in held_identities
                 if held_name or exact_tickers
             )
@@ -378,14 +276,8 @@ def _seed_missing_targets(holdings, targets: dict) -> list:
                 for _, _, bare_tickers, _ in held_identities
             )
         else:
-            # Name similarity is only a last resort when no explicit target
-            # identity survived resolution.
-            already_held = bool(normalized_name) and len(normalized_name) >= 8 and any(
-                held_name.startswith(normalized_name)
-                or normalized_name.startswith(held_name)
-                for _, _, _, held_name in held_identities
-                if held_name
-            )
+            # Similar names are not an economic-identity assertion.
+            already_held = False
 
         if already_held:
             continue
@@ -539,7 +431,10 @@ def _run_once(
     targets_by_isin = _load_targets_or_empty(
         targets_per_holding_source, targets_per_holding_filename
     )
-    _apply_per_holding_targets(holdings, targets_by_isin)
+    from tarzan.data.identity_catalog import TargetIdentityCatalog
+
+    target_catalog = TargetIdentityCatalog()
+    _apply_per_holding_targets(holdings, targets_by_isin, catalog=target_catalog)
     session.memo["target_plan"] = {
         "status": targets_by_isin.status.value,
         "planning_eligible": targets_by_isin.planning_eligible,
@@ -607,7 +502,7 @@ def _run_once(
     # in Holdings / Returns / allocations, only feed the rebalancer.
     seeds = []
     if config.target_use_per_holding_only and targets_by_isin:
-        seeds = _seed_missing_targets(holdings, targets_by_isin)
+        seeds = _seed_missing_targets(holdings, targets_by_isin, catalog=target_catalog)
         if seeds:
             logger.info(
                 "Seeding %d not-held target instrument(s) for buy-new: %s",
@@ -847,7 +742,7 @@ _SERIAL_EXECUTION_GATE = SerialExecutionGate()
 def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, Any]:
     """Return canonical output-affecting evidence for the stable Analysis ID."""
     context = session.context
-    from tarzan.contracts.material import MATERIAL_FACTS_VERSION, material_metrics
+    from tarzan.contracts.material import MATERIAL_FACTS_VERSION, material_metrics, material_value
 
     evidence: dict[str, Any] = {
         "material_facts_version": MATERIAL_FACTS_VERSION,
@@ -871,6 +766,7 @@ def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, An
         "instrument_resolution": session.memo.get("instrument_resolution"),
         "target_plan": session.memo.get("target_plan"),
     }
+    evidence = material_value(evidence)
     if metrics is not None:
         evidence["metrics"] = material_metrics(metrics)
     return evidence

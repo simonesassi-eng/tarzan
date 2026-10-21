@@ -219,6 +219,8 @@ def load_history(symbol: str) -> Optional[pd.DataFrame]:
         return None
     if payload.get("repair_version") != _HISTORY_REPAIR_VERSION:
         return None
+    if payload.get("symbol") is not None and payload["symbol"] != str(symbol):
+        return None  # sanitized filename collision is not identity evidence
     try:
         table = payload.get("table")
         frame = pd.read_json(io.StringIO(json.dumps(table)), orient="table")
@@ -255,6 +257,7 @@ def store_history(symbol: str, df: pd.DataFrame) -> None:
             "name": str(df.name) if is_series and df.name is not None else None,
             "index_freq": getattr(frame.index, "freqstr", None),
             "repair_version": _HISTORY_REPAIR_VERSION,
+            "symbol": str(symbol),
             "table": table,
         }
         path = _history_path(symbol)
@@ -262,6 +265,28 @@ def store_history(symbol: str, df: pd.DataFrame) -> None:
             _atomic_write_json(path, "history", payload)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Price cache write failed for %s: %s", symbol, exc)
+
+
+def list_history_symbols(*, prefix: str = "") -> list[str]:
+    """Enumerate current validated JSON histories, never executable legacy data."""
+    if not is_enabled():
+        return []
+    directory = cache_dir() / "history"
+    if not directory.is_dir():
+        return []
+    symbols = set()
+    for path in directory.glob("*.json"):
+        payload = _read_json(path, "history", None)
+        if not isinstance(payload, dict):
+            continue
+        symbol = payload.get("symbol", path.stem)
+        if (
+            isinstance(symbol, str) and symbol.startswith(prefix)
+            and _safe(symbol) == path.stem
+            and load_history(symbol) is not None
+        ):
+            symbols.add(symbol)
+    return sorted(symbols)
 
 
 def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.DataFrame:
@@ -836,14 +861,41 @@ def _load_ticker_isin_map() -> dict:
     return _read_map(_ticker_isin_path(), "ticker_isin")
 
 
-def load_ticker_isin(ticker: str) -> Optional[str]:
-    """Cached ISIN for a bare ticker (immutable; no TTL), or None."""
+def _visible_xref(entry, as_of=None) -> Optional[str]:
+    from tarzan import runtime
+
+    boundary = as_of or runtime.as_of()
+    if isinstance(entry, str):
+        return (_normalize_profile_isin(entry) or None) if boundary is None else None
+    if isinstance(entry, list):
+        cutoff = _profile_cutoff(boundary)
+        visible = [
+            row for row in entry
+            if isinstance(row, dict) and cutoff is not None
+            and (observed := _parse_profile_observed_at(row.get("observed_at"))) is not None
+            and observed <= cutoff and _normalize_profile_isin(row.get("isin"))
+        ]
+        if not visible:
+            return None
+        latest = max(visible, key=lambda row: _parse_profile_observed_at(row["observed_at"]))
+        return _normalize_profile_isin(latest["isin"])
+    if not isinstance(entry, dict) or not isinstance(entry.get("isin"), str):
+        return None
+    observed = _parse_profile_observed_at(entry.get("observed_at"))
+    cutoff = _profile_cutoff(boundary)
+    if observed is None or cutoff is None or observed > cutoff:
+        return None
+    return _normalize_profile_isin(entry["isin"]) or None
+
+
+def load_ticker_isin(ticker: str, *, as_of=None) -> Optional[str]:
+    """Cached exact-identity assertion visible to the reporting boundary."""
     if not ticker:
         return None
-    return _load_ticker_isin_map().get(normalize_ticker(ticker))
+    return _visible_xref(_load_ticker_isin_map().get(normalize_ticker(ticker)), as_of)
 
 
-def load_ticker_isin_reverse(isin: str) -> Optional[str]:
+def load_ticker_isin_reverse(isin: str, *, as_of=None) -> Optional[str]:
     """Cached bare ticker for an ISIN — the reverse of :func:`load_ticker_isin`
     — or None. The stored map is ticker→ISIN, so this scans its items; the map
     holds at most a few hundred instruments, so a linear scan is fine and keeps
@@ -852,20 +904,44 @@ def load_ticker_isin_reverse(isin: str) -> Optional[str]:
         return None
     want = isin.replace("-", "").strip().upper()
     for ticker, mapped_isin in _load_ticker_isin_map().items():
-        if mapped_isin == want:
+        if _visible_xref(mapped_isin, as_of) == want:
             return ticker
     return None
 
 
-def store_ticker_isin(ticker: str, isin: str) -> None:
+def store_ticker_isin(ticker: str, isin: str, *, observed_at=None) -> None:
     """Transactionally learn a ticker→ISIN mapping."""
     if not is_enabled() or not ticker or not isin:
         return
+    from tarzan import runtime
+
+    if observed_at is None and not runtime.allows_live_transport():
+        return  # a pinned read must not learn a newly observed mapping
     clean = isin.replace("-", "").strip().upper()
     if len(clean) != 12 or not clean[:2].isalpha():
         return
     try:
         key = normalize_ticker(ticker)
-        _update_map(_ticker_isin_path(), "ticker_isin", key, clean)
+        observed = _parse_profile_observed_at(
+            observed_at or datetime.now(timezone.utc).isoformat(),
+        )
+        if observed is None:
+            return
+        path = _ticker_isin_path()
+        with _file_lock(path):
+            mapping = _read_map(path, "ticker_isin")
+            previous = mapping.get(key)
+            history = previous if isinstance(previous, list) else [previous] if isinstance(previous, dict) else []
+            history = [row for row in history if (
+                isinstance(row, dict) and _parse_profile_observed_at(row.get("observed_at")) is not None
+                and _normalize_profile_isin(row.get("isin"))
+            )]
+            # Preserve first knowledge of an unchanged mapping; refreshing it
+            # must not make a previously valid historical observation vanish.
+            latest = max(history, key=lambda row: _parse_profile_observed_at(row["observed_at"])) if history else None
+            if latest is None or latest["isin"] != clean or observed < _parse_profile_observed_at(latest["observed_at"]):
+                history.append({"isin": clean, "observed_at": observed.isoformat()})
+            mapping[key] = sorted(history, key=lambda row: row["observed_at"])[-64:]
+            _atomic_write_json(path, "ticker_isin", mapping)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Ticker↔ISIN cache write failed for %s: %s", ticker, exc)

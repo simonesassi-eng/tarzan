@@ -10,7 +10,8 @@ artifacts. This register contains no personal portfolio amounts.
 | R01–R03, R06 | Target gates, closed booleans, cash-flow signs | Implemented; 64 new regressions, 1,617 full-suite passes, unchanged frozen KPIs |
 | R04 | Instrument resolution and valuation provenance | Implemented; persistent negative mechanics evidence, explicit valuation origins, no frozen KPI change |
 | R05 | Evidence-backed corporate-action repair | Implemented; no jump-only events, explicit provider/curated factors, separate price rulers and pre-repair storage |
-| R07–R08, R18, R20 | Causal identity, single-flight, cache API, real provider budgets | Pending |
+| R07, R18 | Causal identity and validated cache enumeration | Implemented; shared join/seed catalog, boundary-aware profile/xref reads and immutable target aliases |
+| R08, R20 | Single-flight and real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R17, R24 | Drive selection/lifecycle and authenticated Update messages | Pending |
@@ -57,3 +58,14 @@ the Paris price ruler; no paid notice was purchased or claimed to be read.
 Local repair neither waits for nor consumes a future confirmation window.
 Provider history is cached before local repair, so a later historical boundary
 cannot inherit a future local adjustment. History-only cache version is now 3.
+
+Target joins and seed checks now share `TargetIdentityCatalog`, retaining exact
+ISIN compatibility and alias collision guards. Future profile/xref observations
+cannot cross a historical boundary; unchanged xref refreshes preserve first
+knowledge, and changed mappings retain a bounded observation history. Legacy
+timeless xrefs remain readable only in LIVE mode; they cannot prove past
+knowledge. Similar-name prefixes no longer suppress an explicit new target.
+Validated target plans/rows are immutable while preserving aliases of one source
+row. Manual-series listing uses current checksum/schema-validated JSON histories,
+not obsolete pickle globs. Stored history now also carries its original symbol
+to prevent sanitized filename collisions from supplying another ticker's data.

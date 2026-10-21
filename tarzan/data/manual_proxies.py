@@ -73,13 +73,10 @@ def get_series(key: str) -> Optional[pd.Series]:
 
 def list_cached() -> list[str]:
     """Keys currently present in the cache DB (for the CLI ``list`` command)."""
-    hist = price_cache.cache_dir() / "history"
-    if not hist.exists():
-        return []
-    out = []
-    for p in sorted(hist.glob(f"{_CACHE_PREFIX}*.pkl")):
-        out.append(p.stem[len(_CACHE_PREFIX):])
-    return out
+    return [
+        symbol[len(_CACHE_PREFIX):]
+        for symbol in price_cache.list_history_symbols(prefix=_CACHE_PREFIX)
+    ]
 
 
 # ---------------------------------------------------------------------------
