@@ -75,8 +75,10 @@ class DownloadedInputSet(Mapping[str, Path]):
 
     def close(self):
         if not self._closed:
-            self._closed = True
             self._directory.cleanup()
+            # A failed cleanup is not a closed owner. Keep explicit retry
+            # possible (TemporaryDirectory detaches its finalizer first).
+            self._closed = True
 
     def __enter__(self):
         if self._closed:
@@ -84,7 +86,34 @@ class DownloadedInputSet(Mapping[str, Path]):
         return self
 
     def __exit__(self, exc_type, exc, traceback):
-        self.close()
+        if exc_type is None:
+            self.close()
+        else:
+            try:
+                self.close()
+            except Exception as error:
+                _report_cleanup_failure(self.directory, error)
+
+
+def _report_cleanup_failure(directory, error):
+    """Private diagnostics must not replace an active download/consumer error."""
+    logger.warning(
+        "Private Drive staging may remain at %s; cleanup failed (%s).",
+        directory, type(error).__name__,
+        extra={"public_code": "INPUT_STAGING_CLEANUP_FAILED"},
+    )
+
+
+def _close_drive_client(client):
+    close = getattr(client, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as error:
+            logger.warning(
+                "Drive transport cleanup failed (%s).", type(error).__name__,
+                extra={"public_code": "DRIVE_CLIENT_CLEANUP_FAILED"},
+            )
 
 
 class _BoundedBuffer(io.BytesIO):
@@ -115,7 +144,11 @@ def _drive_service(credentials_json: str):
     # Native Google OAuth verification, with a real socket timeout. Credential
     # presence alone never authorizes a download; the listing must succeed.
     http = AuthorizedHttp(creds, http=httplib2.Http(timeout=20))
-    return build("drive", "v3", http=http, cache_discovery=False)
+    try:
+        return build("drive", "v3", http=http, cache_discovery=False)
+    except BaseException:
+        _close_drive_client(http)
+        raise
 
 
 def _select_files(service, folder_id, filenames, required):
@@ -198,8 +231,6 @@ def download_files(
         in a ``with`` block or call ``close``. Even an explicit dest_dir only
         contains a newly owned subdirectory, not overwritten caller files.
     """
-    from googleapiclient.http import MediaIoBaseDownload
-
     if not isinstance(folder_id, str) or not _DRIVE_ID.fullmatch(folder_id):
         raise ValueError("Drive folder ID must be a nonempty native identifier")
     filenames = tuple(dict.fromkeys(filenames))
@@ -209,7 +240,18 @@ def download_files(
     if not set(required).issubset(filenames):
         raise ValueError("required Drive filenames must be requested")
     service = _drive_service(credentials_json)
-    by_name = _select_files(service, folder_id, filenames, required)
+    try:
+        by_name = _select_files(service, folder_id, filenames, required)
+        return _download_selected_inputs(service, by_name, filenames, dest_dir)
+    finally:
+        # Native Resource.close closes AuthorizedHttp/httplib2 connections.
+        # Returned paths own no remote connection or service credential.
+        _close_drive_client(service)
+
+
+def _download_selected_inputs(service, by_name, filenames, dest_dir):
+    from googleapiclient.http import MediaIoBaseDownload
+
     if dest_dir is not None:
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -257,5 +299,8 @@ def download_files(
             paths[name] = local
         return DownloadedInputSet(directory, paths)
     except BaseException:
-        directory.cleanup()
+        try:
+            directory.cleanup()
+        except Exception as error:
+            _report_cleanup_failure(staging, error)
         raise

@@ -1,9 +1,8 @@
 """Low-level serialization + durable-write primitives (stdlib only).
 
-Two idioms were copy-pasted across the runtime, data and delivery layers and
-had already started to drift (an ``allow_nan`` here, a dir-fsync there). They
-live here once so the correctness guards — no NaN/Inf tokens in canonical
-JSON, tmp-file + fsync + atomic rename on every publish — stay uniform.
+Shared primitives prevent drift across runtime, data and delivery: canonical
+JSON rejects NaN/Inf, publication uses tmp-file + fsync + atomic rename, and
+new native lock files have private permissions without chmodding caller data.
 
 Depends on nothing in ``tarzan``, so any layer may import it freely.
 """
@@ -13,7 +12,28 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def private_lock_file(path: Path):
+    """Open a native lock file with private permissions on creation.
+
+    Do not chmod an existing caller-owned file or directory. Reject a symlink
+    lock on platforms supporting O_NOFOLLOW; lock-file content is never data.
+    Directory creation remains the caller's responsibility.
+    """
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    handle = None
+    try:
+        handle = os.fdopen(descriptor, "a+b")
+        with handle:
+            yield handle
+    finally:
+        if handle is None:
+            os.close(descriptor)
 
 
 def canonical_json_bytes(value, *, ascii_only: bool = False, default=None) -> bytes:

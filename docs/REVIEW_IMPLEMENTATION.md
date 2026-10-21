@@ -15,7 +15,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R20 | Real provider budgets and acceptance/publication policy | Implemented locally; separate transport policies, native capped I/O and bounded retries/deadlines; accepted valuation coverage and independent publication thresholds are enforced |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Implemented; retained output lease/clock/ledger, explicit artifact outcome, opt-in isolated What-If and idempotent run-owned capture |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
-| R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
+| R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging, native client closure and truthful retryable cleanup |
 | R17 | Authenticated Update messages | Implemented locally; native Gmail owner/message-level SENT verification, unquoted commands and bounded per-message idempotency; Gmail API service/authorization needed on deployment |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Implemented locally; fixed macro projection only, unique per-run snapshots, native bounded queue and repeated age checks before SMTP |
 | R26 | Domain/report boundaries and shared identity catalog | Implemented; shared target identity catalog, defensive ReportView/RunRenderContext and immutable prepared display references; real section builders/semantic gate do not consult later global taxonomy |
@@ -107,9 +107,31 @@ actual listing; transport uses a real 20-second native HTTP timeout. No staging
 is created before authenticated listing/required-file selection succeeds.
 `DownloadedInputSet` owns a new private temporary directory even when a caller
 provides a destination parent; caller files are not overwritten or removed.
-Delivery retains that owner until its final exit. Partial download/listing
-failure cleans staging, and incomplete Drive configuration cannot silently
-select an older local input set. Original local inputs retain caller ownership.
+Delivery retains that owner through the last CSV consumer, then releases it
+inside the original run scope before publication/artifact finalization/SMTP.
+Partial download/listing failure cleans staging, and incomplete Drive
+configuration cannot silently select an older local input set. Original local
+inputs retain caller ownership.
+
+A cleanup failure does not mark its owner closed or replace an active
+download/consumer/cancellation error. Delivery makes one bounded filesystem
+retry; a persistent failure records a private warning and the potentially
+retained location before the manifest commits. It does not claim deletion,
+change the SMTP outcome or authorize a resend. Native Drive connections close
+on successful downloads, listing/download failures and client-build failures.
+Close diagnostics cannot replace those primary errors.
+
+New cache namespaces, local-claim directories and native lock files are
+created private (700/600). Existing caller-owned directories/files are not
+chmodded; privacy is not retroactively claimed for those locations. The
+supported POSIX hosts reject symlink lock files rather than following them.
+Thirty-three added regressions cover native SDK bindings, closure, bounded
+retry, persistent permission errors, active cancellations, final manifests and
+unchanged delivery states. All 1,922 tests pass without skips or warnings in the
+clean hash-locked environment, both normally and under Actions logging context.
+The frozen actual-portfolio replay in that environment also matches the previous
+checkpoint and the existing-environment replay, with no network attempts or
+semantic errors. All 21 original review probes now pass.
 
 Update requests now require agreement between the trigger's effective owner and
 the native Gmail profile, then the individual message's native `SENT` label,

@@ -216,11 +216,61 @@ class ResolvedInputSet(dict):
             self._downloaded.close()
             self._downloaded = None
 
+    @property
+    def staging_directory(self):
+        return self._downloaded.directory if self._downloaded is not None else None
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, traceback):
-        self.close()
+        if exc_type is None:
+            self.close()
+        else:
+            _close_delivery_inputs(self)
+
+
+def _close_delivery_inputs(inputs, *, result=None) -> None:
+    """Release owned staging before publication; never mask a primary error.
+
+    A filesystem cleanup gets one bounded retry. A persistent failure is
+    private diagnostic evidence, not an SMTP failure or permission to resend.
+    The input owner remains open, so an explicit caller can retry cleanup.
+    """
+    error = None
+    for attempt in (1, 2):
+        try:
+            inputs.close()
+        except OSError as failure:
+            error = failure
+        except Exception as failure:
+            error = failure
+            break
+        else:
+            if attempt == 2 and result is not None:
+                from tarzan.runtime.ledger import LedgerEntryType
+                result.ledger.append(LedgerEntryType.STORAGE, {
+                    "resource": "private_input_staging",
+                    "state": "CLEANED_AFTER_RETRY", "cleanup_attempts": attempt,
+                })
+            return
+    directory = getattr(inputs, "staging_directory", None)
+    logger.warning(
+        "Private input staging may remain at %s; cleanup failed (%s).",
+        directory or "(owned location unavailable)", type(error).__name__,
+        extra={"public_code": "INPUT_STAGING_CLEANUP_FAILED"},
+    )
+    if result is not None:
+        result.ledger.open_failure(
+            stage="input_cleanup",
+            stable_code="INPUT_STAGING_CLEANUP_FAILED",
+            severity="WARNING",
+            error=error,
+            affected_outputs=["private_input_staging"],
+            analytical_impact="parsed financial facts are unchanged; private staging may remain",
+            publication_impact="NONE",
+            context={"staging_directory": str(directory) if directory is not None else None},
+        )
 
 
 def resolve_inputs() -> ResolvedInputSet:
@@ -578,9 +628,6 @@ def _skip_aged_delivery(assessment, *, result=None, writer=None, html=None):
 
 
 def _run_and_send_owned(input_owner) -> int:
-    from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
-    from tarzan.runtime.ledger import LedgerEntryType
-    from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
     from tarzan.runtime.session import last_run_result
 
     initial_freshness = _freshness_assessment()
@@ -599,10 +646,11 @@ def _run_and_send_owned(input_owner) -> int:
 
     previous_result = last_run_result()
     inputs = None
+    result = None
     try:
         inputs = resolve_inputs()
         if hasattr(inputs, "close"):
-            input_owner.callback(inputs.close)
+            input_owner.callback(lambda: _close_delivery_inputs(inputs, result=result))
         logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
         logger.info(
             "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s",
@@ -643,12 +691,14 @@ def _run_and_send_owned(input_owner) -> int:
         return _publish_and_deliver(
             result, metrics, config, smtp_user, smtp_pass, recipient, smtp_host,
             smtp_port, issue_number, subject_prefix, trigger_label, dry_run,
+            release_inputs=input_owner.close,
         )
 
 
 def _publish_and_deliver(
     result, metrics, config, smtp_user, smtp_pass, recipient, smtp_host,
     smtp_port, issue_number, subject_prefix, trigger_label, dry_run,
+    *, release_inputs: Optional[Callable[[], None]] = None,
 ):
     from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
     from tarzan.runtime.ledger import LedgerEntryType
@@ -672,6 +722,13 @@ def _publish_and_deliver(
             analytical_impact="portfolio total and planning are unavailable",
             publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
         )
+
+    # All CSV consumption ended with analysis and its defensive ReportView.
+    # Release staging while its owner is bound, before artifact finalization
+    # or irreversible SMTP. A cleanup warning is then included in the owned
+    # manifest/report, and cannot turn an acknowledged delivery into a failure.
+    if release_inputs is not None:
+        release_inputs()
 
     publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
 

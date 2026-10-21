@@ -52,7 +52,7 @@ from typing import Optional
 import pandas as pd
 
 from tarzan.models.instrument_key import normalize_ticker
-from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
+from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes, private_lock_file
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +92,9 @@ def _thread_lock(path: Path) -> threading.RLock:
 def _file_lock(path: Path):
     """Synchronize cache transactions across supported threads/processes."""
     lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with _thread_lock(path):
-        with open(lock_path, "a+b") as handle:
+        with private_lock_file(lock_path) as handle:
             try:
                 import fcntl
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -159,7 +159,7 @@ def _read_json(path: Path, namespace: str, default):
 def _atomic_write_json(path: Path, namespace: str, entries) -> None:
     if not _validate_json_value(entries):
         raise ValueError(f"invalid or non-finite {namespace} cache value")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload = _canonical_json(_envelope(namespace, entries))
     # fsync_dir: a resurrected stale cache entry would be served as fresh, so
     # the rename itself must survive a crash.
@@ -187,7 +187,7 @@ def cache_dir() -> Path:
     """Base cache directory, created on first use."""
     override = os.environ.get("TARZAN_CACHE_DIR")
     base = Path(override).expanduser() if override else Path.home() / ".cache" / "tarzan"
-    base.mkdir(parents=True, exist_ok=True)
+    base.mkdir(parents=True, exist_ok=True, mode=0o700)
     return base
 
 
@@ -197,7 +197,7 @@ def _safe(name: str) -> str:
 
 def _subdir(name: str) -> Path:
     d = cache_dir() / name
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
 
 

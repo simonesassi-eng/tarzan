@@ -15,7 +15,7 @@ from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
+from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes, private_lock_file
 
 
 DELIVERY_IDENTITY_SCHEMA_VERSION = "1.0"
@@ -133,7 +133,7 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     @contextmanager
     def _lock(self):
@@ -142,7 +142,7 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
             lock = _LOCKS.setdefault(key, threading.RLock())
         with lock:
             lock_path = self.path.with_suffix(self.path.suffix + ".lock")
-            with open(lock_path, "a+b") as handle:
+            with private_lock_file(lock_path) as handle:
                 try:
                     import fcntl
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
