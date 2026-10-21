@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 
 from tarzan import config as cfg
 from tarzan.runtime.provider import ProviderQualityPolicy
+from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.contracts.scalars import finite_nonnegative, parse_boolean
 
 logger = logging.getLogger(__name__)
 
@@ -182,13 +184,32 @@ class InvestorConfig:
         columns (e.g. ``description``) are ignored, so users can keep
         a self-documented config file without the parser caring.
         """
-        with open(path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = {
-                row["key"].strip(): row["value"].strip()
-                for row in reader
-                if row.get("key") and "value" in row
-            }
+        with open(path, "r", encoding="utf-8-sig") as stream:
+            return cls.from_stream(stream)
+
+    @classmethod
+    def from_stream(cls, stream) -> "InvestorConfig":
+        """One CSV contract for paths and uploaded buffers; no last-row wins."""
+        try:
+            reader = csv.DictReader(stream, strict=True)
+            headers = reader.fieldnames or []
+            if (not {"key", "value"}.issubset(headers)
+                    or len(headers) != len(set(headers))):
+                raise DataIngestionError("Configuration CSV requires unique key/value columns")
+            rows = {}
+            for ordinal, row in enumerate(reader, start=2):
+                if None in row:
+                    raise DataIngestionError(f"Configuration row {ordinal} has extra unquoted cells")
+                key = (row.get("key") or "").strip()
+                if not key:
+                    continue
+                if row.get("value") is None:
+                    raise DataIngestionError(f"Configuration row {ordinal} is missing its value cell")
+                if key in rows:
+                    raise DataIngestionError(f"Duplicate configuration key {key!r}")
+                rows[key] = row["value"].strip()
+        except csv.Error as error:
+            raise DataIngestionError("Configuration CSV is malformed") from error
         return cls.from_dict(rows)
 
     @classmethod
@@ -210,11 +231,11 @@ class InvestorConfig:
         _set_float(config, rows, "target_cash_buffer_eur")
 
         # Boolean flags
-        if "rebalancing_no_sell" in rows:
+        if rows.get("rebalancing_no_sell", "") != "":
             config.rebalancing_no_sell = _parse_bool(rows["rebalancing_no_sell"])
-        if "rebalancing_auto_relax" in rows:
+        if rows.get("rebalancing_auto_relax", "") != "":
             config.rebalancing_auto_relax = _parse_bool(rows["rebalancing_auto_relax"])
-        if "target_use_per_holding_only" in rows:
+        if rows.get("target_use_per_holding_only", "") != "":
             config.target_use_per_holding_only = _parse_bool(rows["target_use_per_holding_only"])
 
         # Dict fields
@@ -250,13 +271,22 @@ class InvestorConfig:
 def _set_float(config: InvestorConfig, rows: dict, key: str) -> None:
     if key in rows and rows[key] != "":
         try:
-            setattr(config, key, float(rows[key]))
-        except (ValueError, TypeError):
-            logger.warning("Failed to parse %s='%s', using default", key, rows[key])
+            maximum = 100.0 if key in {
+                "rebalancing_capital_gains_tax_standard_pctg",
+                "rebalancing_capital_gains_tax_government_pctg",
+            } else None
+            setattr(config, key, finite_nonnegative(rows[key], maximum=maximum))
+        except (ValueError, TypeError) as error:
+            raise DataIngestionError(f"Invalid configuration value for {key}") from error
 
 
 def _parse_bool(raw: str) -> bool:
-    return str(raw).strip().lower() in ("true", "1", "yes", "y", "t")
+    try:
+        if raw is None:
+            raise ValueError("missing boolean value")
+        return parse_boolean(raw)
+    except ValueError as error:
+        raise DataIngestionError("Invalid boolean configuration; expected true/false") from error
 
 
 # Canonical asset-class names for the invested allocation section
@@ -285,9 +315,9 @@ def _parse_invested_allocation(config: InvestorConfig, rows: dict) -> None:
     for csv_key, canonical in _INVESTED_ALLOC_KEYS.items():
         if csv_key in rows and rows[csv_key] != "":
             try:
-                found[canonical] = float(rows[csv_key])
-            except (ValueError, TypeError):
-                logger.warning("Failed to parse %s='%s'", csv_key, rows[csv_key])
+                found[canonical] = finite_nonnegative(rows[csv_key])
+            except (ValueError, TypeError) as error:
+                raise DataIngestionError(f"Invalid configuration value for {csv_key}") from error
     if found:
         config.invested_allocation_targets_pctg = found
 
@@ -297,9 +327,9 @@ def _parse_equity_geo(config: InvestorConfig, rows: dict) -> None:
     for csv_key, canonical in _EQUITY_GEO_KEYS.items():
         if csv_key in rows and rows[csv_key] != "":
             try:
-                found[canonical] = float(rows[csv_key])
-            except (ValueError, TypeError):
-                logger.warning("Failed to parse %s='%s'", csv_key, rows[csv_key])
+                found[canonical] = finite_nonnegative(rows[csv_key], maximum=100.0)
+            except (ValueError, TypeError) as error:
+                raise DataIngestionError(f"Invalid configuration value for {csv_key}") from error
     if found:
         config.equity_geo_targets_pctg = found
 

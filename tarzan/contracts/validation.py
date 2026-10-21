@@ -95,6 +95,23 @@ def currency_is_known(currency: str) -> bool:
     return currency in _ISO_4217
 
 
+def cash_flow_sign_error(otype: OrderType, net_eur: float, fees_eur: float = 0.0) -> Optional[str]:
+    """Validate bank cash direction, without inferring or changing an amount.
+
+    A sale or distribution may leave a small net debit when its explicit fee
+    exceeds the proceeds. Transfers carry a fee-only cash leg; transferred
+    basis is a separate security movement, not cash received from a sale.
+    Zero remains valid for non-cash acquisition/transfer evidence.
+    """
+    if otype is OrderType.BUY and net_eur > 0:
+        return "BUY cannot have incoming net_eur"
+    if otype in {OrderType.SELL, OrderType.COUPON, OrderType.DIVIDEND} and net_eur + fees_eur < -1e-9:
+        return f"{otype.value.upper()} cannot have outgoing proceeds beyond its explicit fees"
+    if otype in {OrderType.TRANSFER_IN, OrderType.TRANSFER_OUT} and net_eur > 0:
+        return "security transfer net_eur is fee-only, not incoming sale proceeds"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Order sign / type consistency
 # ---------------------------------------------------------------------------

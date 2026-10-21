@@ -12,9 +12,12 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from tarzan.contracts.targets import TargetSetOutcome
 
 
 class AssetClass(str, Enum):
@@ -115,6 +118,9 @@ class Holding:
     target_fixed_income: Optional[float] = None  # target weight as % of fixed income portion
     target_portfolio: Optional[float] = None  # target weight as % of the whole invested portfolio
     no_buy_no_sell: bool = False  # if True, exclude from rebalancing actions
+    # Source-plan authority survives an empty INVALID mapping. Assigned before
+    # enrichment; a standalone engine sees the same verdict as orchestration.
+    target_plan: Optional[TargetSetOutcome] = field(default=None, repr=False)
     # Seeded target instrument not currently held (quantity 0), added so the
     # optimizer can open a new position toward its target_portfolio weight.
     is_seeded_target: bool = False

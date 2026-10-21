@@ -12,6 +12,7 @@ from dataclasses import asdict
 from typing import Any, Optional, Union
 
 from tarzan.contracts.exceptions import DataIngestionError
+from tarzan.contracts.targets import TargetError, TargetSetOutcome, TargetSetStatus
 from tarzan.data.loader import (
     load_config,
     load_orders,
@@ -34,6 +35,9 @@ def _apply_per_holding_targets(holdings, targets: dict) -> None:
     resolved by lookup order, and ticker aliases never override a conflicting
     explicit ISIN.
     """
+    if isinstance(targets, TargetSetOutcome):
+        for holding in holdings:
+            holding.target_plan = targets
     if not targets:
         return
 
@@ -536,6 +540,14 @@ def _run_once(
         targets_per_holding_source, targets_per_holding_filename
     )
     _apply_per_holding_targets(holdings, targets_by_isin)
+    session.memo["target_plan"] = {
+        "status": targets_by_isin.status.value,
+        "planning_eligible": targets_by_isin.planning_eligible,
+        "error_codes": [error.code for error in targets_by_isin.errors],
+    }
+    session.ledger.append(LedgerEntryType.STAGE, {
+        "stage": "targets", **session.memo["target_plan"],
+    })
 
     # When the per-instrument plan carries weights, IT is the plan: the asset-class and
     # equity-geography targets are derived from it and the ones declared in targets.csv
@@ -677,6 +689,7 @@ def _run_once(
     # Preserve the established constructor contract for injected engines while
     # attaching the run-scoped valuation gate before computation.
     engine.planning_eligible = valuation.planning_eligible
+    engine.target_plan = targets_by_isin
     engine.valuation_assessment = valuation
     metrics = engine.compute_all()
     session.memo["workload"] = {
@@ -797,15 +810,20 @@ def _check_taxonomy_coverage(holdings) -> None:
 
 def _load_targets_or_empty(
     source: Optional[Union[str, io.BytesIO]], filename: str
-) -> dict:
-    """Load per-holding targets, tolerating a missing/unreadable source."""
+) -> TargetSetOutcome:
+    """Retain the distinction between optional absence and invalid input."""
     if source is None:
-        return {}
+        return TargetSetOutcome.absent()
     try:
         return load_targets_per_holding(source, filename)
     except Exception as e:  # noqa: BLE001
-        logger.warning("Per-holding targets unreadable (%s); none applied.", e)
-        return {}
+        from tarzan.runtime import data_quality as dq
+        message = f"Per-holding target input is unreadable ({type(e).__name__}); planning is Unavailable."
+        logger.error(message)
+        dq.error("target_load", message, context=filename or "targets")
+        return TargetSetOutcome(status=TargetSetStatus.INVALID, errors=(
+            TargetError("UNREADABLE_TARGET_INPUT", message, "", ()),
+        ))
 
 
 # Supported production boundary: one active single-user analysis. Waiting

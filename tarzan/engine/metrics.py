@@ -90,12 +90,14 @@ class MetricsEngine:
                  rebalance_seeds: Optional[list] = None,
                  *,
                  planning_eligible: bool = True,
-                 valuation_assessment=None):
+                 valuation_assessment=None,
+                 target_plan=None):
         self.holdings = holdings
         self.config = config
         self.orders = orders
         self.planning_eligible = planning_eligible
         self.valuation_assessment = valuation_assessment
+        self.target_plan = target_plan
         # Not-held target instruments (quantity 0) used ONLY by the rebalancer
         # so it can open new positions. They are deliberately excluded from
         # the portfolio snapshot (holdings, returns, allocations).
@@ -1050,12 +1052,31 @@ class MetricsEngine:
     # Rebalancing
     # ------------------------------------------------------------------
     def _rebalancing(self, ctx: dict) -> None:
-        if self.config is None:
+        ctx["planning_availability"] = "AVAILABLE"
+        plans = [self.target_plan] + [getattr(h, "target_plan", None) for h in self.holdings]
+        invalid_targets = any(plan is not None and not plan.planning_eligible for plan in plans)
+        missing_required_plan = (
+            self.config is not None and self.config.target_use_per_holding_only
+            and self.target_plan is not None and self.target_plan.status.value == "ABSENT"
+        )
+        if invalid_targets or missing_required_plan:
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_plans"] = None
+            ctx["planning_availability"] = "UNAVAILABLE"
+            from tarzan.runtime import data_quality as dq
+            dq.error("rebalancing", "planning is Unavailable because its target set is invalid or required but absent",
+                     context="target_plan")
+            return
+        if self.config is None:
+            ctx["planning_availability"] = "UNAVAILABLE"
+            ctx["rebalancing_suggestions"] = None
+            ctx["rebalancing_verifications"] = None
+            ctx["rebalancing_plans"] = None
             return
         mechanics_unavailable = ctx.get("_order_mechanics_unavailable")
         if mechanics_unavailable:
+            ctx["planning_availability"] = "UNAVAILABLE"
             # Current allocation analytics may use independently established
             # valuation/category evidence, but executable planning requires an
             # exact instrument-kind adapter. Historical price completeness is
@@ -1073,6 +1094,7 @@ class MetricsEngine:
             )
             return
         if not self.planning_eligible:
+            ctx["planning_availability"] = "UNAVAILABLE"
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
             ctx["rebalancing_plans"] = None
@@ -1085,6 +1107,7 @@ class MetricsEngine:
             )
             return
         if not ctx.get("classification_available", True):
+            ctx["planning_availability"] = "UNAVAILABLE"
             ctx["rebalancing_suggestions"] = None
             ctx["rebalancing_verifications"] = None
             ctx["rebalancing_plans"] = None
@@ -2206,6 +2229,7 @@ class MetricsEngine:
             rebalancing_suggestions=ctx.get("rebalancing_suggestions"),
             rebalancing_verifications=ctx.get("rebalancing_verifications"),
             rebalancing_plans=ctx.get("rebalancing_plans"),
+            planning_availability=ctx.get("planning_availability", "UNAVAILABLE"),
             benchmark_comparison=ctx.get("benchmark_comparison", pd.DataFrame()),
             history_availability=ctx.get("history_availability", "AVAILABLE"),
             history_unavailable_instruments=tuple(

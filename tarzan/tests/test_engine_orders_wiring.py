@@ -136,6 +136,7 @@ def test_c1_orchestrator_never_wires_post_asof_orders_to_financial_consumers(
     from tarzan import orchestrator, runtime
     from tarzan.models.investor_config import InvestorConfig
     from tarzan.models.portfolio import PortfolioMetrics
+    from tarzan.contracts.targets import TargetSetOutcome
 
     cutoff = datetime.date(2025, 6, 29)
     future_day = cutoff + datetime.timedelta(days=days_after)
@@ -171,7 +172,7 @@ def test_c1_orchestrator_never_wires_post_asof_orders_to_financial_consumers(
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(orchestrator, "load_config", lambda *a, **k: config)
             mp.setattr(orchestrator, "load_orders", lambda *a, **k: list(orders))
-            mp.setattr(orchestrator, "_load_targets_or_empty", lambda *a, **k: {})
+            mp.setattr(orchestrator, "_load_targets_or_empty", lambda *a, **k: TargetSetOutcome.absent())
             mp.setattr(orchestrator, "_check_taxonomy_coverage", lambda *a, **k: None)
             mp.setattr(orchestrator, "MetricsEngine", CapturingMetricsEngine)
             mp.setattr(

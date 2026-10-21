@@ -129,6 +129,7 @@ class PortfolioMetrics:
     # Excel and the newsletter can show them side by side. Each entry:
     # {"label", "no_sell", "suggestions", "verifications"}.
     rebalancing_plans: Optional[list] = None
+    planning_availability: str = "AVAILABLE"
     benchmark_comparison: pd.DataFrame = field(default_factory=pd.DataFrame)
     history_availability: str = "AVAILABLE"
     history_unavailable_instruments: tuple[str, ...] = ()

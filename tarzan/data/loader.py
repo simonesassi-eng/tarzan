@@ -28,6 +28,7 @@ from tarzan.contracts.targets import (
     ValidatedTargetRow,
 )
 from tarzan.contracts.validation import (
+    cash_flow_sign_error,
     check_order_sign,
     currency_is_known,
     isin_format_error,
@@ -59,19 +60,9 @@ def load_config(source: Optional[Union[str, io.BytesIO]] = None) -> InvestorConf
         return InvestorConfig.from_csv(source)
 
     # BytesIO from file uploader
-    import csv as csv_mod
     source.seek(0)
-    text = source.read().decode("utf-8")
-    reader = csv_mod.DictReader(io.StringIO(text))
-    # Only ``key`` and ``value`` columns are required. Extra columns
-    # (e.g. ``description``) are tolerated so the config file can be
-    # self-documenting without breaking the parser.
-    rows = {
-        row["key"].strip(): row["value"].strip()
-        for row in reader
-        if row.get("key") and "value" in row
-    }
-    return InvestorConfig.from_dict(rows)
+    text = source.read().decode("utf-8-sig")
+    return InvestorConfig.from_stream(io.StringIO(text))
 
 
 def load_orders(source: Union[str, io.BytesIO], filename: str = "",
@@ -94,6 +85,8 @@ def load_orders(source: Union[str, io.BytesIO], filename: str = "",
             actionable message). Default False keeps the historical lenient
             behavior (unknown columns tolerated with a warning), so the
             automated newsletter and existing files are unaffected.
+            Economic cash-direction errors always reject the complete ledger:
+            lenient column handling does not license guessing financial flows.
 
     Returns:
         List of validated Order objects (possibly empty).
@@ -265,6 +258,22 @@ def _parse_order_row(
         logger.warning("Order %s", msg)
         dq.warning(_DQ_SOURCE, msg, context=isin)
     quantity = sign.quantity
+    raw_fees = _clean_str(row.get("fees_eur"))
+    try:
+        fees_eur = _parse_number(raw_fees) if raw_fees else 0.0
+        if fees_eur < 0:
+            raise ValueError("negative fee")
+    except (TypeError, ValueError) as error:
+        raise DataIngestionError(
+            f"order row {int(idx) + 2} ({isin}): fees_eur must be finite and nonnegative"
+        ) from error
+    cash_error = cash_flow_sign_error(otype, net_eur, fees_eur)
+    if cash_error:
+        # Financial-direction errors are fatal in both modes. Dropping a real
+        # position or guessing its money sign would create a different ledger.
+        raise DataIngestionError(
+            f"order row {int(idx) + 2} ({isin}): {cash_error}; correct the source ledger"
+        )
 
     # Currency — keep an unknown code but fall back to EUR and flag it.
     currency = normalize_currency(row.get("currency"))
@@ -287,7 +296,7 @@ def _parse_order_row(
         price_native=_parse_number_optional(row.get("price_native")),
         fx_rate=_parse_number_optional(row.get("fx_rate")),
         gross_eur=gross_eur,
-        fees_eur=_parse_number_safe(row.get("fees_eur"), "fees_eur", idx) or 0.0,
+        fees_eur=fees_eur,
         net_eur=net_eur,
         source=_clean_str(row.get("source")) or "fineco",
         instrument_kind=_parse_instrument_kind(
@@ -378,7 +387,17 @@ def load_targets_per_holding(
                 source_rows=(source_row,),
             ))
             continue
-        nbns = _clean_str(row.get("no_buy_no_sell")).lower()
+        from tarzan.contracts.scalars import parse_boolean
+        try:
+            nbns = parse_boolean(_clean_str(row.get("no_buy_no_sell")))
+        except ValueError:
+            nbns = True  # no ambiguous protection can authorize a trade
+            errors.append(TargetError(
+                code="INVALID_TRADING_PROTECTION",
+                message="no_buy_no_sell requires an explicit true/false value",
+                canonical_key=canonical_key,
+                source_rows=(source_row,),
+            ))
         entry = {
             "isin": isin,
             "ticker": ticker,
@@ -386,7 +405,7 @@ def load_targets_per_holding(
             "target_equities": parse_target(row.get("target_equities"), "target_equities", source_row, canonical_key),
             "target_fixed_income": parse_target(row.get("target_fixed_income"), "target_fixed_income", source_row, canonical_key),
             "target_portfolio": parse_target(row.get("target_portfolio"), "target_portfolio", source_row, canonical_key),
-            "no_buy_no_sell": nbns in ("true", "1", "yes"),
+            "no_buy_no_sell": nbns,
         }
         validated = ValidatedTargetRow(
             source_name=filename or "targets",

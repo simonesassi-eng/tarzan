@@ -119,7 +119,7 @@ class SummaryProjector:
                 else Availability.AVAILABLE
             )
 
-        planning_unavailable = metrics is None or any(
+        planning_unavailable = metrics is None or getattr(metrics, "planning_availability", "") == "UNAVAILABLE" or any(
             record in critical for record in planning_failures
         )
         planning_availability = (
