@@ -130,3 +130,34 @@ aggirare il controllo.
 Restano da eseguire, con l'accesso appropriato: verifica CI delle dipendenze
 bloccate e verifica del deployment reale.
 L'audit e i test non costituiscono una garanzia di assenza di ulteriori bug.
+
+## Correzione aggiuntiva: metadati MONEY
+
+Yahoo restituisce `quoteType=EQUITY` e `typeDisp=Equity` per MONEY.MI, mentre
+il tipo locale e l'identità OpenFIGI verificata per ISIN indicano ETF. Questo
+generava un conflitto spurio: la prima valorizzazione conservava il valore
+di ripiego e registrava un errore, anche quando un successivo aggiornamento
+live recuperava la quotazione corretta.
+
+La riconciliazione ora corregge soltanto quelle etichette generiche, richiedendo
+sia un tipo locale ETF non ambiguo sia la conferma OpenFIGI dello stesso ISIN.
+Non modifica la risposta condivisa di Yahoo, non riclassifica l'esposizione
+del fondo come azionaria e mantiene bloccati i conflitti specifici con azioni,
+obbligazioni o altri tipi. Le esecuzioni storiche usano solo identità osservate
+entro il confine temporale, senza interrogare OpenFIGI live.
+
+Verifiche:
+
+- **20 nuovi test**: regressione MONEY con e senza cache, conflitti locali e
+  del provider, identità non verificata, fonte non OpenFIGI, ISIN malformati,
+  normali azioni e confini temporali delle esecuzioni storiche.
+- Suite completa: **1537 test passati in 46,02 secondi**, nessun test saltato;
+  restano i due warning di deprecazione protobuf già presenti.
+- Confronto prima/dopo sulla posizione MONEY ricavata dagli ordini reali,
+  riusando esattamente la stessa quotazione Yahoo: errore di classificazione
+  riprodotto prima e assente dopo; valore verificato come quantità per prezzo,
+  senza il successivo aggiornamento della sessione live.
+- Compilazione, `pip check` e `git diff --check`: superati.
+- Ordini e target personali invariati; nessuna email inviata.
+
+La correzione riguarda soltanto Python e non richiede aggiornamenti Apps Script.

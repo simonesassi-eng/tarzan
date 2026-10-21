@@ -2647,6 +2647,73 @@ def resolve_effective_order_instruments(orders: list) -> tuple[list, dict]:
 # Classification
 # ---------------------------------------------------------------------------
 
+def _reconcile_verified_etf_metadata(info: dict, holding: Holding) -> dict:
+    """Correct only Yahoo's generic EQUITY label for an ISIN-verified ETF.
+
+    Quote metadata is not allowed to erase specific input/provider conflicts.
+    OpenFIGI must independently verify ETF mechanics for this exact ISIN; an
+    ETF name, ticker, exposure category or an uncorroborated input is not proof.
+    Return a projection, never mutate the shared provider response.
+    """
+    from tarzan import runtime
+    from tarzan.instruments.registry import (
+        InstrumentKind, TypeEvidenceGateway, TypeResolutionState,
+    )
+
+    if str(info.get("quoteType") or "").strip().upper() != "EQUITY":
+        return info
+    gateway = TypeEvidenceGateway()
+    local = gateway.resolve(
+        holding.security_type, holding.instrument_type,
+        *holding.instrument_kind_evidence,
+    )
+    if local.kind is not InstrumentKind.ETF:
+        return info
+    type_disp = info.get("typeDisp")
+    generic_display = str(type_disp or "").strip().upper() == "EQUITY"
+    specific = gateway.resolve(
+        info.get("instrumentType"), info.get("securityType"),
+        None if generic_display else type_disp,
+    )
+    if (
+        specific.state is TypeResolutionState.AMBIGUOUS
+        or specific.kind not in (None, InstrumentKind.ETF)
+    ):
+        return info
+
+    isin = _normalized_profile_isin(holding.isin)
+    if len(isin) != 12 or not isin[:2].isalpha():
+        return info
+    # Fresh structured identity takes precedence over a cached observation.
+    # Pinned runs must neither open transport nor consume a previous LIVE memo.
+    raw = _openfigi_raw(isin) if runtime.allows_live_transport() else []
+    if raw:
+        profile = _build_openfigi_profile(isin, raw)
+    else:
+        boundary = runtime.as_of() or runtime.context().captured_at
+        profile = _reclassify_cached_profile(
+            price_cache.load_instrument_profile(
+                isin, as_of=boundary, allow_stale=True,
+            )
+        )
+    if (
+        _profile_kind(profile) is not InstrumentKind.ETF
+        or str((profile or {}).get("source") or "").strip().upper() != "OPENFIGI"
+    ):
+        return info
+
+    projected = {**info, "quoteType": "ETF"}
+    if generic_display:
+        projected["typeDisp"] = "ETF"
+    dq.info(
+        "instrument_metadata",
+        "Yahoo's generic EQUITY label was reconciled with the exact "
+        "OpenFIGI-verified ETF identity; ETF unit mechanics were retained.",
+        context=isin,
+    )
+    return projected
+
+
 def _infer_instrument_type(info: dict, holding: Holding) -> str:
     """Resolve a display kind from exact declared evidence only."""
     from tarzan.instruments.registry import TypeEvidenceGateway
@@ -2984,8 +3051,8 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     Fetches price history, metadata, converts to EUR, extracts TER/yield/sector.
     Per-holding errors are caught and logged — the holding is returned partially enriched.
 
-    Returns the enriched holding and the raw yfinance ``info`` dict used,
-    so the caller can classify without re-fetching.
+    Returns the enriched holding and the identity-reconciled ``info`` projection
+    used, so the caller can classify without re-fetching or mutating the memo.
     """
     ticker = holding.ticker
     if not ticker:
@@ -3074,6 +3141,7 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
             or selected_ticker
             or ticker
         )
+        info = _reconcile_verified_etf_metadata(info, holding)
         holding.instrument_type = _infer_instrument_type(info, holding)
         holding.fetch_timestamp = dt.now(timezone.utc)
 
