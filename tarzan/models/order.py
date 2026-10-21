@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 from enum import Enum
 from typing import Optional
 
@@ -145,3 +145,42 @@ class Order:
         if self.type is OrderType.TRANSFER_IN:
             return abs(self.gross_eur or 0.0)
         return abs(self.net_eur) if self.net_eur else abs(self.gross_eur or 0.0)
+
+
+@dataclass(frozen=True, eq=False)
+class OrderFact:
+    """Defensive immutable copy at the effective-order financial boundary."""
+
+    date: datetime.date
+    trade_date: datetime.date
+    type: OrderType
+    isin: str
+    name: str
+    ticker: str
+    quantity: float
+    currency: str
+    price_native: Optional[float]
+    fx_rate: Optional[float]
+    gross_eur: float
+    fees_eur: float
+    net_eur: float
+    source: str = "fineco"
+    order_id: str = ""
+    instrument_kind: Optional[InstrumentKind] = None
+    instrument_equivalence_group: Optional[str] = None
+
+    @classmethod
+    def from_order(cls, order: Order | OrderFact) -> OrderFact:
+        return cls(**{item.name: getattr(order, item.name) for item in fields(cls)})
+
+    # Both types share economic behavior; only the ingestion record is mutable.
+    natural_key = Order.natural_key
+    is_position_change = Order.is_position_change
+    acquisition_cost_eur = Order.acquisition_cost_eur
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, (Order, OrderFact)):
+            return NotImplemented
+        return all(getattr(self, item.name) == getattr(other, item.name) for item in fields(self))
+
+    __hash__ = None

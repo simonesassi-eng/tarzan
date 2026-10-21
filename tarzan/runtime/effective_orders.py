@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date
 from typing import Iterable, Optional
 
-from tarzan.models.order import Order
+from tarzan.models.order import Order, OrderFact
 from tarzan.runtime.io_utils import canonical_json_bytes
 
 
@@ -15,7 +15,7 @@ from tarzan.runtime.io_utils import canonical_json_bytes
 class EffectiveOrderSnapshot:
     """Stable, immutable order view shared by every financial consumer."""
 
-    orders: tuple[Order, ...]
+    orders: tuple[OrderFact, ...]
     boundary: Optional[date]
     accepted_count: int
     excluded_count: int
@@ -35,7 +35,7 @@ class EffectiveOrderSnapshot:
         visible = tuple(
             sorted(
                 (
-                    order
+                    OrderFact.from_order(order)
                     for order in source
                     if boundary is None or effective_trade_date(order) <= boundary
                 ),
@@ -46,7 +46,18 @@ class EffectiveOrderSnapshot:
         )
         canonical = [
             {
-                "order_id": order.order_id,
+                # Every field can affect mechanics, tax, conversion, identity
+                # or the report. A digest of cash/quantity alone is incomplete.
+                **{
+                    item.name: (
+                        getattr(order, item.name).value
+                        if hasattr(getattr(order, item.name), "value")
+                        else getattr(order, item.name).isoformat()
+                        if isinstance(getattr(order, item.name), date)
+                        else getattr(order, item.name)
+                    )
+                    for item in fields(order)
+                },
                 "effective_trade_date": effective_trade_date(order).isoformat(),
                 "settlement_date": order.date.isoformat(),
                 "type": order.type.value,

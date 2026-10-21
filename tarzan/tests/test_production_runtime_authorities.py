@@ -588,7 +588,7 @@ def test_materiality_aggregates_missing_rows_by_kind_and_policy():
         if entry.payload.get("failure_id") == critical.failure_id
         and entry.entry_type.value == "FAILURE_OPEN"
     )
-    assert critical_entry.payload["context"]["material_groups"] == [{
+    assert critical_entry.to_dict()["payload"]["context"]["material_groups"] == [{
         "instrument_kind": "BOND",
         "policy_id": "bond-current",
         "missing_count": 2,
@@ -802,7 +802,7 @@ def test_indeterminate_valuation_basis_is_critical_even_with_known_denominator()
         if entry.payload.get("failure_id") == critical.failure_id
         and entry.entry_type.value == "FAILURE_OPEN"
     )
-    assert critical_entry.payload["context"]["material_groups"] == [{
+    assert critical_entry.to_dict()["payload"]["context"]["material_groups"] == [{
         "instrument_kind": "BOND",
         "policy_id": "bond-current",
         "missing_count": 1,

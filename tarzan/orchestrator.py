@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from typing import Any, Optional, Union
 
 from tarzan.contracts.exceptions import DataIngestionError
@@ -544,6 +544,7 @@ def _run_once(
         "status": targets_by_isin.status.value,
         "planning_eligible": targets_by_isin.planning_eligible,
         "error_codes": [error.code for error in targets_by_isin.errors],
+        "rows": dict(targets_by_isin),
     }
     session.ledger.append(LedgerEntryType.STAGE, {
         "stage": "targets", **session.memo["target_plan"],
@@ -846,7 +847,10 @@ _SERIAL_EXECUTION_GATE = SerialExecutionGate()
 def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, Any]:
     """Return canonical output-affecting evidence for the stable Analysis ID."""
     context = session.context
+    from tarzan.contracts.material import MATERIAL_FACTS_VERSION, material_metrics
+
     evidence: dict[str, Any] = {
+        "material_facts_version": MATERIAL_FACTS_VERSION,
         "mode": context.mode.value,
         "effective_date": (
             context.effective_date.isoformat() if context.effective_date else None
@@ -858,14 +862,17 @@ def _analysis_evidence(session: RunSession, metrics: Any = None) -> dict[str, An
         },
         "policy_versions": dict(context.policy_versions),
         "config": dict(session.config_snapshot),
-        "effective_orders": session.memo.get("effective_orders"),
+        "effective_orders": (
+            {key: value for key, value in session.memo["effective_orders"].items()
+             if key != "excluded_count"}
+            if session.memo.get("effective_orders") else None
+        ),
         "valuation": session.memo.get("valuation"),
+        "instrument_resolution": session.memo.get("instrument_resolution"),
+        "target_plan": session.memo.get("target_plan"),
     }
     if metrics is not None:
-        try:
-            evidence["summary"] = metrics.to_summary_dict()
-        except Exception:  # noqa: BLE001 - identity remains available on partial runs
-            evidence["summary"] = {"status": "unavailable"}
+        evidence["metrics"] = material_metrics(metrics)
     return evidence
 
 
@@ -877,7 +884,14 @@ def _record_terminal_result(
     outcome: str,
     started_at: float,
 ) -> RunResult:
-    analysis_id = canonical_analysis_id(_analysis_evidence(session, metrics))
+    evidence = _analysis_evidence(session, metrics)
+    # Per-holding policy can derive effective class/geography targets after the
+    # initial CSV was loaded. Both declared and actually used config matter.
+    if config is not None and is_dataclass(config):
+        from tarzan.contracts.material import material_value
+
+        evidence["effective_config"] = material_value(config)
+    analysis_id = canonical_analysis_id(evidence)
     session.analysis_id = analysis_id
     from tarzan.runtime.workload import build_workload_observation
 

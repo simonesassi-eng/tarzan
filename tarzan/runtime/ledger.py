@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Generic, Iterable, Mapping, Optional, TypeVar
 
 from tarzan.runtime.io_utils import canonical_json_bytes
+from tarzan.contracts.immutable import freeze_json, thaw_json
 
 
 LEDGER_SCHEMA_VERSION = "1.0"
@@ -69,13 +70,16 @@ class LedgerEntry:
     recorded_at: datetime
     payload: Mapping[str, Any]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", freeze_json(self.payload))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "sequence": self.sequence,
             "entry_id": self.entry_id,
             "entry_type": self.entry_type.value,
             "recorded_at": self.recorded_at.isoformat(),
-            "payload": dict(self.payload),
+            "payload": thaw_json(self.payload),
         }
 
 
@@ -95,6 +99,10 @@ class FailureRecord:
     analytical_impact: str
     publication_impact: str
     closed: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "original_failure", freeze_json(self.original_failure))
+        object.__setattr__(self, "remedies", tuple(freeze_json(item) for item in self.remedies))
 
 
 class ErrorNormalizer:
@@ -117,7 +125,7 @@ class ErrorNormalizer:
                 "message": cls._sanitize_text(str(value)),
             }
         if is_dataclass(value):
-            value = asdict(value)
+            value = {item.name: getattr(value, item.name) for item in fields(value)}
         if isinstance(value, Mapping):
             return {
                 str(key): "[REDACTED]" if cls._SENSITIVE_KEYS.search(str(key))
@@ -146,10 +154,19 @@ class RunLedger:
         self._lock = threading.RLock()
         self._entries: list[LedgerEntry] = []
         self._failure_ordinals: dict[tuple[str, str], int] = {}
+        self._remedy_ordinals: dict[str, int] = {}
+        self._failure_revision = 0
+        self._failure_cache_revision = -1
+        self._failure_cache: tuple[FailureRecord, ...] = ()
 
     def append(self, entry_type: LedgerEntryType, payload: Mapping[str, Any]) -> LedgerEntry:
         normalized = ErrorNormalizer.normalize(payload)
         with self._lock:
+            if entry_type is LedgerEntryType.REMEDY:
+                failure_id = normalized["failure_id"]
+                ordinal = self._remedy_ordinals.get(failure_id, 0) + 1
+                self._remedy_ordinals[failure_id] = ordinal
+                normalized["ordinal"] = ordinal
             sequence = len(self._entries) + 1
             stable = canonical_json_bytes(
                 {"type": entry_type.value, "payload": normalized, "sequence": sequence},
@@ -165,6 +182,10 @@ class RunLedger:
                 payload=normalized,
             )
             self._entries.append(entry)
+            if entry_type in (
+                LedgerEntryType.FAILURE_OPEN, LedgerEntryType.REMEDY, LedgerEntryType.FAILURE_CLOSE,
+            ):
+                self._failure_revision += 1
             return entry
 
     def open_failure(
@@ -211,14 +232,8 @@ class RunLedger:
         availability: Availability,
         provenance: Iterable[str] = (),
     ) -> LedgerEntry:
-        remedies = [
-            entry for entry in self.entries
-            if entry.entry_type is LedgerEntryType.REMEDY
-            and entry.payload.get("failure_id") == failure_id
-        ]
         return self.append(LedgerEntryType.REMEDY, {
             "failure_id": failure_id,
-            "ordinal": len(remedies) + 1,
             "remedy_id": remedy_id,
             "action": action,
             "outcome": outcome,
@@ -249,24 +264,28 @@ class RunLedger:
             return tuple(self._entries)
 
     def failure_records(self) -> tuple[FailureRecord, ...]:
-        opens = {
-            entry.payload["failure_id"]: entry
-            for entry in self.entries
-            if entry.entry_type is LedgerEntryType.FAILURE_OPEN
-        }
+        # Take one consistent snapshot and index it once. The old projection
+        # re-copied and re-scanned the complete log for every open failure.
+        with self._lock:
+            revision = self._failure_revision
+            if self._failure_cache_revision == revision:
+                return self._failure_cache
+            entries = tuple(self._entries)
+        opens: dict[str, LedgerEntry] = {}
+        remedy_index: dict[str, list[Mapping[str, Any]]] = {}
+        closures: dict[str, LedgerEntry] = {}
+        for entry in entries:
+            failure_id = entry.payload.get("failure_id")
+            if entry.entry_type is LedgerEntryType.FAILURE_OPEN:
+                opens[failure_id] = entry
+            elif entry.entry_type is LedgerEntryType.REMEDY:
+                remedy_index.setdefault(failure_id, []).append(entry.payload)
+            elif entry.entry_type is LedgerEntryType.FAILURE_CLOSE:
+                closures[failure_id] = entry
         records: list[FailureRecord] = []
         for failure_id, opened in opens.items():
-            remedies = tuple(
-                dict(entry.payload)
-                for entry in self.entries
-                if entry.entry_type is LedgerEntryType.REMEDY
-                and entry.payload.get("failure_id") == failure_id
-            )
-            closure = next((
-                entry for entry in reversed(self.entries)
-                if entry.entry_type is LedgerEntryType.FAILURE_CLOSE
-                and entry.payload.get("failure_id") == failure_id
-            ), None)
+            remedies = tuple(remedy_index.get(failure_id, ()))
+            closure = closures.get(failure_id)
             close_payload = closure.payload if closure else {}
             records.append(FailureRecord(
                 failure_id=failure_id,
@@ -284,4 +303,9 @@ class RunLedger:
                 publication_impact=str(opened.payload.get("publication_impact", "")),
                 closed=closure is not None,
             ))
-        return tuple(records)
+        result = tuple(records)
+        with self._lock:
+            if self._failure_revision == revision:
+                self._failure_cache = result
+                self._failure_cache_revision = revision
+        return result

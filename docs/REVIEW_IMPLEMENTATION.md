@@ -12,7 +12,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R05 | Evidence-backed corporate-action repair | Pending |
 | R07–R08, R18, R20 | Causal identity, single-flight, cache API, real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
-| R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Pending |
+| R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R17, R24 | Drive selection/lifecycle and authenticated Update messages | Pending |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
 | R26–R27 | Domain/report boundaries, shared identity catalog, consistent installation/docs | Pending |
@@ -37,3 +37,12 @@ and tax consumers use the same retained mechanics authority. Existing stamp
 fixtures now declare their ETF mechanics explicitly; return/price expectations
 were preserved. MONEY's independently verified generic-EQUITY reconciliation
 remains narrow, and specific provider conflicts still block valuation.
+
+The analysis digest now covers all published financial tables and full series,
+effective target rows, instrument-resolution evidence and the actually used
+configuration. Operational clocks are excluded. The narrow external summary
+schema remains version 3; its contents did not expand. Effective orders are
+defensive immutable facts (including equal legitimate fills), and ledger
+projections cannot mutate nested source evidence. Failure projection indexes
+one consistent entry snapshot, caches immutable results, and never rescans the
+whole log per failure. Remedy ordinals are assigned atomically at append.
