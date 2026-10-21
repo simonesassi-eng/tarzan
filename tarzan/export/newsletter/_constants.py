@@ -186,10 +186,8 @@ def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=None):
     # untrusted text becomes markup and the only place it can be escaped once
     # for every table. Ten curated names carry an ampersand ("iShares Core S&P
     # 500", "L&G Multi-Strategy", the Return Stacked family), which reached the
-    # document as a bare & — invalid HTML that mail clients happen to tolerate,
-    # so it rendered fine and was never caught. The digest template is
-    # ``.html.j2``, an extension select_autoescape() does not match, so Jinja
-    # escapes nothing on the way out either.
+    # document as a bare &. This builder owns the text-to-HTML boundary:
+    # complete section HTML is intentionally passed through |safe later.
     name_html = (f'<span style="color:{P["muted"]};">{escape(str(name))}</span>'
                  if name else "")
     inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'

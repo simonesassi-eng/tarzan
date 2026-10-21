@@ -273,7 +273,7 @@ class TestEveryMarkupBoundaryEscapes:
         tmpl = (pathlib.Path("tarzan/export/templates/portfolio_digest.html.j2")
                 .read_text(encoding="utf-8"))
         assert "{{ plan.label|e }}" in tmpl, (
-            "the plan label must stay escaped: autoescape is off for .html.j2"
+            "the explicit plan-label text boundary must remain escaped"
         )
         assert self._clean(Environment(autoescape=False)
                            .from_string("{{ v|e }}")
@@ -287,7 +287,7 @@ class TestEveryMarkupBoundaryEscapes:
         assert self._clean(_bridge_svg([row], [row], 100, _Cfg()))
 
     def test_the_hero_tile_and_status_bar_escape(self):
-        """Both go through the template, which does not escape."""
+        """Both expose typed escaped text, without a second template escape."""
         from tarzan.export.newsletter._constants import _NewsletterContext
         from tarzan.export.newsletter._sections_alloc import _build_hero
         hero = _build_hero(_NewsletterContext(

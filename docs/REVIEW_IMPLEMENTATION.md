@@ -20,6 +20,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Implemented locally; fixed macro projection only, unique per-run snapshots, native bounded queue and repeated age checks before SMTP |
 | R26 | Domain/report boundaries and shared identity catalog | Implemented; shared target identity catalog, defensive ReportView/RunRenderContext and immutable prepared display references; real section builders/semantic gate do not consult later global taxonomy |
 | R27 | Consistent installation/docs | Pending |
+| Additional boundary check | HTML text escaping | Implemented locally; .html.j2 autoescaping enabled, typed escaped text preserves single escaping, plain notes/feed metadata cannot inject markup |
 
 Remote legacy-market cache cleanup was explicitly authorized. Only the eight
 resolved `tarzan-market-cache-*` IDs were deleted; the pip cache was preserved.
@@ -191,3 +192,25 @@ never format financial messages, arguments, addresses or tracebacks; original
 records remain intact for private run capture. Entry-point failures and corrupt
 cache-reader diagnostics are covered too. Local logging retains detail. Older
 public run logs were not deleted and cannot be made confidential retroactively.
+
+The newsletter's `.html.j2` filenames did not match the previously configured
+autoescape suffixes. These are now explicitly enabled. Already-escaped labels
+and names have an explicit safe *escaped-text* type (raw input is converted to
+plain text and escaped first), so ampersands are not escaped twice. Plain
+notes, feed identities and section subtitles receive the template's default
+text escape. Complete code-built chart/section HTML remains an explicit markup
+boundary; its market category/name labels are escaped by their builders.
+The font literal inside CSS raw text is code-owned, not provider content.
+
+The synthetic golden changes only entity serialization: decoded HTML bytes,
+parsed element/attribute/text events, numbers and CSS are independently compared
+before regeneration. The missing-critical-benchmark fixture remains rejected by
+the semantic gate; escaping does not manufacture its missing data or relax the
+gate. Adversarial provider/broker names, feed columns, risk notes, AI text and
+section labels cannot introduce images/scripts/event handlers into the document.
+The full suite passes 1,889 tests both in the existing environment and in a clean
+hash-locked environment under Actions logging context. The actual-portfolio
+checkpoint has no financial changes, network attempts or semantic errors;
+its parsed structure, attributes and whitespace-normalized text are unchanged.
+MarkupSafe is now declared as a direct dependency at its already-locked version;
+no dependency version was upgraded for this fix.

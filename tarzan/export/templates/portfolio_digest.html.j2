@@ -25,7 +25,7 @@
    band across the column instead of a floating word. #}
 <td width="100%" style="padding-left:12px;"><div style="height:1px;background:{{ palette.border }};font-size:0;line-height:0;">&nbsp;</div></td>
 </tr></table>
-{%- if sub %}<div style="margin-top:7px;{{ type.prose }}color:{{ palette.muted }};">{{ sub|safe }}</div>{% endif -%}
+{%- if sub %}<div style="margin-top:7px;{{ type.prose }}color:{{ palette.muted }};">{{ sub }}</div>{% endif -%}
 {%- endmacro %}
 <!DOCTYPE html>
 <html lang="en">
@@ -45,7 +45,9 @@
        own tile instead of overflowing the row. Pin the adjustment off too, so
        the declared sizes are the rendered ones and nothing needs to wrap. #}
     body, table, td, div, span { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; text-size-adjust: 100%; }
-    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: {{ font_stack }}; }
+    {# CSS raw text uses only the code-owned font literal. HTML attributes
+       remain autoescaped; provider/broker text never reaches this sink. #}
+    body { margin: 0; padding: 0; background: {{ palette.page }}; font-family: {{ font_stack|safe }}; }
     table { border-collapse: collapse; }
     img { display: block; border: 0; }
     a { color: {{ palette.accent }}; text-decoration: none; }
@@ -280,10 +282,7 @@
               {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
               <div style="margin-top:16px;{{ type.title }}color:{{ palette.accent }};">
-                {# |e explicitly: this template is .html.j2, an extension
-                   select_autoescape() does not match, so nothing is escaped by
-                   default and the plan label carries an ampersand
-                   ("Buy & sell (full rebalance)"). #}{{ plan.label|e }}
+                {{ plan.label|e }}
                 {# Which plan the configuration runs, then whether it can be
                    executed. Both plans are computed every run and both can be
                    executable, so the status alone left the reader with two trade

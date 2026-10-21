@@ -256,7 +256,7 @@ def _render_newsletter_facts(
         os.path.dirname(os.path.dirname(__file__)), "templates")
     env = Environment(
         loader=FileSystemLoader(template_dir),
-        autoescape=select_autoescape(["html", "xml"]),
+        autoescape=select_autoescape(["html", "xml", "html.j2", "xml.j2"]),
         trim_blocks=True,
         lstrip_blocks=True,
     )

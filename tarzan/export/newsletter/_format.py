@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Optional
 
+from markupsafe import Markup
 import pandas as pd
 
 from tarzan.export._format import base_symbol
 from tarzan.export.newsletter._constants import FONT_STACK, PALETTE, TYPE_PX
+
+
+def _escaped_text(value) -> Markup:
+    """Typed, already-escaped text, never trusted provider/broker markup.
+
+    Preserve the escaped-text context API while making the ownership explicit:
+    Jinja must not escape these values twice. Convert to plain str first so a
+    supplied __html__ hook/Markup cannot bypass the actual text escape.
+    """
+    return Markup(escape(str(value)))
 
 
 def is_missing(value) -> bool:

@@ -40,6 +40,7 @@ from tarzan.export.newsletter._constants import (
 )
 from tarzan.export.newsletter._format import (
     _display_ticker,
+    _escaped_text,
     _pct,
     _pct_compact,
     _signed,
@@ -205,7 +206,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     def _region_head(cat: str) -> str:
         return (f'<tr><td colspan="4" style="padding:6px 5px 4px;'
                 f'border-bottom:1px solid {P["row_rule"]};{TYPE["label"]}'
-                f'color:{_rc(cat)};">{cat}</td></tr>')
+                f'color:{_rc(cat)};">{_esc(str(cat))}</td></tr>')
 
     def _table(entries: list) -> str:
         """One column of the strip: region heads interleaved with their rows."""
@@ -873,7 +874,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # sleeve without price history) it is withheld, and a heading promising a
     # comparison the reader cannot find is worse than the generic one.
     drawn = {name for _c, name in si_leg + ret_leg}
-    title = (f"Vs target &amp; {bench_label}"
+    title = (_escaped_text(f"Vs target & {ctx.benchmark_geo or ''}")
              if "Target" in drawn else "Vs the market")
     return {"available": True,
             "matrix_html": matrix_card,
@@ -2585,7 +2586,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     target_table_html = _table_for(target_rows) if target_rows else ""
 
     subtitle_html = (
-        f'Portfolio vs {ctx.benchmark_alpha_beta or "S&amp;P 500"}: '
+        f'Portfolio vs {_esc(str(ctx.benchmark_alpha_beta or "S&P 500"))}: '
         f'<span style="color:{P["green"]};font-weight:700;">&#9679;</span> beat &middot; '
         f'<span style="color:{P["amber"]};font-weight:700;">&#9679;</span> in line &middot; '
         f'<span style="color:{P["red"]};font-weight:700;">&#9679;</span> under'
