@@ -58,6 +58,11 @@ _deferred: ContextVar[Optional[list]] = ContextVar("tarzan_dq_deferred", default
 
 
 def _current_report() -> _Report:
+    from tarzan.runtime.session import current_or_matching_session
+
+    session = current_or_matching_session()
+    if session is not None:
+        return _Report(session.diagnostics)
     report = _report.get()
     if report is None:
         report = _Report()
@@ -68,6 +73,10 @@ def _current_report() -> _Report:
 def reset() -> None:
     """Start a fresh report in the current run context."""
     _report.set(_Report())
+    from tarzan.runtime.session import current_session
+    session = current_session()
+    if session is not None:
+        session.diagnostics.clear()
     # Clear the deferral with it: a reset reached inside a deferring context would
     # otherwise keep buffering into a list nobody replays, silently dropping every
     # diagnostic after it.
@@ -124,7 +133,6 @@ def record(
         from tarzan.runtime.session import current_session
         session = current_session()
         if session is not None:
-            session.diagnostics.append(issue)
             availability = (
                 Availability.DEGRADED
                 if severity == WARNING

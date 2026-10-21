@@ -588,6 +588,8 @@ def _run_once(
     engine.target_plan = targets_by_isin
     engine.valuation_assessment = valuation
     metrics = engine.compute_all()
+    from tarzan.data.market_quotes import fetch_market_quotes
+    metrics.market_quotes = tuple(fetch_market_quotes())
     session.memo["workload"] = {
         "orders": len(orders),
         "holdings": len(holdings),
@@ -780,6 +782,16 @@ def _record_terminal_result(
     outcome: str,
     started_at: float,
 ) -> RunResult:
+    from tarzan.contracts.report import ReportView
+
+    report_view = None
+    if metrics is not None:
+        from tarzan.export.newsletter import _benchmark_names
+
+        alpha_beta, geography = _benchmark_names(None, None)
+        report_view = ReportView.build(
+            metrics, config, benchmark_alpha_beta=alpha_beta, benchmark_geo=geography,
+        )
     evidence = _analysis_evidence(session, metrics)
     # Per-holding policy can derive effective class/geography targets after the
     # initial CSV was loaded. Both declared and actually used config matter.
@@ -816,6 +828,8 @@ def _record_terminal_result(
         attempt_id=session.context.attempt_id,
         analysis_id=analysis_id,
         ledger=session.ledger,
+        session=session,
+        report_view=report_view,
     )
     record_last_run_result(result)
     return result
@@ -885,7 +899,10 @@ def run(
             context=context,
             config_snapshot={},
             ledger=bootstrap_ledger,
+            gate=_SERIAL_EXECUTION_GATE,
         )
+        from tarzan.runtime.logging import bind_capture_to_session
+        bind_capture_to_session(session)
         started_at = time.perf_counter()
         with activate_session(session):
             _dq.reset()

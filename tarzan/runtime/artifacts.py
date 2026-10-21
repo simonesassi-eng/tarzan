@@ -26,6 +26,24 @@ class LocalOnlyWorkbook:
     content: bytes
     filename: str = "what_if.xlsx"
 
+    def __post_init__(self):
+        if (
+            Path(self.filename).name != self.filename
+            or self.filename.startswith(".") or not self.filename.endswith(".xlsx")
+        ):
+            raise ValueError("workbook filename must be one local .xlsx filename")
+        if not isinstance(self.content, bytes):
+            raise TypeError("workbook content must be bytes")
+
+@dataclass(frozen=True)
+class ArtifactFinalizationOutcome:
+    manifest: Optional[Path] = None
+    error_type: Optional[str] = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.manifest is not None and self.error_type is None
+
 
 class LocalArtifactWriter:
     """Write old-or-new committed files and publish checksum manifest last."""
@@ -37,12 +55,16 @@ class LocalArtifactWriter:
         *,
         storage: StorageDescriptor = StorageDescriptor(),
     ) -> None:
+        if not attempt_id or Path(attempt_id).name != attempt_id or attempt_id in (".", ".."):
+            raise ValueError("attempt_id must be one local directory component")
         self.directory = Path(root) / attempt_id
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.attempt_id = attempt_id
         self.storage = storage
 
     def _atomic_write(self, name: str, content: bytes) -> Path:
+        if not name or Path(name).name != name or name.startswith("."):
+            raise ValueError("artifact name must be one non-hidden filename component")
         destination = self.directory / name
         atomic_write_bytes(destination, content)
         return destination

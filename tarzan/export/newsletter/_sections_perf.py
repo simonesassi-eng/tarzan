@@ -78,10 +78,10 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return None
 
     try:
-        from tarzan.data.market_quotes import (fetch_market_quotes, CATEGORY_ORDER,
+        from tarzan.data.market_quotes import (CATEGORY_ORDER,
                                                is_continuous_market, session_caption,
                                                market_status, session_span)
-        snap = fetch_market_quotes()
+        snap = m.market_quotes or ()
     except Exception:  # noqa: BLE001
         snap, CATEGORY_ORDER = [], []
     if not snap:

@@ -13,11 +13,12 @@ artifacts. This register contains no personal portfolio amounts.
 | R07, R18 | Causal identity and validated cache enumeration | Implemented; shared join/seed catalog, boundary-aware profile/xref reads and immutable target aliases |
 | R08 | Run-owned single-flight provider stores | Implemented; concurrent misses/negative answers coalesce per key, cancellation propagates, unrelated keys remain parallel |
 | R20 | Real provider budgets | Pending |
-| R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
+| R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Implemented; retained output lease/clock/ledger, explicit artifact outcome, opt-in isolated What-If and idempotent run-owned capture |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R17, R24 | Drive selection/lifecycle and authenticated Update messages | Pending |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
-| R26–R27 | Domain/report boundaries, shared identity catalog, consistent installation/docs | Pending |
+| R26 | Domain/report boundaries and shared identity catalog | Domain authorities and defensive ReportView/RunRenderContext implemented; remaining display-reference lookups are being replaced with prepared facts |
+| R27 | Consistent installation/docs | Pending |
 
 Remote legacy-market cache cleanup was explicitly authorized. Only the eight
 resolved `tarzan-market-cache-*` IDs were deleted; the pip cache was preserved.
@@ -79,3 +80,20 @@ same-key fetches fail promptly, and returned data is defensive. No network work
 holds the shared memo lock. justETF workers inherit the owning run context.
 The configured history period and market strip also remain run-owned.
 The pinned-history test now checks actual behavior instead of source indentation.
+
+Completed results retain their session and immutable `ReportView`. Output
+scopes reacquire the serial lease, bind the original clock and ledger, and restore
+the caller on exit. Financial tables, nested values, series and configuration
+are immutable facts with defensive typed pandas projections. Fixed market-context
+quotes are prepared during analysis; newsletter sections and the AI digest do
+not fetch them. AI attempts, diagnostics and logs stay with their original owner.
+
+CLI finalization returns a typed outcome; exit success is decided only after
+the core manifest commits. Rendering/semantic errors retain computed financial
+evidence but block normal output. `--what-if` is now opt-in, runs after the
+core commit and writes a separate `what-if/<attempt>/` artifact set; optional
+failure cannot overwrite the core newsletter/manifest. Console setup reuses its
+owned handler without removing foreign handlers, and capture buffers are
+run/context-owned. Artifact names/attempt paths reject traversal; new attempt
+directories are private. SMTP state semantics and resend authorization are not
+changed by these CLI/output fixes.

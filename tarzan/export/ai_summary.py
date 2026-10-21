@@ -83,6 +83,11 @@ _last_provider_result: ContextVar[Optional[GeminiProviderResult]] = ContextVar(
 
 def last_provider_result() -> Optional[GeminiProviderResult]:
     """Return non-secret attempt evidence for the current run context."""
+    from tarzan.runtime.session import current_or_matching_session
+
+    session = current_or_matching_session()
+    if session is not None:
+        return session.memo.get("gemini_result")
     return _last_provider_result.get()
 
 
@@ -91,11 +96,12 @@ def _store_provider_result(result: GeminiProviderResult) -> None:
     _last_provider_result.set(result)
     try:
         from tarzan.runtime.ledger import Availability, LedgerEntryType
-        from tarzan.runtime.session import current_session
+        from tarzan.runtime.session import current_or_matching_session
 
-        session = current_session()
+        session = current_or_matching_session()
         if session is None:
             return
+        session.memo["gemini_result"] = result
         for attempt in result.attempts:
             session.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
                 "provider": attempt.provider,
@@ -176,7 +182,7 @@ def generate_summary(metrics, config) -> Optional[str]:
         # _system_prompt). metrics/config are still accepted so the caller
         # in newsletter/__init__.py needs no changes.
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
-        today_str = datetime.now().strftime("%A, %B %d, %Y")
+        today_str = runtime.today().strftime("%A, %B %d, %Y")
         system, user = _system_prompt(language, today_str), _user_prompt()
         grounded_started = time.perf_counter()
         try:
@@ -677,17 +683,18 @@ def build_digest(metrics, config) -> dict:
     no I/O — safe to unit-test.
     """
     m = metrics
+    from tarzan import runtime
+
     digest: dict[str, Any] = {
-        "as_of": datetime.now().strftime("%Y-%m-%d"),
-        "today": datetime.now().strftime("%A, %B %d, %Y"),
+        "as_of": runtime.today().strftime("%Y-%m-%d"),
+        "today": runtime.today().strftime("%A, %B %d, %Y"),
     }
 
     # Today's major-index levels and daily moves (yfinance-style set,
     # fetched through the cached price layer — warm runs add no network),
     # so the model can cite real figures rather than vague wording.
     try:
-        from tarzan.data.market_quotes import fetch_market_quotes
-        mk = fetch_market_quotes()
+        mk = getattr(m, "market_quotes", None) or ()
         if mk:
             digest["markets_today"] = [
                 {"name": d["name"], "level": _num(d["value"], 2),

@@ -75,7 +75,10 @@ class SummaryProjector:
     ) -> VersionedRunSummary:
         failures = result.ledger.failure_records()
         publication = publication or PublicationEvaluator.evaluate(failures)
-        metrics = result.metrics
+        metrics = (
+            result.report_view.project()[0]
+            if result.report_view is not None else result.metrics
+        )
 
         critical = tuple(
             record for record in failures

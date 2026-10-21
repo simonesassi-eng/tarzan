@@ -148,6 +148,9 @@ class PortfolioMetrics:
     # consumes this catalog and never performs provider I/O.
     intraday_requested_tickers: tuple[str, ...] = ()
     intraday_quotes: dict[str, dict] = field(default_factory=dict)
+    # Fixed public macro universe, prepared inside the analysis owner. ``None``
+    # denotes a legacy unprepared cube; an empty tuple is an explicit miss.
+    market_quotes: Optional[tuple[dict, ...]] = None
     holding_histories: dict = field(default_factory=dict)
     # NAV (base 100) of the TARGET allocation — the per-instrument
     # ``target_portfolio`` weights held CONSTANT, over the window where every

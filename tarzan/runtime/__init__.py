@@ -9,6 +9,7 @@ and reproducible modes therefore cannot split clocks or transport policy.
 from __future__ import annotations
 
 import datetime
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Optional
 
@@ -16,6 +17,16 @@ from tarzan.runtime.session import RunContext, RunMode
 
 
 _ctx: ContextVar[Optional[RunContext]] = ContextVar("tarzan_run_context", default=None)
+
+
+@contextmanager
+def bind_context(value: RunContext):
+    """Temporarily bind an explicit immutable clock, restoring the caller."""
+    token = _ctx.set(value)
+    try:
+        yield value
+    finally:
+        _ctx.reset(token)
 
 
 def _build_context(

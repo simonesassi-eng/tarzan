@@ -18,39 +18,10 @@ from pathlib import Path
 
 from tarzan import __version__
 from tarzan.contracts.exceptions import DataIngestionError, TarzanError
+from tarzan.runtime.artifacts import ArtifactFinalizationOutcome
+from tarzan.runtime.logging import LOG_CAPTURE as _LOG_CAPTURE
 
 logger = logging.getLogger("tarzan")
-
-
-class _RecordCaptureHandler(logging.Handler):
-    """Capture each log record's structured fields (level, time, logger,
-    message) for the run, so the single report.html can render them as a
-    color-coded table (like the reference DetailedRunLog). No file is written;
-    this replaces analyzer.log entirely."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.DEBUG)
-        self.records: list[dict] = []
-        # A Formatter owns asctime formatting (Handler does not); use one to
-        # turn each record's created-time into an HH:MM:SS string.
-        self._fmt = logging.Formatter(datefmt="%H:%M:%S")
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self.records.append({
-                "level": record.levelname,
-                "time": self._fmt.formatTime(record, "%H:%M:%S"),
-                "origin": record.name,
-                "message": record.getMessage(),
-            })
-        except Exception:  # noqa: BLE001 — logging must never break the run
-            pass
-
-
-# Process-global capture handler, (re)installed by setup_logging each run.
-# The whole run's log is captured here (no separate analyzer.log file) and
-# rendered as the color-coded table in the single output/report.html.
-_LOG_CAPTURE = _RecordCaptureHandler()
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -86,6 +57,11 @@ def parse_args(argv=None) -> argparse.Namespace:
              "Default off keeps the lenient behavior. Also settable via "
              "TARZAN_STRICT_INPUT=1.",
     )
+    parser.add_argument(
+        "--what-if", action="store_true",
+        help="After committing the core newsletter, build the optional local "
+             "candidate-portfolio workbook in a separate artifact set.",
+    )
     return parser.parse_args(argv)
 
 
@@ -108,19 +84,10 @@ def _dated_output_dir(base: str, as_of=None) -> str:
 
 
 def setup_logging(output_dir: str) -> None:
-    os.makedirs(output_dir, exist_ok=True)
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-    # Live console output (as before).
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    root.addHandler(ch)
-    # Full DEBUG trace captured as structured records (no separate
-    # analyzer.log file) and rendered as the color-coded table in report.html.
-    _LOG_CAPTURE.records.clear()
-    if _LOG_CAPTURE not in root.handlers:
-        root.addHandler(_LOG_CAPTURE)
+    from tarzan.runtime.logging import setup_logging as setup
+
+    os.makedirs(output_dir, exist_ok=True, mode=0o700)
+    setup()
 
 
 def _write_run_reports(
@@ -130,20 +97,29 @@ def _write_run_reports(
     *,
     newsletter_html: str | None = None,
     what_if=None,
-) -> None:
+    result=None,
+) -> ArtifactFinalizationOutcome:
     """Finalize one correlated local artifact set for every initialized run."""
+    from contextlib import nullcontext
+    from tarzan.runtime.session import completed_run_scope
+
+    with completed_run_scope(result) if result is not None else nullcontext():
+        return _write_run_reports_owned(
+            output_dir, newsletter_html=newsletter_html, what_if=what_if, result=result,
+        )
+
+
+def _write_run_reports_owned(output_dir, *, newsletter_html, what_if, result):
     from tarzan.runtime import data_quality as dq
     from tarzan.runtime import report_html
     from tarzan import runtime
     from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
     from tarzan.runtime.ledger import LedgerEntryType
     from tarzan.runtime.publication import PublicationEvaluator
-    from tarzan.runtime.session import last_run_result
     from tarzan.runtime.summary import SummaryProjector
 
     try:
         logger.info(dq.summary_line())
-        result = last_run_result()
         stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
         if result is None:
             # Argument parsing can fail before a RunSession exists. Keep the
@@ -155,7 +131,7 @@ def _write_run_reports(
             )
             if path:
                 logger.info("Pre-run report: %s", path)
-            return
+            return ArtifactFinalizationOutcome(Path(path) if path else None)
 
         publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
         summary = SummaryProjector.project(result, publication)
@@ -200,8 +176,8 @@ def _write_run_reports(
             manifest,
             len(dq.issues()),
         )
+        return ArtifactFinalizationOutcome(manifest)
     except Exception as error:  # noqa: BLE001
-        result = last_run_result()
         if result is not None:
             result.ledger.open_failure(
                 stage="local_artifacts",
@@ -216,6 +192,7 @@ def _write_run_reports(
             "Local artifact finalization failed (%s); normalized evidence remains in memory.",
             type(error).__name__,
         )
+        return ArtifactFinalizationOutcome(error_type=type(error).__name__)
 
 
 def _export_whatif(portfolios, config):
@@ -247,10 +224,53 @@ def _export_whatif(portfolios, config):
         return None
 
 
+def _optional_what_if(args, output_dir, result, config, newsletter_html):
+    """Optional work cannot overwrite or invalidate the committed core set."""
+    from tarzan.runtime.session import completed_run_scope
+    from tarzan.runtime.ledger import LedgerEntryType
+
+    with completed_run_scope(result):
+        try:
+            from tarzan.backtest import newsletter_portfolios
+
+            portfolios = newsletter_portfolios(
+                deterministic=(args.deterministic or bool(args.as_of)),
+            )
+            workbook = _export_whatif(portfolios, config) if portfolios else None
+            if workbook is None:
+                raise RuntimeError("optional candidate workbook is unavailable")
+            result.ledger.append(LedgerEntryType.STAGE, {
+                "stage": "what_if", "outcome": "SUCCEEDED", "core_already_committed": True,
+            })
+            outcome = _write_run_reports(
+                str(Path(output_dir) / "what-if"), result=result,
+                newsletter_html=newsletter_html, what_if=workbook,
+            )
+            if not outcome.succeeded:
+                raise OSError("optional artifact set could not be finalized")
+        except Exception as error:
+            result.ledger.open_failure(
+                stage="what_if", stable_code="OPTIONAL_WHAT_IF_FAILED", severity="WARNING",
+                error=error, affected_outputs=["what_if"],
+                analytical_impact="core financial results and committed newsletter remain unchanged",
+                publication_impact="NONE",
+            )
+            logger.warning("Optional What-If failed; the core artifact set is already committed.")
+            _write_run_reports(
+                str(Path(output_dir) / "what-if"), result=result,
+                newsletter_html=None, what_if=None,
+            )
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
 
-    from tarzan.runtime import data_quality as dq
+    from tarzan import runtime
+    from tarzan.runtime.session import RunAttemptEnvelope, completed_run_scope, last_run_result
+
+    previous_result = last_run_result()
+    bootstrap = RunAttemptEnvelope.create("cli-bootstrap")
+    runtime.reset(attempt_id=bootstrap.attempt_id, invocation_source=bootstrap.invocation_source)
     # Parse the optional as-of date FIRST (before logging is set up) — it is a
     # hard, actionable error if malformed, and it also names the output folder.
     as_of = None
@@ -283,7 +303,9 @@ def main(argv=None) -> int:
     metrics = None
     config = None
     newsletter_html = None
-    what_if = None
+    result = None
+    status = 1
+    output_error = None
     try:
         from tarzan.orchestrator import run
         metrics, config = run(
@@ -296,78 +318,88 @@ def main(argv=None) -> int:
         )
         from tarzan.runtime.ledger import LedgerEntryType
         from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
-        from tarzan.runtime.session import last_run_result
-
         result = last_run_result()
-        if result is None:
+        if result is None or result is previous_result:
             raise RuntimeError("orchestrator completed without a RunResult")
-        publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
-        result.ledger.append(LedgerEntryType.PUBLICATION, {
-            "decision": publication.decision.value,
-            "delivery_purpose": publication.delivery_purpose.value,
-            "critical_failure_refs": list(publication.critical_failure_ids),
-        })
-        # The publication decision is the ONLY thing that may set a failing exit
-        # code. A zero total is not evidence of failure — a fully liquidated book's
-        # true total IS zero — and the run's real failures are on the ledger, which
-        # is what the decision reads. The deleted proxy manufactured a
-        # disagreement: it exited 1 while the decision beside it said SEND_NORMAL
-        # and no issue had been written, so three parts of one run each reported a
-        # different outcome for the same state.
-        if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
-            logger.critical(
-                "Normal newsletter blocked by critical run evidence: %s",
-                ", ".join(publication.critical_failure_ids),
-            )
-            return 1
+        with completed_run_scope(result):
+            if result.report_view is not None:
+                metrics, config = result.report_view.project()
+            publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
+            if publication.decision in (
+                PublicationDecision.SEND_NORMAL, PublicationDecision.SEND_DEGRADED_NORMAL,
+            ):
+                from tarzan.export.newsletter import render_newsletter
+                from tarzan.export.newsletter._semantic import validate_newsletter_semantics
 
-        # Long-history backtest of the candidate portfolios — for the local-only
-        # What-If workbook. The newsletter does not carry a backtest section:
-        # comparing portfolios the reader does not hold took 28% of the issue,
-        # and a reader who wants that comparison opens the workbook.
-        from tarzan.backtest import newsletter_portfolios
-        backtest_portfolios = newsletter_portfolios(
-            deterministic=(args.deterministic or as_of is not None))
-
-        # Render in memory. LocalArtifactWriter is the only file publisher for
-        # newsletter, report, summary, ledger, manifest, and What-If evidence.
-        from tarzan.export.newsletter import render_newsletter
-        newsletter_html = render_newsletter(
-            metrics=metrics,
-            config=config,
-        )
-
-        if backtest_portfolios:
-            what_if = _export_whatif(backtest_portfolios, config)
-
-        logger.info("Completed successfully.")
-        return 0
+                semantic_audit = {}
+                newsletter_html = render_newsletter(
+                    metrics=metrics, config=config, semantic_audit=semantic_audit,
+                    run_result=result,
+                )
+                violations = validate_newsletter_semantics(metrics, semantic_audit, newsletter_html)
+                if violations:
+                    result.ledger.open_failure(
+                        stage="newsletter_semantics",
+                        stable_code="NEWSLETTER_SEMANTIC_INVARIANT_FAILED",
+                        severity="CRITICAL", error="; ".join(violations),
+                        affected_outputs=["newsletter", "publication"],
+                        analytical_impact="rendered facts do not match the computed financial authority",
+                        publication_impact="BLOCK_NORMAL_AND_DO_NOT_SEND",
+                    )
+                    newsletter_html = None
+                else:
+                    status = 0
+            else:
+                logger.critical("Normal newsletter blocked by critical run evidence.")
+            publication = PublicationEvaluator.evaluate(result.ledger.failure_records())
+            result.ledger.append(LedgerEntryType.PUBLICATION, {
+                "decision": publication.decision.value,
+                "delivery_purpose": publication.delivery_purpose.value,
+                "critical_failure_refs": list(publication.critical_failure_ids),
+            })
 
     except FileNotFoundError as e:
         logger.error("File not found: %s", e)
-        return 1
+        output_error = e
     except (DataIngestionError, ValueError) as e:
         logger.error("Validation error: %s", e)
-        return 1
+        output_error = e
     except TarzanError as e:
         logger.error("Analysis error: %s", e)
-        return 1
+        output_error = e
     except Exception as e:
         logger.error("Unexpected error: %s", e)
         logger.debug(traceback.format_exc())
-        return 1
+        output_error = e
     finally:
+        if result is None:
+            fresh = last_run_result()
+            result = fresh if fresh is not previous_result else None
+        if output_error is not None and result is not None and metrics is not None:
+            result.ledger.open_failure(
+                stage="cli_output", stable_code="NEWSLETTER_RENDER_FAILED", severity="CRITICAL",
+                error=output_error, affected_outputs=["newsletter", "publication"],
+                analytical_impact="financial analysis succeeded but newsletter rendering did not",
+                publication_impact="BLOCK_NORMAL_AND_DO_NOT_SEND",
+            )
         # Always write the unified run report (run summary + data quality) —
         # on success, on the no-value early exit, and on any failure — so the
         # user always has one readable record of what the run produced and
         # what it skipped, regardless of how the run ended.
-        _write_run_reports(
+        outcome = _write_run_reports(
             output_dir,
             metrics=metrics,
             config=config,
             newsletter_html=newsletter_html,
-            what_if=what_if,
+            result=result,
         )
+    if not isinstance(outcome, ArtifactFinalizationOutcome) or not outcome.succeeded:
+        return 1
+    if status == 0:
+        logger.info("Core newsletter and evidence committed successfully.")
+        if args.what_if:
+            _optional_what_if(args, output_dir, result, config, newsletter_html)
+    return status
 
 
 if __name__ == "__main__":

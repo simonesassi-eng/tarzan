@@ -642,20 +642,11 @@ class TestStripSparklineAtTheOpen:
         from tarzan.export.newsletter._constants import _NewsletterContext
         from tarzan.models.portfolio import PortfolioMetrics
         from tarzan.models.investor_config import InvestorConfig
-        import tarzan.data.market_quotes as _mq
-
-        ctx = _NewsletterContext(metrics=PortfolioMetrics(),
+        ctx = _NewsletterContext(metrics=PortfolioMetrics(market_quotes=(dict(quote),)),
                                  config=InvestorConfig())
         # _build_markets closes over its own _spark_for; drive it through the
         # section with a single-row snapshot rather than reaching inside.
-        _mq_snap = [dict(quote)]
-        monkey = _mq.fetch_market_quotes
-        try:
-            _mq.fetch_market_quotes = lambda *a, **kw: _mq_snap
-            sp.fetch_market_quotes = lambda *a, **kw: _mq_snap
-            return sp._build_markets(ctx)["html"]
-        finally:
-            _mq.fetch_market_quotes = monkey
+        return sp._build_markets(ctx)["html"]
 
     def _quote(self, **kw):
         base = {"name": "FTSE 100", "symbol": "^FTSE", "category": "Europe",

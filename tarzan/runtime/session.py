@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -84,6 +84,8 @@ class RunSession:
     audit: list[Any] = field(default_factory=list)
     memo: dict[Any, Any] = field(default_factory=dict)
     providers: ProviderMemo = field(default_factory=ProviderMemo, repr=False)
+    log_records: list[dict] = field(default_factory=list, repr=False)
+    gate: Optional["SerialExecutionGate"] = field(default=None, repr=False)
     analysis_id: Optional[str] = None
 
     def __post_init__(self) -> None:
@@ -103,6 +105,8 @@ class RunResult:
     attempt_id: str
     analysis_id: str
     ledger: Any
+    session: Optional[RunSession] = field(default=None, repr=False, compare=False)
+    report_view: Any = field(default=None, repr=False, compare=False)
 
     def compatibility_tuple(self) -> tuple[Any, Any]:
         return self.metrics, self.config
@@ -138,6 +142,62 @@ def record_last_run_result(result: RunResult) -> None:
 
 def last_run_result() -> Optional[RunResult]:
     return _last_run_result.get()
+
+
+def current_or_matching_session() -> Optional[RunSession]:
+    """Read a completed session only when the ambient attempt still matches."""
+    active = current_session()
+    if active is not None:
+        return active
+    result = last_run_result()
+    if result is None or result.session is None:
+        return None
+    from tarzan import runtime
+
+    return result.session if runtime.context().attempt_id == result.attempt_id else None
+
+
+@contextmanager
+def completed_run_scope(result: RunResult):
+    """Lease and bind the original owner through render/finalization/delivery."""
+    session = result.session
+    active = current_session()
+    if session is None:
+        # Compatibility for injected callers that have no production lifecycle.
+        yield result
+        return
+    if active is session:
+        yield result
+        return
+    if active is not None:
+        raise RuntimeError("cannot render another run inside an active session")
+    from tarzan import runtime
+
+    envelope = RunAttemptEnvelope(
+        result.attempt_id, session.context.captured_at, "completed-run-output",
+    )
+    lease = session.gate.acquire(envelope) if session.gate is not None else nullcontext()
+    with lease, runtime.bind_context(session.context), activate_session(session):
+        token = _last_run_result.set(result)
+        try:
+            yield result
+        finally:
+            _last_run_result.reset(token)
+
+
+@dataclass(frozen=True)
+class RunRenderContext:
+    """Explicit completed owner for callers rendering older analyses."""
+
+    result: RunResult
+
+    def activate(self):
+        return completed_run_scope(self.result)
+
+    def project(self):
+        if self.result.report_view is None:
+            return self.result.compatibility_tuple()
+        return self.result.report_view.project()
 
 
 def canonical_analysis_id(evidence: Mapping[str, Any]) -> str:

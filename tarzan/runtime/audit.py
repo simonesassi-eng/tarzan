@@ -29,6 +29,11 @@ _audit: ContextVar[Optional[_Audit]] = ContextVar("tarzan_rebalancing_audit", de
 
 
 def _current_audit() -> _Audit:
+    from tarzan.runtime.session import current_or_matching_session
+
+    session = current_or_matching_session()
+    if session is not None:
+        return _Audit(session.audit)
     audit = _audit.get()
     if audit is None:
         audit = _Audit()
@@ -39,6 +44,10 @@ def _current_audit() -> _Audit:
 def reset() -> None:
     """Start a fresh audit trail in the current run context."""
     _audit.set(_Audit())
+    from tarzan.runtime.session import current_session
+    session = current_session()
+    if session is not None:
+        session.audit.clear()
 
 
 def record_rebalancing_plan(
@@ -100,7 +109,6 @@ def record_rebalancing_plan(
         from tarzan.runtime.session import current_session
         session = current_session()
         if session is not None:
-            session.audit.append(record)
             session.ledger.append(LedgerEntryType.PLAN, record)
     except Exception as e:  # noqa: BLE001 — audit must never break the pipeline
         logger.debug("Rebalancing audit record failed: %s", e)

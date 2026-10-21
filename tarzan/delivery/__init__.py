@@ -557,6 +557,24 @@ def run_and_send() -> int:
             ledger=RunLedger(envelope.attempt_id),
         )
 
+    from tarzan.runtime.session import completed_run_scope
+    with completed_run_scope(result):
+        return _publish_and_deliver(
+            result, metrics, config, smtp_user, smtp_pass, recipient, smtp_host,
+            smtp_port, issue_number, subject_prefix, trigger_label, dry_run,
+        )
+
+
+def _publish_and_deliver(
+    result, metrics, config, smtp_user, smtp_pass, recipient, smtp_host,
+    smtp_port, issue_number, subject_prefix, trigger_label, dry_run,
+):
+    from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
+    from tarzan.runtime.ledger import LedgerEntryType
+    from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
+    if result.report_view is not None:
+        metrics, config = result.report_view.project()
+
     # A zero total is not by itself evidence of failure: a fully liquidated book's
     # true total IS zero, and blocking its issue turned a legitimate state into an
     # "Analysis failure" notice. What is evidence is an EMPTY LEDGER — a run that
@@ -598,6 +616,7 @@ def run_and_send() -> int:
             config=config,
             issue_number=issue_number,
             semantic_audit=semantic_audit,
+            run_result=result,
         )
         from tarzan.export.newsletter._semantic import validate_newsletter_semantics
         semantic_errors = validate_newsletter_semantics(

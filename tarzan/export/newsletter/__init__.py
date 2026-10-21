@@ -198,6 +198,7 @@ def render_newsletter(
     benchmark_geo: Optional[str] = None,
     ai_summary: Optional[str] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
+    run_result=None,
 ) -> str:
     """Render the newsletter HTML to a string.
 
@@ -216,6 +217,31 @@ def render_newsletter(
     Returns:
         The full HTML newsletter as a single string.
     """
+    from tarzan.runtime.session import completed_run_scope, last_run_result
+
+    result = run_result or last_run_result()
+    if (
+        result is not None and (run_result is not None or result.metrics is metrics)
+        and result.report_view is not None
+    ):
+        with completed_run_scope(result):
+            projected_metrics, projected_config = result.report_view.project()
+            return _render_newsletter_facts(
+                projected_metrics, projected_config, issue_number,
+                benchmark_alpha_beta or result.report_view.benchmark_alpha_beta,
+                benchmark_geo or result.report_view.benchmark_geo,
+                ai_summary, semantic_audit,
+            )
+    return _render_newsletter_facts(
+        metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
+        ai_summary, semantic_audit,
+    )
+
+
+def _render_newsletter_facts(
+    metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
+    ai_summary, semantic_audit,
+):
     # Benchmark display names are resolved in build_context (one resolver, so no
     # entry point can name a different index than the engine computed against).
     # Resolve the optional AI market-context summary when not explicitly passed,

@@ -22,9 +22,12 @@ from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 
 
-def _ctx() -> _NewsletterContext:
+def _ctx(quotes=None) -> _NewsletterContext:
     return _NewsletterContext(
-        metrics=PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0),
+        metrics=PortfolioMetrics(
+            total_value=1.0, invested_value=1.0, cash_value=0.0,
+            market_quotes=tuple(_SAMPLE if quotes is None else quotes),
+        ),
         config=InvestorConfig(), issue_number=1,
         benchmark_alpha_beta="S&P 500", benchmark_geo="MSCI ACWI",
     )
@@ -120,7 +123,7 @@ def test_daily_close_fallback_chart_is_labelled_no_intraday():
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
          mock.patch.object(mq, "market_status", return_value=(False, "Mon")):
-        html = _build_markets(_ctx())["html"]
+        html = _build_markets(_ctx(sample))["html"]
     assert "<polyline" in html      # the daily-closes chart really is drawn
     assert "no intraday" in html    # and it says what those closes are
 
@@ -139,7 +142,7 @@ def test_real_intraday_chart_is_not_labelled_no_intraday():
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
          mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
-        html = _build_markets(_ctx())["html"]
+        html = _build_markets(_ctx(sample))["html"]
     assert "no intraday" not in html
 
 
