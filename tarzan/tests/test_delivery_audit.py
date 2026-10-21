@@ -93,6 +93,8 @@ def test_run_and_send_concurrent_claimers_invoke_the_transport_once(
                 pass
 
             def send_message(self, message):
+                assert message["Auto-Submitted"] == "auto-generated"
+                assert message["X-Tarzan-Message-Type"] == "newsletter"
                 sent.append(message["Subject"])
 
         monkeypatch.setattr(delivery.smtplib, "SMTP_SSL", SMTP)

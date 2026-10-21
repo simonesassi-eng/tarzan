@@ -16,7 +16,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Implemented; retained output lease/clock/ledger, explicit artifact outcome, opt-in isolated What-If and idempotent run-owned capture |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
-| R17 | Authenticated Update messages | Pending |
+| R17 | Authenticated Update messages | Implemented locally; native Gmail owner/message-level SENT verification, unquoted commands and bounded per-message idempotency; Gmail API service/authorization needed on deployment |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
 | R26 | Domain/report boundaries and shared identity catalog | Domain authorities and defensive ReportView/RunRenderContext implemented; remaining display-reference lookups are being replaced with prepared facts |
 | R27 | Consistent installation/docs | Pending |
@@ -109,3 +109,20 @@ provides a destination parent; caller files are not overwritten or removed.
 Delivery retains that owner until its final exit. Partial download/listing
 failure cleans staging, and incomplete Drive configuration cannot silently
 select an older local input set. Original local inputs retain caller ownership.
+
+Update requests now require agreement between the trigger's effective owner and
+the native Gmail profile, then the individual message's native `SENT` label,
+exact owner From header and recent internal timestamp. Received/automated mail,
+quoted commands and unavailable native authorization fail closed. Per-message
+markers and stable opaque event IDs allow later replies in the same thread
+without resending a handled reply. Searches, verification and retained markers
+are bounded; capacity pauses new requests rather than discarding recent markers.
+Legacy handled threads migrate on the protocol upgrade. GitHub dispatch payloads
+no longer contain email subjects, bodies or mailbox addresses. SMTP identifies
+generated newsletters with standard automation and application headers.
+
+The actual production Apps Script source is executed in Node with native-service
+doubles, including spoofing, missing OAuth, quotation, pagination, migration,
+locking, marker capacity and later same-thread replies. The existing delivery
+claim/CAS protocol tests remain intact. No production script was changed; the
+operator must add Gmail API and authorize `installTrigger()` for this upgrade.

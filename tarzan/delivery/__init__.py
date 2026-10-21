@@ -182,6 +182,8 @@ def send_email(
     msg["To"] = recipient
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="tarzan.local")
+    msg["Auto-Submitted"] = "auto-generated"
+    msg["X-Tarzan-Message-Type"] = "newsletter"
 
     # Plain-text fallback
     msg.set_content(

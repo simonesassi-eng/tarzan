@@ -211,13 +211,23 @@ fire the same GitHub workflow via `repository_dispatch`.
 3. Replace the contents of `Code.gs` with the contents of
    `scripts/apps_script/Code.gs` from this repo. (Just copy and paste.)
 4. Rename the project to `Tarzan Scheduler` (top-left).
+5. In **Services** (plus button), add **Gmail API**, identifier `Gmail`.
+   For a standard Cloud project, enable Gmail API in its Cloud console too.
+   Native OAuth verifies the mailbox owner and each message's own `SENT`
+   label. Received messages, even with a forged owner From header, cannot
+   authorize an Update. Missing API/scopes/owner fail closed; scheduled slots
+   remain independently handled by `checkSchedule`.
 
 > **Updating the script later.** Pushing to GitHub does NOT deploy it. Open the
 > project from <https://script.google.com/home>, replace the whole of `Code.gs` with
 > the repo's
 > `scripts/apps_script/Code.gs`, and **Save**. The `tick()` trigger runs the
-> latest *saved* code, so no Deploy and no trigger reinstall are needed; then
-> run `validateSlots` once and expect `N slots OK.` in the log. (Only the
+> latest *saved* code. For the authenticated-Update protocol upgrade, add Gmail
+> API and run `installTrigger()` once: it migrates existing messages on old
+> handled threads into per-message markers, preventing an old request from
+> being dispatched again. Send a new reply after installation to verify it.
+> A later reply in the same thread is eligible; its informational thread label
+> no longer suppresses it. Run `validateSlots` too. (Only the
 > web-app `/exec` endpoint, used by the dormant `doPost`, needs an explicit
 > Deploy.)
 
@@ -257,7 +267,9 @@ have sensible defaults — leave them blank.
 
 1. Open the email you received in step 5.
 2. Hit **Reply**, type literally `Update`, send.
-3. Within 5 minutes the `tick()` trigger sees the reply and posts to GitHub.
+3. On the next tick, a new unquoted reply from the verified trigger owner,
+   natively recorded as `SENT`, posts to GitHub. Replies older than 45 minutes,
+   automated newsletters and quoted/forwarded trigger text do not qualify.
 4. **Actions** tab on GitHub → new run with event `repository_dispatch`.
 5. Within ~3 more minutes, a fresh newsletter lands in your inbox.
 
@@ -270,6 +282,12 @@ That's it. Going forward:
 - **Reply "Update"** → fresh send within ~8 minutes total.
 - **Click "Run workflow"** in the Actions UI for an instant manual send.
 - **Edit the CSVs in your Drive folder** — next run picks up the changes.
+
+Update idempotency is per message, under the script lock. Markers are bounded;
+the listener pauses instead of evicting recent idempotency evidence at capacity.
+Search and native-verification work are bounded per tick. Public GitHub dispatch
+payloads contain an opaque event digest and request timestamp, not message
+bodies, addresses or newsletter subjects/portfolio figures.
 
 ---
 

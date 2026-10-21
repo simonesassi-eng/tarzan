@@ -57,9 +57,12 @@
  *                     eligible for the "Update" reply path.
  *      WORD_MATCH     Optional. Default "update" — body must contain
  *                     this token (case-insensitive, word boundary).
- * 4. Run `installTrigger()` once. Approve the OAuth consent for
+ * 4. Add the native Gmail API advanced service (identifier "Gmail") in
+ *    the editor's Services panel. For a standard Cloud project, also enable
+ *    Gmail API there. Update verification fails closed until it is available.
+ * 5. Run `installTrigger()` once. Approve the OAuth consent for
  *    Gmail + UrlFetch scopes. This installs the every-5-minute tick().
- * 5. (Optional) Run `checkSchedule()` or `processInbox()` manually to
+ * 6. (Optional) Run `checkSchedule()` or `processInbox()` manually to
  *    test each path on demand.
  *
  * IMPORTANT: remove the `schedule:` block from
@@ -217,6 +220,15 @@ const DEFAULT_WORD_MATCH = 'update';
 // is plenty given the 5-minute polling cadence and is a safety net
 // in case a trigger run fails for a few hours.
 const SEARCH_WINDOW_DAYS = 1;
+const UPDATE_MAX_AGE_MINUTES = 45;
+const UPDATE_MARKER_PREFIX = 'update_message:';
+const UPDATE_PROTOCOL_KEY = 'update_protocol_version';
+const UPDATE_PROTOCOL_VERSION = '2';
+const UPDATE_MARKER_RETENTION_DAYS = 3;
+const UPDATE_MARKER_LIMIT = 500;
+const UPDATE_PAGE_SIZE = 50;
+const UPDATE_MAX_PAGES = 4;
+const UPDATE_VERIFICATION_LIMIT = 100;
 
 // ---------------------------------------------------------------------------
 // Trigger entry point
@@ -246,17 +258,27 @@ function tick() {
  * processInbox handler) first, so re-running never stacks triggers.
  */
 function installTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  for (const t of triggers) {
-    const fn = t.getHandlerFunction();
-    if (fn === 'tick' || fn === 'processInbox') {
-      ScriptApp.deleteTrigger(t);
-    }
+  if (!_verifiedMailboxOwner_()) {
+    throw new Error('Enable the native Gmail API service and authorize the trigger owner first.');
   }
-  ScriptApp.newTrigger('tick')
-    .timeBased()
-    .everyMinutes(5)
-    .create();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) throw new Error('Another scheduler operation is active; retry installation.');
+  try {
+    _migrateLegacyUpdateMarkers_(PropertiesService.getScriptProperties(), new Date());
+    const triggers = ScriptApp.getProjectTriggers();
+    for (const t of triggers) {
+      const fn = t.getHandlerFunction();
+      if (fn === 'tick' || fn === 'processInbox') {
+        ScriptApp.deleteTrigger(t);
+      }
+    }
+    ScriptApp.newTrigger('tick')
+      .timeBased()
+      .everyMinutes(5)
+      .create();
+  } finally {
+    lock.releaseLock();
+  }
   Logger.log('Trigger installed: tick() runs every 5 minutes.');
 }
 
@@ -410,10 +432,8 @@ function _localMinuteOfDay_(date) {
 // ---------------------------------------------------------------------------
 
 /**
- * Scans the inbox for unread "Update" replies on Tarzan threads and
- * dispatches one GitHub event per matching thread. Unchanged behavior
- * from the original listener; now invoked from tick() alongside the
- * scheduler.
+ * Scan recent replies, authenticate each message through Gmail's SENT label,
+ * and dispatch once per message. Thread labels are informational, not gates.
  */
 function processInbox() {
   const props = PropertiesService.getScriptProperties();
@@ -423,36 +443,54 @@ function processInbox() {
   const subjectMatch = props.getProperty('SUBJECT_MATCH') || DEFAULT_SUBJECT_MATCH;
   const wordMatch = (props.getProperty('WORD_MATCH') || DEFAULT_WORD_MATCH).toLowerCase();
   const labelName = props.getProperty('LABEL_NAME') || DEFAULT_LABEL;
-
-  const label = _ensureLabel_(labelName);
-
-  // Gmail search query: subject contains the marker, newer than the window,
-  // and NOT yet labelled as handled. Deliberately NOT scoped to in:inbox — the
-  // digest is self-sent (sender == recipient), so Gmail files the thread under
-  // Sent / All Mail, not the Inbox, and the "Update" reply lives there too.
-  // Gmail search excludes Spam and Trash by default, and _matchingUpdateMessageId_
-  // still requires a genuine user reply carrying the trigger word, so dropping
-  // in:inbox cannot broaden what actually dispatches.
-  const query =
-    'subject:"' + subjectMatch + '"' +
-    ' newer_than:' + SEARCH_WINDOW_DAYS + 'd' +
-    ' -label:' + labelName.replace(/\s+/g, '-');
-
-  const threads = GmailApp.search(query, 0, 50);
-  Logger.log('Found %s candidate threads', threads.length);
-
-  let dispatched = 0;
-  for (const thread of threads) {
-    const matchingMessageId = _matchingUpdateMessageId_(thread, wordMatch);
-    if (matchingMessageId) {
-      const eventId = 'update:' + thread.getId() + ':' + matchingMessageId;
-      _dispatch_(owner, repo, token, 'on-demand', _summarize_(thread), eventId);
-      thread.addLabel(label);
-      dispatched += 1;
-    }
+  const mailboxOwner = _verifiedMailboxOwner_();
+  if (!mailboxOwner) {
+    Logger.log('Update denied: native Gmail API verification/trigger owner is unavailable.');
+    return 0;
   }
-  Logger.log('Dispatched %s newsletter request(s)', dispatched);
-  return dispatched;
+  if (!_updateTokenRegex_(wordMatch)) throw new Error('WORD_MATCH must be a nonempty literal token.');
+  const query = 'subject:"' + _gmailQueryLiteral_(subjectMatch) + '"' +
+                ' newer_than:' + SEARCH_WINDOW_DAYS + 'd';
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return 0;
+  try {
+    const now = new Date();
+    _migrateLegacyUpdateMarkers_(props, now);
+    _pruneUpdateMarkers_(props, now);
+    const seen = props.getProperties();
+    let markerCount = Object.keys(seen).filter(k => k.indexOf(UPDATE_MARKER_PREFIX) === 0).length;
+    if (markerCount >= UPDATE_MARKER_LIMIT) {
+      Logger.log('Update paused: recent message marker capacity reached; no marker was evicted.');
+      return 0;
+    }
+    const label = _ensureLabel_(labelName);
+    const budget = {remaining: UPDATE_VERIFICATION_LIMIT};
+    let dispatched = 0;
+    for (let page = 0; page < UPDATE_MAX_PAGES; page += 1) {
+      const threads = GmailApp.search(query, page * UPDATE_PAGE_SIZE, UPDATE_PAGE_SIZE);
+      for (const thread of threads) {
+        const matches = _matchingUpdateMessages_(thread, wordMatch, seen, now, mailboxOwner, budget);
+        for (const match of matches) {
+          if (markerCount >= UPDATE_MARKER_LIMIT) break;
+          const eventId = 'update:' + _opaqueDigest_(thread.getId() + ':' + match.id);
+          _dispatch_(owner, repo, token, 'on-demand', 'authenticated user reply',
+                     eventId, match.requestedAt);
+          const key = _updateMarkerKey_(match.id);
+          props.setProperty(key, now.toISOString());
+          seen[key] = now.toISOString();
+          markerCount += 1;
+          dispatched += 1;
+          thread.addLabel(label);
+        }
+      }
+      if (threads.length < UPDATE_PAGE_SIZE || budget.remaining <= 0 ||
+          markerCount >= UPDATE_MARKER_LIMIT) break;
+    }
+    Logger.log('Dispatched %s authenticated Update request(s)', dispatched);
+    return dispatched;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -484,29 +522,139 @@ function _ensureLabel_(name) {
  * excluded from the scan.
  */
 function _matchingUpdateMessageId_(thread, wordMatch) {
+  const matches = _matchingUpdateMessages_(thread, wordMatch, {}, new Date(),
+                                            _verifiedMailboxOwner_(),
+                                            {remaining: UPDATE_VERIFICATION_LIMIT});
+  return matches.length ? matches[0].id : null;
+}
+
+function _mailbox_(from) {
+  if (typeof from !== 'string' || /[\r\n]/.test(from)) return '';
+  const text = from.trim();
+  const angle = /^(?:[^<>]*)<([^<>]+)>$/.exec(text);
+  const address = (angle ? angle[1] : text).trim().toLowerCase();
+  // Multiple mailboxes, comments and quoted local parts are not guessed.
+  return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(address)
+         ? address : '';
+}
+
+function _verifiedMailboxOwner_() {
+  try {
+    const effective = _mailbox_(Session.getEffectiveUser().getEmail());
+    if (!effective || typeof Gmail === 'undefined' || !Gmail.Users ||
+        !Gmail.Users.Messages || typeof Gmail.Users.Messages.get !== 'function') return '';
+    const profile = Gmail.Users.getProfile('me');
+    return profile && _mailbox_(profile.emailAddress) === effective ? effective : '';
+  } catch (err) {
+    return '';  // Unknown scopes, expired OAuth or service setup never authorizes.
+  }
+}
+
+function _updateTokenRegex_(word) {
+  if (typeof word !== 'string' || !word.trim() || word.length > 64 || /\s/.test(word)) return null;
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('(?:^|\\W)' + escaped + '(?=\\W|$)', 'i');
+}
+
+function _newReplyText_(body) {
+  const lines = String(body || '').slice(0, 4000).split(/\r?\n/);
+  const written = [];
+  for (const line of lines) {
+    if (/^\s*>/.test(line) ||
+        /^\s*(?:On .+ wrote:|Il (?:giorno )?.+ ha scritto:|Am .+ schrieb:|El .+ escribi[oó]:)/i.test(line) ||
+        /^\s*(?:-{2,}.*(?:Original|Forwarded|Messaggio originale|Messaggio inoltrato|Mensaje reenviado)|Begin forwarded message:)/i.test(line)) break;
+    written.push(line);
+  }
+  return written.join('\n');
+}
+
+function _matchingUpdateMessages_(thread, word, seen, now, owner, budget) {
+  const regex = _updateTokenRegex_(word);
+  if (!owner || !regex) return [];
   const messages = thread.getMessages();
-  if (messages.length < 2) return null;
-  const myAddress = Session.getActiveUser().getEmail().toLowerCase();
-  const tokenRegex = new RegExp('\\b' + wordMatch + '\\b', 'i');
+  const matches = [];
   for (let i = messages.length - 1; i >= 1; i -= 1) {
-    const m = messages[i];
-    const sender = (m.getFrom() || '').toLowerCase();
-    if (sender.indexOf(myAddress) === -1) continue;
-    const body = m.getPlainBody() || '';
-    if (tokenRegex.test(body)) {
-      return m.getId();
+    const message = messages[i];
+    const id = message.getId();
+    if (seen[_updateMarkerKey_(id)] || _mailbox_(message.getFrom()) !== owner ||
+        !regex.test(_newReplyText_(message.getPlainBody()))) continue;
+    if (budget.remaining <= 0) break;
+    budget.remaining -= 1;
+    try {
+      const native = Gmail.Users.Messages.get('me', id, {
+        format: 'metadata',
+        metadataHeaders: ['From', 'Auto-Submitted', 'X-Tarzan-Message-Type'],
+        fields: 'id,labelIds,internalDate,payload/headers',
+      });
+      if (!native || native.id !== id || !Array.isArray(native.labelIds) ||
+          native.labelIds.indexOf('SENT') < 0) continue;
+      const headers = {};
+      for (const header of ((native.payload || {}).headers || [])) {
+        const key = String(header.name || '').toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(headers, key)) throw new Error('duplicate metadata header');
+        headers[key] = String(header.value || '');
+      }
+      if (_mailbox_(headers.from) !== owner ||
+          (headers['auto-submitted'] && headers['auto-submitted'].toLowerCase() !== 'no') ||
+          headers['x-tarzan-message-type']) continue;
+      const stamp = Number(native.internalDate);
+      const age = now.getTime() - stamp;
+      if (!Number.isFinite(stamp) || stamp <= 0 || age < -120000 ||
+          age > UPDATE_MAX_AGE_MINUTES * 60000) continue;
+      matches.push({id: id, requestedAt: new Date(stamp).toISOString()});
+    } catch (err) {
+      // Unknown message provenance fails closed, without exposing its content.
     }
   }
-  return null;
+  return matches;
+}
+
+function _opaqueDigest_(value) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value))
+    .map(byte => ('0' + (byte & 255).toString(16)).slice(-2)).join('');
+}
+
+function _updateMarkerKey_(id) {
+  return UPDATE_MARKER_PREFIX + _opaqueDigest_(id);
+}
+
+function _gmailQueryLiteral_(value) {
+  if (typeof value !== 'string' || !value.trim() || /[\r\n]/.test(value) || value.length > 150) {
+    throw new Error('Gmail query configuration must be a short nonempty literal.');
+  }
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function _migrateLegacyUpdateMarkers_(props, now) {
+  if (props.getProperty(UPDATE_PROTOCOL_KEY) === UPDATE_PROTOCOL_VERSION) return;
+  const label = props.getProperty('LABEL_NAME') || DEFAULT_LABEL;
+  const query = 'label:"' + _gmailQueryLiteral_(label) + '" newer_than:' + SEARCH_WINDOW_DAYS + 'd';
+  let count = 0;
+  for (let page = 0; page < UPDATE_MAX_PAGES; page += 1) {
+    const threads = GmailApp.search(query, page * UPDATE_PAGE_SIZE, UPDATE_PAGE_SIZE);
+    for (const thread of threads) {
+      for (const message of thread.getMessages().slice(1)) {
+        if (++count > UPDATE_MARKER_LIMIT) throw new Error('Legacy Update migration exceeds marker capacity.');
+        props.setProperty(_updateMarkerKey_(message.getId()), now.toISOString());
+      }
+    }
+    if (threads.length < UPDATE_PAGE_SIZE) break;
+  }
+  props.setProperty(UPDATE_PROTOCOL_KEY, UPDATE_PROTOCOL_VERSION);
+}
+
+function _pruneUpdateMarkers_(props, now) {
+  const cutoff = now.getTime() - UPDATE_MARKER_RETENTION_DAYS * 86400000;
+  const all = props.getProperties();
+  for (const key in all) {
+    if (key.indexOf(UPDATE_MARKER_PREFIX) !== 0) continue;
+    const stamp = Date.parse(all[key]);
+    if (Number.isFinite(stamp) && stamp < cutoff) props.deleteProperty(key);
+  }
 }
 
 function _threadHasUpdateRequest_(thread, wordMatch) {
   return _matchingUpdateMessageId_(thread, wordMatch) !== null;
-}
-
-function _summarize_(thread) {
-  const subject = thread.getFirstMessageSubject() || '(no subject)';
-  return subject.slice(0, 80);
 }
 
 /**
@@ -519,7 +667,7 @@ function _summarize_(thread) {
  *   scheduled slots, "on-demand" for an "Update" reply).
  * @param {string} summary  short human context for the logs.
  */
-function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId) {
+function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId, requestedAt) {
   const url =
     'https://api.github.com/repos/' + owner + '/' + repo + '/dispatches';
   const payload = {
@@ -528,8 +676,7 @@ function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId) {
       label: dispatchLabel,
       origin: 'gmail-apps-script',
       event_id: eventId,
-      thread_subject: summary,
-      timestamp: new Date().toISOString(),
+      timestamp: requestedAt || new Date().toISOString(),
     },
   };
   const response = UrlFetchApp.fetch(url, {
