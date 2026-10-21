@@ -15,7 +15,8 @@ artifacts. This register contains no personal portfolio amounts.
 | R20 | Real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Implemented; retained output lease/clock/ledger, explicit artifact outcome, opt-in isolated What-If and idempotent run-owned capture |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
-| R15–R17, R24 | Drive selection/lifecycle and authenticated Update messages | Pending |
+| R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
+| R17 | Authenticated Update messages | Pending |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
 | R26 | Domain/report boundaries and shared identity catalog | Domain authorities and defensive ReportView/RunRenderContext implemented; remaining display-reference lookups are being replaced with prepared facts |
 | R27 | Consistent installation/docs | Pending |
@@ -97,3 +98,14 @@ owned handler without removing foreign handlers, and capture buffers are
 run/context-owned. Artifact names/attempt paths reject traversal; new attempt
 directories are private. SMTP state semantics and resend authorization are not
 changed by these CLI/output fixes.
+
+Drive selection follows `nextPageToken`, rejects ambiguous names before any
+download, bounds pages/files/bytes/chunks and validates available native size
+and MD5 revision evidence. Google OAuth read-only credentials authorize the
+actual listing; transport uses a real 20-second native HTTP timeout. No staging
+is created before authenticated listing/required-file selection succeeds.
+`DownloadedInputSet` owns a new private temporary directory even when a caller
+provides a destination parent; caller files are not overwritten or removed.
+Delivery retains that owner until its final exit. Partial download/listing
+failure cleans staging, and incomplete Drive configuration cannot silently
+select an older local input set. Original local inputs retain caller ownership.

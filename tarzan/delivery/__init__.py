@@ -199,7 +199,26 @@ def send_email(
     logger.info("Sent newsletter to %s with subject: %s", recipient, subject)
 
 
-def resolve_inputs() -> dict[str, str | None]:
+class ResolvedInputSet(dict):
+    """Mapping-compatible paths with ownership only for Drive staging."""
+
+    def __init__(self, paths, *, downloaded=None):
+        super().__init__(paths)
+        self._downloaded = downloaded
+
+    def close(self):
+        if self._downloaded is not None:
+            self._downloaded.close()
+            self._downloaded = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+
+def resolve_inputs() -> ResolvedInputSet:
     """Resolve the pipeline input paths.
 
     Returns a dict with keys ``config``, ``orders`` and ``targets_per_holding``
@@ -212,6 +231,8 @@ def resolve_inputs() -> dict[str, str | None]:
     """
     drive_folder = _env("DRIVE_FOLDER_ID")
     drive_creds = _env("GOOGLE_DRIVE_CREDENTIALS_JSON")
+    if bool(drive_folder) != bool(drive_creds):
+        raise RuntimeError("Drive input configuration requires both folder ID and credentials")
     if drive_folder and drive_creds:
         from tarzan.delivery.drive_loader import KNOWN_INPUT_FILES, download_files
         logger.info("Loading inputs from Google Drive folder %s", drive_folder)
@@ -219,24 +240,16 @@ def resolve_inputs() -> dict[str, str | None]:
             folder_id=drive_folder,
             credentials_json=drive_creds,
             filenames=KNOWN_INPUT_FILES,
+            required_filenames=("order_list.csv", "targets.csv"),
         )
-        if "targets.csv" not in files:
-            raise FileNotFoundError(
-                "Drive folder is missing targets.csv (the config file)."
-            )
-        if "order_list.csv" not in files:
-            raise FileNotFoundError(
-                "Drive folder is missing order_list.csv (the order list that "
-                "drives the whole report)."
-            )
-        return {
+        return ResolvedInputSet({
             "config": str(files["targets.csv"]),
             "orders": str(files["order_list.csv"]),
             "targets_per_holding": (
                 str(files["targets_per_holding.csv"])
                 if "targets_per_holding.csv" in files else None
             ),
-        }
+        }, downloaded=files)
 
     # Local mode.
     targets_path = _env("TARGETS_PATH", ".private/targets.csv")
@@ -256,11 +269,11 @@ def resolve_inputs() -> dict[str, str | None]:
         orders_path, targets_path,
         tph_path if Path(tph_path).exists() else "(none)",
     )
-    return {
+    return ResolvedInputSet({
         "config": targets_path,
         "orders": orders_path,
         "targets_per_holding": tph_path if Path(tph_path).exists() else None,
-    }
+    })
 
 
 # Manual-proxy source files (third-party index levels) that feed the carry /
@@ -282,6 +295,7 @@ def _seed_manual_proxies() -> None:
     local path — and ingested. If neither is available the backtest simply
     uses its generic fallback for that sleeve. Never raises.
     """
+    downloaded = {}
     try:
         from tarzan.data import manual_proxies as mp
         missing = {fn: key for fn, key in _MANUAL_PROXY_SOURCES.items()
@@ -319,6 +333,9 @@ def _seed_manual_proxies() -> None:
                 logger.warning("Manual proxy ingest failed for %s: %s", key, e)
     except Exception as e:  # noqa: BLE001
         logger.info("Manual-proxy seeding skipped (%s): %s", type(e).__name__, e)
+    finally:
+        if hasattr(downloaded, "close"):
+            downloaded.close()
 
 
 def _delivery_claim_store() -> DeliveryClaimStore:
@@ -503,6 +520,13 @@ def _input_failure_result(error):
 
 def run_and_send() -> int:
     """Run, evaluate publication, claim durably, checkpoint, and invoke SMTP once."""
+    from contextlib import ExitStack
+
+    with ExitStack() as input_owner:
+        return _run_and_send_owned(input_owner)
+
+
+def _run_and_send_owned(input_owner) -> int:
     from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
     from tarzan.runtime.ledger import LedgerEntryType
     from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
@@ -522,6 +546,8 @@ def run_and_send() -> int:
     inputs = None
     try:
         inputs = resolve_inputs()
+        if hasattr(inputs, "close"):
+            input_owner.callback(inputs.close)
         logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
         logger.info(
             "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s",
