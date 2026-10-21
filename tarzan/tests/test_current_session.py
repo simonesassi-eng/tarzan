@@ -27,7 +27,8 @@ def _holding(ticker: str, closes: list[float], quantity: float,
              *, start: str = "2026-08-17") -> Holding:
     idx = pd.bdate_range(start, periods=len(closes))
     h = Holding(isin=f"XX{ticker:0<10}"[:12], ticker=ticker, quantity=quantity,
-                cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR")
+                cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
+                instrument_type="ETF")
     h.price_history = pd.Series(closes, index=idx)
     h.current_price = closes[-1]
     h.current_value = closes[-1] * quantity

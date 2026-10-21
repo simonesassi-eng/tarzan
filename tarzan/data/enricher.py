@@ -2756,19 +2756,26 @@ def _resolve_instrument_kind(
     figi_security_type: Optional[str] = None,
 ):
     """Resolve exact mechanics from declared provider/input kind evidence."""
-    from tarzan.instruments.registry import TypeEvidenceGateway
+    return _resolve_instrument_evidence(
+        info, holding, figi_market_sector=figi_market_sector,
+        figi_security_type=figi_security_type,
+    ).kind
 
-    return TypeEvidenceGateway().resolve(
+
+def _resolve_instrument_evidence(
+    info: dict, holding: Holding, *, figi_market_sector=None, figi_security_type=None,
+):
+    from tarzan.instruments.valuation import holding_kind_resolution
+
+    return holding_kind_resolution(
+        holding,
         info.get("quoteType"),
         info.get("instrumentType"),
         info.get("securityType"),
         info.get("typeDisp"),
         figi_market_sector,
         figi_security_type,
-        holding.security_type,
-        holding.instrument_type,
-        *holding.instrument_kind_evidence,
-    ).kind
+    )
 
 
 def classify_asset_class(info: dict, ticker: str, holding: Holding):
@@ -3128,6 +3135,13 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
             history = data.get("history", pd.DataFrame())
 
         selected_ticker = _record_ticker_decision(holding, ticker, data)
+        # A ticker-keyed curated declaration is now resolvable. Consume it
+        # before selecting mechanics, not only in the later display pass.
+        from tarzan.instruments.registry import TypeResolutionState
+        from tarzan.instruments.valuation import holding_kind_resolution
+
+        if holding_kind_resolution(holding).state is TypeResolutionState.UNKNOWN:
+            _apply_taxonomy_override(holding)
         if selected_ticker and is_valid_isin:
             price_cache.store_ticker_isin(selected_ticker, clean_isin)
         if selected_ticker and (history is not None and not history.empty or info):
@@ -3142,6 +3156,14 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
             or ticker
         )
         info = _reconcile_verified_etf_metadata(info, holding)
+        holding.instrument_provider_evidence = tuple(
+            str(value).strip()
+            for key in ("quoteType", "instrumentType", "securityType", "typeDisp")
+            if (value := info.get(key)) is not None and str(value).strip()
+        )
+        # Resolve before writing a display kind: "Other" must not discard the
+        # negative verdict or the local assertion that contradicted a provider.
+        holding.instrument_resolution = _resolve_instrument_evidence(info, holding)
         holding.instrument_type = _infer_instrument_type(info, holding)
         holding.fetch_timestamp = dt.now(timezone.utc)
 
@@ -3171,12 +3193,16 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         figi_sector, figi_sec_type = (None, None)
         if is_valid_isin:
             figi_sector, figi_sec_type = _openfigi_bond_signals(clean_isin)
-        instrument_kind = _resolve_instrument_kind(
+        holding.instrument_provider_evidence += tuple(
+            value for value in (figi_sector, figi_sec_type) if value
+        )
+        holding.instrument_resolution = _resolve_instrument_evidence(
             info,
             holding,
             figi_market_sector=figi_sector,
             figi_security_type=figi_sec_type,
         )
+        instrument_kind = holding.instrument_resolution.kind
         if instrument_kind is not None:
             holding.security_type = instrument_kind.value
 
@@ -3283,6 +3309,9 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     except Exception as e:
         logger.error("Failed to enrich %s: %s", ticker, e)
 
+    from tarzan.instruments.valuation import select_holding_valuation
+
+    holding.valuation_result = select_holding_valuation(holding)
     return holding, info
 
 
@@ -3683,6 +3712,9 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
                     isin, value, csv_value,
                 )
                 value = csv_value
+                holding.current_value = value
+                holding.data_source = "input_csv (bond quote disagrees with anchor)"
+                return
 
             holding.current_price = price_eur_per_100 / 100.0  # EUR per unit
             holding.current_value = value

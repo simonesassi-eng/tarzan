@@ -18,6 +18,8 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from tarzan.contracts.targets import TargetSetOutcome
+    from tarzan.instruments.registry import TypeResolution
+    from tarzan.instruments.valuation import ValuationResult
 
 
 class AssetClass(str, Enum):
@@ -75,6 +77,11 @@ class Holding:
     # assertion keeps conflicting declarations ambiguous even when a provider
     # later supplies one plausible kind; no later source may erase a conflict.
     instrument_kind_evidence: tuple[str, ...] = ()
+    # Raw provider declarations remain distinct from mutable display fields and
+    # source-order evidence (which can be filtered by an as-of boundary).
+    instrument_provider_evidence: tuple[str, ...] = ()
+    instrument_resolution: Optional[TypeResolution] = field(default=None, repr=False)
+    valuation_result: Optional[ValuationResult] = field(default=None, repr=False)
     asset_type: Optional[str] = None
     current_price: Optional[float] = None
     current_value: Optional[float] = None

@@ -8,7 +8,7 @@ artifacts. This register contains no personal portfolio amounts.
 |---|---|---|
 | Verification | Frozen raw-provider capture, offline KPI comparison | Implemented; two baseline replays match, no network attempts or semantic errors |
 | R01–R03, R06 | Target gates, closed booleans, cash-flow signs | Implemented; 64 new regressions, 1,617 full-suite passes, unchanged frozen KPIs |
-| R04 | Instrument resolution and valuation provenance | Pending |
+| R04 | Instrument resolution and valuation provenance | Implemented; persistent negative mechanics evidence, explicit valuation origins, no frozen KPI change |
 | R05 | Evidence-backed corporate-action repair | Pending |
 | R07–R08, R18, R20 | Causal identity, single-flight, cache API, real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
@@ -29,3 +29,11 @@ input rather than selecting defaults. Optional blank values retain documented
 defaults. Economic cash-sign errors reject the complete order input even in
 lenient column mode; no row is silently removed and no amount is sign-flipped.
 Legitimate equal broker fills remain distinct orders.
+
+Provider mechanics evidence now survives taxonomy/display rewrites. Selected
+market valuation is an immutable EUR-per-unit fact; an anchor is never primary
+merely because an unvalued quote remains on the holding. Live stamps, returns
+and tax consumers use the same retained mechanics authority. Existing stamp
+fixtures now declare their ETF mechanics explicitly; return/price expectations
+were preserved. MONEY's independently verified generic-EQUITY reconciliation
+remains narrow, and specific provider conflicts still block valuation.

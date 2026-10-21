@@ -960,7 +960,8 @@ class TestTheEighthOfOctoberEndToEnd:
                             lambda tk: ["ABC.MI", "ABC.PA"])
         tape = TestVenueConsensus._history(level=29.445)
         h = Holding(isin="IE0000000001", ticker="ABC.DE", quantity=100.0,
-                    cost_basis_eur=2800.0, market_value_eur=2944.5, currency="EUR")
+                    cost_basis_eur=2800.0, market_value_eur=2944.5, currency="EUR",
+                    instrument_type="ETF")
         h.price_history = tape.copy()
         h.price_history_native = tape.copy()
         current_session.apply_to_holdings([h])

@@ -304,7 +304,8 @@ class TestHoldingsStampBothTapesToo:
                                          "prev_close": last,
                                          "time": self.FRI}})
         h = Holding(isin="IE000K975W13", ticker="AVEM.DE", quantity=0.0,
-                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR")
+                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
+                    instrument_type="ETF")
         h.price_history = _tape(last)
         h.price_history_native = _tape(last)
         h.price_currency = "EUR"
@@ -346,7 +347,8 @@ class TestHoldingsStampBothTapesToo:
             lambda symbols: {"AVEM.DE": {"price": 27.945, "prev_close": 27.625,
                                          "time": self.FRI}})
         h = Holding(isin="IE1", ticker="AVEM.DE", quantity=1.0,
-                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR")
+                    cost_basis_eur=0.0, market_value_eur=0.0, currency="EUR",
+                    instrument_type="ETF")
         h.price_history = _tape(27.625)
         h.price_history_native = None
 

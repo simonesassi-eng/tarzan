@@ -157,13 +157,9 @@ class ValuationCompletenessEvaluator:
 
     @staticmethod
     def _kind(holding: object) -> str:
-        from tarzan.instruments.registry import TypeEvidenceGateway
+        from tarzan.instruments.valuation import holding_kind_resolution
 
-        resolution = TypeEvidenceGateway().resolve(
-            getattr(holding, "security_type", None),
-            getattr(holding, "instrument_type", None),
-            *tuple(getattr(holding, "instrument_kind_evidence", ()) or ()),
-        )
+        resolution = holding_kind_resolution(holding)
         return resolution.kind.value if resolution.kind is not None else "UNKNOWN"
 
     def _classify_holding(
@@ -184,7 +180,28 @@ class ValuationCompletenessEvaluator:
         quantity_value = self._finite(getattr(holding, "quantity", None))
         quantity = abs(quantity_value) if quantity_value is not None else None
         current_price = self._finite(getattr(holding, "current_price", None))
-        has_price = current_price is not None
+        from tarzan.instruments.valuation import ValuationOrigin
+
+        selected_fact = getattr(holding, "valuation_result", None)
+        has_price = (
+            current_price is not None and current_price > 0
+            and quantity_value is not None and quantity_value >= 0
+            and current_value is not None and current_value >= 0
+            and not str(getattr(holding, "data_source", "") or "").startswith(
+                ("input_csv", "last-known", "historical-only")
+            )
+        )
+        if selected_fact is not None:
+            has_price = (
+                has_price
+                and selected_fact.origin in (ValuationOrigin.MARKET, ValuationOrigin.FALLBACK)
+                and selected_fact.price_eur_per_unit == current_price
+                and selected_fact.value_eur == current_value
+                and math.isclose(
+                    current_value, quantity_value * current_price,
+                    rel_tol=1e-12, abs_tol=1e-8,
+                )
+            )
         price_is_fallback = bool(
             getattr(holding, "price_is_fallback", False)
         )

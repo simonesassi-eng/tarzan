@@ -555,16 +555,16 @@ def _holding_quotes(holding, symbols, quotes, today):
     """Prepare independent native and EUR-per-unit quote maps for one holding."""
     from tarzan.data import enricher
     from tarzan.data.exchange_calendar import previous_session
-    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.instruments.valuation import holding_kind_resolution
 
     native_quotes, eur_quotes = {}, {}
     own_currency = major_code(
         holding.price_currency or holding.price_quote_currency or holding.currency or "EUR"
     ).upper()
-    kind = TypeEvidenceGateway().resolve(
-        holding.security_type, holding.instrument_type,
-        *holding.instrument_kind_evidence,
-    ).kind
+    kind = holding_kind_resolution(holding).kind
+    if kind is None:
+        return native_quotes, eur_quotes
     for symbol in symbols:
         original = quotes.get(symbol) or {}
         currency = (
@@ -675,6 +675,12 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
 
     stamped: list[str] = []
     for holding in holdings:
+        from tarzan.instruments.valuation import (
+            holding_kind_resolution, select_holding_valuation,
+        )
+
+        if holding_kind_resolution(holding).kind is None:
+            continue
         price_only = getattr(holding, "price_history_price_only", None)
         total_return = getattr(holding, "price_history", None)
         symbols = candidates.get(str(holding.ticker), [])
@@ -788,12 +794,15 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
 
             observed = _composite_observation_time(observed, fx_evidence["observation_time"])
         holding.price_is_fallback = bool(
-            fx_evidence is not None
-            and (fx_evidence["is_fallback"] or observed is None)
+            observed is None
+            or (fx_evidence is not None and fx_evidence["is_fallback"])
         )
         holding.price_observation_timestamp = observed
-        if holding.price_is_fallback and fx_evidence.get("source"):
+        if fx_evidence is not None and holding.price_is_fallback and fx_evidence.get("source"):
             holding.data_source = fx_evidence["source"]
+        else:
+            holding.data_source = f"yfinance:{quote.get('symbol') or holding.ticker}:current_session"
+        holding.valuation_result = select_holding_valuation(holding)
         stamped.append(str(holding.ticker))
 
     if stamped:

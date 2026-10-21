@@ -114,6 +114,9 @@ def _classify(
         if related.instrument_kind is not None
     ]
     for holding in holdings:
+        retained = getattr(holding, "instrument_resolution", None)
+        if retained is not None:
+            assertions.extend(retained.evidence)
         assertions.extend(
             value
             for value in (

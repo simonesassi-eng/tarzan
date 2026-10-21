@@ -42,6 +42,7 @@ import pandas as pd
 from tarzan.data.bond_fetcher import value_position
 from tarzan.engine import allocations as _alloc
 from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+from tarzan.instruments.valuation import holding_kind_resolution
 from tarzan.models.currency import to_major
 from tarzan.models.holding import AssetClass, Holding
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
@@ -322,6 +323,16 @@ def _causal_enriched_by_isin(
             security_type=security_type,
             instrument_type=instrument_type,
             instrument_kind_evidence=current_evidence,
+            # Filter order authority without discarding independently observed
+            # provider assertions or resurrecting an excluded future order.
+            instrument_resolution=(
+                gateway.resolve(
+                    *holding.instrument_provider_evidence,
+                    security_type, instrument_type, *current_evidence,
+                )
+                if order_evidence_changed else holding.instrument_resolution
+            ),
+            valuation_result=None if order_evidence_changed else holding.valuation_result,
             asset_class=(
                 None if clear_historical_category else holding.asset_class
             ),
@@ -712,16 +723,18 @@ class PriceResolver:
                 self._orders, isin
             )
             if order_resolution.evidence:
-                resolution = order_resolution
+                # A surviving order declaration does not license a conflict
+                # with independently retained provider mechanics.
+                resolution = (
+                    holding_kind_resolution(holding, *order_resolution.evidence)
+                    if holding and holding.instrument_resolution is not None
+                    else order_resolution
+                )
             else:
                 holding_evidence = tuple(
                     getattr(holding, "instrument_kind_evidence", ()) or ()
                 ) if holding else ()
-                resolution = TypeEvidenceGateway().resolve(
-                    getattr(holding, "security_type", None) if holding else None,
-                    getattr(holding, "instrument_type", None) if holding else None,
-                    *holding_evidence,
-                )
+                resolution = holding_kind_resolution(holding, *holding_evidence)
             self._instrument_kinds[isin] = resolution.kind
         return self._instrument_kinds[isin]
 

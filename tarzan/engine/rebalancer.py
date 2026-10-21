@@ -449,7 +449,8 @@ class _ObjectiveModel:
 
 def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.ndarray:
     from tarzan.engine.tax import is_government_bond
-    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+    from tarzan.instruments.registry import InstrumentKind
+    from tarzan.instruments.valuation import holding_kind_resolution
 
     cg_std = float(config.rebalancing_capital_gains_tax_standard_pctg or 0.0) / 100.0
     cg_gov = float(config.rebalancing_capital_gains_tax_government_pctg or 0.0) / 100.0
@@ -463,9 +464,7 @@ def _tax_per_unit_sold(holdings: list[Holding], config: InvestorConfig) -> np.nd
         # ETF (asset_class=Fixed Income, KIND=ETF) is capital income at the
         # standard rate, so an issuer token in its NAME (BTP/BUND/…) must not
         # buy it the reduced rate here while the estimate charges 26%.
-        kind = TypeEvidenceGateway().resolve(
-            h.security_type, h.instrument_type, *(h.instrument_kind_evidence or ())
-        ).kind
+        kind = holding_kind_resolution(h).kind
         subtypes = (h.instrument_type, h.security_type)
         rate = (
             cg_gov
