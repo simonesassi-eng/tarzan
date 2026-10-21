@@ -459,19 +459,18 @@ def _run_once(
             if orders:
                 logger.info("Loaded %d orders", len(orders))
         except DataIngestionError:
-            # In strict mode a schema violation must surface as an actionable
-            # rejection, not silently degrade to "no orders" (empty report).
-            if strict:
-                raise
-            logger.warning("Order list rejected by schema; treating as no orders.")
-            orders = None
+            # A rejected file never establishes a valid portfolio, regardless
+            # of whether extra columns are tolerated by the row contract.
+            raise
         except Exception as e:
-            logger.warning("Order list unreadable (%s).", e)
-            orders = None
+            raise DataIngestionError(
+                f"Order list could not be read ({type(e).__name__})."
+            ) from e
 
     if not orders:
-        logger.error("No order list available — cannot run.")
-        return PortfolioMetrics(), config
+        raise DataIngestionError(
+            "No accepted orders are available; an analysis cannot be initialized."
+        )
 
     # Form the effective ledger exactly once. Every financial consumer below
     # receives this immutable on/before-boundary view; the original accepted
@@ -497,8 +496,9 @@ def _run_once(
         "outcome": "SUCCEEDED",
     })
     if not orders:
-        logger.error("No orders are effective on or before the analysis boundary.")
-        return PortfolioMetrics(), config
+        raise DataIngestionError(
+            "No orders are effective on or before the analysis boundary."
+        )
 
     _check_offline_identity_bootstrap(orders)
 
@@ -924,11 +924,33 @@ def run(
                 stable_code="INVALID_RUN_CONTEXT",
                 severity="CRITICAL",
                 error=error,
-                affected_outputs=["run"],
+                affected_outputs=["run", "portfolio", "planning", "publication"],
                 analytical_impact="analysis did not start",
                 publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
                 context={"attempt_id": envelope.attempt_id},
             )
+            # Configuration failed before a RunSession existed. Still publish
+            # a fresh failed result; a caller must never see yesterday's result
+            # as the outcome of this attempt.
+            _runtime.reset(
+                attempt_id=envelope.attempt_id,
+                invocation_source=envelope.invocation_source,
+            )
+            analysis_id = canonical_analysis_id({
+                "failure_code": "INVALID_RUN_CONTEXT",
+                "deterministic": deterministic,
+                "as_of": as_of,
+            })
+            bootstrap_ledger.append(LedgerEntryType.STAGE, {
+                "stage": "run",
+                "outcome": "FAILED",
+                "analysis_id": analysis_id,
+                "availability": Availability.UNAVAILABLE.value,
+            })
+            record_last_run_result(RunResult(
+                metrics=None, config=None, attempt_id=envelope.attempt_id,
+                analysis_id=analysis_id, ledger=bootstrap_ledger,
+            ))
             raise
 
         session = RunSession(

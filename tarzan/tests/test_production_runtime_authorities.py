@@ -367,6 +367,7 @@ def test_apps_script_claim_adapter_and_workflow_share_the_durable_contract(
             "ok": True,
             "retention_days": 45,
             "state": document["target"],
+            "operation_id": document["operation_id"],
         })
 
     monkeypatch.setattr("tarzan.delivery.claims.urlopen", fake_urlopen)
@@ -1055,7 +1056,7 @@ def test_order_derived_zero_anchor_has_indeterminate_materiality():
     assert assessment.planning_eligible is False
 
 
-def test_local_delivery_claim_store_idempotent_transition(tmp_path):
+def test_local_delivery_claim_store_cannot_authorize_a_second_sender(tmp_path):
     store = LocalJsonDeliveryClaimStore(tmp_path / "delivery-idempotent.json")
     intent = DeliveryIntent(
         stable_event_id="test:idempotent",
@@ -1066,8 +1067,13 @@ def test_local_delivery_claim_store_idempotent_transition(tmp_path):
     store.claim(intent)
     # First transition: CLAIMED -> SMTP_INVOCATION_STARTED (succeeds)
     store.transition(intent.logical_id, (DeliveryState.CLAIMED,), DeliveryState.SMTP_INVOCATION_STARTED)
-    # Second transition (retry): CLAIMED -> SMTP_INVOCATION_STARTED (succeeds because state is already SMTP_INVOCATION_STARTED)
-    assert store.transition(intent.logical_id, (DeliveryState.CLAIMED,), DeliveryState.SMTP_INVOCATION_STARTED) == DeliveryState.SMTP_INVOCATION_STARTED
+    # A new call has no evidence that it owns the already-consumed SMTP edge.
+    with pytest.raises(ValueError, match="invalid delivery transition"):
+        store.transition(
+            intent.logical_id,
+            (DeliveryState.CLAIMED,),
+            DeliveryState.SMTP_INVOCATION_STARTED,
+        )
 
 
 def test_remote_claim_store_idempotent_transition_retry(monkeypatch):
@@ -1095,13 +1101,15 @@ def test_remote_claim_store_idempotent_transition_retry(monkeypatch):
     monkeypatch.setattr(claims_module.time, "sleep", lambda seconds: None)
 
     def timeout_then_idempotent(request, timeout):
-        attempts.append(1)
+        document = json.loads(request.data.decode("utf-8"))
+        attempts.append(document["operation_id"])
         if len(attempts) == 1:
             raise TimeoutError("timeout")
         return Response({
             "ok": True,
             "retention_days": 45,
-            "state": "SMTP_INVOCATION_STARTED"
+            "state": "SMTP_INVOCATION_STARTED",
+            "operation_id": document["operation_id"],
         })
 
     monkeypatch.setattr(claims_module, "urlopen", timeout_then_idempotent)
@@ -1112,3 +1120,4 @@ def test_remote_claim_store_idempotent_transition_retry(monkeypatch):
         DeliveryState.SMTP_INVOCATION_STARTED,
     ) == DeliveryState.SMTP_INVOCATION_STARTED
     assert len(attempts) == 2
+    assert attempts[0] == attempts[1]

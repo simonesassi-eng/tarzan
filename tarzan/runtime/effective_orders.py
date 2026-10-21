@@ -39,11 +39,9 @@ class EffectiveOrderSnapshot:
                     for order in source
                     if boundary is None or effective_trade_date(order) <= boundary
                 ),
-                key=lambda order: (
-                    effective_trade_date(order),
-                    order.date,
-                    order.order_id,
-                ),
+                # Preserve source chronology within a trade date. Settlement
+                # dates and content hashes do not establish intraday order.
+                key=effective_trade_date,
             )
         )
         canonical = [

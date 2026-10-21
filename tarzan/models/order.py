@@ -134,3 +134,14 @@ class Order:
     def is_position_change(self) -> bool:
         """True if this order changes the held quantity of a security."""
         return self.type in _POSITION_CHANGE_TYPES
+
+    def acquisition_cost_eur(self) -> float:
+        """Cost contributed by a buy or incoming security transfer.
+
+        An incoming transfer's cash leg may contain only a fee; its explicitly
+        transferred gross basis is the authority. A buy uses the cash paid,
+        including acquisition fees, with gross as the no-cash fallback.
+        """
+        if self.type is OrderType.TRANSFER_IN:
+            return abs(self.gross_eur or 0.0)
+        return abs(self.net_eur) if self.net_eur else abs(self.gross_eur or 0.0)

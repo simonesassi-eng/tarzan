@@ -1085,8 +1085,9 @@ class TestIncomeInTwr:
 
         # Flat price (100 throughout): with no income the market return
         # is 0%. A coupon paid mid-window is income → must lift TWR.
-        prices = [100.0] * 60
+        prices = [1.0] * 60  # EUR per unit: the enricher already applied bond /100
         enriched = {"BTP": _enriched_with_history("BTP", prices, start=(2025, 1, 1))}
+        enriched["BTP"].price_history_price_only = enriched["BTP"].price_history.copy()
         orders = [
             _o(OrderType.BUY, "BTP", qty=1000.0, net=-1000.0, price=100.0,
                d=(2025, 1, 1), kind=InstrumentKind.BOND),
@@ -1100,7 +1101,7 @@ class TestIncomeInTwr:
         # the securities portfolio) so it is added back into V_before.
         assert series.external_flows.get(datetime.date(2025, 2, 1)) == pytest.approx(-20.0)
         # Income makes the time-weighted return strictly positive.
-        assert res.cumulative_pct > 0.0
+        assert res.cumulative_pct == pytest.approx(2.0)
 
     def test_no_income_stays_flat(self):
         from tarzan.engine.metrics import twr

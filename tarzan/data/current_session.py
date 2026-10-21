@@ -52,10 +52,13 @@ so it surfaced only on the Saturday issue.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
+
+from tarzan.models.currency import major_code, to_major
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +161,9 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
 
     Returns ``{}`` when nothing qualifies, so the caller keeps the feed's own close.
 
-    ponytail: the reference is an EUR-per-unit close while the quote is in the
-    venue's native units, so a non-EUR listing fails the tolerance by the FX
-    rate and is simply not stamped. Comparing in native units (i.e. stamping
-    before the FX/bond conversion) is what would make this reachable for them.
+    Both quote and reference must be on the same currency/unit ruler. The
+    holdings adapter converts provider quotes before calling this selector;
+    proximity of USD and EUR levels is never evidence of equal units.
     """
     from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
 
@@ -526,6 +528,115 @@ def _candidates(tickers) -> dict[str, list[str]]:
     return {tk: [tk, *_sibling_symbols(tk)] for tk in tickers if tk}
 
 
+def _fx_on(fx, day):
+    """Return a causal daily FX rate and its observation evidence."""
+    from tarzan.data import enricher
+
+    if fx is None or fx.empty or not isinstance(fx.index, pd.DatetimeIndex):
+        return None
+    threshold = pd.Timestamp(day)
+    if fx.index.tz is not None:
+        threshold = threshold.tz_localize(fx.index.tz)
+    position = fx.index.searchsorted(threshold, side="right") - 1
+    if position < 0:
+        return None
+    index = fx.index[position]
+    origin = fx.attrs.get(enricher._HISTORY_ORIGINS_ATTR, {}).get(
+        enricher._history_timestamp_key(index), enricher._HISTORY_ORIGIN_PRIMARY,
+    )
+    return float(fx.iloc[position]), {
+        "observation_time": pd.Timestamp(index).to_pydatetime(),
+        "is_fallback": origin == enricher._HISTORY_ORIGIN_CACHE,
+        "source": "price_cache:FX" if origin == enricher._HISTORY_ORIGIN_CACHE else None,
+    }
+
+
+def _holding_quotes(holding, symbols, quotes, today):
+    """Prepare independent native and EUR-per-unit quote maps for one holding."""
+    from tarzan.data import enricher
+    from tarzan.data.exchange_calendar import previous_session
+    from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
+
+    native_quotes, eur_quotes = {}, {}
+    own_currency = major_code(
+        holding.price_currency or holding.price_quote_currency or holding.currency or "EUR"
+    ).upper()
+    kind = TypeEvidenceGateway().resolve(
+        holding.security_type, holding.instrument_type,
+        *holding.instrument_kind_evidence,
+    ).kind
+    for symbol in symbols:
+        original = quotes.get(symbol) or {}
+        currency = (
+            enricher.venue_currency(symbol) or original.get("currency")
+            or holding.price_quote_currency or holding.price_currency
+            or holding.currency or "EUR"
+        )
+        currency = str(currency).strip()
+        quote = dict(original)
+        for key in ("price", "prev_close"):
+            try:
+                value = float(quote.get(key))
+            except (TypeError, ValueError, OverflowError):
+                quote.pop(key, None)
+                continue
+            if not math.isfinite(value) or value <= 0:
+                quote.pop(key, None)
+            else:
+                quote[key] = to_major(value, currency)
+        if not quote.get("price"):
+            continue
+        normalized_currency = major_code(currency).upper()
+        quote["currency"] = normalized_currency
+        if normalized_currency == own_currency:
+            native_quotes[symbol] = quote
+        eur = dict(quote)
+        if normalized_currency != "EUR":
+            day = stamp_date(quote, today, ticker=symbol)
+            if day is None:
+                continue
+            fx = enricher._usable_fx_series(
+                enricher._get_fx_series(normalized_currency)
+            ).sort_index()
+            fx = fx[~fx.index.duplicated(keep="last")]
+            current = _fx_on(fx, day)
+            if current is None:
+                continue  # unknown FX can never license a native-as-EUR stamp
+            rate, evidence = current
+            eur["price"] *= rate
+            eur["_fx_evidence"] = evidence
+            if eur.get("prev_close"):
+                rolled = (
+                    day.date() < pd.Timestamp(today).date()
+                    and abs(quote["prev_close"] / quote["price"] - 1) < 1e-9
+                )
+                prior_day = day if rolled else previous_session(symbol, day.date())
+                previous = _fx_on(fx, prior_day)
+                if previous is None:
+                    eur.pop("prev_close", None)
+                else:
+                    eur["prev_close"] *= previous[0]
+        if kind is InstrumentKind.BOND:
+            for key in ("price", "prev_close"):
+                if key in eur:
+                    eur[key] /= 100
+        eur["currency"] = "EUR"
+        if eur.get("prev_close") and not math.isfinite(eur["prev_close"]):
+            eur.pop("prev_close", None)
+        if math.isfinite(eur["price"]) and eur["price"] > 0:
+            eur_quotes[symbol] = eur
+    return native_quotes, eur_quotes
+
+
+def _quotes_not_older_than(quotes, date, today, ticker):
+    """A recent quote still cannot supersede a newer dated market close."""
+    return {
+        symbol: quote for symbol, quote in quotes.items()
+        if (day := stamp_date(quote, today, ticker=ticker)) is not None
+        and day.date() >= date
+    }
+
+
 def apply_to_holdings(holdings: list) -> tuple[str, ...]:
     """Stamp the current session onto every holding's series AND price.
 
@@ -564,6 +675,33 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
 
     stamped: list[str] = []
     for holding in holdings:
+        price_only = getattr(holding, "price_history_price_only", None)
+        total_return = getattr(holding, "price_history", None)
+        symbols = candidates.get(str(holding.ticker), [])
+        native_quotes, eur_quotes = _holding_quotes(holding, symbols, quotes, today)
+
+        def _total_return_quote(quote):
+            """Put a raw previous close onto the existing adjusted ruler."""
+            if price_only is None or total_return is None:
+                return quote
+            day = stamp_date(quote, today, ticker=str(holding.ticker))
+            if day is None or not quote.get("prev_close") or not quote.get("price"):
+                return quote
+            # Preserve stamp_today's protection against a rolled previous close.
+            if (day.date() < pd.Timestamp(today).date()
+                    and abs(float(quote["prev_close"]) / float(quote["price"]) - 1) < 1e-9):
+                return quote
+            from tarzan.data.exchange_calendar import previous_session
+
+            previous = pd.Timestamp(previous_session(str(holding.ticker), day.date()))
+            raw_index = previous.tz_localize(price_only.index.tz) if price_only.index.tz else previous
+            adjusted_index = previous.tz_localize(total_return.index.tz) if total_return.index.tz else previous
+            raw = price_only.get(raw_index)
+            adjusted = total_return.get(adjusted_index)
+            if raw is None or adjusted is None or pd.isna(raw) or pd.isna(adjusted) or raw <= 0:
+                # An absent factor is not evidence that the two rulers coincide.
+                return dict(quote, prev_close=None)
+            return dict(quote, prev_close=float(quote["prev_close"]) * float(adjusted / raw))
 
         def _stamp(tape):
             """Stamp one tape against ITS OWN last close, or ``(None, None)``.
@@ -581,25 +719,40 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             clean = None if tape is None else tape.dropna()
             if clean is None or len(clean) == 0:
                 return None, None
-            q = pick_quote(candidates.get(str(holding.ticker), []), quotes,
+            current_quotes = _quotes_not_older_than(
+                native_quotes, pd.Timestamp(clean.index[-1]).date(), today,
+                str(holding.ticker),
+            )
+            q = pick_quote(symbols, current_quotes,
                            float(clean.iloc[-1]), history=clean,
-                           referee=referees.get(str(holding.ticker)))
+                           referee=(
+                               referees.get(str(holding.ticker))
+                               if not holding.price_currency or holding.price_currency == "EUR"
+                               else None
+                           ))
             p = q.get("price")
             if not p:
                 return None, None
             return stamp_today(tape, today, float(p),
-                               q, ticker=str(holding.ticker)), q
+                               _total_return_quote(q), ticker=str(holding.ticker)), q
 
         native_stamped, _nq = _stamp(getattr(holding, "price_history_native", None))
         if native_stamped is not None:
             holding.price_history_native = native_stamped
 
         series = getattr(holding, "price_history", None)
-        usable = None if series is None else series.dropna()
+        if series is None or series.empty:
+            continue
+        reference = price_only if price_only is not None and not price_only.empty else series
+        usable = None if reference is None else reference.dropna()
         if usable is None or len(usable) == 0:
             continue
+        current_quotes = _quotes_not_older_than(
+            eur_quotes, pd.Timestamp(usable.index[-1]).date(), today,
+            str(holding.ticker),
+        )
         quote = pick_quote(
-            candidates.get(str(holding.ticker), []), quotes,
+            symbols, current_quotes,
             float(usable.iloc[-1]), history=usable,
             referee=referees.get(str(holding.ticker)),
         )
@@ -613,23 +766,34 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         # application of the bond per-100 convention.
         stamped_price = float(price)
         history = stamp_today(
-            series, today, stamped_price, quote, ticker=str(holding.ticker))
+            series, today, stamped_price, _total_return_quote(quote), ticker=str(holding.ticker))
         if history is None:
             # The quote belongs on no session for this venue, so neither the
             # series nor the price it would pair with may be written: they are
             # one observation and must not diverge.
             continue
         holding.price_history = history
+        if price_only is not None and not price_only.empty:
+            holding.price_history_price_only = stamp_today(
+                price_only, today, stamped_price, quote, ticker=str(holding.ticker))
         holding.current_price = stamped_price
         quantity = float(getattr(holding, "quantity", 0.0) or 0.0)
         holding.current_value = quantity * stamped_price
-        # A level-validated published quote is primary market evidence, so it
-        # clears any fallback flag enrichment set from a staler rung. Its
-        # observation time comes from the quote itself when the provider dated
-        # it; the policy falls back to the fetch clock for a non-fallback quote
-        # with no distinct timestamp.
-        holding.price_is_fallback = False
-        holding.price_observation_timestamp = quote_observed_at(quote)
+        # Keep the older observation governing a converted price. A primary
+        # security quote cannot erase the provenance of fallback FX evidence.
+        observed = quote_observed_at(quote)
+        fx_evidence = quote.get("_fx_evidence")
+        if fx_evidence is not None:
+            from tarzan.data.enricher import _composite_observation_time
+
+            observed = _composite_observation_time(observed, fx_evidence["observation_time"])
+        holding.price_is_fallback = bool(
+            fx_evidence is not None
+            and (fx_evidence["is_fallback"] or observed is None)
+        )
+        holding.price_observation_timestamp = observed
+        if holding.price_is_fallback and fx_evidence.get("source"):
+            holding.data_source = fx_evidence["source"]
         stamped.append(str(holding.ticker))
 
     if stamped:

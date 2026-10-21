@@ -51,7 +51,8 @@ from tarzan.runtime.ledger import Availability
 
 logger = logging.getLogger(__name__)
 
-_QTY_EPS = 0.01
+# Numerical cancellation tolerance, never a minimum investable quantity.
+_QTY_EPS = 1e-9
 _IdentityKey = tuple[str, str]
 
 
@@ -434,9 +435,9 @@ def _apply_cost_order(
 ) -> None:
     """Advance the running average-cost ``(qty, cost)`` books by one order.
 
-      * a buy / transfer-in adds the EUR it committed — the net cash paid
-        including fees (``net_eur``), or the gross transferred value when
-        no cash moved (a ``transfer_in`` has ``net_eur == 0``);
+      * a buy adds the net cash paid including fees (``net_eur``);
+        a transfer-in adds its explicit gross transferred basis, independently
+        of the separate cash leg (which may contain only a transfer fee);
       * a sell / transfer-out removes cost at the running *average* price,
         so realized gains/losses do not distort the basis of the units
         that remain;
@@ -454,7 +455,7 @@ def _apply_cost_order(
     q = qty.get(book, 0.0)
     c = cost.get(book, 0.0)
     if o.quantity > 0:  # buy / transfer_in
-        committed = abs(o.net_eur) if o.net_eur else abs(o.gross_eur or 0.0)
+        committed = o.acquisition_cost_eur()
         qty[book] = q + o.quantity
         cost[book] = c + committed
     elif o.quantity < 0:  # sell / transfer_out
@@ -629,7 +630,7 @@ def _build_synthetic_history(orders: list[Order], isin: str) -> Optional[pd.Seri
         if fx_numeric is None:
             # Foreign order with no usable FX rate: unavailable, not 1:1.
             continue
-        eur_price = native_price / fx_numeric
+        eur_price = to_major(native_price, o.currency) / fx_numeric
         usable_eur_price = _usable_price(eur_price)
         if usable_eur_price is not None:
             obs.append((o.trade_date, usable_eur_price))
@@ -685,6 +686,12 @@ class PriceResolver:
         self._today = today
         self._synth: dict[str, Optional[pd.Series]] = {}
         self._instrument_kinds: dict[str, Optional[InstrumentKind]] = {}
+        self._cash_income_isins = {
+            order.isin for order in self._orders
+            if order.type in (OrderType.COUPON, OrderType.DIVIDEND)
+            and order.net_eur
+        }
+        self._income_basis_reported: set[str] = set()
 
     def _synthetic(self, isin: str) -> Optional[pd.Series]:
         if isin not in self._synth:
@@ -761,6 +768,22 @@ class PriceResolver:
             return None, "excluded"
         h = self._enriched.get(isin)
         ph = getattr(h, "price_history", None) if h else None
+        price_only = getattr(h, "price_history_price_only", None) if h else None
+        if price_only is not None and not price_only.empty:
+            ph = price_only
+        elif isin in self._cash_income_isins and ph is not None and len(ph) > 0:
+            # Legacy/partial provider evidence is not proof of price-only
+            # history. A warning alone would still publish inflated returns.
+            if isin not in self._income_basis_reported:
+                dq.error(
+                    "returns",
+                    "booked distribution has no price-only market history; "
+                    "total-return prices would double-count income, so "
+                    "historical valuation is unavailable",
+                    context=isin,
+                )
+                self._income_basis_reported.add(isin)
+            return None, "excluded"
         if ph is not None and len(ph) > 0:
             price = _price_at(ph, d)
             if price is not None:
@@ -971,22 +994,9 @@ def build_order_derived_series(
             external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) + o.quantity * unit
         elif o.type in (OrderType.COUPON, OrderType.DIVIDEND) and o.net_eur:
             # Distribution paid out of the securities portfolio → withdrawal.
-            # DOUBLE-COUNT GUARD: this GIPS treatment is correct only when the
-            # instrument's price series is PRICE-ONLY (income not embedded), as
-            # for bonds priced on the clean price. The yfinance rung is total-
-            # return (auto_adjust=True, dividends already in the price), so
-            # crediting the distribution ALSO as a flow would count it twice.
-            # No distributing holding is priced via yfinance today; warn loudly
-            # if that ever changes rather than silently inflating the return.
-            _, src = resolver.price_on(o.isin, o.trade_date)
-            if src == "yfinance":
-                dq.warning(
-                    "returns",
-                    f"{o.type.value} booked as a cash flow on a total-return "
-                    f"(yfinance) price series — income would be double-counted; "
-                    f"this holding needs a price-only series",
-                    context=o.isin,
-                )
+            # The resolver requires an unadjusted tape for booked income.
+            _, source = resolver.price_on(o.isin, o.trade_date)
+            record_history_source(o.isin, source)
             external_flows[o.trade_date] = external_flows.get(o.trade_date, 0.0) - o.net_eur
 
     cf_dates = sorted(external_flows.keys())
@@ -995,7 +1005,7 @@ def build_order_derived_series(
     })
     history_dates = sorted(set(cf_dates) | set(position_dates))
     valuations: list[tuple[datetime.date, float]] = [
-        (d, value_on(d)) for d in cf_dates
+        (d, value_on(d)) for d in cf_dates if d < today
     ]
     # Terminal valuation today, retaining a separate latest-value source set
     # for coverage while also contributing to whole-history provenance.
@@ -1025,8 +1035,9 @@ def build_order_derived_series(
     # so we cut the series back to the last date that actually moved. The
     # terminal ``valuations``/``xirr_cashflows`` (which drive XIRR/TWR)
     # are left untouched: their value equals the carried price anyway.
+    # Actual-value accounting must still reach today: a flat market price
+    # does not mean no cash arrived, or that cost basis stayed unchanged.
     daily_series = _trim_carried_tail(daily_series)
-    actual_value_series = _trim_carried_tail(actual_value_series)
 
     # Whole-history evidence authority. A terminal quote cannot erase a gap
     # earlier in the held interval: missing causal evidence is unavailable,
@@ -1171,15 +1182,23 @@ def build_order_derived_series(
             f"historical value series is {coverage_pct:.1f}% priced by real "
             "market data; the remainder used the synthetic/carry-flat fallback ladder",
         )
-    # XIRR cash flows (bank-account perspective): transfer_in is a
-    # deposit at its market value; others use net_eur. Dated on the
+    # XIRR cash flows (bank-account perspective): security transfers are
+    # external capital at market value, with their separate cash/fee leg.
+    # Moving securities out is not an investment loss. Dated on the
     # trade date (when market exposure is taken on), consistent with
     # every other metric. Terminated by today's value.
     xirr_cashflows: list[tuple[datetime.date, float]] = []
     for o in orders:
-        if o.type == OrderType.TRANSFER_IN:
-            if (o.gross_eur or 0.0) > 0:
-                xirr_cashflows.append((o.trade_date, -(o.gross_eur)))
+        if o.type in (OrderType.TRANSFER_IN, OrderType.TRANSFER_OUT):
+            unit = value_isin_on(o.isin, o.trade_date)
+            transferred = (
+                abs(o.quantity) * unit
+                if unit is not None else abs(o.gross_eur or 0.0)
+            )
+            direction = -1 if o.type is OrderType.TRANSFER_IN else 1
+            amount = direction * transferred + (o.net_eur or 0.0)
+            if amount:
+                xirr_cashflows.append((o.trade_date, amount))
         elif o.net_eur != 0.0:
             xirr_cashflows.append((o.trade_date, o.net_eur))
     xirr_cashflows.append((today, current_value))

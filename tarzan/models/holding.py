@@ -127,15 +127,21 @@ class Holding:
     # still describe an old market close.
     fetch_timestamp: Optional[datetime] = None
     price_history: Optional[pd.Series] = field(default=None, repr=False)
+    # EUR-per-unit market closes without dividend back-adjustment. Actual
+    # quantities and booked distributions must be valued on this ruler;
+    # ``price_history`` remains the total-return tape for instrument analytics.
+    price_history_price_only: Optional[pd.Series] = field(default=None, repr=False)
     # The same series before the FX step, plus the currency it is quoted in.
-    # Everything that values the PORTFOLIO reads ``price_history`` (EUR, the
-    # book's currency); the per-instrument return columns read this, because a
+    # The per-instrument return columns read this total-return tape, because a
     # return is a ratio and FX does not divide out of one — RSSY's five sessions
     # to 28 Aug 2026 read −1.28% on its own tape and −2.18% converted end to end.
     # ``price_currency`` is the LISTING's currency, not the fund's base currency:
     # EXUS.MI is named "…UCITS ETF 1C USD" and trades on Milan in EUR.
     price_history_native: Optional[pd.Series] = field(default=None, repr=False)
     price_currency: Optional[str] = None
+    # Original provider units, before minor-unit normalization (e.g. GBp rather
+    # than GBP). Live quote conversion must not infer units from price levels.
+    price_quote_currency: Optional[str] = None
     price_observation_timestamp: Optional[datetime] = None
     price_is_fallback: bool = False
 

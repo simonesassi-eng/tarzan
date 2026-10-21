@@ -12,6 +12,7 @@ import datetime
 import pytest
 
 from tarzan import orchestrator
+from tarzan.contracts.exceptions import DataIngestionError
 from tarzan.data.loader import load_targets_per_holding
 from tarzan.engine.returns_builder import build_holdings_from_orders
 from tarzan.models.order import Order, OrderType
@@ -137,14 +138,17 @@ def test_run_without_per_holding_targets(tmp_path, monkeypatch):
     assert metrics.total_value > 0
 
 
-def test_run_without_orders_returns_empty(tmp_path, monkeypatch):
+def test_run_without_orders_records_a_failed_analysis(tmp_path, monkeypatch):
     monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", _no_network_enrich)
     _stub_benchmarks(monkeypatch)
-    # No order list → nothing to derive; returns empty metrics, not a crash.
-    metrics, _ = orchestrator.run(
-        orders_source=str(tmp_path / "does_not_exist.csv"),
-    )
-    assert metrics.total_value == 0
+    # Missing input is not evidence of a genuinely liquidated portfolio.
+    with pytest.raises(DataIngestionError):
+        orchestrator.run(orders_source=str(tmp_path / "does_not_exist.csv"))
+    from tarzan.runtime.session import last_run_result
+
+    result = last_run_result()
+    assert result.metrics is None
+    assert any(record.stable_code == "UNHANDLED_RUN_FAILURE" for record in result.ledger.failure_records())
 
 
 # ── Per-holding PORTFOLIO targets + buy-new seeding ──────────────────────────

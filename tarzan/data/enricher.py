@@ -382,7 +382,14 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
         dtype=object,
     ).reindex(combined.index).ffill()
 
-    converted = (combined["price"] * combined["fx"]).dropna()
+    # Joining different time zones uses UTC internally. Restore the asset's
+    # session labels after causal FX alignment: callers index daily prices by
+    # the asset's local date, not by the time zone of the FX feed.
+    converted = (
+        (combined["price"] * combined["fx"])
+        .reindex(prices.index)
+        .dropna()
+    )
     from tarzan import runtime
 
     cache_is_fallback = runtime.allows_live_transport()
@@ -1467,6 +1474,66 @@ def _history_origins(
     return origins
 
 
+def _download_price_history(
+    symbol: str, start=None,
+) -> pd.DataFrame:
+    """Retain raw market closes and an independent total-return tape.
+
+    One unadjusted provider response contains Close and Adj Close. Applying
+    that response's factor to OHLC reproduces auto_adjust=True without losing
+    the actual prices needed for holdings and cash-distribution accounting.
+    """
+    _space_yf_call()
+    ticker = yf.Ticker(symbol)
+    arguments = {"interval": "1d", "auto_adjust": False}
+    if start is None:
+        arguments["period"] = _backtest_period()
+    else:
+        arguments["start"] = start
+    frame = ticker.history(**arguments)
+    if frame is None or frame.empty or "Close" not in frame:
+        return frame
+    frame = frame.copy()
+    close = pd.to_numeric(frame["Close"], errors="coerce")
+    frame["Price Close"] = close
+    if "Adj Close" in frame:
+        adjusted = pd.to_numeric(frame["Adj Close"], errors="coerce")
+        factor = adjusted / close.where(close > 0)
+        for column in ("Open", "High", "Low"):
+            if column in frame:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce") * factor
+        frame["Close"] = adjusted
+        frame = frame.drop(columns=["Adj Close"])
+    return frame
+
+
+def _coherent_price_inputs(
+    symbol: str,
+    cached: Optional[pd.DataFrame],
+    fresh: pd.DataFrame,
+    start,
+) -> tuple[Optional[pd.DataFrame], pd.DataFrame]:
+    """Never splice a newly adjusted tail onto an older adjustment scale."""
+    if not price_cache.price_adjustments_changed(cached, fresh):
+        return cached, fresh
+    # A full-period fetch already supplies one internally consistent snapshot.
+    if start is None:
+        return None, fresh
+    full = _retry(
+        lambda: _download_price_history(symbol),
+        what=f"full adjusted history {symbol}",
+    )
+    if full is not None and not full.empty and "Close" in full:
+        return None, full
+    dq.warning(
+        "market_data",
+        "provider revised historical prices but a full refresh failed; "
+        "retaining stale cache evidence instead of mixing adjustment scales",
+        context=symbol,
+    )
+    return cached, pd.DataFrame()
+
+
 def _sibling_close_series(symbol: str):
     """Daily closes for ``symbol``, fetched WITHOUT sibling filling.
 
@@ -1482,22 +1549,19 @@ def _sibling_close_series(symbol: str):
                 _NO_LISTING, symbol, _NO_LISTING_TTL_DAYS):
             return None
         start = price_cache.refresh_start(cached)
-
-        def _call():
-            _space_yf_call()
-            ticker = yf.Ticker(symbol)
-            if start is not None:
-                return ticker.history(start=start, interval="1d", auto_adjust=True)
-            return ticker.history(period=_backtest_period(), interval="1d",
-                                  auto_adjust=True)
-
-        fresh = _retry(_call, what=f"sibling history {symbol}")
+        if cached is not None and "Price Close" not in cached:
+            start = None
+        fresh = _retry(
+            lambda: _download_price_history(symbol, start),
+            what=f"sibling history {symbol}",
+        )
         if cached is None and fresh is not None and fresh.empty:
             # Yahoo ANSWERED, with no data, for a venue never seen trading. (A
             # throttled call returns None, not an empty frame, and is not recorded.)
             price_cache.store_timed(_NO_LISTING, symbol, True)
         if fresh is None:
             fresh = pd.DataFrame()
+        cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
         merged = price_cache.merge_history(cached, fresh)
         frame = merged if merged is not None and not merged.empty else fresh
         if frame is None or frame.empty or "Close" not in frame:
@@ -1694,28 +1758,17 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     # then keeps the union. Guards the young-fund YTD/since-inception anchor.
     if start is not None and not price_cache.covers_period(cached, _backtest_period()):
         start = None
+    if cached is not None and "Price Close" not in cached:
+        start = None  # upgrade adjusted-only caches without an incomplete raw head
 
-    def _call():
-        _space_yf_call()
-        ticker = yf.Ticker(symbol)
-        # auto_adjust pinned EXPLICITLY (the yfinance default flip-flopped
-        # across versions — see proxy_data): total-return closes, so a
-        # benchmark's dividends live in its price. Holdings are currently all
-        # accumulating (no DIVIDEND orders) or bonds priced on the clean price
-        # via Borsa, so total-return == price-only for them today. If a
-        # DISTRIBUTING holding is ever added AND its dividends are booked as
-        # orders (the chosen policy), that holding's price must switch to
-        # price-only to avoid double-counting the income — build_order_derived
-        # _series guards that case at run time.
-        if start is not None:
-            return ticker.history(start=start, interval="1d", auto_adjust=True)
-        return ticker.history(period=_backtest_period(), interval="1d",
-                              auto_adjust=True)
-
-    fresh = _retry(_call, what=f"history {symbol}")
+    fresh = _retry(
+        lambda: _download_price_history(symbol, start),
+        what=f"history {symbol}",
+    )
     if fresh is None:
         fresh = pd.DataFrame()
 
+    cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
     merged = price_cache.merge_history(cached, fresh)
     result = merged if merged is not None and not merged.empty else fresh
     if fresh.empty and result is not None and not result.empty:
@@ -3060,7 +3113,7 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
             holding.security_type = instrument_kind.value
 
         cp = holding.current_price
-        has_price = cp is not None and cp == cp and cp > 0
+        has_price = cp is not None and math.isfinite(cp) and cp > 0
         if has_price and instrument_kind is not None:
             from tarzan.data.bond_fetcher import value_position
             from tarzan.instruments.registry import InstrumentKind
@@ -3075,6 +3128,8 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                 # the clean-price /100 conversion is applied exactly once.
                 if holding.price_history is not None and len(holding.price_history) > 0:
                     holding.price_history = holding.price_history / 100.0
+                if holding.price_history_price_only is not None:
+                    holding.price_history_price_only = holding.price_history_price_only / 100.0
                 holding.current_price = holding.current_price / 100.0
             if not holding.price_is_fallback and not holding.data_source:
                 holding.data_source = data_source
@@ -3245,29 +3300,31 @@ def _set_price_data(
     history clipped to the reporting date and never consume a current quote.
     """
     quote_currency = currency
+    holding.price_quote_currency = currency
     current_price: Optional[float] = None
     observation_time: Optional[dt] = None
     is_fallback = False
     selected_source: Optional[str] = None
     holding.price_observation_timestamp = None
     holding.price_is_fallback = False
+    holding.price_history_price_only = None
 
     if history is not None and not history.empty and "Close" in history:
-        native = history["Close"].copy()
+        native = pd.to_numeric(history["Close"], errors="coerce").copy()
         native, history_currency = _normalize_minor_currency(native, currency)
         # Clean FIRST, convert LAST, so the native and EUR series are the same
         # series in two currencies rather than two independently cleaned ones.
         # Every step here is either pointwise (dropna, >0) or date-based
         # (_clip_to_as_of), so none of them depends on the unit.
         native = native.dropna()
-        native = native[native > 0]
+        native = native[native.map(lambda value: math.isfinite(value) and value > 0)]
         native = _clip_to_as_of(native)
         fx_evidence: dict[str, dict[str, object]] = {}
         if history_currency != "EUR":
             prices = convert_to_eur(native, history_currency)
             fx_evidence = prices.attrs.get(_FX_EVIDENCE_ATTR, {})
             prices = prices.dropna()
-            prices = prices[prices > 0]
+            prices = prices[prices.map(lambda value: math.isfinite(value) and value > 0)]
         else:
             prices = native
         if len(prices) > 0:
@@ -3287,9 +3344,29 @@ def _set_price_data(
             native.name = prices.name
             holding.price_history_native = native
             holding.price_currency = history_currency
-            selected_index = prices.index[-1]
+            valuation_prices = prices
+            if "Price Close" in history:
+                raw = pd.to_numeric(history["Price Close"], errors="coerce").copy()
+                raw, raw_currency = _normalize_minor_currency(raw, currency)
+                raw = raw.dropna()
+                raw = raw[raw.map(lambda value: math.isfinite(value) and value > 0)]
+                raw = _clip_to_as_of(raw)
+                raw_prices = (
+                    convert_to_eur(raw, raw_currency)
+                    if raw_currency != "EUR" else raw
+                )
+                raw_prices = raw_prices.dropna()
+                raw_prices = raw_prices[
+                    raw_prices.map(lambda value: math.isfinite(value) and value > 0)
+                ]
+                if not raw_prices.empty:
+                    raw_prices.name = prices.name
+                    holding.price_history_price_only = raw_prices
+                    valuation_prices = raw_prices
+                    fx_evidence = raw_prices.attrs.get(_FX_EVIDENCE_ATTR, {})
+            selected_index = valuation_prices.index[-1]
             selected_key = _history_timestamp_key(selected_index)
-            current_price = float(prices.iloc[-1])
+            current_price = float(valuation_prices.iloc[-1])
             observation_time = _history_observation_time(history, selected_index)
             origins = history.attrs.get(_HISTORY_ORIGINS_ATTR, {})
             selected_origin = origins.get(selected_key)
@@ -3321,9 +3398,9 @@ def _set_price_data(
     def _valid_quote(value: object) -> Optional[float]:
         try:
             numeric = float(value) if value is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
-        if numeric is None or numeric != numeric or numeric <= 0:
+        if numeric is None or not math.isfinite(numeric) or numeric <= 0:
             return None
         return numeric
 
@@ -3352,7 +3429,8 @@ def _set_price_data(
             if isinstance(fx.index, pd.DatetimeIndex)
             else None
         )
-        return converted * float(fx.iloc[-1]), {
+        result = _valid_quote(converted * float(fx.iloc[-1]))
+        return result, {
             "observation_time": fx_time,
             "is_fallback": origin == _HISTORY_ORIGIN_CACHE or fx_time is None,
             "source": (

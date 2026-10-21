@@ -21,6 +21,7 @@ sparkline shades green above / red below).
 from __future__ import annotations
 
 import logging
+import math
 import time as _time
 from datetime import datetime, time as dtime
 from typing import Optional
@@ -1271,10 +1272,13 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
                               ("prev_close", "regularMarketPreviousClose")):
                 try:
                     value = q.get(name)
-                    if value is not None and float(value) > 0:
+                    if value is not None and math.isfinite(float(value)) and float(value) > 0:
                         fields[key] = float(value)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     continue
+            currency = q.get("currency")
+            if isinstance(currency, str) and currency.strip():
+                fields["currency"] = currency.strip()
             # The instant the quote was observed. Carried because a stamped
             # price becomes the holding's current price, and the valuation
             # policy dates freshness on the OBSERVATION, not on when the
@@ -1284,16 +1288,16 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
                 observed = q.get("regularMarketTime")
                 if observed is not None:
                     fields["time"] = int(observed)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
             # Today's traded volume on this venue: the evidence ``pick_quote`` weighs
             # when two venues dispute an instrument's 1D. Already in this response,
             # so carrying it costs no request.
             try:
                 volume = q.get("regularMarketVolume")
-                if volume is not None and float(volume) >= 0:
+                if volume is not None and math.isfinite(float(volume)) and float(volume) >= 0:
                     fields["volume"] = float(volume)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
             if fields.get("price") or fields.get("prev_close"):
                 out[sym] = fields

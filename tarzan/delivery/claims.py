@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -32,6 +33,10 @@ class DeliveryState(str, Enum):
     ACKNOWLEDGED_SUCCESS = "ACKNOWLEDGED_SUCCESS"
     DEFINITE_PRE_SEND_FAILURE = "DEFINITE_PRE_SEND_FAILURE"
     UNCERTAIN = "UNCERTAIN"
+
+
+class DeliveryTransitionConflict(ValueError):
+    """Another caller has already consumed the expected delivery state."""
 
 
 _ALLOWED_DELIVERY_TRANSITIONS: dict[DeliveryState, frozenset[DeliveryState]] = {
@@ -142,14 +147,16 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
                     import fcntl
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
                 except (ImportError, OSError):
-                    pass
+                    raise RuntimeError(
+                        "local delivery claims require process-safe file locking"
+                    ) from None
                 try:
                     yield
                 finally:
                     try:
                         import fcntl
                         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                    except (ImportError, OSError):
+                    except OSError:
                         pass
 
     def _read(self) -> dict:
@@ -200,9 +207,13 @@ class LocalJsonDeliveryClaimStore(DeliveryClaimStore):
                 raise KeyError(f"delivery claim not found: {logical_id}")
             current = DeliveryState(record["state"])
             if current not in expected:
-                if current == target:
+                # Terminal acknowledgments may be read repeatedly. Crossing
+                # the SMTP boundary must have exactly one successful caller.
+                if current == target and target is not DeliveryState.SMTP_INVOCATION_STARTED:
                     return target
-                raise ValueError(f"invalid delivery transition {current.value} -> {target.value}")
+                raise DeliveryTransitionConflict(
+                    f"invalid delivery transition {current.value} -> {target.value}"
+                )
             record["state"] = target.value
             self._write(document)
             return target
@@ -320,6 +331,8 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
             # a later attempt cannot duplicate an already-committed claim.
             if code == "LOCK_UNAVAILABLE":
                 raise _TransientClaimError(message)
+            if code == "CONDITIONAL_TRANSITION_FAILED":
+                raise DeliveryTransitionConflict(message)
             raise RuntimeError(message)
         retention = document.get("retention_days")
         if not isinstance(retention, int) or retention < self.minimum_retention_days:
@@ -351,12 +364,17 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         target: DeliveryState,
     ) -> DeliveryState:
         self._validate_transition_request(expected, target)
+        operation_id = uuid.uuid4().hex
         document = self._call({
             "action": "transition",
             "state_schema_version": DELIVERY_STATE_SCHEMA_VERSION,
             "logical_id": logical_id,
             "expected": [state.value for state in expected],
             "target": target.value,
+            # Stable across this HTTP call's retries, distinct for another
+            # caller. An already-applied transition can authorize only its
+            # original operation, never a competing sender.
+            "operation_id": operation_id,
         })
         try:
             returned = DeliveryState(document["state"])
@@ -365,5 +383,10 @@ class AppsScriptPropertiesDeliveryClaimStore(DeliveryClaimStore):
         if returned is not target:
             raise RuntimeError(
                 "delivery claim service did not apply the requested transition"
+            )
+        if document.get("operation_id") != operation_id:
+            raise RuntimeError(
+                "delivery claim service did not confirm the transition operation; "
+                "update the claim-service deployment before sending"
             )
         return returned

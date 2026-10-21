@@ -670,9 +670,13 @@ function _transitionDeliveryClaim_(props, request) {
   const record = JSON.parse(raw);
   const expected = Array.isArray(request.expected) ? request.expected : [];
   const target = String(request.target || '');
+  const operationId = String(request.operation_id || '');
+  if (!/^[0-9a-f]{32}$/.test(operationId)) {
+    return { ok: false, error_code: 'INVALID_TRANSITION_OPERATION_ID' };
+  }
   if (expected.indexOf(record.state) === -1) {
-    if (record.state === target) {
-      return { ok: true, state: record.state };
+    if (record.state === target && record.last_transition_id === operationId) {
+      return { ok: true, state: record.state, operation_id: operationId };
     }
     return { ok: false, error_code: 'CONDITIONAL_TRANSITION_FAILED' };
   }
@@ -687,9 +691,10 @@ function _transitionDeliveryClaim_(props, request) {
     return { ok: false, error_code: 'INVALID_TRANSITION' };
   }
   record.state = target;
+  record.last_transition_id = operationId;
   record.updated_at = new Date().toISOString();
   props.setProperty(key, JSON.stringify(record));
-  return { ok: true, state: record.state };
+  return { ok: true, state: record.state, operation_id: operationId };
 }
 
 function _pruneDeliveryClaims_(props, now) {
@@ -701,8 +706,10 @@ function _pruneDeliveryClaims_(props, now) {
       const record = JSON.parse(values[key]);
       if (new Date(record.created_at).getTime() < cutoff) props.deleteProperty(key);
     } catch (err) {
-      // Corrupt control records are removed while holding the script lock.
-      props.deleteProperty(key);
+      // Deleting an unreadable claim could authorize a second send of an
+      // already-published event. Retain it for manual reconciliation; reads
+      // of this logical claim fail closed without blocking unrelated claims.
+      Logger.log('Corrupt delivery claim retained for manual reconciliation.');
     }
   }
 }

@@ -57,6 +57,7 @@ from tarzan.delivery.claims import (
     DeliveryIntent,
     DeliveryPurpose,
     DeliveryState,
+    DeliveryTransitionConflict,
     LocalJsonDeliveryClaimStore,
     recipient_set_digest,
 )
@@ -467,6 +468,39 @@ def _write_delivery_artifacts(
     return writer.finalize(**arguments)
 
 
+def _input_failure_result(error):
+    """Create critical delivery evidence when input resolution cannot run."""
+    from tarzan import runtime
+    from tarzan.runtime.ledger import Availability, LedgerEntryType, RunLedger
+    from tarzan.runtime.session import (
+        RunAttemptEnvelope, RunResult, canonical_analysis_id, record_last_run_result,
+    )
+
+    envelope = RunAttemptEnvelope.create("delivery-inputs")
+    runtime.reset(attempt_id=envelope.attempt_id, invocation_source=envelope.invocation_source)
+    ledger = RunLedger(envelope.attempt_id)
+    ledger.open_failure(
+        stage="input_resolution",
+        stable_code="INPUT_RESOLUTION_FAILED",
+        severity="CRITICAL",
+        error=error,
+        affected_outputs=["portfolio", "planning", "publication"],
+        analytical_impact="analysis did not start because inputs were unavailable",
+        publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+    )
+    analysis_id = canonical_analysis_id({
+        "failure_code": "INPUT_RESOLUTION_FAILED",
+        "error_type": type(error).__name__,
+    })
+    ledger.append(LedgerEntryType.STAGE, {
+        "stage": "run", "outcome": "FAILED",
+        "analysis_id": analysis_id, "availability": Availability.UNAVAILABLE.value,
+    })
+    result = RunResult(None, None, envelope.attempt_id, analysis_id, ledger)
+    record_last_run_result(result)
+    return result
+
+
 def run_and_send() -> int:
     """Run, evaluate publication, claim durably, checkpoint, and invoke SMTP once."""
     from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
@@ -484,19 +518,29 @@ def run_and_send() -> int:
     trigger_label = _env("TRIGGER_LABEL", "")
     dry_run = _env("DRY_RUN", "0") == "1"
 
-    inputs = resolve_inputs()
-    logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
-    logger.info(
-        "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s",
-        inputs["orders"], inputs["config"], inputs["targets_per_holding"] or "(none)",
-    )
-
     previous_result = last_run_result()
-    metrics, config = run(
-        config_source=inputs["config"],
-        orders_source=inputs["orders"],
-        targets_per_holding_source=inputs["targets_per_holding"],
-    )
+    inputs = None
+    try:
+        inputs = resolve_inputs()
+        logger.info("Tarzan newsletter — trigger=%r, issue=%d", trigger_label, issue_number)
+        logger.info(
+            "Inputs (order-only) — orders=%s | targets=%s | per_holding=%s",
+            inputs["orders"], inputs["config"], inputs["targets_per_holding"] or "(none)",
+        )
+        metrics, config = run(
+            config_source=inputs["config"],
+            orders_source=inputs["orders"],
+            targets_per_holding_source=inputs["targets_per_holding"],
+        )
+    except Exception as error:
+        # The orchestrator finalizes critical evidence before propagating an
+        # analysis failure. Use that fresh result to notify the recipient.
+        failed_result = last_run_result()
+        if inputs is None:
+            failed_result = _input_failure_result(error)
+        if failed_result is None or failed_result is previous_result:
+            raise
+        metrics, config = failed_result.metrics, failed_result.config
     result = last_run_result()
     if result is None or result is previous_result:
         # Compatibility adapter for injected/test orchestration callables. The
@@ -519,7 +563,7 @@ def run_and_send() -> int:
     # recorded no stage at all never really ran, and the send boundary must stay
     # fail-closed on that. A genuinely unpriceable real book still opens its own
     # CRITICAL record upstream (MATERIAL_VALUATION_GAP), so it is still blocked.
-    if metrics.total_value == 0 and not result.ledger.entries:
+    if metrics is not None and metrics.total_value == 0 and not result.ledger.entries:
         result.ledger.open_failure(
             stage="valuation",
             stable_code="EMPTY_PORTFOLIO_VALUE",
@@ -801,6 +845,17 @@ def run_and_send() -> int:
         # is safe only after such a transport has returned definitively.
         if not invocation_started:
             mark_invocation_started()
+    except DeliveryTransitionConflict:
+        if invocation_started:
+            raise
+        result.ledger.append(LedgerEntryType.DELIVERY, {
+            "state": "SUPPRESSED_CONCURRENT",
+            "logical_id": intent.logical_id,
+            "smtp_invoked": False,
+        })
+        _write_delivery_artifacts(writer, result, html, "SUPPRESSED_CONCURRENT")
+        logger.warning("A competing caller consumed the claim; SMTP is suppressed.")
+        return 0
     except Exception as error:  # noqa: BLE001
         target = (
             DeliveryState.UNCERTAIN
@@ -812,24 +867,74 @@ def run_and_send() -> int:
             if invocation_started
             else (DeliveryState.CLAIMED,)
         )
+        durable_state_confirmed = False
         try:
             store.transition(intent.logical_id, expected, target)
+            durable_state_confirmed = True
+        except Exception as state_error:  # noqa: BLE001
+            result.ledger.open_failure(
+                stage="delivery_reconciliation",
+                stable_code="DELIVERY_STATE_RECONCILIATION_FAILED",
+                severity="CRITICAL",
+                error=state_error,
+                affected_outputs=["delivery", "publication"],
+                analytical_impact="analysis is retained but durable delivery state is unconfirmed",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+            )
+            logger.error(
+                "Delivery state could not be persisted (%s); manual reconciliation required.",
+                type(state_error).__name__,
+            )
         finally:
             result.ledger.append(LedgerEntryType.DELIVERY, {
                 "state": target.value,
                 "logical_id": intent.logical_id,
                 "smtp_invoked": invocation_started,
                 "automatic_retry": False,
+                "durable_state_confirmed": durable_state_confirmed,
             })
             _write_delivery_artifacts(writer, result, html, target.value)
         logger.error("SMTP delivery ended in %s (%s).", target.value, type(error).__name__)
         return 1
 
-    store.transition(
-        intent.logical_id,
-        (DeliveryState.SMTP_INVOCATION_STARTED,),
-        DeliveryState.ACKNOWLEDGED_SUCCESS,
-    )
+    try:
+        store.transition(
+            intent.logical_id,
+            (DeliveryState.SMTP_INVOCATION_STARTED,),
+            DeliveryState.ACKNOWLEDGED_SUCCESS,
+        )
+    except Exception as error:  # noqa: BLE001
+        # SMTP has already returned successfully. An unavailable claim store
+        # cannot turn that into permission to send again.
+        durable_state_confirmed = False
+        try:
+            store.transition(
+                intent.logical_id,
+                (DeliveryState.SMTP_INVOCATION_STARTED,),
+                DeliveryState.UNCERTAIN,
+            )
+            durable_state_confirmed = True
+        except Exception:
+            pass
+        result.ledger.open_failure(
+            stage="delivery_reconciliation",
+            stable_code="DELIVERY_ACK_PERSISTENCE_FAILED",
+            severity="CRITICAL",
+            error=error,
+            affected_outputs=["delivery", "publication"],
+            analytical_impact="SMTP returned success but durable acknowledgment is unconfirmed",
+            publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+        )
+        result.ledger.append(LedgerEntryType.DELIVERY, {
+            "state": DeliveryState.UNCERTAIN.value,
+            "logical_id": intent.logical_id,
+            "smtp_invoked": True,
+            "automatic_retry": False,
+            "durable_state_confirmed": durable_state_confirmed,
+        })
+        _write_delivery_artifacts(writer, result, html, DeliveryState.UNCERTAIN.value)
+        logger.error("SMTP succeeded but acknowledgment persistence failed; no automatic resend.")
+        return 1
     result.ledger.append(LedgerEntryType.DELIVERY, {
         "state": DeliveryState.ACKNOWLEDGED_SUCCESS.value,
         "logical_id": intent.logical_id,

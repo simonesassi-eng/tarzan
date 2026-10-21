@@ -88,15 +88,10 @@ def _cost_basis_key(order: Order) -> _IdentityKey:
     return "isin", str(order.isin or "").strip().upper()
 
 
-def _identity_orders(orders: list[Order], key: _IdentityKey) -> list[Order]:
-    return [order for order in orders if _cost_basis_key(order) == key]
-
-
 def _classify(
     order: Order,
     enriched_by_isin: dict[str, Holding],
-    orders: list[Order],
-    identity_key: _IdentityKey,
+    related_orders: list[Order],
 ) -> tuple[bool, bool]:
     """Return ``(is_government_bond, is_capital_income)`` from exact evidence.
 
@@ -106,7 +101,6 @@ def _classify(
     Once BOND mechanics are established, provider subtype and issuer-name
     markers may distinguish sovereign debt for the reduced rate.
     """
-    related_orders = _identity_orders(orders, identity_key)
     related_isins = {related.isin for related in related_orders}
     holdings = [
         enriched_by_isin[isin]
@@ -173,6 +167,10 @@ def _realizations(
     cost: dict[_IdentityKey, float] = {}
     basis_complete: dict[_IdentityKey, bool] = {}
     realizations: list[_Realization] = []
+    orders_by_identity: dict[_IdentityKey, list[Order]] = {}
+    for order in orders:
+        orders_by_identity.setdefault(_cost_basis_key(order), []).append(order)
+    classifications: dict[_IdentityKey, tuple[bool, bool]] = {}
 
     for order in position_orders:
         key = _cost_basis_key(order)
@@ -182,13 +180,7 @@ def _realizations(
             # BUY net cash includes acquisition fees. TRANSFER_IN has no cash
             # purchase; only an explicit gross amount is transferred basis,
             # while a nonzero net amount may be a fee and cannot prove basis.
-            committed = (
-                abs(order.gross_eur or 0.0)
-                if order.type is OrderType.TRANSFER_IN
-                else abs(order.net_eur)
-                if order.net_eur
-                else abs(order.gross_eur or 0.0)
-            )
+            committed = order.acquisition_cost_eur()
             quantity[key] = held_quantity + order.quantity
             cost[key] = held_cost + committed
             basis_complete[key] = (
@@ -218,12 +210,11 @@ def _realizations(
             fraction = units / abs(order.quantity) if order.quantity else 1.0
             proceeds = (order.net_eur or 0.0) * fraction
             pnl = proceeds - cost_removed
-            is_government, is_capital_income = _classify(
-                order,
-                enriched_by_isin,
-                orders,
-                key,
-            )
+            if key not in classifications:
+                classifications[key] = _classify(
+                    order, enriched_by_isin, orders_by_identity[key]
+                )
+            is_government, is_capital_income = classifications[key]
             realizations.append(
                 _Realization(
                     date=order.trade_date,

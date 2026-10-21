@@ -1,4 +1,4 @@
-"""On-disk cache for *immutable* historical market data.
+"""On-disk cache for historical market data.
 
 The design reconciles two goals that look contradictory:
 
@@ -6,12 +6,11 @@ The design reconciles two goals that look contradictory:
   * "But the multi-year price history for my instruments only needs to be
     downloaded once."
 
-The reconciliation: daily closes up to *yesterday* never change, so they
-are cached and reused. Only the recent tail (the last few days, including
-today) is re-fetched on every run, so today's price is always fresh — it
-is never served stale. We cache the immutable past, not the present.
+The recent tail is re-fetched on every run. Historical adjusted prices CAN
+change after dividends, splits and provider corrections; price-history
+consumers must verify overlapping rows before reusing an older head.
 
-Three things are cached, all stable:
+Three things are cached:
   * per-symbol daily price history (the heavy multi-year download);
   * FX pair history (currency→EUR series);
   * the deterministic ISIN→symbol resolution (skips the OpenFIGI + probe
@@ -283,6 +282,48 @@ def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.Dat
     return combined
 
 
+def price_adjustments_changed(
+    cached: Optional[pd.DataFrame],
+    fresh: Optional[pd.DataFrame],
+) -> bool:
+    """Whether a price tail cannot safely share its scale with a cached head.
+
+    Corporate actions revise the past, not just the new rows. Never infer a
+    head adjustment from one ratio: a vendor revision may be date-dependent.
+    The caller must replace the history with one full provider snapshot.
+    FX history continues to use the ordinary merge contract.
+    """
+    if cached is None or cached.empty or fresh is None or fresh.empty:
+        return False
+    if "Close" not in cached or "Close" not in fresh:
+        return False
+    if not pd.to_numeric(fresh["Close"], errors="coerce").map(
+        lambda value: math.isfinite(value) and value > 0
+    ).any():
+        return False  # invalid rows do not justify discarding valid cache evidence
+    if "Price Close" in fresh and "Price Close" not in cached:
+        return True  # upgrade legacy adjusted-only cache in one coherent read
+    overlap = cached.index.intersection(fresh.index)
+    if overlap.empty:
+        return True  # no evidence that two snapshots share an adjustment scale
+    comparable_close = False
+    for column in ("Close", "Price Close"):
+        if column not in cached or column not in fresh:
+            continue
+        old = pd.to_numeric(cached.loc[overlap, column], errors="coerce")
+        new = pd.to_numeric(fresh.loc[overlap, column], errors="coerce")
+        valid = old.map(lambda value: math.isfinite(value) and value > 0)
+        valid &= new.map(lambda value: math.isfinite(value) and value > 0)
+        if column == "Close":
+            comparable_close = bool(valid.any())
+        if valid.any() and not all(
+            math.isclose(before, after, rel_tol=1e-9, abs_tol=1e-12)
+            for before, after in zip(old[valid], new[valid])
+        ):
+            return True
+    return not comparable_close
+
+
 # Daily Close ratios outside this band are not real market moves for the
 # diversified ETFs/indices/funds we track (even a 2x-leveraged fund would
 # need its underlying to move >±50% in one session). A *persistent* jump
@@ -387,7 +428,7 @@ def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     fseries = (pd.Series(factor, index=valid.index)
                .reindex(df.index).ffill().bfill().fillna(1.0))
     out = df.copy()
-    for col in ("Open", "High", "Low", "Close"):
+    for col in ("Open", "High", "Low", "Close", "Price Close"):
         if col in out.columns:
             out[col] = out[col].astype(float) * fseries
     logger.info("repair_split_jumps: back-adjusted %d split(s) in a price series", splits)
