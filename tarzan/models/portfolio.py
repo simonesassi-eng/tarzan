@@ -112,6 +112,7 @@ class PortfolioMetrics:
     trustworthy_total_value_eur: Optional[float] = None
     known_valuation_subtotal_eur: Optional[float] = None
     valuation_evidence: tuple = ()
+    valuation_coverage: tuple = ()
     invested_value: float = 0.0
     cash_value: float = 0.0
     cash_target_eur: float = 0.0

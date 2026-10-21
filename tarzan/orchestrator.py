@@ -340,6 +340,8 @@ def _run_once(
     config = load_config(config_source)
     config_snapshot = asdict(config)
     session.bind_config(config_snapshot)
+    from tarzan.runtime.transport import current_budget
+    current_budget()
     session.ledger.append(LedgerEntryType.STAGE, {
         "stage": "configuration",
         "outcome": "SUCCEEDED",
@@ -568,6 +570,7 @@ def _run_once(
         "missing_materiality_pct": valuation.missing_materiality_pct,
         "planning_eligible": valuation.planning_eligible,
         "failure_refs": list(valuation.failure_refs),
+        "coverage": [asdict(item) for item in valuation.coverage],
     }
     session.ledger.append(LedgerEntryType.STAGE, {
         "stage": "valuation_completeness",
@@ -955,3 +958,9 @@ def run(
                     started_at=started_at,
                 )
                 raise
+            finally:
+                if session.transport is not None:
+                    try:
+                        session.transport.close()
+                    except Exception:
+                        logger.warning("Provider client cleanup failed; analysis outcome retained.")

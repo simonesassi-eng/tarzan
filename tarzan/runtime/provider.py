@@ -11,7 +11,7 @@ from typing import Generic, Optional, TypeVar
 from tarzan.runtime.ledger import Availability
 
 
-PROVIDER_POLICY_SCHEMA_VERSION = "1.0"
+PROVIDER_POLICY_SCHEMA_VERSION = "2.0"
 
 
 @dataclass(frozen=True)
@@ -34,8 +34,6 @@ class ProviderQualityPolicy:
     policy_id: str
     freshness_seconds: float
     minimum_coverage_pct: float
-    timeout_seconds: float
-    retry_budget: int
     allow_fallback: bool
     valuation_materiality_pct: float
     publication_materiality_pct: float
@@ -44,21 +42,22 @@ class ProviderQualityPolicy:
         finite = {
             "freshness_seconds": self.freshness_seconds,
             "minimum_coverage_pct": self.minimum_coverage_pct,
-            "timeout_seconds": self.timeout_seconds,
             "valuation_materiality_pct": self.valuation_materiality_pct,
             "publication_materiality_pct": self.publication_materiality_pct,
         }
         for name, value in finite.items():
-            if not math.isfinite(float(value)) or float(value) < 0:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and nonnegative")
+        if not isinstance(self.allow_fallback, bool):
+            raise ValueError("allow_fallback must be boolean")
+        if not isinstance(self.policy_id, str) or not self.policy_id.strip():
+            raise ValueError("policy_id must be nonempty")
         if not 0 <= self.minimum_coverage_pct <= 100:
             raise ValueError("minimum_coverage_pct must be in [0, 100]")
         if not 0 <= self.valuation_materiality_pct <= 100:
             raise ValueError("valuation_materiality_pct must be in [0, 100]")
         if not 0 <= self.publication_materiality_pct <= 100:
             raise ValueError("publication_materiality_pct must be in [0, 100]")
-        if self.retry_budget < 0:
-            raise ValueError("retry_budget must be nonnegative")
 
 
 K = TypeVar("K")
@@ -120,6 +119,17 @@ class ValuationEvidence:
 
 
 @dataclass(frozen=True)
+class ValuationCoverage:
+    instrument_kind: str
+    policy_id: str
+    accepted_basis_eur: float
+    total_basis_eur: Optional[float]
+    coverage_pct: Optional[float]
+    minimum_coverage_pct: float
+    satisfied: bool
+
+
+@dataclass(frozen=True)
 class ValuationCompletenessAssessment:
     availability: Availability
     trustworthy_total_eur: Optional[float]
@@ -128,6 +138,7 @@ class ValuationCompletenessAssessment:
     planning_eligible: bool
     evidence: tuple[ValuationEvidence, ...]
     failure_refs: tuple[str, ...] = ()
+    coverage: tuple[ValuationCoverage, ...] = ()
 
 
 class ValuationCompletenessEvaluator:
@@ -470,6 +481,7 @@ class ValuationCompletenessEvaluator:
 
         material_groups: list[dict[str, object]] = []
         material_rows: list[dict[str, object]] = []
+        publication_groups: list[dict[str, object]] = []
         for (kind, policy_id), group_rows in missing_by_policy.items():
             policy = group_rows[0]["policy"]
             group_basis_values = [
@@ -502,13 +514,51 @@ class ValuationCompletenessEvaluator:
                 if group_basis_indeterminate:
                     material_group["materiality_indeterminate"] = True
                 material_groups.append(material_group)
+            if group_pct is None or group_pct > policy.publication_materiality_pct:
+                publication_groups.append({
+                    "instrument_kind": kind, "policy_id": policy_id,
+                    "missing_count": len(group_rows),
+                    "missing_materiality_pct": group_pct,
+                    "threshold_pct": policy.publication_materiality_pct,
+                })
 
-        critical_ref = None
+        coverage_by_policy: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for row in rows:
+            item = row["evidence"]
+            coverage_by_policy.setdefault((item.instrument_kind, item.policy_id), []).append(row)
+        coverage: list[ValuationCoverage] = []
+        for (kind, policy_id), group in coverage_by_policy.items():
+            bases = [row["evidence"].materiality_basis_eur for row in group]
+            denominator = None if any(value is None for value in bases) else sum(bases)
+            accepted_basis = sum(
+                row["evidence"].materiality_basis_eur or 0.0
+                for row in group if row["evidence"].accepted_by_policy
+            )
+            coverage_pct = (
+                None if denominator is None
+                else accepted_basis / denominator * 100.0 if denominator else 100.0
+            )
+            minimum = group[0]["policy"].minimum_coverage_pct
+            coverage.append(ValuationCoverage(
+                kind, policy_id, accepted_basis, denominator, coverage_pct, minimum,
+                coverage_pct is not None and coverage_pct + 1e-9 >= minimum,
+            ))
+        coverage_gaps = [item for item in coverage if not item.satisfied]
+        if coverage:
+            from dataclasses import asdict
+            ledger.append(LedgerEntryType.CAPABILITY, {
+                "capability": "ACCEPTED_VALUATION_COVERAGE",
+                "basis": "materiality basis weighted within kind/policy; permitted fallback counts",
+                "policies": [asdict(item) for item in coverage],
+            })
+
+        publication_blocked = bool(publication_groups)
+        valuation_ref = None
         if material_rows:
-            critical_ref = ledger.open_failure(
+            valuation_ref = ledger.open_failure(
                 stage="valuation_completeness",
                 stable_code="MATERIAL_VALUATION_GAP",
-                severity="CRITICAL",
+                severity="CRITICAL" if publication_blocked else "ERROR",
                 error={
                     "missing_count": len(material_rows),
                     "states": [row["evidence"].state.value for row in material_rows],
@@ -518,23 +568,54 @@ class ValuationCompletenessEvaluator:
                     "trustworthy total is unavailable; known subtotal remains partial evidence; "
                     "optimization and rebalancing are suppressed"
                 ),
-                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+                publication_impact=(
+                    "BLOCK_NORMAL_AND_NOTIFY_FAILURE" if publication_blocked else "DEGRADE"
+                ),
                 context={
                     "missing_materiality_pct": missing_pct,
                     "material_groups": material_groups,
+                    "publication_groups": publication_groups,
                     "applied_policy_ids": list(dict.fromkeys(
                         row["policy"].policy_id for row in material_rows
                     )),
                 },
             )
 
+        coverage_ref = None
+        if coverage_gaps:
+            from dataclasses import asdict
+            coverage_ref = ledger.open_failure(
+                stage="valuation_completeness",
+                stable_code="VALUATION_COVERAGE_BELOW_POLICY",
+                severity="ERROR",
+                error={"policy_count": len(coverage_gaps)},
+                affected_outputs=["portfolio", "total", "planning", "rebalancing"],
+                analytical_impact="accepted valuation coverage is insufficient; total and planning are unavailable",
+                publication_impact="DEGRADE",
+                context={"coverage": [asdict(item) for item in coverage_gaps]},
+            )
+
+        publication_ref = None
+        if publication_blocked and not valuation_ref:
+            publication_ref = ledger.open_failure(
+                stage="valuation_publication",
+                stable_code="PUBLICATION_VALUATION_GAP",
+                severity="CRITICAL",
+                error={"policy_count": len(publication_groups)},
+                affected_outputs=["publication"],
+                analytical_impact="valuation policy is independent of the stricter publication threshold",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+                context={"publication_groups": publication_groups},
+            )
+
         all_evidence = tuple(row["evidence"] for row in rows)
         failure_refs = tuple(
             degraded_failure_refs
             + missing_failure_refs
-            + ([critical_ref] if critical_ref else [])
+            + [ref for ref in (valuation_ref, coverage_ref, publication_ref) if ref]
         )
-        if critical_ref:
+        valuation_unavailable = bool(valuation_ref or coverage_ref)
+        if valuation_unavailable:
             availability = Availability.UNAVAILABLE
         elif any(item.state is not ValuationEvidenceState.PRIMARY for item in all_evidence):
             availability = Availability.DEGRADED
@@ -542,10 +623,11 @@ class ValuationCompletenessEvaluator:
             availability = Availability.AVAILABLE
         return ValuationCompletenessAssessment(
             availability=availability,
-            trustworthy_total_eur=None if critical_ref else known_subtotal,
+            trustworthy_total_eur=None if valuation_unavailable else known_subtotal,
             known_subtotal_eur=known_subtotal,
             missing_materiality_pct=missing_pct,
-            planning_eligible=critical_ref is None,
+            planning_eligible=not valuation_unavailable,
             evidence=all_evidence,
             failure_refs=failure_refs,
+            coverage=tuple(coverage),
         )

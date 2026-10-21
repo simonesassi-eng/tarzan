@@ -54,9 +54,13 @@ def _get_json(url: str) -> Optional[dict]:
     content type is checked rather than the status.
     """
     import requests
+    from tarzan.runtime.transport import provider_call
 
     try:
-        r = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT_S)
+        r = provider_call(
+            "justetf", lambda timeout: requests.get(url, headers=_HEADERS, timeout=timeout),
+            timeout=_TIMEOUT_S,
+        )
     except Exception as e:  # noqa: BLE001 — a referee must never break a run
         logger.info("justETF unreachable (%s): %s", type(e).__name__, url.split("?")[0])
         return None

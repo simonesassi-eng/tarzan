@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from tarzan import config as cfg
 from tarzan.runtime.provider import ProviderQualityPolicy
+from tarzan.runtime.transport import ProviderTransportSettings
 from tarzan.contracts.exceptions import DataIngestionError
 from tarzan.contracts.scalars import finite_nonnegative, parse_boolean
 
@@ -163,6 +164,9 @@ class InvestorConfig:
     # values; callers cannot silently fall through to a universal threshold.
     provider_quality_policies: dict[str, ProviderQualityPolicy] = field(
         default_factory=_configured_provider_quality_policies
+    )
+    provider_transport: ProviderTransportSettings = field(
+        default_factory=ProviderTransportSettings.configured
     )
 
     # Metadata

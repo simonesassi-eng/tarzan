@@ -1010,7 +1010,7 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                 # keeps exactly the CURRENT session out of whatever comes
                 # back, so a wider window never means a multi-day chart,
                 # only a better chance of finding a single real one.
-                return yf.download(symbols, period="5d", interval="15m",
+                return _yf_net.download(symbols, period="5d", interval="15m",
                                    group_by="ticker", progress=False, threads=True)
         # Shared spacing+retry so the intraday batch survives a 429 burst.
         raw = _yf_net.fetch_yf(_download, what="intraday batch", log=logger)
@@ -1252,10 +1252,9 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
         return {}
     out: dict = {}
     try:
-        from yfinance.data import YfData
         from tarzan.data import _yf_net
 
-        data = YfData()
+        data = _yf_net.yahoo_data()
 
         def _get():
             resp = data.get(

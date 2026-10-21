@@ -2212,6 +2212,7 @@ class MetricsEngine:
             valuation_evidence=(
                 assessment.evidence if assessment is not None else ()
             ),
+            valuation_coverage=assessment.coverage if assessment is not None else (),
             invested_value=ctx.get("invested_value", 0.0),
             cash_value=ctx.get("cash_value", 0.0),
             cash_target_eur=cash_target,

@@ -52,9 +52,9 @@ def _policy(
     return ProviderQualityPolicy(
         policy_id=policy_id,
         freshness_seconds=3600.0,
-        minimum_coverage_pct=100.0,
-        timeout_seconds=5.0,
-        retry_budget=0,
+        # These tests isolate portfolio-relative materiality. Coverage is
+        # exercised independently by test_review_provider_policies.
+        minimum_coverage_pct=0.0,
         allow_fallback=allow_fallback,
         valuation_materiality_pct=materiality_pct,
         publication_materiality_pct=materiality_pct,

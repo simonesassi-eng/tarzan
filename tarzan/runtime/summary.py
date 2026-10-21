@@ -99,7 +99,9 @@ class SummaryProjector:
         else:
             machine_metrics = metrics.to_summary_dict()
             portfolio_availability = (
-                Availability.DEGRADED
+                Availability.UNAVAILABLE
+                if getattr(metrics, "valuation_availability", "") == "UNAVAILABLE"
+                else Availability.DEGRADED
                 if failures or getattr(metrics, "degraded_computers", None)
                 else Availability.AVAILABLE
             )

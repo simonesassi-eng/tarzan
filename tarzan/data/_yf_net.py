@@ -38,7 +38,8 @@ def space_yf_call() -> None:
     with _lock:
         wait = _YF_MIN_INTERVAL - (_time.monotonic() - _last_call[0])
         if wait > 0:
-            _time.sleep(wait)
+            from tarzan.runtime.transport import provider_wait
+            provider_wait(wait, "yahoo")
         _last_call[0] = _time.monotonic()
 
 
@@ -51,13 +52,24 @@ def is_transient_error(exc: Exception) -> bool:
     return any(t in msg for t in transient)
 
 
-def retry(fn: Callable, *, what: str, log: Optional[logging.Logger] = None):
+def retry(fn: Callable, *, what: str, log: Optional[logging.Logger] = None,
+          provider: str = "yahoo"):
     """Run ``fn`` with bounded exponential backoff on transient errors.
 
     Returns ``fn()`` on success, or None if every attempt failed. A definitive
     (non-transient) error is not retried.
     """
     lg = log or logger
+    from tarzan.runtime.transport import current_budget
+    budget = current_budget()
+    if budget is not None:
+        try:
+            # HTTP retries belong to the native adapter, not this second layer.
+            with budget.operation(provider):
+                return fn()
+        except Exception as error:
+            lg.debug("%s unavailable under provider policy (%s)", what, type(error).__name__)
+            return None
     for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
         try:
             return fn()
@@ -69,6 +81,35 @@ def retry(fn: Callable, *, what: str, log: Optional[logging.Logger] = None):
             lg.debug("%s throttled (attempt %d), backing off %.2fs", what, attempt, delay)
             _time.sleep(delay)
     return None
+
+
+def ticker(symbol):
+    """Use the actual yfinance session port, including cookie/crumb requests."""
+    import yfinance as yf
+    from tarzan.runtime.transport import current_budget
+    budget = current_budget()
+    return yf.Ticker(symbol) if budget is None else yf.Ticker(symbol, session=budget.yahoo_client())
+
+
+def download(symbols, **kwargs):
+    """Native batch port; owned SDK threads must not lose the operation context."""
+    import yfinance as yf
+    from tarzan.runtime.transport import current_budget
+    budget = current_budget()
+    kwargs["progress"] = False
+    if budget is not None:
+        kwargs.update(session=budget.yahoo_client(), threads=False)
+    return yf.download(symbols, **kwargs)
+
+
+def yahoo_data():
+    from yfinance.data import YfData
+    from tarzan.runtime.transport import current_budget
+    budget = current_budget()
+    if budget is not None:
+        return YfData(session=budget.yahoo_client())
+    from curl_cffi.requests import Session
+    return YfData(session=Session(impersonate="chrome"))
 
 
 def fetch_yf(fn: Callable, *, what: str, log: Optional[logging.Logger] = None):

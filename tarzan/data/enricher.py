@@ -161,13 +161,13 @@ def _is_transient_error(exc: Exception) -> bool:
     return _yf_net.is_transient_error(exc)
 
 
-def _retry(fn, *, what: str):
+def _retry(fn, *, what: str, provider: str = "yahoo"):
     """Run a live provider call only when the run contract permits it."""
     from tarzan import runtime
 
     if not runtime.allows_live_transport():
         return None
-    return _yf_net.retry(fn, what=what, log=logger)
+    return _yf_net.retry(fn, what=what, log=logger, provider=provider)
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
         def _call(p=pair, s=start):
             _space_yf_call()
-            ticker = yf.Ticker(p)
+            ticker = _yf_net.ticker(p)
             # auto_adjust pinned for a stable "Close" column across yfinance
             # versions (FX pairs pay no dividends, so the value is unaffected;
             # this only guards the column set the reader below depends on).
@@ -1439,7 +1439,7 @@ def _fetch_ticker_info(symbol: str) -> dict:
     for the duration of the run."""
     def _call():
         _space_yf_call()
-        return yf.Ticker(symbol).info or {}
+        return _yf_net.ticker(symbol).info or {}
 
     return memoized(
         "enricher.info", symbol, lambda: _retry(_call, what=f"info {symbol}") or {},
@@ -1494,7 +1494,7 @@ def _download_price_history(
     the actual prices needed for holdings and cash-distribution accounting.
     """
     _space_yf_call()
-    ticker = yf.Ticker(symbol)
+    ticker = _yf_net.ticker(symbol)
     arguments = {"interval": "1d", "auto_adjust": False}
     if start is None:
         arguments["period"] = _backtest_period()
@@ -1890,7 +1890,8 @@ def _openfigi_load_many(missing: list[str]) -> dict[str, list]:
                     _time.monotonic() - _openfigi_last_call[0]
                 )
                 if wait > 0:
-                    _time.sleep(wait)
+                    from tarzan.runtime.transport import provider_wait
+                    provider_wait(wait, "openfigi")
                 _openfigi_last_call[0] = _time.monotonic()
             payload = [
                 {"idType": "ID_ISIN", "idValue": value}
@@ -1901,12 +1902,16 @@ def _openfigi_load_many(missing: list[str]) -> dict[str, list]:
                 data=json.dumps(payload).encode("utf-8"),
             )
             request.add_header("Content-Type", "application/json")
-            with urlopen(request, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
+            from tarzan.runtime.transport import provider_call
+            def _http(timeout):
+                with urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            return provider_call("openfigi", _http, timeout=10)
 
         response = _retry(
             _call,
             what=f"OpenFIGI batch ({len(batch)} ISINs)",
+            provider="openfigi",
         )
         valid_response = (
             isinstance(response, list) and len(response) == len(batch)

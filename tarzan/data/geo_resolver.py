@@ -206,7 +206,7 @@ def _geo_from_own_country(ticker: str, isin: str = "") -> Optional[tuple[dict[Ge
 
         from tarzan.data import _yf_net
 
-        info = _yf_net.fetch_yf(lambda: yf.Ticker(str(ticker)).info,
+        info = _yf_net.fetch_yf(lambda: _yf_net.ticker(str(ticker)).info,
                                 what=f"info {ticker}", log=logger) or {}
     except Exception:  # noqa: BLE001 — geography must never break a run
         return None
@@ -258,7 +258,7 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
     try:
         import yfinance as yf
         from tarzan.data import _yf_net
-        t = yf.Ticker(ticker)
+        t = _yf_net.ticker(ticker)
 
         # Try to get top holdings (spaced+retried against 429 bursts).
         try:
@@ -282,7 +282,7 @@ def _geo_from_top_holdings(ticker: str) -> Optional[tuple[dict[Geography, float]
             # Look up country for this holding (spaced against 429 bursts).
             try:
                 h_info = _yf_net.fetch_yf(
-                    lambda ht=holding_ticker: yf.Ticker(str(ht)).info,
+                    lambda ht=holding_ticker: _yf_net.ticker(str(ht)).info,
                     what=f"info {holding_ticker}", log=logger) or {}
                 country = h_info.get("country", "")
                 geo = gm.get(country, Geography.OTHER)
@@ -376,7 +376,7 @@ def resolve_isin(symbol: str) -> Optional[str]:
     try:
         import yfinance as yf
         from tarzan.data import _yf_net
-        ticker = yf.Ticker(symbol)
+        ticker = _yf_net.ticker(symbol)
         raw = _yf_net.fetch_yf(lambda: ticker.isin,
                                what=f"isin {symbol}", log=logger) or ""
         raw = raw.replace("-", "").strip().upper()

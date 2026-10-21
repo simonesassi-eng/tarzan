@@ -450,7 +450,7 @@ def test_official_quote_batch_retains_currency_and_rejects_infinities(monkeypatc
             "regularMarketPreviousClose": 10000, "currency": "GBp",
         },
     ]}}
-    monkeypatch.setattr("yfinance.data.YfData", lambda: SimpleNamespace())
+    monkeypatch.setattr("yfinance.data.YfData", lambda **kwargs: SimpleNamespace())
     monkeypatch.setattr(_yf_net, "fetch_yf", lambda *args, **kwargs: payload)
     quotes = production_quote_batch(["BAD", "EXAMPLE.L"])
     assert "price" not in quotes.get("BAD", {})

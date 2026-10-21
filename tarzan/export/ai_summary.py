@@ -981,8 +981,11 @@ def _call_gemini(system_prompt: str, user_prompt: str, use_search: bool = True) 
     req.add_header("Content-Type", "application/json")
     req.add_header("x-goog-api-key", api_key)
     try:
-        with urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        from tarzan.runtime.transport import provider_call
+        def _http(timeout):
+            with urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        data = provider_call("gemini", _http, timeout=_TIMEOUT_SECONDS)
     except HTTPError as error:
         # Provider response bodies can echo request details or credentials and
         # therefore never enter logs, exceptions, ledger evidence, or artifacts.

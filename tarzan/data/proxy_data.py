@@ -72,6 +72,20 @@ def _eur_rate_for_year(y: int) -> float:
 
 logger = logging.getLogger(__name__)
 
+
+def _read_url(request, *, timeout):
+    import urllib.request
+    from tarzan.runtime.transport import provider_call
+
+    def _http(native_timeout):
+        with urllib.request.urlopen(request, timeout=native_timeout) as response:
+            # A malformed provider download cannot grow an unbounded buffer.
+            content = response.read(64 * 1024 * 1024 + 1)
+            if len(content) > 64 * 1024 * 1024:
+                raise ValueError("proxy response exceeds byte limit")
+            return content
+    return provider_call("manual", _http, timeout=timeout)
+
 # Each bucket resolves to the FIRST candidate that yfinance prices, ordered
 # longest-history first (mutual funds reach further back than ETFs, à la
 # testfol.io's SIM backfills) → enables a ~2000 start.
@@ -184,7 +198,7 @@ def _fetch_max(symbol: str) -> pd.Series:
         # Go through the shared spacing+retry so a proxy fetch survives a 429
         # burst the same way the enricher does (was raw before → flaky).
         h = _yf_net.fetch_yf(
-            lambda: yf.Ticker(symbol).history(period="max", auto_adjust=True),
+            lambda: _yf_net.ticker(symbol).history(period="max", auto_adjust=True),
             what=f"proxy {symbol}", log=logger)
     except Exception as e:  # noqa: BLE001
         logger.warning("Proxy fetch failed for %s: %s", symbol, e)
@@ -342,7 +356,7 @@ def _ecb_fetch(url: str, key: str, static: bool = False) -> Optional[pd.Series]:
         import io
         import urllib.request
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        raw = urllib.request.urlopen(req, timeout=30).read().decode()
+        raw = _read_url(req, timeout=30).decode()
         df = pd.read_csv(io.StringIO(raw))
         s = pd.Series(df["OBS_VALUE"].values,
                       index=pd.to_datetime(df["TIME_PERIOD"])).dropna()
@@ -558,7 +572,7 @@ def _ff_download(url: str, colnames: list[str]) -> Optional[pd.DataFrame]:
     import urllib.request
     import zipfile
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    raw = urllib.request.urlopen(req, timeout=40).read()
+    raw = _read_url(req, timeout=40)
     z = zipfile.ZipFile(io.BytesIO(raw))
     text = z.read(z.namelist()[0]).decode("latin-1")
     idx, rows = [], []
@@ -654,7 +668,7 @@ def _ff_download_monthly(url: str, colnames: list[str]) -> Optional[pd.DataFrame
     import urllib.request
     import zipfile
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    raw = urllib.request.urlopen(req, timeout=40).read()
+    raw = _read_url(req, timeout=40)
     z = zipfile.ZipFile(io.BytesIO(raw))
     text = z.read(z.namelist()[0]).decode("latin-1")
     idx, rows = [], []

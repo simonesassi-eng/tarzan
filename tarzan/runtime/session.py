@@ -84,6 +84,7 @@ class RunSession:
     audit: list[Any] = field(default_factory=list)
     memo: dict[Any, Any] = field(default_factory=dict)
     providers: ProviderMemo = field(default_factory=ProviderMemo, repr=False)
+    transport: Any = field(default=None, repr=False)
     log_records: list[dict] = field(default_factory=list, repr=False)
     gate: Optional["SerialExecutionGate"] = field(default=None, repr=False)
     analysis_id: Optional[str] = None

@@ -86,7 +86,8 @@ def test_a_throttled_venue_is_not_recorded_as_missing(cache, monkeypatch):
 def test_an_openfigi_mapping_is_reused_across_runs(cache, monkeypatch):
     sent = []
 
-    def fake_retry(fn, what):
+    def fake_retry(fn, what, *, provider="yahoo"):
+        assert provider == "openfigi"
         sent.append(what)
         return [{"data": [{"name": "SYNTHETIC FUND", "ticker": "ABC"}]}]
 

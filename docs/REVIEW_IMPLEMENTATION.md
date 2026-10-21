@@ -12,7 +12,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R05 | Evidence-backed corporate-action repair | Implemented; no jump-only events, explicit provider/curated factors, separate price rulers and pre-repair storage |
 | R07, R18 | Causal identity and validated cache enumeration | Implemented; shared join/seed catalog, boundary-aware profile/xref reads and immutable target aliases |
 | R08 | Run-owned single-flight provider stores | Implemented; concurrent misses/negative answers coalesce per key, cancellation propagates, unrelated keys remain parallel |
-| R20 | Real provider budgets | Pending |
+| R20 | Real provider budgets and acceptance/publication policy | Implemented locally; separate transport policies, native capped I/O and bounded retries/deadlines; accepted valuation coverage and independent publication thresholds are enforced |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Implemented; retained output lease/clock/ledger, explicit artifact outcome, opt-in isolated What-If and idempotent run-owned capture |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
@@ -135,3 +135,29 @@ semantic gate consume those same facts rather than consulting later global
 configuration. Legacy unprepared cubes retain a single compatibility preparation
 at the context boundary. The golden newsletter remains byte-identical; a new
 regression forbids every global reference accessor during a completed render.
+
+Provider transport policy is now separate from valuation acceptance. The
+configured run deadline starts after validated configuration is bound; pacing,
+HTTP retries and native I/O consume it. Yahoo uses its real `curl_cffi` session
+port (including cookie/crumb traffic), without a second outer retry multiplier.
+Owned intraday SDK batches run without internal threads so their operation
+context is retained; independent outer enrichment/referee workers remain
+parallel. The previous SDK default may impose a lower timeout than the configured
+ceiling. OpenFIGI, Borsa, justETF, optional external proxies and Gemini pass their
+configured timeout to the native request. Native clients close on analysis exits.
+Before-input Drive authentication retains its separate bounded native timeout.
+Deadlines are checked before/after calls and waits; this does not terminate
+arbitrary Python/CPU work or promise a hard whole-newsletter wall-clock limit.
+
+Accepted valuation coverage is weighted by materiality basis within each
+kind/policy. Explicitly permitted anchors/stale fallbacks count as accepted
+valuation, not as real market-history coverage. An insufficient or indeterminate
+coverage makes the total/planning unavailable. Valuation and publication
+materiality thresholds are assessed independently: a policy-permitted degraded
+publication cannot label an unavailable total as complete. Unknown materiality
+remains fail-closed. The narrow external summary remains schema 3.
+
+Fake-clock and native-port tests cover changed timeout/retry settings, operation
+and run exhaustion, pacing, cancellation, HTTP status classification, SDK retry
+nonmultiplication and non-Yahoo adapters. Independent gate tests cover coverage,
+fallback acceptance, separate publication thresholds and unavailable summaries.

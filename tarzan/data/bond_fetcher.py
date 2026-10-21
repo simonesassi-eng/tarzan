@@ -71,10 +71,14 @@ def _try_segment(isin: str, segment: str) -> Optional[dict]:
     url = f"https://www.borsaitaliana.it/borsa/obbligazioni/{segment}/scheda/{isin}.html"
     try:
         req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(req, timeout=10) as resp:
-            if resp.status != 200:
-                return None
-            html = resp.read().decode("utf-8")
+        from tarzan.runtime.transport import provider_call
+        def _http(timeout):
+            with urlopen(req, timeout=timeout) as resp:
+                if resp.status != 200:
+                    return ""
+                return resp.read().decode("utf-8")
+        html = provider_call("borsa", _http, timeout=10)
+        if html:
             if len(html) < 5000:
                 return None
 

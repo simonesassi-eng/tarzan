@@ -1,0 +1,266 @@
+"""Run-owned provider deadlines, native timeouts and bounded HTTP retries.
+
+Deadlines are checked before/after calls and pacing. Native client timeouts
+bound transport I/O; this is not a mechanism for killing arbitrary Python code.
+Provider URLs, headers, bodies and instrument identifiers never enter telemetry.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+import math
+import threading
+import time
+
+
+_PROVIDERS = frozenset({"yahoo", "openfigi", "borsa", "justetf", "manual", "gemini"})
+_operation = ContextVar("tarzan_provider_operation", default=None)
+
+
+def _positive(value, name):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+
+
+@dataclass(frozen=True)
+class ProviderTransportPolicy:
+    provider: str
+    timeout_seconds: float
+    retry_budget: int
+
+    def __post_init__(self):
+        if self.provider not in _PROVIDERS:
+            raise ValueError("unknown provider transport")
+        _positive(self.timeout_seconds, "timeout_seconds")
+        if type(self.retry_budget) is not int or not 0 <= self.retry_budget <= 5:
+            raise ValueError("retry_budget must be an integer in [0, 5]")
+
+
+@dataclass(frozen=True)
+class ProviderTransportSettings:
+    run_budget_seconds: float
+    providers: tuple[ProviderTransportPolicy, ...]
+
+    def __post_init__(self):
+        _positive(self.run_budget_seconds, "run_budget_seconds")
+        object.__setattr__(self, "providers", tuple(self.providers))
+        if len(self.providers) != len(_PROVIDERS) or {p.provider for p in self.providers} != _PROVIDERS:
+            raise ValueError("each provider transport must be declared exactly once")
+
+    @classmethod
+    def configured(cls):
+        from tarzan import config
+        raw = config.get("provider_transport")
+        if not isinstance(raw, dict) or set(raw) != {"run_budget_seconds", "providers"}:
+            raise ValueError("provider_transport must declare run_budget_seconds and providers")
+        if not isinstance(raw["providers"], dict):
+            raise ValueError("provider_transport providers must be a mapping")
+        return cls(
+            raw["run_budget_seconds"],
+            tuple(ProviderTransportPolicy(provider=name, **values)
+                  for name, values in sorted(raw["providers"].items())),
+        )
+
+
+class ProviderBudgetExceeded(RuntimeError):
+    """A deadline is exhausted; further retries cannot restore authority."""
+
+
+class ProviderRequestFailure(RuntimeError):
+    """Bounded native request failure, without leaking its private request."""
+
+
+def _transient(error):
+    if isinstance(error, ProviderBudgetExceeded):
+        return False
+    from tarzan.data._yf_net import is_transient_error
+    status = getattr(error, "code", None)
+    return (
+        isinstance(error, (TimeoutError, ConnectionError))
+        or type(error).__name__ in {
+            "Timeout", "ConnectTimeout", "ReadTimeout", "ConnectionError",
+            "ChunkedEncodingError", "RemoteDisconnected",
+        }
+        or status in (429, 500, 502, 503, 504)
+        or is_transient_error(error)
+    )
+
+
+class ProviderBudget:
+    def __init__(self, settings, ledger=None, *, clock=time.monotonic, sleep=time.sleep):
+        self.settings = settings
+        self.policies = {policy.provider: policy for policy in settings.providers}
+        self.ledger = ledger
+        self.clock = clock
+        self.sleep = sleep
+        self.deadline = clock() + settings.run_budget_seconds
+        self._lock = threading.Lock()
+        self._reported = set()
+        self._yahoo_client = None
+
+    def _remaining(self, provider):
+        remaining = self.deadline - self.clock()
+        active = _operation.get()
+        if active is not None and active[0] is self and active[1] == provider:
+            remaining = min(remaining, active[2] - self.clock())
+        if remaining <= 0:
+            self._failure(provider, "PROVIDER_BUDGET_EXHAUSTED")
+            raise ProviderBudgetExceeded(f"{provider} provider budget exhausted")
+        return remaining
+
+    def _failure(self, provider, code):
+        with self._lock:
+            key = (provider, code)
+            if key in self._reported or self.ledger is None:
+                return
+            self._reported.add(key)
+        self.ledger.open_failure(
+            stage="provider_transport", stable_code=code, severity="WARNING",
+            error={"provider": provider, "code": code},
+            affected_outputs=["market_data"], publication_impact="DEGRADE",
+            analytical_impact="provider evidence unavailable; only explicit data-quality fallbacks remain",
+            context={"provider": provider},
+        )
+
+    @contextmanager
+    def operation(self, provider):
+        policy = self.policies[provider]
+        self._remaining(provider)
+        active = _operation.get()
+        if active is not None and active[0] is self and active[1] == provider:
+            yield
+            self._remaining(provider)
+            return
+        token = _operation.set((self, provider, min(self.deadline, self.clock() + policy.timeout_seconds)))
+        try:
+            yield
+            self._remaining(provider)
+        finally:
+            _operation.reset(token)
+
+    def wait(self, seconds, provider):
+        remaining = self._remaining(provider)
+        if seconds >= remaining:
+            self._failure(provider, "PROVIDER_BUDGET_EXHAUSTED")
+            raise ProviderBudgetExceeded(f"{provider} provider pacing exceeds remaining budget")
+        if seconds > 0:
+            self.sleep(seconds)
+        self._remaining(provider)
+
+    def call(self, provider, callback, *, requested_timeout=None):
+        """Retry a native request, capped by one operation and the run deadline."""
+        from tarzan.runtime.ledger import LedgerEntryType
+
+        policy = self.policies[provider]
+        with self.operation(provider):
+            for ordinal in range(1, policy.retry_budget + 2):
+                cap = min(policy.timeout_seconds, self._remaining(provider))
+                if requested_timeout is not None:
+                    requested = requested_timeout
+                    if isinstance(requested, (tuple, list)):
+                        requested = min(requested)
+                    if isinstance(requested, (int, float)) and math.isfinite(requested) and requested > 0:
+                        cap = min(cap, requested)
+                started = self.clock()
+                retryable = False
+                outcome = "CANCELLED"
+                try:
+                    value = callback(cap)
+                    self._remaining(provider)
+                    status = getattr(value, "status_code", None)
+                    retryable = status in (429, 500, 502, 503, 504)
+                    outcome = f"HTTP_{status}" if status is not None else "SUCCEEDED"
+                    if retryable:
+                        close = getattr(value, "close", None)
+                        if callable(close):
+                            close()
+                    else:
+                        return value
+                except ProviderBudgetExceeded:
+                    outcome = "BUDGET_EXHAUSTED"
+                    raise
+                except Exception as error:
+                    retryable = _transient(error)
+                    outcome = type(error).__name__
+                    if not retryable:
+                        raise
+                finally:
+                    if self.ledger is not None:
+                        self.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
+                            "source": provider, "operation": "native_http",
+                            "ordinal": ordinal, "outcome": outcome,
+                            "timeout_seconds": cap, "retry_budget": policy.retry_budget,
+                            "latency_ms": max(0.0, self.clock() - started) * 1000.0,
+                        })
+                if ordinal <= policy.retry_budget:
+                    self.wait(0.25 * 2 ** (ordinal - 1), provider)
+            self._failure(provider, "PROVIDER_RETRY_BUDGET_EXHAUSTED")
+            # The SDK must not retry the same already-exhausted network exception.
+            raise ProviderRequestFailure(f"{provider} native request retry budget exhausted") from None
+
+    def yahoo_client(self):
+        with self._lock:
+            if self._yahoo_client is None:
+                from curl_cffi.requests import Session
+                owner = self
+
+                class BudgetedSession(Session):
+                    def request(self, method, url, **kwargs):
+                        requested = kwargs.pop("timeout", None)
+                        native_request = super().request
+                        try:
+                            return owner.call(
+                                "yahoo",
+                                lambda timeout: native_request(method, url, timeout=timeout, **kwargs),
+                                requested_timeout=requested,
+                            )
+                        except ProviderBudgetExceeded:
+                            raise
+                        except Exception:
+                            # Prevent the SDK's own transient-error retry loop
+                            # from multiplying already-budgeted native attempts.
+                            raise ProviderRequestFailure("yahoo native request unavailable") from None
+
+                self._yahoo_client = BudgetedSession(impersonate="chrome")
+            return self._yahoo_client
+
+    def close(self):
+        with self._lock:
+            client, self._yahoo_client = self._yahoo_client, None
+        if client is not None:
+            client.close()
+
+
+def current_budget():
+    from tarzan.runtime.session import current_session
+    session = current_session()
+    if session is None:
+        return None
+    with session.providers.lock:
+        if session.transport is None:
+            raw = session.config_snapshot.get("provider_transport")
+            settings = (
+                ProviderTransportSettings(
+                    raw["run_budget_seconds"],
+                    tuple(ProviderTransportPolicy(**policy) for policy in raw["providers"]),
+                )
+                if raw else ProviderTransportSettings.configured()
+            )
+            session.transport = ProviderBudget(settings, session.ledger)
+    return session.transport
+
+
+def provider_call(provider, callback, *, timeout):
+    budget = current_budget()
+    return callback(timeout) if budget is None else budget.call(provider, callback)
+
+
+def provider_wait(seconds, provider):
+    budget = current_budget()
+    if budget is None:
+        if seconds > 0:
+            time.sleep(seconds)
+    else:
+        budget.wait(seconds, provider)
