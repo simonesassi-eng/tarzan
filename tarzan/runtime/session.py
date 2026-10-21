@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
 import uuid
@@ -17,6 +18,9 @@ from typing import Any, Mapping, Optional
 
 from tarzan.runtime.io_utils import canonical_json_bytes
 from tarzan.runtime.memo import ProviderMemo
+
+
+logger = logging.getLogger(__name__)
 
 
 class RunMode(str, Enum):
@@ -97,6 +101,21 @@ class RunSession:
         if self.config_snapshot:
             raise RuntimeError("run session configuration is already bound")
         self.config_snapshot = MappingProxyType(dict(config))
+
+    def close_transport(self) -> None:
+        """Close owned clients, not the retained deadline/policy authority.
+
+        A later output can acquire a new client under the same budget. Ordinary
+        cleanup failures must not replace the analysis/output's primary result.
+        """
+        if self.transport is not None:
+            try:
+                self.transport.close()
+            except Exception:
+                logger.warning(
+                    "Provider client cleanup failed; primary outcome retained.",
+                    extra={"public_code": "PROVIDER_CLIENT_CLEANUP_FAILED"},
+                )
 
 
 @dataclass(frozen=True)
@@ -183,7 +202,13 @@ def completed_run_scope(result: RunResult):
         try:
             yield result
         finally:
-            _last_run_result.reset(token)
+            try:
+                # Optional completed-run work can create fresh native clients
+                # after the orchestrator has closed its analysis connections.
+                # Nested scopes leave them with the outer owner until it exits.
+                session.close_transport()
+            finally:
+                _last_run_result.reset(token)
 
 
 @dataclass(frozen=True)

@@ -959,8 +959,4 @@ def run(
                 )
                 raise
             finally:
-                if session.transport is not None:
-                    try:
-                        session.transport.close()
-                    except Exception:
-                        logger.warning("Provider client cleanup failed; analysis outcome retained.")
+                session.close_transport()

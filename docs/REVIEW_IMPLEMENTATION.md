@@ -171,6 +171,17 @@ configured timeout to the native request. Native clients close on analysis exits
 Before-input Drive authentication retains its separate bounded native timeout.
 Deadlines are checked before/after calls and waits; this does not terminate
 arbitrary Python/CPU work or promise a hard whole-newsletter wall-clock limit.
+Completed-run output scopes now also close clients created after analysis,
+including optional What-If work, while keeping the original deadline/policy
+authority. Nested scopes do not close the outer consumer's client prematurely.
+Ordinary cleanup errors retain the primary result and restore the caller's
+clock/context. Analysis and completed output share the same cleanup method.
+Eight counterexamples failed before this follow-up (success, failure,
+cancellation, old-result reentry and both real optional CLI paths).
+All ten new client-lifetime tests and 1,932 full-suite tests pass in the clean
+locked environment, normally and with Actions logging. The actual-portfolio
+checkpoint remains financially identical with no network attempts or semantic
+errors; no live-performance acceleration is claimed.
 
 Accepted valuation coverage is weighted by materiality basis within each
 kind/policy. Explicitly permitted anchors/stale fallbacks count as accepted
