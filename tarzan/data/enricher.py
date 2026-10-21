@@ -1567,7 +1567,7 @@ def _sibling_close_series(symbol: str):
         if frame is None or frame.empty or "Close" not in frame:
             return None
         frame = _clip_to_as_of(frame)
-        frame = price_cache.repair_split_jumps(frame)
+        frame = price_cache.repair_split_jumps(frame, symbol=symbol)
         if frame is None or frame.empty:
             return None
         closes = frame["Close"].dropna()
@@ -1799,14 +1799,15 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     from tarzan import runtime
 
     pinned = not runtime.allows_live_transport()
+    if not pinned and result is not None and not result.empty:
+        # Store the provider ruler before local actions or synthesized bars.
+        # A later historical boundary must not inherit a future local repair.
+        price_cache.store_history(symbol, result)
     if pinned:
-        # Split detection may use later sessions to confirm a discontinuity and
-        # back-adjust all earlier closes. In a point-in-time run that would let
-        # a post-boundary split rewrite pre-boundary valuation evidence. Clip
-        # first, repair only the visible frame, and leave the full disk cache
-        # untouched for future/live runs.
+        # Apply only declared actions visible to the analysis boundary; no
+        # later prices are read to confirm an earlier event.
         result = _clip_to_as_of(result)
-    result = price_cache.repair_split_jumps(result)
+    result = price_cache.repair_split_jumps(result, symbol=symbol, as_of=runtime.as_of())
     if result is not None and not result.empty:
         result.attrs[_HISTORY_ORIGINS_ATTR] = origins
         result.attrs[_HISTORY_SYMBOL_ATTR] = symbol
@@ -1816,7 +1817,6 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
             # per-run reconstruction, and persisting it would let it be read
             # back next run as though the venue had printed it — and then
             # become the base another synthetic close is derived from.
-            price_cache.store_history(symbol, result)
             # Live runs only. A pinned/reproducible run must reflect exactly
             # what its own venue printed, or the same as_of would yield
             # different history depending on which venues answered.

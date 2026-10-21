@@ -188,18 +188,19 @@ class TestASplitIsBackAdjustedByItsRoundRatio:
         from tarzan.data.price_cache import repair_split_jumps
 
         raw = self._cl2_frame()
-        out = repair_split_jumps(raw)
+        out = repair_split_jumps(raw, symbol="CL2.MI")
         before = out.loc["2023-10-09", "Close"]
         assert before == pytest.approx(4017.15 / 300.0, rel=1e-9)
         # ...so the split session keeps its real move instead of being erased.
         assert out.loc["2023-10-10", "Close"] / before - 1 == pytest.approx(0.0298, abs=0.0005)
 
     def test_a_ratio_that_is_not_round_is_not_forced_onto_one(self):
-        from tarzan.data.price_cache import _snap_split_ratio
+        from tarzan.data.price_cache import repair_split_jumps
 
-        assert _snap_split_ratio(1 / 3.4) == pytest.approx(1 / 3.4)
-        assert _snap_split_ratio(1 / 291.31) == pytest.approx(1 / 300)
-        assert _snap_split_ratio(2.07) == pytest.approx(2.0)
+        raw = self._cl2_frame()
+        # Without the exact corporate-action declaration, even a near-round
+        # persistent loss remains a loss. Neither date nor ratio is guessed.
+        pd.testing.assert_frame_equal(repair_split_jumps(raw), raw)
 
     def test_histories_repaired_the_old_way_are_refetched(self, tmp_path, monkeypatch):
         """A history is cached AFTER repair, so a repaired series has no jump left for a

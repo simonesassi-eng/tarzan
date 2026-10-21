@@ -9,7 +9,7 @@ artifacts. This register contains no personal portfolio amounts.
 | Verification | Frozen raw-provider capture, offline KPI comparison | Implemented; two baseline replays match, no network attempts or semantic errors |
 | R01–R03, R06 | Target gates, closed booleans, cash-flow signs | Implemented; 64 new regressions, 1,617 full-suite passes, unchanged frozen KPIs |
 | R04 | Instrument resolution and valuation provenance | Implemented; persistent negative mechanics evidence, explicit valuation origins, no frozen KPI change |
-| R05 | Evidence-backed corporate-action repair | Pending |
+| R05 | Evidence-backed corporate-action repair | Implemented; no jump-only events, explicit provider/curated factors, separate price rulers and pre-repair storage |
 | R07–R08, R18, R20 | Causal identity, single-flight, cache API, real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
@@ -46,3 +46,14 @@ defensive immutable facts (including equal legitimate fills), and ledger
 projections cannot mutate nested source evidence. Failure projection indexes
 one consistent entry snapshot, caches immutable results, and never rescans the
 whole log per failure. Remedy ordinals are assigned atomically at append.
+
+Split repair no longer guesses events or round factors from persistent losses.
+It requires a provider `Stock Splits` declaration or the exact curated listing
+and effective date. CL2's existing 300 factor is retained; Euronext's public
+Milan notice `MIL_20231004_03289_ETP` independently confirms the split, unchanged
+ISIN `FR0010755611` and 10 October 2023 effective date. The public abstract does
+not disclose the factor, which remains explicit prior curation corroborated by
+the Paris price ruler; no paid notice was purchased or claimed to be read.
+Local repair neither waits for nor consumes a future confirmation window.
+Provider history is cached before local repair, so a later historical boundary
+cannot inherit a future local adjustment. History-only cache version is now 3.

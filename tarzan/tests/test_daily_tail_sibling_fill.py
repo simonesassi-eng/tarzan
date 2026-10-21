@@ -218,7 +218,7 @@ def test_the_synthetic_close_is_not_persisted_to_the_cache(monkeypatch):
     monkeypatch.setattr(en.price_cache, "load_history", lambda s: None)
     monkeypatch.setattr(en.price_cache, "refresh_start", lambda c: None)
     monkeypatch.setattr(en.price_cache, "merge_history", lambda a, b: b)
-    monkeypatch.setattr(en.price_cache, "repair_split_jumps", lambda f: f)
+    monkeypatch.setattr(en.price_cache, "repair_split_jumps", lambda f, **kwargs: f)
     own = _frame([(datetime.date(2026, 8, 7), 29.6950), (YESTERDAY, 29.8250)])
     monkeypatch.setattr(en, "_retry", lambda fn, what=None: own)
     _sibling(monkeypatch, {"NTSG.DE": _series([(YESTERDAY, 29.8500),

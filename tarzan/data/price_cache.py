@@ -74,13 +74,10 @@ _INSTRUMENT_PROFILE_NAMESPACE = "instrument_profiles_v1"
 _DISABLED_ENV = "TARZAN_DISABLE_CACHE"
 _CACHE_SCHEMA_VERSION = "1"
 
-#: Bumped when ``repair_split_jumps`` changes what a stored history contains. Histories
-#: are cached AFTER repair, so a repaired series has no jump left for a better repair
-#: to find: without this, the CL2.MI history repaired with 1:291.31 would have kept
-#: that factor forever. A history without the current version is refetched once.
-#: History-only on purpose: the global schema version would also throw away the ISIN
-#: resolutions, geographies and TERs, which nothing here invalidates.
-_HISTORY_REPAIR_VERSION = "2"
+# 3 stores provider histories BEFORE local split repair. A pinned run can then
+# apply only its visible declared events. Discard old guessed/repaired heads
+# once without invalidating identity, geography, TER or unrelated namespaces.
+_HISTORY_REPAIR_VERSION = "3"
 _LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 
@@ -324,114 +321,78 @@ def price_adjustments_changed(
     return not comparable_close
 
 
-# Daily Close ratios outside this band are not real market moves for the
-# diversified ETFs/indices/funds we track (even a 2x-leveraged fund would
-# need its underlying to move >±50% in one session). A *persistent* jump
-# past it is an unadjusted split/denomination change, which we back-adjust.
-SPLIT_JUMP_LO = 0.5
-SPLIT_JUMP_HI = 2.0
+def repair_split_jumps(
+    df: Optional[pd.DataFrame], *, symbol: Optional[str] = None, as_of: Optional[date] = None,
+) -> Optional[pd.DataFrame]:
+    """Apply only explicitly declared splits on the exact effective date.
 
-
-#: How far a measured close-to-close jump may sit from a round split ratio and still be
-#: that split. The remainder is the real market move of the split session, which a
-#: diversified ETF does not exceed in a day (a 2x line's worst sessions are well inside).
-_SPLIT_SNAP_TOLERANCE = 0.12
-
-#: The mantissas real split and consolidation ratios are made of: 1:2, 1:3, 1:10, 1:25,
-#: 1:300, 5:1, ...
-_SPLIT_MANTISSAS = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 7.5, 8.0, 9.0)
-
-
-def _snap_split_ratio(r: float) -> float:
-    """The split ratio a measured close-to-close jump ``r`` stands for.
-
-    The raw jump is the split TIMES the session's real move, and back-adjusting by the
-    raw jump books that move into every earlier price. CL2.MI is the case that measured
-    it: a 1:300 split on 10 Oct 2023 read as 1:291.31, because the 2x line also rose
-    ~3% that session (its Paris listing: +2.69%). The 9-day-old history was therefore
-    3% high and the 5Y return ~10pp low — confirmed against two other sources, which
-    agreed with each other and not with us.
-
-    Snapped to the nearest round ratio in log space when within
-    ``_SPLIT_SNAP_TOLERANCE``; otherwise the raw jump is kept, so an unusual ratio is
-    never forced onto a round one it is not.
+    The close ratio can verify an unadjusted ruler, but can NEVER create an
+    event or choose its factor. There is no future-session confirmation window.
+    Total-return OHLC and the price-only ruler are evaluated independently.
     """
-    import math
+    from tarzan.data.corporate_actions import CURATED_SPLITS
 
-    if r <= 0:
-        return r
-    big = 1.0 / r if r < 1.0 else r
-    best, best_err = None, None
-    for exp in range(0, 5):
-        for m in _SPLIT_MANTISSAS:
-            cand = m * 10 ** exp
-            if cand < 2.0:
-                continue
-            err = abs(math.log(big / cand))
-            if best_err is None or err < best_err:
-                best, best_err = cand, err
-    if best is None or best_err > math.log(1.0 + _SPLIT_SNAP_TOLERANCE):
-        return r
-    return (1.0 / best) if r < 1.0 else best
-
-
-def repair_split_jumps(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """Back-adjust unadjusted split/denomination discontinuities in a daily
-    OHLC history so multi-period returns stay correct.
-
-    Yahoo sometimes fails to split-adjust non-US listings: the series then
-    carries a single huge day-over-day jump (e.g. CL2.MI fell ~291x on
-    2023-10-09), which makes a 5Y return read −99% instead of the true
-    +150%+. We detect such a jump on Close, confirm it *persists* for ~10
-    sessions — distinguishing a real split from a transient bad print —
-    then multiply every earlier row by the jump factor so the series is
-    continuous (the standard back-adjustment). Healthy series are returned
-    untouched, and the operation is idempotent (an already-adjusted series
-    has no jump left to fix).
-    """
     if df is None or len(df) == 0 or "Close" not in df.columns:
         return df
-    valid = df["Close"].astype(float).dropna()
-    if len(valid) < 5:
+    if (
+        not isinstance(df.index, pd.DatetimeIndex) or not df.index.is_unique
+        or not df.index.is_monotonic_increasing
+    ):
         return df
-    vals = list(valid.values)
-    n = len(vals)
-    factor = [1.0] * n
-    cum = 1.0
-    splits = 0
-    # A real split/denomination boundary sits between two runs of *genuine*
-    # prices. A transient bad print (e.g. a lone 0.0001 tick) also produces a
-    # huge day-over-day ratio, but the median of the sessions on the low side
-    # then reflects the bad tick, not a new price level. Requiring both the
-    # before- and after-medians to be well clear of zero rejects a spurious
-    # split triggered by an aberrant near-zero print, which would otherwise
-    # back-adjust the entire earlier series and corrupt all multi-period
-    # returns for that instrument.
-    ref = float(pd.Series([v for v in vals if v > 0]).median()) if any(v > 0 for v in vals) else 0.0
-    min_level = ref * 1e-3  # 0.1% of the typical level
-    for i in range(n - 2, -1, -1):
-        prev = vals[i]
-        r = (vals[i + 1] / prev) if prev else 1.0
-        if r < SPLIT_JUMP_LO or r > SPLIT_JUMP_HI:
-            before = pd.Series(vals[max(0, i - 9):i + 1]).median()
-            after = pd.Series(vals[i + 1:i + 11]).median()
-            expected = before * r if before else 0.0
-            # Persistent split: the new level holds near before×ratio, AND
-            # both surrounding levels are real prices (not a near-zero tick).
-            if (expected > 0 and after > 0 and before > min_level and after > min_level
-                    and abs(after - expected) / expected <= 0.35):
-                cum *= _snap_split_ratio(r)
-                splits += 1
-        factor[i] = cum
-    if splits == 0:
+    events: dict[date, float] = {}
+    if "Stock Splits" in df:
+        for stamp, value in pd.to_numeric(df["Stock Splits"], errors="coerce").items():
+            if pd.notna(value) and math.isfinite(value) and value > 0 and value != 1:
+                events[pd.Timestamp(stamp).date()] = float(value)
+    for action in CURATED_SPLITS.get(str(symbol or "").strip().upper(), ()):
+        if as_of is not None and (
+            action.effective_date > as_of or action.announced_on > as_of
+        ):
+            continue
+        if action.effective_date in events and not math.isclose(
+            events[action.effective_date], action.units_after_per_unit_before,
+        ):
+            logger.warning("Conflicting declared split for %s on %s; no repair", symbol, action.effective_date)
+            events.pop(action.effective_date)
+        else:
+            events[action.effective_date] = action.units_after_per_unit_before
+    if as_of is not None:
+        events = {day: ratio for day, ratio in events.items() if day <= as_of}
+    if not events:
         return df
-    fseries = (pd.Series(factor, index=valid.index)
-               .reindex(df.index).ffill().bfill().fillna(1.0))
+    positions = {stamp.date(): i for i, stamp in enumerate(df.index)}
+    if len(positions) != len(df):
+        return df  # daily action mechanics do not apply to an intraday ruler
+
+    def factors(column):
+        prices = pd.to_numeric(df[column], errors="coerce").astype(float)
+        factor = pd.Series(1.0, index=df.index)
+        for day, ratio in events.items():
+            position = positions.get(day)
+            if position is None or position == 0:
+                continue
+            before, after = prices.iloc[position - 1], prices.iloc[position]
+            if not all(math.isfinite(v) and v > 0 for v in (before, after)):
+                continue
+            observed, expected = after / before, 1.0 / ratio
+            if (
+                abs(math.log(observed / expected)) <= math.log(1.35)
+                and abs(math.log(observed / expected)) < abs(math.log(observed))
+            ):
+                factor.iloc[:position] *= expected
+        return factor
+
+    total_factor = factors("Close")
+    price_factor = factors("Price Close") if "Price Close" in df else total_factor
+    if (total_factor == 1).all() and (price_factor == 1).all():
+        return df  # already split-adjusted, or no corroborating discontinuity
     out = df.copy()
-    for col in ("Open", "High", "Low", "Close", "Price Close"):
+    for col in ("Open", "High", "Low", "Close"):
         if col in out.columns:
-            out[col] = out[col].astype(float) * fseries
-    logger.info("repair_split_jumps: back-adjusted %d split(s) in a price series", splits)
+            out[col] = pd.to_numeric(out[col], errors="coerce") * total_factor
+    if "Price Close" in out:
+        out["Price Close"] = pd.to_numeric(out["Price Close"], errors="coerce") * price_factor
+    logger.info("Applied declared split adjustment to %s", symbol or "provider history")
     return out
 
 

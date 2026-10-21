@@ -196,6 +196,7 @@ class TestRepairSplitJumps:
         pre = [3000.0 + i for i in range(30)]
         post = [10.0 + i * 0.05 for i in range(30)]
         df = self._series(pre + post)
+        df["Stock Splits"] = [0.0] * 30 + [300.0] + [0.0] * 29
         out = price_cache.repair_split_jumps(df)
         c = out["Close"]
         # No catastrophic jump left → the series is continuous.
@@ -226,6 +227,7 @@ class TestRepairSplitJumps:
         pre = [3000.0 + i for i in range(30)]
         post = [10.0 + i * 0.05 for i in range(30)]
         df = self._series(pre + post)
+        df["Stock Splits"] = [0.0] * 30 + [300.0] + [0.0] * 29
         once = price_cache.repair_split_jumps(df)
         twice = price_cache.repair_split_jumps(once)
         pd.testing.assert_frame_equal(once, twice)

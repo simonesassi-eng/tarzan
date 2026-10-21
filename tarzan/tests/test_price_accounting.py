@@ -301,6 +301,7 @@ def test_split_repair_keeps_the_two_price_rulers_consistent():
         {"Close": [100.] * 20 + [10.] * 20, "Price Close": [100.] * 20 + [10.] * 20},
         index=days,
     )
+    frame["Stock Splits"] = [0.0] * 20 + [10.0] + [0.0] * 19
     repaired = price_cache.repair_split_jumps(frame)
     assert repaired["Close"].tolist() == [10.] * 40
     assert repaired["Price Close"].tolist() == [10.] * 40
