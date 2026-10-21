@@ -194,6 +194,8 @@ def test_local_input_lifecycle_never_deletes_caller_files(monkeypatch, tmp_path)
 def test_delivery_closes_only_its_owned_input_set_even_on_failure(
     monkeypatch, tmp_path, analysis_failure,
 ):
+    for key in ("GITHUB_ACTIONS", "TARZAN_REQUESTED_AT", "TARZAN_WORKFLOW_CREATED_AT"):
+        monkeypatch.delenv(key, raising=False)
     closed = []
 
     class Inputs(dict):

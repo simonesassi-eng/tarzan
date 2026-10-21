@@ -26,12 +26,12 @@ Location
 --------
 * Local: ``~/.cache/tarzan/`` (override with the ``TARZAN_CACHE_DIR`` env
   var). It lives outside the repo and is git-ignored.
-* GitHub Actions (newsletter): the same directory, persisted across runs
-  by ``actions/cache`` — it is per-repository and isolated per fork, so a
-  user cloning the repo gets their own cache with zero configuration. It
-  is NOT stored in Google Drive (Drive only holds the input files) and is
-  never committed to the repo. The cached data is public market data, so
-  it is safe even for a public repository.
+* GitHub Actions (newsletter): this whole directory is private/ephemeral and
+  is NEVER archived. Only ``tarzan.data.public_cache`` may project fixed macro
+  price tables into ``~/.cache/tarzan-public/snapshot.json`` for Actions.
+  Portfolio queries, identity profiles and manual/licensed series are excluded.
+  Base-branch Actions caches can be read from pull requests/forks; absence from
+  git does not make a cache private.
 """
 
 from __future__ import annotations

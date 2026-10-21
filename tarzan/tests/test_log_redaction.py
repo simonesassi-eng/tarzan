@@ -9,7 +9,9 @@ from __future__ import annotations
 import io
 import logging
 
-from tarzan.log_redaction import RedactingFilter, install
+import pytest
+
+from tarzan.log_redaction import RedactingFilter, RestrictedConsoleFormatter, install
 
 
 class TestTheLeakingLinesAreRedacted:
@@ -71,8 +73,8 @@ class TestItLeavesTheRestOfTheLogAlone:
 
 
 class TestInstallation:
-    def test_it_filters_records_that_reach_the_handler(self):
-        """End to end: a child logger's record, through the root handler."""
+    def test_it_restricts_records_that_reach_the_handler(self):
+        """Public text is withheld, while the original record stays private."""
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)
         root = logging.getLogger()
@@ -82,19 +84,140 @@ class TestInstallation:
             logging.getLogger("tarzan.data.enricher").warning(
                 "Total portfolio value: %.2f EUR", 123456.78)  # synthetic
             assert "123456" not in stream.getvalue(), stream.getvalue()
-            assert "<amount>" in stream.getvalue()
+            assert "PRIVATE_DIAGNOSTIC" in stream.getvalue()
         finally:
             root.removeHandler(handler)
+            install(enabled=False)
             for h in root.handlers:
                 h.filters = [f for f in h.filters
                              if not isinstance(f, RedactingFilter)]
 
     def test_off_locally_on_under_ci(self, monkeypatch):
         """Local runs keep their full detail; CI is the public one."""
-        monkeypatch.delenv("CI", raising=False)
+        for key in ("CI", "GITHUB_ACTIONS", "TARZAN_RESTRICTED_CONSOLE"):
+            monkeypatch.delenv(key, raising=False)
         assert install() is None
         monkeypatch.setenv("CI", "true")
         f = install()
-        assert isinstance(f, RedactingFilter)
+        assert isinstance(f, RestrictedConsoleFormatter)
+        install(enabled=False)
         for h in logging.getLogger().handlers:
             h.filters = [x for x in h.filters if x is not f]
+
+
+def test_public_formatter_never_formats_private_arguments_and_preserves_original_record():
+    class PrivateArgument:
+        def __str__(self):
+            raise AssertionError("public formatter touched private argument")
+
+    argument = PrivateArgument()
+    record = logging.LogRecord(
+        "tarzan.data.owner@example.invalid", logging.ERROR, "/private/path", 1,
+        "quantity=%s", (argument,), (ValueError, ValueError("private-secret"), None),
+    )
+    record.stack_info = "private-ledger owner@example.invalid"
+    before = dict(record.__dict__)
+    assert RestrictedConsoleFormatter().format(record) == "[ERROR] market-data: PRIVATE_DIAGNOSTIC"
+    assert record.__dict__ == before
+
+
+@pytest.mark.parametrize("name", ["root", "yfinance", "vendor.private-account", "tarzan.delivery.private"])
+def test_public_console_withholds_bare_symbols_quantities_percentages_addresses_and_tracebacks(name):
+    stream = io.StringIO()
+    console = logging.StreamHandler(stream)
+    private_records = []
+
+    class PrivateCapture(logging.Handler):
+        _tarzan_private_capture = True
+
+        def emit(self, record):
+            private_records.append(record)
+
+    logger = logging.getLogger(name)
+    original_handlers, original_propagate, original_level = logger.handlers[:], logger.propagate, logger.level
+    capture = PrivateCapture()
+    logger.handlers, logger.propagate, logger.level = [console, capture], False, logging.DEBUG
+    try:
+        install(enabled=True)
+        try:
+            raise ValueError("secret-token PRIVATE quantity=12345 return=12.34%")
+        except ValueError:
+            logger.exception(
+                "AAPL quantity=%s return=12.34%% owner@example.invalid https://private.invalid/token",
+                12345,
+            )
+        output = stream.getvalue()
+        assert output.startswith("[ERROR]") and "PRIVATE_DIAGNOSTIC" in output
+        for forbidden in ("AAPL", "12345", "12.34", "owner", "private.invalid", "secret", "Traceback"):
+            assert forbidden not in output
+        assert len(private_records) == 1
+        record = private_records[0]
+        assert record.args == (12345,) and "AAPL" in record.getMessage()
+        assert record.exc_info[1].args == ("secret-token PRIVATE quantity=12345 return=12.34%",)
+    finally:
+        install(enabled=False)
+        logger.handlers, logger.propagate, logger.level = original_handlers, original_propagate, original_level
+
+
+def test_restricted_formatter_allows_only_fixed_status_codes_and_is_reversible():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    original = logging.Formatter("%(message)s")
+    handler.setFormatter(original)
+    logger = logging.getLogger("review.private-console")
+    logger.addHandler(handler)
+    try:
+        install(enabled=True)
+        first = handler.formatter
+        install(enabled=True)
+        assert handler.formatter is first
+        record = logging.LogRecord("tarzan.delivery", logging.INFO, "", 1, "private", (), None)
+        record.public_code = "SMTP_ACKNOWLEDGED"
+        assert first.format(record) == "[INFO] delivery: SMTP_ACKNOWLEDGED"
+        record.public_code = "owner@example.invalid"
+        assert first.format(record) == "[INFO] delivery: PRIVATE_DIAGNOSTIC"
+        install(enabled=False)
+        assert handler.formatter is original
+        assert handler.formatter.format(record) == "private"
+    finally:
+        logger.removeHandler(handler)
+        install(enabled=False)
+
+
+def test_entrypoint_exception_keeps_private_traceback_out_of_public_console(monkeypatch, capsys):
+    import importlib.util
+    from pathlib import Path
+    from tarzan.runtime.logging import LOG_CAPTURE
+
+    monkeypatch.setenv("TARZAN_RESTRICTED_CONSOLE", "1")
+    root = logging.getLogger()
+    original_handlers, original_level = root.handlers[:], root.level
+    original_streams = {
+        handler: handler.stream for handler in original_handlers
+        if isinstance(handler, logging.StreamHandler)
+    }
+    path = Path(__file__).resolve().parents[2] / "scripts/send_newsletter.py"
+    spec = importlib.util.spec_from_file_location("review_private_send_entrypoint", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def unexpected():
+        raise ValueError("owner@example.invalid private-ledger quantity=12345")
+
+    monkeypatch.setattr(module, "run_and_send", unexpected)
+    try:
+        assert module.main() == 1
+        output = capsys.readouterr()
+        assert "NEWSLETTER_ENTRYPOINT_FAILED" in output.out
+        assert "private-ledger" not in output.out + output.err
+        assert "12345" not in output.out + output.err
+        assert "Traceback" not in output.out + output.err
+        assert any("private-ledger" in record["message"] for record in LOG_CAPTURE.records)
+    finally:
+        install(enabled=False)
+        for handler in root.handlers[:]:
+            if handler not in original_handlers:
+                root.removeHandler(handler)
+        for handler, stream in original_streams.items():
+            handler.stream = stream
+        root.setLevel(original_level)

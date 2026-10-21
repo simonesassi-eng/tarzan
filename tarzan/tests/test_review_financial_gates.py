@@ -161,7 +161,7 @@ def test_optional_absent_fee_is_zero_without_a_spurious_skip_warning(caplog):
         b"date,type,isin,quantity,gross_eur,net_eur\n2025-01-02,buy,US0000000001,10,100,-100\n",
     )
     assert loader.load_orders(source, strict=True)[0].fees_eur == 0.0
-    assert "invalid fees_eur" not in caplog.text
+    assert all("invalid fees_eur" not in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("content", [

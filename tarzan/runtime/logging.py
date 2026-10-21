@@ -26,6 +26,7 @@ def bind_capture_to_session(session):
 class RecordCaptureHandler(logging.Handler):
     def __init__(self):
         super().__init__(logging.DEBUG)
+        self._tarzan_private_capture = True
         self._fmt = logging.Formatter(datefmt="%H:%M:%S")
 
     @property
@@ -37,11 +38,16 @@ class RecordCaptureHandler(logging.Handler):
         try:
             session = current_session()
             records = session.log_records if session is not None else _bootstrap()
+            message = record.getMessage()
+            if record.exc_info:
+                message += "\n" + self._fmt.formatException(record.exc_info)
+            if record.stack_info:
+                message += "\n" + record.stack_info
             records.append({
                 "level": record.levelname,
                 "time": self._fmt.formatTime(record, "%H:%M:%S"),
                 "origin": record.name,
-                "message": record.getMessage(),
+                "message": message,
             })
         except Exception:
             pass
@@ -67,3 +73,5 @@ def setup_logging():
     console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
     if LOG_CAPTURE not in root.handlers:
         root.addHandler(LOG_CAPTURE)
+    from tarzan import log_redaction
+    log_redaction.install()

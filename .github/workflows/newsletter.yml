@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       trigger_label:
-        description: "Label for this run (shown in the email subject)"
+        description: "Short single-line operational label (not appended to subject)"
         default: "manual"
         required: false
   repository_dispatch:
@@ -20,6 +20,7 @@ on:
 
 concurrency:
   group: tarzan-newsletter
+  queue: max              # Native bounded queue: at most 100 pending runs.
   cancel-in-progress: false
 
 jobs:
@@ -28,30 +29,10 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-      actions: read      # the issue reads its own commit's Checks result
+      actions: read      # native run-created time and the optional Checks notice
     steps:
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Resolve trigger label
-        id: trigger
-        env:
-          GH_EVENT: ${{ github.event_name }}
-          MANUAL_LABEL: ${{ github.event.inputs.trigger_label }}
-          REPO_DISPATCH_LABEL: ${{ github.event.client_payload.label }}
-          REPO_DISPATCH_EVENT_ID: ${{ github.event.client_payload.event_id }}
-          GH_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          if [[ "$GH_EVENT" == "repository_dispatch" ]]; then
-            LABEL="${REPO_DISPATCH_LABEL:-on-demand}"
-            EVENT_ID="${REPO_DISPATCH_EVENT_ID:-workflow:$GH_RUN_ID}"
-          else
-            LABEL="${MANUAL_LABEL:-manual}"
-            EVENT_ID="workflow:$GH_RUN_ID"
-          fi
-          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
-          echo "event_id=$EVENT_ID" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -59,6 +40,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.txt
+
+      - name: Resolve native event context
+        id: trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/resolve_newsletter_event.py
 
       - name: Install immutable dependencies
         # --retries/--timeout, because a lost download costs a whole issue. Measured
@@ -74,21 +61,22 @@ jobs:
       - name: Check installed dependency consistency
         run: python -m pip check
 
-      - name: Compute cache date
-        id: cachedate
-        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
       # A speed optimisation, never a precondition: the run refetches whatever
       # the cache does not hand back, so a cache service outage or a future
       # incompatible action release must not cost a digest.
-      - name: Restore market-data cache
+      - name: Restore public macro snapshot
+        id: public_cache
         continue-on-error: true
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/tarzan
-          key: tarzan-market-cache-${{ steps.cachedate.outputs.date }}
+          path: ~/.cache/tarzan-public/snapshot.json
+          key: tarzan-public-macro-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            tarzan-market-cache-
+            tarzan-public-macro-v1-${{ runner.os }}-
+
+      - name: Validate and import public macro snapshot
+        continue-on-error: true
+        run: python -m tarzan.data.public_cache import
 
       # Publication credentials are scoped only to the step that consumes
       # them. Validation, checkout, setup, installation, and cache restore see
@@ -106,8 +94,25 @@ jobs:
           SUBJECT_PREFIX: "Portfolio Digest"
           ISSUE_NUMBER: ${{ github.run_number }}
           TARZAN_STABLE_EVENT_ID: ${{ steps.trigger.outputs.event_id }}
+          TARZAN_REQUESTED_AT: ${{ steps.trigger.outputs.requested_at }}
+          TARZAN_WORKFLOW_CREATED_AT: ${{ steps.trigger.outputs.run_created_at }}
+          TARZAN_RESTRICTED_CONSOLE: "1"
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
           DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
           DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/send_newsletter.py
+
+      - name: Project public macro snapshot
+        id: cache_export
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: python -m tarzan.data.public_cache export
+
+      - name: Save verified public macro snapshot
+        if: always() && !cancelled() && steps.cache_export.outcome == 'success' && steps.cache_export.outputs.nonempty == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tarzan-public/snapshot.json
+          key: tarzan-public-macro-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

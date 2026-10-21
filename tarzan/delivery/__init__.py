@@ -198,7 +198,10 @@ def send_email(
         if before_invoke is not None:
             before_invoke()
         smtp.send_message(msg)
-    logger.info("Sent newsletter to %s with subject: %s", recipient, subject)
+    logger.info(
+        "Sent newsletter to %s with subject: %s", recipient, subject,
+        extra={"public_code": "SMTP_ACKNOWLEDGED"},
+    )
 
 
 class ResolvedInputSet(dict):
@@ -528,11 +531,61 @@ def run_and_send() -> int:
         return _run_and_send_owned(input_owner)
 
 
+def _delivery_now_utc():
+    """Operational age is wall-clock based, never the portfolio analysis date."""
+    from datetime import timezone
+    return datetime.now(timezone.utc)
+
+
+def _freshness_assessment():
+    from tarzan.contracts.events import assess_freshness
+    return assess_freshness(
+        _env("TARZAN_REQUESTED_AT"), _env("TARZAN_WORKFLOW_CREATED_AT"),
+        now=_delivery_now_utc(), automated=_env("GITHUB_ACTIONS").lower() == "true",
+    )
+
+
+class DeliveryFreshnessExpired(RuntimeError):
+    def __init__(self, assessment):
+        self.assessment = assessment
+        super().__init__("delivery request is outside its authorized freshness window")
+
+
+def _skip_aged_delivery(assessment, *, result=None, writer=None, html=None):
+    from tarzan.runtime.ledger import LedgerEntryType, RunLedger
+    from tarzan.runtime.session import (
+        RunAttemptEnvelope, RunResult, canonical_analysis_id, record_last_run_result,
+    )
+    if result is None:
+        envelope = RunAttemptEnvelope.create("delivery-freshness")
+        result = RunResult(
+            None, None, envelope.attempt_id,
+            canonical_analysis_id({"delivery_state": assessment.state.value, "reason": assessment.reason}),
+            RunLedger(envelope.attempt_id),
+        )
+        record_last_run_result(result)
+    result.ledger.append(LedgerEntryType.DELIVERY, {
+        "state": assessment.state.value, "reason": assessment.reason,
+        "age_seconds": assessment.age_seconds, "smtp_invoked": False,
+    })
+    if writer is not None:
+        _write_delivery_artifacts(writer, result, html, assessment.state.value)
+    logger.warning(
+        "Delivery suppressed by operational freshness: %s", assessment.reason,
+        extra={"public_code": assessment.state.value},
+    )
+    return 0 if assessment.state.value == "SKIPPED_STALE" else 1
+
+
 def _run_and_send_owned(input_owner) -> int:
     from tarzan.runtime.artifacts import LocalArtifactWriter, StorageDescriptor
     from tarzan.runtime.ledger import LedgerEntryType
     from tarzan.runtime.publication import PublicationDecision, PublicationEvaluator
     from tarzan.runtime.session import last_run_result
+
+    initial_freshness = _freshness_assessment()
+    if not initial_freshness.eligible:
+        return _skip_aged_delivery(initial_freshness)
 
     smtp_user = _env("SMTP_USER", required=True)
     smtp_pass = _env("SMTP_PASS", required=True)
@@ -626,7 +679,10 @@ def _publish_and_deliver(
     if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
         html = _failure_notification_html(result)
         subject = f"{subject_prefix} - Analysis failure"
-        logger.critical("Normal newsletter blocked; preparing failure notification.")
+        logger.critical(
+            "Normal newsletter blocked; preparing failure notification.",
+            extra={"public_code": "PUBLICATION_BLOCKED"},
+        )
     else:
         from tarzan.export.ai_summary import is_enabled as _ai_on
         logger.info(
@@ -634,7 +690,8 @@ def _publish_and_deliver(
             "enabled (market-context block resolved at render)"
             if _ai_on() else "disabled (no GEMINI_API_KEY / pinned mode)",
         )
-        _seed_manual_proxies()
+        # Manual/licensed sources are an explicit local backtest workflow, not
+        # a newsletter input and never a public Actions cache dependency.
         # No candidate-portfolio backtest here: the newsletter no longer carries
         # that section, and it was the most expensive computation in the send
         # path. The What-If workbook still builds it, from the CLI run.
@@ -670,15 +727,14 @@ def _publish_and_deliver(
                 ),
                 publication_impact="BLOCK_NORMAL_AND_DO_NOT_SEND",
             )
-            # The violations themselves, not just their count. A bare count
-            # cannot be diagnosed from a CI log — the run is the only place
-            # the live book is ever rendered, so an unprinted violation costs
-            # a whole guess-and-redeploy cycle.
+            # Full violations remain in the owned private ledger/report.
+            # Public console output exposes only the fixed failure code.
             logger.critical(
                 "Newsletter semantic gate failed with %d violation(s); claim and "
                 "SMTP are blocked:\n%s",
                 len(semantic_errors),
                 "\n".join(f"  [{i}] {e}" for i, e in enumerate(semantic_errors, 1)),
+                extra={"public_code": "SEMANTIC_VALIDATION_FAILED"},
             )
         subject = build_subject(metrics, subject_prefix, trigger_label)
         html = _with_ci_notice(html, _failed_checks_sha())
@@ -728,8 +784,14 @@ def _publish_and_deliver(
             "smtp_invoked": False,
         })
         _write_delivery_artifacts(writer, result, html, "DRY_RUN")
-        logger.warning("DRY_RUN=1 — skipping claim and SMTP send.")
+        logger.warning("DRY_RUN=1 — skipping claim and SMTP send.", extra={"public_code": "DRY_RUN"})
         return 0
+
+    before_claim_freshness = _freshness_assessment()
+    if not before_claim_freshness.eligible:
+        return _skip_aged_delivery(
+            before_claim_freshness, result=result, writer=writer, html=html,
+        )
 
     stable_event_id = _env("TARZAN_STABLE_EVENT_ID")
     if not stable_event_id:
@@ -764,13 +826,13 @@ def _publish_and_deliver(
             "purpose": intent.purpose.value,
             "smtp_invoked": False,
         })
-        # The message is the only diagnosable channel on an ephemeral runner:
-        # local artifacts are not retained. Every raise site in claims.py
-        # carries a fixed string plus an HTTP/error code — never a credential.
+        # Details stay in private run evidence. The public console projects
+        # only a fixed failure code, even if a transport error contains context.
         logger.critical(
             "Delivery claim storage unavailable (%s: %s); SMTP is blocked.",
             type(error).__name__,
             error,
+            extra={"public_code": "CLAIM_STORE_UNAVAILABLE"},
         )
         _write_delivery_artifacts(writer, result, html, "CLAIM_STORE_UNAVAILABLE")
         return 1
@@ -815,6 +877,7 @@ def _publish_and_deliver(
             "Delivery %s already claimed in state %s; suppressing duplicate SMTP.",
             intent.logical_id,
             claim.state.value,
+            extra={"public_code": "SUPPRESSED_DUPLICATE"},
         )
         return 0
     if claim.duplicate:
@@ -858,18 +921,31 @@ def _publish_and_deliver(
             analytical_impact="local checkpoint is incomplete; SMTP was not invoked",
             publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
         )
-        logger.critical("Pre-delivery local checkpoint failed; SMTP is blocked.")
+        logger.critical(
+            "Pre-delivery local checkpoint failed; SMTP is blocked.",
+            extra={"public_code": "PRE_DELIVERY_CHECKPOINT_FAILED"},
+        )
         return 1
 
     invocation_started = False
+    claim_consumed = False
 
     def mark_invocation_started() -> None:
-        nonlocal invocation_started
+        nonlocal invocation_started, claim_consumed
+        latest_freshness = _freshness_assessment()
+        if not latest_freshness.eligible:
+            raise DeliveryFreshnessExpired(latest_freshness)
         store.transition(
             intent.logical_id,
             (DeliveryState.CLAIMED,),
             DeliveryState.SMTP_INVOCATION_STARTED,
         )
+        claim_consumed = True
+        # A slow remote CAS is itself part of the request's elapsed age.
+        # The reservation may be durable, but SMTP is not yet authorized.
+        after_cas_freshness = _freshness_assessment()
+        if not after_cas_freshness.eligible:
+            raise DeliveryFreshnessExpired(after_cas_freshness)
         invocation_started = True
         result.ledger.append(LedgerEntryType.DELIVERY, {
             "state": DeliveryState.SMTP_INVOCATION_STARTED.value,
@@ -878,6 +954,9 @@ def _publish_and_deliver(
         })
 
     try:
+        before_connect_freshness = _freshness_assessment()
+        if not before_connect_freshness.eligible:
+            raise DeliveryFreshnessExpired(before_connect_freshness)
         send_email(
             html=html,
             subject=subject,
@@ -888,10 +967,33 @@ def _publish_and_deliver(
             smtp_pass=smtp_pass,
             before_invoke=mark_invocation_started,
         )
-        # Test/future transports may not expose the callback seam. Marking here
-        # is safe only after such a transport has returned definitively.
+        # Compatibility for injected test transports. The production SMTP
+        # adapter always invokes the callback immediately before send_message.
         if not invocation_started:
             mark_invocation_started()
+    except DeliveryFreshnessExpired as expired:
+        if claim_consumed:
+            # The original state machine has no "unused reservation" edge.
+            # Conservatively consume it without claiming SMTP was invoked.
+            # Failure to confirm reconciliation never authorizes a resend.
+            confirmed = False
+            try:
+                store.transition(
+                    intent.logical_id, (DeliveryState.SMTP_INVOCATION_STARTED,),
+                    DeliveryState.UNCERTAIN,
+                )
+                confirmed = True
+            except Exception as error:
+                logger.warning("Expired delivery reservation could not be reconciled: %s", type(error).__name__)
+            result.ledger.append(LedgerEntryType.DELIVERY, {
+                "state": DeliveryState.UNCERTAIN.value,
+                "logical_id": intent.logical_id, "smtp_invoked": False,
+                "reason": "FRESHNESS_EXPIRED_AFTER_CAS",
+                "automatic_retry": False, "durable_state_confirmed": confirmed,
+            })
+        return _skip_aged_delivery(
+            expired.assessment, result=result, writer=writer, html=html,
+        )
     except DeliveryTransitionConflict:
         if invocation_started:
             raise
@@ -901,7 +1003,10 @@ def _publish_and_deliver(
             "smtp_invoked": False,
         })
         _write_delivery_artifacts(writer, result, html, "SUPPRESSED_CONCURRENT")
-        logger.warning("A competing caller consumed the claim; SMTP is suppressed.")
+        logger.warning(
+            "A competing caller consumed the claim; SMTP is suppressed.",
+            extra={"public_code": "SUPPRESSED_CONCURRENT"},
+        )
         return 0
     except Exception as error:  # noqa: BLE001
         target = (
@@ -941,7 +1046,10 @@ def _publish_and_deliver(
                 "durable_state_confirmed": durable_state_confirmed,
             })
             _write_delivery_artifacts(writer, result, html, target.value)
-        logger.error("SMTP delivery ended in %s (%s).", target.value, type(error).__name__)
+        logger.error(
+            "SMTP delivery ended in %s (%s).", target.value, type(error).__name__,
+            extra={"public_code": target.value},
+        )
         return 1
 
     try:
@@ -980,7 +1088,10 @@ def _publish_and_deliver(
             "durable_state_confirmed": durable_state_confirmed,
         })
         _write_delivery_artifacts(writer, result, html, DeliveryState.UNCERTAIN.value)
-        logger.error("SMTP succeeded but acknowledgment persistence failed; no automatic resend.")
+        logger.error(
+            "SMTP succeeded but acknowledgment persistence failed; no automatic resend.",
+            extra={"public_code": "DELIVERY_ACK_PERSISTENCE_FAILED"},
+        )
         return 1
     result.ledger.append(LedgerEntryType.DELIVERY, {
         "state": DeliveryState.ACKNOWLEDGED_SUCCESS.value,

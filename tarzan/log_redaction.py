@@ -1,36 +1,9 @@
-"""Keep the book out of a PUBLIC run's log.
+"""Public console output is a fixed status projection, not financial prose.
 
-This repo is public, and a GitHub Actions run's log is public with it — no
-login, no fork, no clone needed. Nothing is committed, so git is not the
-channel and rewriting history does not touch this: the runner captures the
-process's stdout/stderr and GitHub serves the page.
-
-Before this filter, one successful send published the portfolio total twice
-(``tarzan.data.enricher`` at the end of enrichment, ``tarzan.orchestrator``
-after metrics) plus every ISIN and venue-suffixed symbol it resolved. At
-roughly nine sends a day against a 90-day retention that is a daily
-net-worth time series, attached to the author's name.
-
-Installed on the root HANDLER, not at the call sites, because the leak is not
-one line's fault. Any future log line publishes whatever it formats, and so
-does any vendor's own logger — ``yfinance`` writes the failing symbol to its
-own. A filter at the handler covers the lines that exist and the ones nobody
-has written yet. (A logger-level filter would not: filters on a logger run
-only for records logged directly to it, never for records propagated up from
-children.)
-
-Amounts and ISINs are dropped outright. Symbols become a per-run pseudonym so
-a failure stays followable across the lines that discuss it — "fallback
-exhausted for SYM#a3f2, tried SYM#b1c8" still reads as a story — without
-naming the holding. The salt is random per process, because a bare hash of a
-ticker is not privacy: the universe of European ETF tickers is small enough to
-enumerate in seconds. Random-per-run also means two runs' tokens cannot be
-linked into a position history.
-
-ponytail: message text only. ``exc_info`` tracebacks are formatted by the
-handler after this filter runs, so a repr of a holding inside a traceback
-would still print. Nothing logs one today; if that changes, redact in a
-Formatter instead of a Filter.
+The legacy text redactor remains for explicitly requested local use. Automation
+uses a formatter that never formats the message, arguments or traceback. Bare
+symbols, quantities, percentages, paths, provider bodies and addresses therefore
+cannot evade a regex. Original records remain intact for owned private reports.
 """
 
 from __future__ import annotations
@@ -90,21 +63,72 @@ class RedactingFilter(logging.Filter):
         return True
 
 
-def install(*, enabled: bool | None = None) -> RedactingFilter | None:
-    """Attach the filter to every root handler. On by default under ``$CI``.
+_PUBLIC_CODES = frozenset({
+    "SMTP_ACKNOWLEDGED", "SKIPPED_STALE", "BLOCKED_INVALID_REQUEST",
+    "NEWSLETTER_ENTRYPOINT_FAILED", "SEMANTIC_VALIDATION_FAILED",
+    "CLAIM_STORE_UNAVAILABLE", "DELIVERY_INTENT_CONFLICT",
+    "SUPPRESSED_CONCURRENT", "SUPPRESSED_DUPLICATE", "DRY_RUN",
+    "PUBLICATION_BLOCKED", "PRE_DELIVERY_CHECKPOINT_FAILED",
+    "UNCERTAIN", "DEFINITE_PRE_SEND_FAILURE", "DELIVERY_ACK_PERSISTENCE_FAILED",
+    "ANALYSIS_STARTED", "ANALYSIS_COMPLETE",
+    "PROVIDER_BUDGET_EXHAUSTED", "PROVIDER_RETRY_BUDGET_EXHAUSTED",
+})
 
-    Call AFTER ``basicConfig``/``setup_logging``: the filter goes on the
-    handlers that exist, so a handler added later is not covered.
 
-    """
+class RestrictedConsoleFormatter(logging.Formatter):
+    def __init__(self, original=None):
+        super().__init__()
+        self.original = original
+
+    def format(self, record):
+        level = record.levelname if isinstance(record.levelname, str) and record.levelname in {
+            "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL",
+        } else "LOG"
+        name = record.name if isinstance(record.name, str) else ""
+        if name.startswith("tarzan.delivery") or name == "tarzan.newsletter":
+            stage = "delivery"
+        elif name.startswith("tarzan.data.") or name == "yfinance":
+            stage = "market-data"
+        elif name.startswith("tarzan.engine."):
+            stage = "metrics"
+        elif name.startswith("tarzan.export."):
+            stage = "render"
+        elif name == "tarzan.orchestrator":
+            stage = "analysis"
+        else:
+            stage = "application"
+        code = getattr(record, "public_code", None)
+        code = code if isinstance(code, str) and code in _PUBLIC_CODES else "PRIVATE_DIAGNOSTIC"
+        return f"[{level}] {stage}: {code}"
+
+
+def install(*, enabled: bool | None = None) -> RestrictedConsoleFormatter | None:
+    """Restrict existing console handlers; never mutate private capture records."""
     if enabled is None:
-        enabled = bool(os.environ.get("CI"))
-    if not enabled:
-        return None
-    f = RedactingFilter()
+        enabled = any(os.environ.get(key, "").lower() in {"1", "true", "yes"} for key in (
+            "CI", "GITHUB_ACTIONS", "TARZAN_RESTRICTED_CONSOLE",
+        ))
     root = logging.getLogger()
-    for handler in root.handlers:
-        handler.addFilter(f)
-    if not root.handlers:  # nothing configured yet — cover the fallback path
-        logging.lastResort.addFilter(f)
-    return f
+    handlers = list(root.handlers)
+    for value in root.manager.loggerDict.values():
+        if isinstance(value, logging.Logger):
+            handlers.extend(value.handlers)
+    if logging.lastResort is not None:
+        handlers.append(logging.lastResort)
+    selected = None
+    for handler in dict.fromkeys(handlers):
+        if getattr(handler, "_tarzan_private_capture", False):
+            continue
+        if not isinstance(handler, logging.StreamHandler) or isinstance(handler, logging.FileHandler):
+            continue
+        # Remove only this module's obsolete in-place filter.
+        handler.filters = [item for item in handler.filters if type(item) is not RedactingFilter]
+        existing = handler.formatter
+        if enabled:
+            selected = existing if isinstance(existing, RestrictedConsoleFormatter) else RestrictedConsoleFormatter(existing)
+            handler.setFormatter(selected)
+        elif isinstance(existing, RestrictedConsoleFormatter):
+            handler.setFormatter(existing.original)
+    if enabled:
+        logging.captureWarnings(True)
+    return selected if enabled else None

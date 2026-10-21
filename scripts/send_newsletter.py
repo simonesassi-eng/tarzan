@@ -23,16 +23,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tarzan import log_redaction  # noqa: E402
 from tarzan.delivery import run_and_send  # noqa: E402
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from tarzan.runtime.logging import setup_logging  # noqa: E402
 
-# After basicConfig, so the handler it just created is the one that gets the
-# filter. This repo is public and so is every Actions run's log: under $CI the
-# amounts, ISINs and tickers come out of the records before they are printed.
+setup_logging()
 log_redaction.install()
 
 
+def main():
+    try:
+        return run_and_send()
+    except Exception:
+        logging.getLogger("tarzan.delivery").exception(
+            "Newsletter entry point failed.",
+            extra={"public_code": "NEWSLETTER_ENTRYPOINT_FAILED"},
+        )
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(run_and_send())
+    sys.exit(main())

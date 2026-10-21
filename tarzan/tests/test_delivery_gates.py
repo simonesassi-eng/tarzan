@@ -78,23 +78,24 @@ class TestOnlyDeliveryReasonsCanStopADelivery:
         assert not (_ROOT / "tarzan/release_manifest.json").exists()
         assert not (_ROOT / "scripts/validate_release.py").exists()
 
-    def test_the_delivery_gate_reads_no_clock(self):
-        """Every step the gate runs, in order, and none of them consults a date.
+    def test_only_operational_event_freshness_and_dependency_consistency_gate_delivery(self):
+        """No declaration/dependency-expiry calendar can withhold an issue.
 
-        The gate is two commands after the install. Pinning the job's whole list is
-        what keeps a future "check the pins are fresh" step from being added back to
-        the one job whose failure costs a digest. (The cache date only names a key.)
+        Native event age is intentionally a delivery condition: an obsolete queued
+        request must not authorize SMTP. It is not an expiring dependency manifest.
+        Cache import/export are explicitly best-effort and carry no personal data.
         """
         workflow = _text(".github/workflows/newsletter.yml")
         commands = re.findall(r"(?m)^        run:\s*(.+?)\s*$", workflow)
 
         assert commands == [
-            "|",                                  # resolve the trigger label
+            "python scripts/resolve_newsletter_event.py",
             "python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt",
             "python -m compileall -q tarzan scripts",
             "python -m pip check",
-            'echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"',
+            "python -m tarzan.data.public_cache import",
             "python scripts/send_newsletter.py",
+            "python -m tarzan.data.public_cache export",
         ], commands
 
 

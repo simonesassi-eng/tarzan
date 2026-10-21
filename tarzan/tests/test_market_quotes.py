@@ -305,9 +305,8 @@ def test_resolve_intraday_logs_reason_when_all_candidates_exhausted(monkeypatch,
     # Mirrors what CL2 likely hit tonight: a stale Milan primary, and every
     # EUR-venue sibling either has no data or prices too far from the
     # canonical close to trust (ticker-root collision on another exchange).
-    # Previously these reasons were only logged at DEBUG, invisible in the
-    # INFO-level CI log — silent, correct rejection looked identical to a
-    # broken fallback. All three reasons should now surface at INFO.
+    # All three reasons remain captured at INFO in the private diagnostic
+    # record. Public CI formatting deliberately withholds instrument names.
     stale_primary = _intra([94.0, 94.05], day="2026-07-08", start="09:00")
     mismatched_sibling = _intra([250.0, 251.0], day="2026-07-10", start="14:55")
 
@@ -328,7 +327,7 @@ def test_resolve_intraday_logs_reason_when_all_candidates_exhausted(monkeypatch,
     with caplog.at_level("INFO", logger="tarzan.data.market_quotes"):
         resolved = mq._resolve_intraday(["NTSG.MI"])
     assert resolved == {}
-    text = caplog.text
+    text = "\n".join(record.getMessage() for record in caplog.records)
     assert "stale" in text and "NTSG.MI" in text
     assert "NTSG.MI→NTSG.PA rejected" in text
     assert "exhausted for NTSG.MI" in text

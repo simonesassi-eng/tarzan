@@ -17,7 +17,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
 | R17 | Authenticated Update messages | Implemented locally; native Gmail owner/message-level SENT verification, unquoted commands and bounded per-message idempotency; Gmail API service/authorization needed on deployment |
-| R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
+| R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Implemented locally; fixed macro projection only, unique per-run snapshots, native bounded queue and repeated age checks before SMTP |
 | R26 | Domain/report boundaries and shared identity catalog | Implemented; shared target identity catalog, defensive ReportView/RunRenderContext and immutable prepared display references; real section builders/semantic gate do not consult later global taxonomy |
 | R27 | Consistent installation/docs | Pending |
 
@@ -161,3 +161,33 @@ Fake-clock and native-port tests cover changed timeout/retry settings, operation
 and run exhaustion, pacing, cancellation, HTTP status classification, SDK retry
 nonmultiplication and non-Yahoo adapters. Independent gate tests cover coverage,
 fallback acceptance, separate publication thresholds and unavailable summaries.
+
+Public Actions caching no longer archives the private runtime directory.
+`public_cache` exports one schema/checksum-validated file containing only the
+fixed Markets-strip Yahoo universe and numeric price columns. It strips all
+table attributes/names and excludes holdings, identity profiles and manual or
+licensed sources. Only that explicit file is restored/saved. A checksum detects
+corruption, not authenticity of market observations. An export failure cannot
+authorize a save; caching remains best-effort. Per-run/attempt keys accumulate
+later snapshots instead of reusing an immutable daily exact hit.
+
+Newsletter delivery no longer seeds optional manual proxies. Explicit local
+manual-series ingestion remains available. The workflow uses the platform's
+`queue: max` (bounded to 100 pending runs), not an unbounded/durable delivery SLA.
+Closed event outputs come from native authorized run metadata; arbitrary context
+is hashed, and newline/type injection is rejected. The oldest request/native-run
+timestamp controls an explicit 45-minute delivery window, separate from the
+portfolio's analysis clock. Invalid automated metadata blocks delivery.
+
+Age is checked before input work, after rendering, before connecting, and before
+and after the remote CAS immediately preceding `send_message`. Expired requests
+skip SMTP. Late expiry retains owned artifacts; a reservation already consumed
+by CAS is conservatively reconciled to the existing UNCERTAIN state without
+claiming SMTP was invoked or authorizing an automatic resend. This does not
+guarantee receipt, recover dropped/capacity-exceeded events or erase old logs.
+
+Automation logging projects only fixed stage/status codes. Console formatters
+never format financial messages, arguments, addresses or tracebacks; original
+records remain intact for private run capture. Entry-point failures and corrupt
+cache-reader diagnostics are covered too. Local logging retains detail. Older
+public run logs were not deleted and cannot be made confidential retroactively.

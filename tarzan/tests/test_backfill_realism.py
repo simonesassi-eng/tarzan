@@ -40,7 +40,7 @@ def test_too_smooth_backfill_warns_and_records(caplog):
         _check_backfill_realism("XSMOOTH", spliced, real)
     rec = BACKFILL_REALISM["XSMOOTH"]
     assert rec["ratio"] < _REALISM_BAND[0]
-    assert any("too SMOOTH" in r.message for r in caplog.records), caplog.text
+    assert any("too SMOOTH" in r.getMessage() for r in caplog.records), caplog.text
     # The annualised numbers are what a reader acts on, so they must be right.
     assert abs(rec["vol_synth_pct"] - 0.004 * (252 ** 0.5) * 100) < 1.5
     assert abs(rec["vol_real_pct"] - 0.010 * (252 ** 0.5) * 100) < 1.5
