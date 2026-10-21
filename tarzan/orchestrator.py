@@ -576,6 +576,8 @@ def _run_once(
 
     # Compute
     logger.info("Computing metrics...")
+    from tarzan.contracts.reference import ReportReference
+    report_reference = ReportReference.prepare()
     engine = MetricsEngine(
         holdings,
         config,
@@ -588,6 +590,7 @@ def _run_once(
     engine.target_plan = targets_by_isin
     engine.valuation_assessment = valuation
     metrics = engine.compute_all()
+    metrics.report_reference = report_reference
     from tarzan.data.market_quotes import fetch_market_quotes
     metrics.market_quotes = tuple(fetch_market_quotes())
     session.memo["workload"] = {
@@ -786,11 +789,12 @@ def _record_terminal_result(
 
     report_view = None
     if metrics is not None:
-        from tarzan.export.newsletter import _benchmark_names
+        from tarzan.contracts.reference import reference_for
 
-        alpha_beta, geography = _benchmark_names(None, None)
+        reference = reference_for(metrics)
         report_view = ReportView.build(
-            metrics, config, benchmark_alpha_beta=alpha_beta, benchmark_geo=geography,
+            metrics, config, benchmark_alpha_beta=reference.benchmark_alpha_beta,
+            benchmark_geo=reference.benchmark_geo,
         )
     evidence = _analysis_evidence(session, metrics)
     # Per-holding policy can derive effective class/geography targets after the

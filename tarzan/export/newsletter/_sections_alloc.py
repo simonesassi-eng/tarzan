@@ -644,7 +644,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # per metric, so the band is the caption and its colour is the figure's.
     from tarzan.export.newsletter._risk_tiles import risk_tiles as _risk_tiles
 
-    state_tiles.extend(_risk_tiles(m, _tile))
+    state_tiles.extend(_risk_tiles(m, _tile, ctx.reference.metric_ratings))
 
     return {
         # Hero big number, rounded to whole euros (e.g. €XXX,XXX): decimals add
@@ -796,7 +796,6 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
     that is both is one row: held wins, exactly as the Watchlist table drops a
     benchmark the portfolio owns.
     """
-    from tarzan import config as _cfg
     from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 
     m = ctx.metrics
@@ -818,7 +817,7 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
             # Curated names carry ampersands ("iShares Core S&P 500", the Return
             # Stacked family); the template does not escape (.html.j2), so the
             # appendix escapes at its own boundary like every other builder.
-            "name": _esc(_cfg.name_for(isin, canonical)
+            "name": _esc(ctx.reference.name_for(isin, canonical)
                          or str(record.get("name") or "")),
             "isin": isin,
             # The listing the daily bars came from; the selected symbol when the
@@ -831,7 +830,7 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
 
     resolved = getattr(m, "benchmark_tickers", {}) or {}
     quotes = getattr(m, "intraday_quotes", {}) or {}
-    for name, requested, isin in _cfg.benchmark_identities():
+    for name, requested, isin in ctx.reference.benchmark_identities:
         hist = str(resolved.get(name) or "")
         known = next((by_identity[k] for k in (isin, normalize_ticker(hist or requested))
                       if k and k in by_identity), None)
@@ -1847,8 +1846,7 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
         return {"summary": [], "table_html": "", "total_count": 0}
 
     # Curated taxonomy for the shared role categorizer (role sub-grouping).
-    from tarzan import config as _cfg
-    _tax = _cfg.instrument_taxonomy()
+    _tax = ctx.reference.taxonomy
 
     # Class totals and counts, keyed by the SAME normaliser as the row lookup
     # below and as the grouping engine that writes the headers. Keyed on the raw
@@ -1905,7 +1903,7 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "_ticker": h.get("ticker", ""),
             "name_html": uni_name(
                 display_instrument_name(h.get("isin"), h.get("ticker"),
-                                        h.get("name", ""), 40),
+                                        h.get("name", ""), 40, names=ctx.reference.names),
                 _display_ticker(h.get("ticker")) or "",
             ),
             "cells": [
@@ -1957,7 +1955,8 @@ def _build_holdings(ctx: _NewsletterContext) -> dict:
             "table_html": table_html,
             "subtitle": subtitle, "total_count": int(len(df))}
 
-def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -> dict:
+def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None,
+                        reference=None) -> dict:
     """Build one optimizer plan's render context (actions + totals) from a
     list of rebalancing suggestions.
 
@@ -1968,6 +1967,9 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
     interrupted -- six header rows above nine trades.
     """
     df = m.holdings_df
+    if reference is None:
+        from tarzan.contracts.reference import reference_for
+        reference = reference_for(m)
     taxonomy = taxonomy or {}
     total_buy = sum(float(s["amount_eur"]) for s in suggestions
                     if s["direction"].lower() == "buy")
@@ -2015,7 +2017,8 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None) -
             # Name cell: action pill + ticker pin + shortened name, via the
             # shared uni_name so it matches every other table.
             "name_html": uni_name(
-                display_instrument_name(isin, ticker, s.get("name", "")), tk,
+                display_instrument_name(
+                    isin, ticker, s.get("name", ""), names=reference.names), tk,
                 pill=_pill(direction)),
             # Trade -> Now -> After -> Target, each abs + %. The trade leads
             # because it is what the table is for, and After sits next to
@@ -2065,8 +2068,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     whenever the serialized-action proof says they are not executable.
     """
     m = ctx.metrics
-    from tarzan import config as _cfg
-    _tax = _cfg.instrument_taxonomy()
+    _tax = ctx.reference.taxonomy
     plans_src = getattr(m, "rebalancing_plans", None)
 
     def _attach_cost(pc: dict, p: dict) -> None:
@@ -2108,7 +2110,8 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     if plans_src:
         plans = []
         for p in plans_src:
-            pc = _optimizer_plan_ctx(m, list(p.get("suggestions") or []), _tax)
+            pc = _optimizer_plan_ctx(
+                m, list(p.get("suggestions") or []), _tax, ctx.reference)
             pc["label"] = p.get("label", "")
             pc["no_sell"] = p.get("no_sell")
             # Which plan the configuration actually runs. Both are computed
@@ -2128,7 +2131,7 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
     suggestions = list(m.rebalancing_suggestions or [])
     if not suggestions:
         return {"available": False}
-    pc = _optimizer_plan_ctx(m, suggestions, _tax)
+    pc = _optimizer_plan_ctx(m, suggestions, _tax, ctx.reference)
     pc["label"] = "Suggested actions"
     pc["no_sell"] = None
     pc["active"] = True

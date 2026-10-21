@@ -1804,8 +1804,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
 
     # Curated taxonomy (asset_class already on df) for the shared grouping
     # engine, so the snapshot groups exactly like every other instrument table.
-    from tarzan import config as cfg
-    _tax = cfg.instrument_taxonomy()
+    _tax = ctx.reference.taxonomy
 
     # Portfolio (highlighted) row. The portfolio has no single ticker, but its
     # holdings trade intraday, so build a value-weighted synthetic intraday
@@ -1857,7 +1856,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             # the abbreviation in _format keeps it to ~2 tight lines. (The Book
             # below still carries the full untruncated name for every holding.)
             "name_html": _perf_name_html(
-                display_instrument_name(isin, ticker, raw_name),
+                display_instrument_name(isin, ticker, raw_name, names=ctx.reference.names),
                 display_tk, [],
                 perf_by_ticker.get(ticker, {}).get("currency")),
             "spark_inner": inner,
@@ -2228,7 +2227,6 @@ def _build_movers(ctx: _NewsletterContext) -> dict:
 def _build_performance(ctx: _NewsletterContext) -> dict:
     """Build the performance section: instruments sectioned by asset class &
     role, with a 1D intraday sparkline and multi-horizon % returns."""
-    from tarzan import config as cfg
     m = ctx.metrics
 
     # Portfolio history span shown in the disclaimer. We use the
@@ -2357,7 +2355,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # Benchmark rows (from holding_performance, type contains 'enchmark').
     # Each row is tagged with its curated (asset_class, role) from the
     # instrument taxonomy so the section can be grouped and ordered.
-    taxonomy = cfg.instrument_taxonomy()
+    taxonomy = ctx.reference.taxonomy
 
     # A taxonomy row can be BOTH held and flagged watchlist=true (a fund we own
     # and keep tracking). Such an instrument already has a row in the returns
@@ -2372,7 +2370,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     held_bench_names = set()
     if m.holdings_df is not None and not m.holdings_df.empty:
         for _, h in m.holdings_df.iterrows():
-            curated = cfg.name_for(h.get("isin"), h.get("ticker"))
+            curated = ctx.reference.name_for(h.get("isin"), h.get("ticker"))
             if curated:
                 held_bench_names.add(curated.strip().lower())
 
@@ -2393,7 +2391,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             target_rows.append({
                 "name": display_instrument_name(
                     r.get("isin"), raw_ticker,
-                    str(r.get("name") or raw_ticker)),
+                    str(r.get("name") or raw_ticker), names=ctx.reference.names),
                 "ticker": _display_ticker(raw_ticker),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
@@ -2428,7 +2426,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     # the charts, the gap tile and the risk table, and printing it here would put
     # an instrument in the watchlist table that the taxonomy says is not on the
     # watchlist. ``watchlist=true`` is what this table lists.
-    watchlisted = cfg.watchlist_names()
+    watchlisted = ctx.reference.watchlist_names
 
     benchmark_rows: list[dict] = []
     if not hp.empty and "type" in hp.columns:
@@ -2457,7 +2455,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 # Display name goes through the SAME shortener as the holding
                 # rows so "iShares Nasdaq 100 UCITS ETF" reads like the rest of
                 # the table (tag-matching above uses the raw name, not this).
-                "name": display_instrument_name(r.get("isin"), raw_ticker, name),
+                "name": display_instrument_name(
+                    r.get("isin"), raw_ticker, name, names=ctx.reference.names),
                 "ticker": _display_ticker(r.get("ticker")),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,

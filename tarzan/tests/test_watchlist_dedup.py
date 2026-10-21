@@ -13,27 +13,21 @@ the row, and the renderer routing it to the right table.
 import pandas as pd
 
 from tarzan.export.newsletter import _sections_perf
+from tarzan.contracts.reference import ReportReference
 
 
 def _fixture(monkeypatch, *, target_rows=()):
     """NTSG is held AND tracked; UEQC is tracked only; AVWC is tracked AND a
     positive per-holding target that is not held. Returns the built section."""
-    from tarzan import config as cfg
-
-    monkeypatch.setattr(
-        cfg, "name_for",
-        lambda isin, ticker: {
-            "IE00077IIPQ8": "WisdomTree Global Efficient Core",
-        }.get(str(isin or "").upper()),
+    # Hermetic prepared facts, not a later global name resolver.
+    reference = ReportReference(
+        names={"IE00077IIPQ8": "WisdomTree Global Efficient Core"},
+        watchlist_names=(
+            "wisdomtree global efficient core",
+            "ubs cmci commodity carry",
+            "avantis global equity",
+        ),
     )
-    monkeypatch.setattr(cfg, "instrument_taxonomy", lambda: {})
-    # Hermetic: the watchlist membership this fixture asserts on comes from here,
-    # not from the repository's own instrument_taxonomy.csv.
-    monkeypatch.setattr(cfg, "watchlist_names", lambda: frozenset({
-        "wisdomtree global efficient core",
-        "ubs cmci commodity carry",
-        "avantis global equity",
-    }))
 
     holdings_df = pd.DataFrame([{
         "isin": "IE00077IIPQ8", "ticker": "NTSG.MI", "name": "WS GL EFF C",
@@ -74,6 +68,7 @@ def _fixture(monkeypatch, *, target_rows=()):
 
     ctx = _Ctx()
     ctx.metrics = m
+    ctx.reference = reference
     return _sections_perf._build_performance(ctx)
 
 
@@ -263,13 +258,6 @@ def test_a_reference_role_is_fetched_even_when_it_is_not_watchlisted(monkeypatch
 
 def test_a_reference_only_row_is_not_printed_in_the_watchlist(monkeypatch):
     """The renderer end of the same contract."""
-    from tarzan import config as cfg
-
-    monkeypatch.setattr(cfg, "name_for", lambda isin, ticker: None)
-    monkeypatch.setattr(cfg, "instrument_taxonomy", lambda: {})
-    monkeypatch.setattr(cfg, "watchlist_names",
-                        lambda: frozenset({"tracked fund"}))
-
     class _M:
         holdings_df = pd.DataFrame()
         holding_performance = pd.DataFrame([
@@ -288,6 +276,7 @@ def test_a_reference_only_row_is_not_printed_in_the_watchlist(monkeypatch):
 
     class _Ctx:
         metrics = _M()
+        reference = ReportReference(watchlist_names=("tracked fund",))
         benchmark_alpha_beta = "Reference Only"
         benchmark_geo = "Reference Only"
         performance_intraday_map: dict = {}

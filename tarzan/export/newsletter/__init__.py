@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 
 def _benchmark_names(alpha_beta: Optional[str],
-                     geo: Optional[str]) -> tuple[str, str]:
+                     geo: Optional[str], reference=None) -> tuple[str, str]:
     """Resolve the two benchmark display names from the curated taxonomy.
 
     ``instrument_taxonomy.csv`` is the authority: the rows flagged
@@ -90,17 +90,13 @@ def _benchmark_names(alpha_beta: Optional[str],
     in ``benchmark_histories`` BY that name, a caller reaching build_context
     directly silently lost the benchmark line from all three panels.
     """
-    from tarzan import config as _cfg
+    if reference is None:
+        from tarzan.contracts.reference import ReportReference
+        reference = ReportReference.prepare()
     if alpha_beta is None:
-        try:
-            alpha_beta = _cfg.benchmark_beta_name()
-        except Exception:  # noqa: BLE001 — a label must never block a render
-            alpha_beta = _cfg._default_benchmark_name()
+        alpha_beta = reference.benchmark_alpha_beta
     if geo is None:
-        try:
-            geo = _cfg.benchmark_geo_allocation()
-        except Exception:  # noqa: BLE001
-            geo = _cfg._default_benchmark_name()
+        geo = reference.benchmark_geo
     return alpha_beta, geo
 
 
@@ -130,8 +126,10 @@ def build_context(
     Returns:
         A dict with all keys consumed by ``portfolio_digest.html.j2``.
     """
+    from tarzan.contracts.reference import reference_for
+    reference = reference_for(metrics)
     benchmark_alpha_beta, benchmark_geo = _benchmark_names(
-        benchmark_alpha_beta, benchmark_geo)
+        benchmark_alpha_beta, benchmark_geo, reference)
     # Reset the per-render SVG clipPath id counters so a render's element ids
     # depend only on how many charts it draws, not on how many newsletters the
     # process rendered before it. Without this, two renders in one process
@@ -147,6 +145,7 @@ def build_context(
         benchmark_alpha_beta=benchmark_alpha_beta,
         benchmark_geo=benchmark_geo,
         semantic_audit=semantic_audit if semantic_audit is not None else {},
+        reference=reference,
     )
     hero = _build_hero(nctx)
     return {
@@ -173,7 +172,7 @@ def build_context(
         # The risk METRICS are STATE tiles now (see _risk_tiles); what stays here is
         # the glossary that defines them and the three disclosures that came with the
         # section they used to live in, both rendered at the foot of the issue.
-        "risk_legend": _risk_legend(),
+        "risk_legend": _risk_legend(reference.metric_ratings),
         "risk_window_note": _risk_notes(nctx)["window"],
         "risk_alpha_beta_note": _risk_notes(nctx)["alpha_beta"],
         "risk_backtest_note": _risk_notes(nctx)["backtest"],

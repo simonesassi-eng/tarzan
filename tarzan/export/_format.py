@@ -316,7 +316,7 @@ _NAME_CACHE: Optional[dict] = None
 
 def display_instrument_name(isin: Optional[str], ticker: Optional[str],
                             raw_name: Optional[str] = None,
-                            max_len: int = 40) -> str:
+                            max_len: int = 40, *, names=None) -> str:
     """The instrument's readable name, preferring the curated taxonomy one.
 
     The holdings frame carries the broker's order-export description, and no
@@ -328,7 +328,7 @@ def display_instrument_name(isin: Optional[str], ticker: Optional[str],
     """
     from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 
-    names = _taxonomy_names()
+    names = _taxonomy_names() if names is None else names
     for key in (normalize_isin(isin), normalize_ticker(ticker)):
         if key and key in names:
             return short_instrument_name(names[key], max_len)

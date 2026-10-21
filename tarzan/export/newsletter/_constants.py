@@ -1,6 +1,6 @@
 """Newsletter palette, colour maps, class-order constants + the render context.
 
-Leaf module: depends only on external packages. Everything above sits on top.
+Shared presentation leaf with explicitly prepared reference facts.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Optional
 
+from tarzan.contracts.reference import ReportReference, reference_for
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
@@ -448,4 +449,9 @@ class _NewsletterContext:
     # resolution; the semantic gate checks this projection against metrics.
     performance_intraday_map: Optional[dict] = None
     semantic_audit: Optional[dict] = None
+    reference: Optional[ReportReference] = None
+
+    def __post_init__(self):
+        if self.reference is None:
+            self.reference = reference_for(self.metrics)
 

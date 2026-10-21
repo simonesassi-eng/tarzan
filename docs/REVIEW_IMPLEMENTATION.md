@@ -18,7 +18,7 @@ artifacts. This register contains no personal portfolio amounts.
 | R15–R16, R24 | Drive selection/lifecycle | Implemented; complete bounded listing, unique native file identity, private owned staging and cleanup on all exits |
 | R17 | Authenticated Update messages | Implemented locally; native Gmail owner/message-level SENT verification, unquoted commands and bounded per-message idempotency; Gmail API service/authorization needed on deployment |
 | R21–R23 | Public-cache allowlist, bounded event queue, incremental snapshots | Pending |
-| R26 | Domain/report boundaries and shared identity catalog | Domain authorities and defensive ReportView/RunRenderContext implemented; remaining display-reference lookups are being replaced with prepared facts |
+| R26 | Domain/report boundaries and shared identity catalog | Implemented; shared target identity catalog, defensive ReportView/RunRenderContext and immutable prepared display references; real section builders/semantic gate do not consult later global taxonomy |
 | R27 | Consistent installation/docs | Pending |
 
 Remote legacy-market cache cleanup was explicitly authorized. Only the eight
@@ -126,3 +126,12 @@ doubles, including spoofing, missing OAuth, quotation, pagination, migration,
 locking, marker capacity and later same-thread replies. The existing delivery
 claim/CAS protocol tests remain intact. No production script was changed; the
 operator must add Gmail API and authorize `installTrigger()` for this upgrade.
+
+`ReportReference` prepares the curated names, roles, benchmark identities,
+watchlist and risk-rating bands once at the analysis boundary. Its mappings and
+sequences are deeply immutable and part of the material analysis digest. The
+completed `ReportView` retains them; all production section builders and the
+semantic gate consume those same facts rather than consulting later global
+configuration. Legacy unprepared cubes retain a single compatibility preparation
+at the context boundary. The golden newsletter remains byte-identical; a new
+regression forbids every global reference accessor during a completed render.

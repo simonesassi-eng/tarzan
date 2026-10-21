@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from tarzan.contracts.reference import ReportReference
 
 
 def _round_or_none(value, ndigits: int):
@@ -151,6 +154,9 @@ class PortfolioMetrics:
     # Fixed public macro universe, prepared inside the analysis owner. ``None``
     # denotes a legacy unprepared cube; an empty tuple is an explicit miss.
     market_quotes: Optional[tuple[dict, ...]] = None
+    # Display reference facts captured with the analysis. Completed output never
+    # consults a later global taxonomy, watchlist or risk-rating configuration.
+    report_reference: Optional["ReportReference"] = None
     holding_histories: dict = field(default_factory=dict)
     # NAV (base 100) of the TARGET allocation — the per-instrument
     # ``target_portfolio`` weights held CONSTANT, over the window where every

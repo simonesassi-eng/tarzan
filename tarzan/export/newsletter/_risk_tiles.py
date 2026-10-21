@@ -142,7 +142,7 @@ def health(value, rating: Optional[dict], *, judged: bool = True) -> tuple[str, 
     return (_TONES[idx] if judged else "flat"), word
 
 
-def risk_tiles(metrics, tile) -> list[dict]:
+def risk_tiles(metrics, tile, ratings=None) -> list[dict]:
     """The ten risk figures as STATE tiles, built through the caller's own ``tile``.
 
     ``tile(label, value, caption, tone)`` is passed in rather than imported so the tiles
@@ -152,8 +152,6 @@ def risk_tiles(metrics, tile) -> list[dict]:
     Returns ``[]`` when the historical-risk block is unavailable, so STATE simply ends
     at the return measures rather than showing ten em-dashes.
     """
-    from tarzan import config as cfg
-
     hr = getattr(metrics, "historical_risk", None) or {}
     if not hr.get("available"):
         return []
@@ -161,7 +159,9 @@ def risk_tiles(metrics, tile) -> list[dict]:
     values = port.get("metrics") or {}
     if not values:
         return []
-    ratings = cfg.metric_ratings() or {}
+    if ratings is None:
+        from tarzan.contracts.reference import reference_for
+        ratings = reference_for(metrics).metric_ratings
 
     out: list[dict] = []
     for label, key, is_pct, note, rating_key in RISK_METRICS:
@@ -179,7 +179,7 @@ def risk_tiles(metrics, tile) -> list[dict]:
     return out
 
 
-def risk_legend() -> list[dict]:
+def risk_legend(ratings=None) -> list[dict]:
     """``[{label, strong, fair, weak, description}]`` — one row per metric.
 
     The bands come from ``metric_ratings`` so the numbers quoted are the ones the tile
@@ -187,9 +187,9 @@ def risk_legend() -> list[dict]:
     defines are in STATE at the top, and a reader who needs the definition of Sortino
     needs it once, not above every reading of it.
     """
-    from tarzan import config as cfg
-
-    ratings = cfg.metric_ratings() or {}
+    if ratings is None:
+        from tarzan.contracts.reference import ReportReference
+        ratings = ReportReference.prepare().metric_ratings
     rows: list[dict] = []
     for label, _key, _is_pct, note, rating_key in RISK_METRICS:
         band = ratings.get(rating_key or "") or {}

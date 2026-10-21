@@ -104,10 +104,12 @@ def validate_newsletter_semantics(
     if not has_contract:
         return ()
 
-    from tarzan import config as cfg
+    from tarzan.contracts.reference import reference_for
+    reference = reference_for(metrics)
 
     errors: list[str] = []
-    definitions = {_text(name): _text(ticker) for name, ticker in cfg.benchmarks().items()}
+    definitions = {_text(name): _text(ticker)
+                   for name, ticker in reference.benchmarks.items()}
     expected_names = set(definitions)
     selected_names = set(selected)
 
@@ -118,7 +120,7 @@ def validate_newsletter_semantics(
     # runner throttling) must drop that one row, NOT block the whole digest —
     # three sends were lost to exactly this. Availability degrades; identity is
     # still fully enforced below on whatever DID resolve.
-    critical = {_text(cfg.benchmark_geo_allocation()), _text(cfg.benchmark_beta_name())}
+    critical = {_text(reference.benchmark_geo), _text(reference.benchmark_alpha_beta)}
     critical.discard("")
     unresolved = expected_names - selected_names
     missing_critical = sorted(unresolved & critical)
@@ -390,7 +392,7 @@ def validate_newsletter_semantics(
         # legend value, the visible rounded label and its presence in the HTML.
         from tarzan.export.newsletter._sections_perf import _perf_intraday_window
 
-        geo_name = cfg.benchmark_geo_allocation()
+        geo_name = reference.benchmark_geo
         #: The lines a window panel is DESIGNED to draw. Kept here as well as in
         #: the renderer on purpose: the check that the drawn set EQUALS the
         #: resolvable set is what stops a line from quietly disappearing, and a
