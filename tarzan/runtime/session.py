@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 from tarzan.runtime.io_utils import canonical_json_bytes
+from tarzan.runtime.memo import ProviderMemo
 
 
 class RunMode(str, Enum):
@@ -82,6 +83,7 @@ class RunSession:
     diagnostics: list[Any] = field(default_factory=list)
     audit: list[Any] = field(default_factory=list)
     memo: dict[Any, Any] = field(default_factory=dict)
+    providers: ProviderMemo = field(default_factory=ProviderMemo, repr=False)
     analysis_id: Optional[str] = None
 
     def __post_init__(self) -> None:

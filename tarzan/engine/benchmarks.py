@@ -119,9 +119,16 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
     """
     from tarzan.data import enricher as _enr
 
-    with _enr._net_lock:
-        if ticker in _enr._benchmark_memo:
-            return _enr._benchmark_memo[ticker]
+    from tarzan.runtime.memo import memoized
+
+    return memoized(
+        "enricher.benchmark", ticker, lambda: _fetch_benchmark_uncached(ticker),
+        legacy=_enr._benchmark_memo,
+    )
+
+
+def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
+    from tarzan.data import enricher as _enr
 
     expected_name = cfg.name_for(None, ticker) or ""
     data = _enr._fetch_ticker_data(ticker, expected_name=expected_name)
@@ -173,8 +180,6 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
             "%s reported no listing currency; its returns are quoted unconverted "
             "and carry no currency mark", selected_ticker)
 
-    with _enr._net_lock:
-        _enr._benchmark_memo[ticker] = series
     return series
 
 

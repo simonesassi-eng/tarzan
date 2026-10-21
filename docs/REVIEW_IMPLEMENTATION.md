@@ -11,7 +11,8 @@ artifacts. This register contains no personal portfolio amounts.
 | R04 | Instrument resolution and valuation provenance | Implemented; persistent negative mechanics evidence, explicit valuation origins, no frozen KPI change |
 | R05 | Evidence-backed corporate-action repair | Implemented; no jump-only events, explicit provider/curated factors, separate price rulers and pre-repair storage |
 | R07, R18 | Causal identity and validated cache enumeration | Implemented; shared join/seed catalog, boundary-aware profile/xref reads and immutable target aliases |
-| R08, R20 | Single-flight and real provider budgets | Pending |
+| R08 | Run-owned single-flight provider stores | Implemented; concurrent misses/negative answers coalesce per key, cancellation propagates, unrelated keys remain parallel |
+| R20 | Real provider budgets | Pending |
 | R09, R13–R14, R19 | Render lifecycle, finalization outcomes, optional work, logging | Pending |
 | R10–R12, R25 | Complete analysis identity, immutable orders/ledger, linear projection | Implemented; full financial facts hashed, defensive order facts, deeply immutable ledger, atomic remedy ordinals and linear/cached failure projection |
 | R15–R17, R24 | Drive selection/lifecycle and authenticated Update messages | Pending |
@@ -69,3 +70,12 @@ Validated target plans/rows are immutable while preserving aliases of one source
 row. Manual-series listing uses current checksum/schema-validated JSON histories,
 not obsolete pickle globs. Stored history now also carries its original symbol
 to prevent sanitized filename collisions from supplying another ticker's data.
+
+Provider stores now belong to `RunSession`, including info, history, FX,
+OpenFIGI, geography, benchmark history, quote pairs, justETF and bond prices.
+Concurrent misses share a per-key Future; batched callers reserve only their
+new keys. Misses are cached, exceptions/cancellation reach waiters, recursive
+same-key fetches fail promptly, and returned data is defensive. No network work
+holds the shared memo lock. justETF workers inherit the owning run context.
+The configured history period and market strip also remain run-owned.
+The pinned-history test now checks actual behavior instead of source indentation.

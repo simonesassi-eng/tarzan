@@ -43,6 +43,7 @@ from tarzan.data import price_cache
 from tarzan.data import _yf_net
 from tarzan import config as cfg
 from tarzan.runtime import data_quality as dq
+from tarzan.runtime.memo import memoized, memoized_many, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +57,23 @@ BACKTEST_PERIOD = "5y"
 def set_portfolio_backtest_period(period: str) -> None:
     """Set the yfinance history period for all subsequent fetches."""
     global BACKTEST_PERIOD
+    from tarzan.runtime.session import current_session
+
+    if current_session() is not None:
+        with provider_memo().lock:
+            provider_store("enricher.settings", {})["backtest_period"] = period
+        return
     with _period_lock:
         BACKTEST_PERIOD = period
 
 
 def _backtest_period() -> str:
     """Thread-safe read of the configured backtest period."""
+    from tarzan.runtime.session import current_session
+
+    if current_session() is not None:
+        with provider_memo().lock:
+            return provider_store("enricher.settings", {}).get("backtest_period", "5y")
     with _period_lock:
         return BACKTEST_PERIOD
 
@@ -83,13 +95,14 @@ def _backtest_period() -> str:
 #     rows keep explicit origin and observation time for policy evaluation.
 #     The ``info`` blob is not cached.
 #
-# All in-memory stores are guarded by a lock because enrichment runs under
-# a ThreadPoolExecutor.
+# Production stores and pending requests belong to RunSession. Legacy module
+# dictionaries remain only for direct helper compatibility. Per-key futures
+# coalesce concurrent misses; unrelated instruments do not share a network lock.
 
 # yfinance spacing/backoff constants now live in tarzan.data._yf_net (shared).
 _OPENFIGI_MIN_INTERVAL = 0.3     # spacing between OpenFIGI calls (~25/min cap)
 
-_net_lock = threading.Lock()
+_net_lock = threading.Lock()  # compatibility for direct helper callers
 _openfigi_memo: dict[str, list] = {}
 _ticker_info_memo: dict[str, dict] = {}
 _history_memo: dict[str, pd.DataFrame] = {}
@@ -98,6 +111,7 @@ _benchmark_memo: dict[str, pd.Series] = {}
 # re-attempt the network refresh — the series is identical within a run.
 _fx_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
+_openfigi_spacing_lock = threading.Lock()
 
 # DataFrame attrs carry per-run provenance without entering the immutable disk
 # cache. Origin is assigned per row so an invalid fresh tail cannot relabel an
@@ -117,17 +131,21 @@ _FX_EVIDENCE_ATTR = "tarzan_fx_evidence"
 def reset_run_caches() -> None:
     """Clear all intra-run memoization. Called once at the start of each
     enrichment run so every run starts from fresh network state."""
-    with _net_lock:
-        _openfigi_memo.clear()
-        _ticker_info_memo.clear()
-        _history_memo.clear()
-        _benchmark_memo.clear()
-        _fx_memo.clear()
-        _geo_breakdown_memo.clear()
-        _geo_source_memo.clear()
-        _openfigi_last_call[0] = 0.0
+    namespaces = (
+        ("openfigi", _openfigi_memo), ("info", _ticker_info_memo),
+        ("history", _history_memo), ("benchmark", _benchmark_memo),
+        ("fx", _fx_memo), ("geo", _geo_breakdown_memo),
+        ("geo_source", _geo_source_memo), ("geo_result", _geo_result_memo),
+    )
+    with provider_memo().lock:
+        for namespace, legacy in namespaces:
+            provider_store("enricher." + namespace, legacy).clear()
     from tarzan.data import market_quotes as _mq
     _mq.reset_quote_memo()
+    from tarzan.data import justetf as _je
+    _je.reset_memo()
+    from tarzan.data import bond_fetcher as _bf
+    _bf.reset_memo()
     _yf_net.reset()
 
 
@@ -195,14 +213,10 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     Memoized per currency for the run (cleared by :func:`reset_run_caches`):
     every holding in a given currency shares one series instead of re-reading
     the disk cache and re-attempting the refresh."""
-    with _net_lock:
-        if currency in _fx_memo:
-            return _fx_memo[currency]
-
-    result = _fetch_fx_pair_uncached(currency)
-    with _net_lock:
-        _fx_memo[currency] = result
-    return result
+    return memoized(
+        "enricher.fx", currency, lambda: _fetch_fx_pair_uncached(currency),
+        legacy=_fx_memo,
+    )
 
 
 def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
@@ -1423,18 +1437,14 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
 def _fetch_ticker_info(symbol: str) -> dict:
     """yfinance ``info`` for a symbol, retried on throttle and memoized
     for the duration of the run."""
-    with _net_lock:
-        if symbol in _ticker_info_memo:
-            return _ticker_info_memo[symbol]
-
     def _call():
         _space_yf_call()
         return yf.Ticker(symbol).info or {}
 
-    info = _retry(_call, what=f"info {symbol}") or {}
-    with _net_lock:
-        _ticker_info_memo[symbol] = info
-    return info
+    return memoized(
+        "enricher.info", symbol, lambda: _retry(_call, what=f"info {symbol}") or {},
+        legacy=_ticker_info_memo,
+    )
 
 
 def _history_timestamp_key(value: object) -> str:
@@ -1746,9 +1756,13 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     selection can therefore classify the actual last valid close rather than
     treating the whole merged frame as fresh because a request just ran.
     """
-    with _net_lock:
-        if symbol in _history_memo:
-            return _history_memo[symbol]
+    return memoized(
+        "enricher.history", symbol, lambda: _fetch_history_uncached(symbol),
+        legacy=_history_memo,
+    )
+
+
+def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
 
     cached = price_cache.load_history(symbol)
     start = price_cache.refresh_start(cached)
@@ -1822,8 +1836,6 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
             # different history depending on which venues answered.
             result = _fill_today_from_sibling(symbol, result)
 
-    with _net_lock:
-        _history_memo[symbol] = result
     return result
 
 
@@ -1854,14 +1866,18 @@ def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
         logger.debug("Pinned run: skipping %d live OpenFIGI lookup(s)", len(ordered))
         return {isin: [] for isin in ordered}
 
-    with _net_lock:
-        missing = [isin for isin in ordered if isin not in _openfigi_memo]
+    return memoized_many(
+        "enricher.openfigi", ordered, _openfigi_load_many, legacy=_openfigi_memo,
+    )
+
+
+def _openfigi_load_many(missing: list[str]) -> dict[str, list]:
+    result = {}
     stored = {isin: price_cache.load_timed(_OPENFIGI_CACHE, isin, _OPENFIGI_TTL_DAYS)
               for isin in missing}
-    with _net_lock:
-        for isin, value in stored.items():
-            if value:
-                _openfigi_memo[isin] = value
+    for isin, value in stored.items():
+        if value:
+            result[isin] = value
     missing = [isin for isin in missing if not stored[isin]]
 
     for offset in range(0, len(missing), _OPENFIGI_BATCH_SIZE):
@@ -1869,7 +1885,7 @@ def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
 
         def _call(values=batch) -> list:
             # Enforce minimum spacing between OpenFIGI requests across threads.
-            with _net_lock:
+            with _openfigi_spacing_lock:
                 wait = _OPENFIGI_MIN_INTERVAL - (
                     _time.monotonic() - _openfigi_last_call[0]
                 )
@@ -1900,19 +1916,15 @@ def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
                 "OpenFIGI batch returned an invalid shape for %d ISIN(s)",
                 len(batch),
             )
-        with _net_lock:
-            for index, isin in enumerate(batch):
-                _openfigi_memo[isin] = (
-                    [response[index]] if valid_response else []
-                )
+        for index, isin in enumerate(batch):
+            result[isin] = [response[index]] if valid_response else []
         if valid_response:
             for index, isin in enumerate(batch):
                 # Only a mapping is an identity; an error/warning entry is retried.
                 if isinstance(response[index], dict) and response[index].get("data"):
                     price_cache.store_timed(_OPENFIGI_CACHE, isin, [response[index]])
 
-    with _net_lock:
-        return {isin: _openfigi_memo.get(isin, []) for isin in ordered}
+    return result
 
 
 def _openfigi_raw(isin: str) -> list:
@@ -2849,24 +2861,26 @@ GEOGRAPHY_MAP: dict[str, Geography] = cfg.geography_map()
 EXCHANGE_COUNTRY: dict[str, str] = cfg.exchange_country()
 
 # Per-run geo-breakdown memoization. Written from worker threads during
-# enrich_holdings, so all access is guarded by _net_lock; cleared by
+# enrich_holdings, so all access is guarded by the run's provider lock; cleared by
 # reset_run_caches() at the start of each run so it never persists stale
 # breakdowns across runs (consistent with the no-cache guarantee).
 _geo_breakdown_memo: dict[str, dict[Geography, float]] = {}
 _geo_source_memo: dict[str, str] = {}
+_geo_result_memo: dict[str, object] = {}
 
 
 def _get_geo_breakdown_cached(ticker: str) -> Optional[dict[Geography, float]]:
     """Thread-safe read of the run-scoped geo-breakdown memo."""
-    with _net_lock:
-        return _geo_breakdown_memo.get(ticker)
+    with provider_memo().lock:
+        value = provider_store("enricher.geo", _geo_breakdown_memo).get(ticker)
+        return dict(value) if value is not None else None
 
 
 def _store_geo_breakdown(ticker: str, breakdown: dict[Geography, float], source: str) -> None:
     """Thread-safe write to the run-scoped geo-breakdown memo."""
-    with _net_lock:
-        _geo_breakdown_memo[ticker] = breakdown
-        _geo_source_memo[ticker] = source
+    with provider_memo().lock:
+        provider_store("enricher.geo", _geo_breakdown_memo)[ticker] = dict(breakdown)
+        provider_store("enricher.geo_source", _geo_source_memo)[ticker] = source
 
 
 def classify_geography(info: dict, ticker: str, holding: Holding) -> Geography:
@@ -2909,10 +2923,19 @@ def get_geo_breakdown(
     fallback, so a justETF/scrape outage does not degrade the geography
     section to "Not Available" — while never shadowing an instrument_taxonomy.csv edit.
     """
+    return memoized(
+        "enricher.geo_result", (ticker, isin),
+        lambda: _get_geo_breakdown_uncached(ticker, isin), legacy=_geo_result_memo,
+    )
+
+
+def _get_geo_breakdown_uncached(ticker, isin):
     cached = _get_geo_breakdown_cached(ticker)
     if cached is not None:
-        with _net_lock:
-            source = _geo_source_memo.get(ticker, "memory")
+        with provider_memo().lock:
+            source = provider_store("enricher.geo_source", _geo_source_memo).get(
+                ticker, "memory",
+            )
         return cached, source
 
     geo_key = isin or ticker

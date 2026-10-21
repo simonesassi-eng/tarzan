@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Optional
 
 import pandas as pd
+from tarzan.runtime.memo import memoized, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +42,9 @@ _quote_memo: dict[str, Optional[dict]] = {}
 
 
 def reset_memo() -> None:
-    _series_memo.clear()
-    _quote_memo.clear()
+    with provider_memo().lock:
+        provider_store("justetf.series", _series_memo).clear()
+        provider_store("justetf.quote", _quote_memo).clear()
 
 
 def _get_json(url: str) -> Optional[dict]:
@@ -108,24 +111,30 @@ def prefetch(isins) -> None:
     wanted = [i for i in dict.fromkeys(isins) if i]
     if not wanted or not runtime.allows_live_transport():
         return
-    missing_s = [i for i in wanted if i not in _series_memo]
-    missing_q = [i for i in wanted if i not in _quote_memo]
-    if not (missing_s or missing_q):
-        return
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        series = dict(zip(missing_s, pool.map(_fetch_series, missing_s)))
-        quotes = dict(zip(missing_q, pool.map(_fetch_quote, missing_q)))
-    _series_memo.update(series)
-    _quote_memo.update(quotes)
+        futures = [
+            pool.submit(copy_context().run, fetch, isin)
+            for fetch in (series, quote) for isin in wanted
+        ]
+        for future in futures:
+            future.result()
 
 
 def series(isin: str) -> Optional[pd.Series]:
-    if isin not in _series_memo:
-        prefetch([isin])
-    return _series_memo.get(isin)
+    from tarzan import runtime
+
+    if not isin or not runtime.allows_live_transport():
+        return None
+    return memoized(
+        "justetf.series", isin, lambda: _fetch_series(isin), legacy=_series_memo,
+    )
 
 
 def quote(isin: str) -> Optional[dict]:
-    if isin not in _quote_memo:
-        prefetch([isin])
-    return _quote_memo.get(isin)
+    from tarzan import runtime
+
+    if not isin or not runtime.allows_live_transport():
+        return None
+    return memoized(
+        "justetf.quote", isin, lambda: _fetch_quote(isin), legacy=_quote_memo,
+    )

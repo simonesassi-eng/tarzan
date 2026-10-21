@@ -1058,7 +1058,10 @@ _quote_memo: dict[str, dict] = {}
 
 def reset_quote_memo() -> None:
     """Drop the run-scoped quote pairs (mirrors ``enricher.reset_run_caches``)."""
-    _quote_memo.clear()
+    from tarzan.runtime.memo import provider_memo, provider_store
+
+    with provider_memo().lock:
+        provider_store("market.official", _quote_memo).clear()
 
 
 def official_quotes(symbols: list[str]) -> dict:
@@ -1070,14 +1073,16 @@ def official_quotes(symbols: list[str]) -> dict:
     different snapshots of two different feeds. Batched: only symbols not
     already memoized reach the network.
     """
-    missing = [s for s in dict.fromkeys(symbols) if s and s not in _quote_memo]
-    if missing:
+    from tarzan.runtime.memo import memoized_many
+
+    ordered = [s for s in dict.fromkeys(symbols) if s]
+
+    def load(missing):
         fetched = _fetch_official_quotes(missing)
-        for symbol in missing:
-            # Cache the miss too: one attempt per symbol per run.
-            _quote_memo[symbol] = fetched.get(symbol, {})
-    return {s: _quote_memo[s] for s in dict.fromkeys(symbols)
-            if s and _quote_memo.get(s)}
+        return {symbol: fetched.get(symbol, {}) for symbol in missing}
+
+    values = memoized_many("market.official", ordered, load, legacy=_quote_memo)
+    return {symbol: value for symbol, value in values.items() if value}
 
 
 def _prepend_session_open(intra, baseline, *, ticker: str, now):
@@ -1609,9 +1614,29 @@ def intraday_feeds(
 def fetch_market_quotes(force: bool = False) -> list[dict]:
     """Fetch the curated market quotes (memoised per process). Best-effort:
     returns whatever could be fetched; never raises."""
+    from tarzan.runtime.memo import memoized, provider_memo
+    from tarzan.runtime.session import current_session
+
+    if current_session() is not None:
+        if force:
+            with provider_memo().lock:
+                provider_memo().store("market.strip").clear()
+        return memoized(
+            "market.strip", "curated", _fetch_market_quotes_uncached, legacy={},
+        )
+    return _fetch_market_quotes_compat(force)
+
+
+def _fetch_market_quotes_compat(force):
     global _memo, _memo_at
     if _memo is not None and not force and (_time.monotonic() - _memo_at) < _MEMO_TTL_SECONDS:
         return _memo
+    _memo = _fetch_market_quotes_uncached()
+    _memo_at = _time.monotonic()
+    return _memo
+
+
+def _fetch_market_quotes_uncached():
     try:
         from tarzan.data.enricher import _fetch_history
     except Exception as e:  # noqa: BLE001
@@ -1653,6 +1678,4 @@ def fetch_market_quotes(force: bool = False) -> list[dict]:
             logger.debug("market quote %s failed: %s", symbol, e)
             continue
 
-    _memo = out
-    _memo_at = _time.monotonic()
     return out

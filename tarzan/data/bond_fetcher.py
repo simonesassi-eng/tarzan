@@ -14,6 +14,7 @@ from typing import Optional
 from urllib.request import Request, urlopen
 
 from tarzan.instruments.registry import InstrumentKind
+from tarzan.runtime.memo import memoized, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,12 @@ _SEGMENTS = [
     "mot/altri-titoli-di-stato",
     "mot/cct",
 ]
+_price_memo: dict[str, Optional[dict]] = {}
+
+
+def reset_memo() -> None:
+    with provider_memo().lock:
+        provider_store("bond.price", _price_memo).clear()
 
 
 def fetch_bond_price(isin: str) -> Optional[dict]:
@@ -38,6 +45,17 @@ def fetch_bond_price(isin: str) -> Optional[dict]:
     """
     if not isin or len(isin.replace("-", "")) != 12:
         return None
+    from tarzan import runtime
+
+    if not runtime.allows_live_transport():
+        return None
+    return memoized(
+        "bond.price", isin, lambda: _fetch_bond_price_uncached(isin),
+        legacy=_price_memo,
+    )
+
+
+def _fetch_bond_price_uncached(isin):
 
     for segment in _SEGMENTS:
         result = _try_segment(isin, segment)

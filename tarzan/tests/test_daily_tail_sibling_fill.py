@@ -195,16 +195,23 @@ def test_pinned_runs_never_fill(monkeypatch, tmp_path):
     printed. Otherwise the same as_of yields different history depending on
     which venues happened to answer, and the golden/lookahead guarantees go
     with it. _fetch_history gates the fill on `not pinned`."""
-    import inspect
-    src = inspect.getsource(en._fetch_history)
-    fill_line = next(ln for ln in src.splitlines()
-                     if "_fill_today_from_sibling" in ln)
-    indent = len(fill_line) - len(fill_line.lstrip())
-    guard = next(ln for ln in src.splitlines()
-                 if "if not pinned" in ln)
-    guard_indent = len(guard) - len(guard.lstrip())
-    assert guard_indent < indent, \
-        "the fill must sit inside the `if not pinned` branch"
+    from tarzan import runtime
+    runtime.configure(as_of=TODAY)
+    en.reset_run_caches()
+    own = _frame([(datetime.date(2026, 8, 7), 29.6950), (YESTERDAY, 29.8250)])
+    monkeypatch.setattr(en.price_cache, "load_history", lambda s: own)
+    monkeypatch.setattr(en, "_retry", lambda *a, **k: None)
+    monkeypatch.setattr(
+        en, "_fill_today_from_sibling",
+        lambda *a: pytest.fail("a pinned run must never synthesize a sibling bar"),
+    )
+    monkeypatch.setattr(
+        en.price_cache, "store_history",
+        lambda *a: pytest.fail("a pinned run must not write live history"),
+    )
+    out = en._fetch_history("NTSG.MI")
+    assert out["Close"].equals(own["Close"])
+    assert TODAY not in [pd.Timestamp(index).date() for index in out.index]
 
 
 def test_the_synthetic_close_is_not_persisted_to_the_cache(monkeypatch):
