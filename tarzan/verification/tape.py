@@ -270,7 +270,7 @@ class ProviderTape:
         import yfinance as yf
         import yfinance.multi as yf_multi
         from yfinance.data import YfData
-        from tarzan.data import bond_fetcher, enricher
+        from tarzan.data import bond_fetcher, bond_history, enricher
         from tarzan.data import _yf_net
 
         # Throttle actual captures, not already recorded responses. Recording
@@ -350,6 +350,18 @@ class ProviderTape:
                               lambda: _http_value(original_urlopen(request, *args, **kwargs), url))
             return HTTPAnswer(**value)
 
+        original_bond_history = bond_history._request_raw
+
+        def official_bond_history(isin):
+            # Freeze only raw market fields. The publisher's anonymous public
+            # view HTML/access descriptor is never a verification artifact.
+            return tape.call(
+                "borsa.bond_history",
+                {"isin": isin, "exchange": "XMIL", "period": "5Y",
+                 "adjustment": False, "add-last-price": False},
+                lambda: original_bond_history(isin),
+            )
+
         self._stack.enter_context(patch.object(yf, "Ticker", Ticker))
         self._stack.enter_context(patch.object(yf_multi, "Ticker", Ticker))
         self._stack.enter_context(patch.object(YfData, "get", yahoo_get))
@@ -357,6 +369,7 @@ class ProviderTape:
         self._stack.enter_context(patch.object(urllib.request, "urlopen", urlopen))
         self._stack.enter_context(patch.object(enricher, "urlopen", urlopen))
         self._stack.enter_context(patch.object(bond_fetcher, "urlopen", urlopen))
+        self._stack.enter_context(patch.object(bond_history, "_request_raw", official_bond_history))
         if self.replay:
             self._stack.enter_context(patch.object(socket.socket, "connect", self._block))
             self._stack.enter_context(patch.object(socket, "create_connection", self._block))

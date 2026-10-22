@@ -540,6 +540,7 @@ class MetricsEngine:
             _causal_enriched_by_isin,
             build_holdings_from_orders,
             build_order_derived_series,
+            required_historical_price_windows,
         )
         from tarzan import runtime
 
@@ -593,6 +594,13 @@ class MetricsEngine:
                 if holding.isin:
                     enriched_by_isin[holding.isin] = holding
 
+        from tarzan.data.bond_history import hydrate_historical_bonds
+
+        hydrate_historical_bonds(
+            enriched_by_isin.values(),
+            required_historical_price_windows(effective_orders, as_of=analysis_date),
+            as_of=analysis_date,
+        )
         series = build_order_derived_series(
             effective_orders,
             enriched_by_isin,

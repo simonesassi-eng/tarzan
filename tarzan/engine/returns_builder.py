@@ -19,7 +19,7 @@ is computed on it.
 
 The causal fallback ladder for missing market history:
 
-    1. yfinance     last market observation at or before date → "yfinance"
+    1. market       causal provider observation (Yahoo or verified Borsa history)
     2. synthetic    exact dated order-price observation       → "synthetic"
     3. carry_flat   latest prior order price carried forward  → "carry_flat"
     4. excluded     no causal price at or before date          → "excluded"
@@ -114,6 +114,36 @@ def _identity_key(
     """Look up an ISIN's resolved identity, defaulting to that full ISIN."""
     normalized = _normalized_isin(isin)
     return (identity_by_isin or {}).get(normalized, ("isin", normalized))
+
+
+def required_historical_price_windows(
+    orders: list[Order], *, as_of: datetime.date,
+) -> dict[str, tuple[datetime.date, datetime.date]]:
+    """Required holding intervals, not authority to share prices across ISINs.
+
+    A position transferred under one explicitly equivalent identifier can
+    close under another. Its required interval spans the economic identity;
+    each member must still obtain and validate its own exact-ISIN prices.
+    Future orders cannot extend a window or supply equivalence evidence.
+    """
+    effective = [order for order in orders if order.trade_date <= as_of]
+    identities = _instrument_identity_by_isin(effective)
+    intervals: dict[_IdentityKey, tuple[datetime.date, datetime.date]] = {}
+    quantities: dict[_IdentityKey, float] = {}
+    for order in effective:
+        if not order.is_position_change():
+            continue
+        identity = _identity_key(order.isin, identities)
+        first, last = intervals.get(identity, (order.trade_date, order.trade_date))
+        intervals[identity] = (min(first, order.trade_date), max(last, order.trade_date))
+        quantities[identity] = quantities.get(identity, 0.0) + order.quantity
+    return {
+        isin: (
+            intervals[identity][0],
+            as_of if abs(quantities[identity]) >= _QTY_EPS else intervals[identity][1],
+        )
+        for isin, identity in identities.items() if identity in intervals
+    }
 
 
 @dataclass
@@ -798,9 +828,19 @@ class PriceResolver:
                 self._income_basis_reported.add(isin)
             return None, "excluded"
         if ph is not None and len(ph) > 0:
-            price = _price_at(ph, d)
-            if price is not None:
-                return price, "yfinance"
+            from tarzan.data import bond_history
+
+            if bond_history.SOURCE_ATTR in ph.attrs:
+                # This evidence already has causal daily FX and /100 applied.
+                # Invalid metadata or a stale observation must not fall through
+                # as an unrestricted Yahoo history, or be rescaled again.
+                price = bond_history.price_on(ph, isin, d) if self.is_bond(isin) else None
+                if price is not None:
+                    return price, "borsa_italiana"
+            else:
+                price = _price_at(ph, d)
+                if price is not None:
+                    return price, "yfinance"
         # Borsa Italiana single-point rung: only for the TODAY/terminal
         # valuation of a bond with no yfinance history. The scrape gives
         # only today's price (no series), so historical dates still fall

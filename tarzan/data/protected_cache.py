@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -31,6 +32,7 @@ _MAPS = {
     "instrument_profiles/profiles_v1.json": price_cache._INSTRUMENT_PROFILE_NAMESPACE,
     "timed/openfigi.json": "openfigi",
     "timed/no_listing.json": "no_listing",
+    "timed/bond_history_v1.json": "bond_history_v1",
     "geo/geo_breakdown.json": "geo",
     "ter/ter_by_isin.json": "ter",
     "xref/ticker_isin.json": "ticker_isin",
@@ -71,6 +73,18 @@ def _cache_document(relative: str, document) -> bool:
     if relative in _MAPS:
         if document["namespace"] != _MAPS[relative] or not isinstance(entries, dict):
             raise ValueError("market cache namespace mismatch")
+        if relative == "timed/bond_history_v1.json":
+            from tarzan.data.bond_history import cache_entry_valid
+
+            if any(
+                not isinstance(entry, dict) or set(entry) != {"ts", "value"}
+                or type(entry["ts"]) not in (int, float)
+                or entry["ts"] <= 0 or entry["ts"] > 253402300799
+                or not math.isfinite(entry["ts"])
+                or not cache_entry_valid(entry["value"], isin)
+                for isin, entry in entries.items()
+            ):
+                raise ValueError("invalid public bond-history cache scope")
         return True
     parts = Path(relative).parts
     if len(parts) != 2 or parts[0] != "history" or not parts[1].endswith(".json"):
