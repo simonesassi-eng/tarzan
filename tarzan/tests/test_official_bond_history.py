@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import date, datetime, timezone
+from html import escape
 import json
 from io import BytesIO
 
@@ -346,6 +347,18 @@ def test_existing_market_history_is_not_replaced_even_when_partial(monkeypatch, 
     assert holding.price_history_price_only is history
 
 
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), 0.0, -1.0])
+def test_wholly_unusable_existing_tape_does_not_block_verified_market_history(
+    monkeypatch, live, invalid,
+):
+    old = pd.Series([invalid], index=pd.to_datetime(["2026-01-06"]))
+    holding = carrier(price_history_price_only=old)
+    monkeypatch.setattr(bonds, "raw_history", lambda *args: entry())
+    assert bonds.hydrate_historical_bonds([holding], {ISIN: (START, END)}, as_of=END) == (ISIN,)
+    assert holding.price_history_price_only is not old
+    assert holding.price_history_price_only.iloc[-1] == pytest.approx(1.02)
+
+
 def test_currency_mismatch_and_optional_failure_leave_fallback_untouched(monkeypatch, live):
     holding = carrier(currency="USD")
     monkeypatch.setattr(bonds, "raw_history", lambda *args: entry())
@@ -420,6 +433,31 @@ def test_native_request_follows_publisher_descriptor_only_and_returns_no_token(m
     assert calls[1][1]["Authorization"] == "Bearer anonymous-public-view"
     assert "anonymous-public-view" not in json.dumps(result)
     assert bonds._NoRedirect().redirect_request(None, None, 302, None, None, "https://example.invalid") is None
+
+
+@pytest.mark.parametrize("location,token", [
+    ("header", "anonymous-public-view"),
+    ("nested", "anonymous-public-view"),
+    ("header", 'anonymous"public-view'),
+])
+def test_provider_echo_of_public_access_descriptor_cannot_enter_raw_market_tape(
+    monkeypatch, location, token,
+):
+    def read(opener, url, **kwargs):
+        if "interactive-chart/" in url:
+            return (
+                f'<chart-allinone code="{ISIN}" exchcode="XMIL" '
+                f'url="https://grafici.borsaitaliana.it/api/" token="{escape(token, quote=True)}">'
+            ).encode()
+        raw = packet()["payload"]
+        if location == "header":
+            raw["transco"]["code"] = token
+        else:
+            raw["history"]["historyDt"][0]["closePx"] = {token: "unexpected source field"}
+        return json.dumps(raw).encode()
+
+    monkeypatch.setattr(bonds, "_read_body", read)
+    assert bonds._request_raw(ISIN) is None
 
 
 def test_ambiguous_public_views_do_not_open_price_endpoint(monkeypatch):

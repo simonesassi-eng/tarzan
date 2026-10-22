@@ -125,6 +125,20 @@ def _public_market_payload(body):
     return result
 
 
+def _contains_descriptor(value, token):
+    """A malformed provider echo must not cross the raw market-recording port."""
+    if isinstance(value, str):
+        return token in value
+    if isinstance(value, dict):
+        return any(
+            _contains_descriptor(key, token) or _contains_descriptor(item, token)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_descriptor(item, token) for item in value)
+    return False
+
+
 def _request_raw(isin: str):
     """Credential-free market-input port used by the frozen verification tape."""
     if not _ISIN.fullmatch(str(isin)):
@@ -146,10 +160,13 @@ def _request_raw(isin: str):
         headers={**_HEADERS, "Accept": "application/json",
                  "Authorization": "Bearer " + view.token},
     )
+    market_payload = _public_market_payload(json.loads(raw))
+    if _contains_descriptor(market_payload, view.token):
+        return None
     return {
         "exchange": view.exchange,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "payload": _public_market_payload(json.loads(raw)),
+        "payload": market_payload,
     }
 
 
@@ -466,7 +483,8 @@ def hydrate_historical_bonds(holdings, windows, *, as_of: date) -> tuple[str, ..
             continue
         existing = holding.price_history_price_only
         if existing is not None and not existing.empty:
-            if not existing.dropna().empty:
+            numeric = pd.to_numeric(existing, errors="coerce")
+            if (numeric.gt(0) & numeric.lt(float("inf"))).any():
                 continue
         wanted.append(holding)
     if not wanted:
