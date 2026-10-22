@@ -10,6 +10,7 @@ from pandas.testing import assert_frame_equal, assert_series_equal
 
 from tarzan.runtime.io_utils import canonical_json_bytes
 from tarzan.verification.portfolio import compare_checkpoints, differences, portfolio_kpis
+from tarzan.verification.portfolio import _snapshot_cache_clock
 from tarzan.verification.tape import HTTPAnswer, ProviderTape, UnrecordedInput, decode, encode
 
 
@@ -142,3 +143,26 @@ def test_kpi_projection_keeps_financial_outputs_not_ai_or_attempt_noise():
     assert "analysis_id" not in result
     assert "attempt_id" not in result
     assert result["pnl_series"]["values"] == [0.0, 200.0]
+
+
+def test_snapshot_ttls_follow_capture_even_when_host_time_moves_months_forward(monkeypatch, tmp_path):
+    import time
+    from types import SimpleNamespace
+    from tarzan.data import price_cache
+
+    captured = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.delenv("TARZAN_DISABLE_CACHE", raising=False)
+    monkeypatch.setenv("TARZAN_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(price_cache, "time", SimpleNamespace(time=lambda: captured.timestamp()))
+    price_cache.store_resolution("US0000000001", "SYNTH.MI")
+    price_cache.store_timed("openfigi", "US0000000001", ["SYNTH"])
+    host = SimpleNamespace(time=lambda: captured.timestamp() + 100 * 86400)
+    monkeypatch.setattr(price_cache, "time", host)
+    original_process_clock = time.time
+    assert price_cache.load_resolution("US0000000001") is None
+    with _snapshot_cache_clock(captured):
+        assert price_cache.load_resolution("US0000000001") == "SYNTH.MI"
+        assert price_cache.load_timed("openfigi", "US0000000001", 7) == ["SYNTH"]
+        assert time.time is original_process_clock
+    assert price_cache.time is host
+    assert price_cache.load_timed("openfigi", "US0000000001", 7) is None

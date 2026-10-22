@@ -86,12 +86,18 @@ def _cache_document(relative: str, document) -> bool:
         or parts[1] != f"{price_cache._safe(symbol)}.json"
     ):
         return False  # manual/licensed identifiers must never leave the runner
-    fields = entries.get("table", {}).get("schema", {}).get("fields", [])
-    if not fields or any(
-        field.get("type") != "datetime" and (
-            field.get("name") not in _PRICE_COLUMNS
+    schema = entries.get("table", {}).get("schema", {})
+    fields = schema.get("fields", [])
+    primary_key = schema.get("primaryKey", [])
+    if (
+        not fields or not isinstance(primary_key, list) or len(primary_key) != 1
+        or sum(field.get("type") == "datetime" for field in fields) != 1
+        or any(
+            field.get("name") != primary_key[0] if field.get("type") == "datetime"
+            else field.get("name") not in _PRICE_COLUMNS
             or field.get("type") not in {"number", "integer"}
-        ) for field in fields
+            for field in fields
+        )
     ):
         return False  # price tables only, never custom account/input columns
     return True

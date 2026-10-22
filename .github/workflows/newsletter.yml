@@ -15,11 +15,16 @@ on:
         description: "Short single-line operational label (not appended to subject)"
         default: "manual"
         required: false
+      verify_only:
+        description: "Analyze/render real inputs without mail credentials, claims or SMTP"
+        type: boolean
+        default: false
+        required: false
   repository_dispatch:
     types: [send_now]
 
 concurrency:
-  group: tarzan-newsletter
+  group: ${{ inputs.verify_only && 'tarzan-newsletter-verify' || 'tarzan-newsletter' }}
   queue: max              # Native bounded queue: at most 100 pending runs.
   cancel-in-progress: false
 
@@ -43,6 +48,7 @@ jobs:
 
       - name: Resolve native event context
         id: trigger
+        if: ${{ !inputs.verify_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/resolve_newsletter_event.py
@@ -61,6 +67,33 @@ jobs:
       - name: Check installed dependency consistency
         run: python -m pip check
 
+      # The repository is public. Queried market state leaves the runner only
+      # as authenticated ciphertext; the dedicated key is never bound to an
+      # external action. Cache outages/corruption remain ordinary cache misses.
+      - name: Verify protected cache key
+        id: cache_key
+        continue-on-error: true
+        env:
+          TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
+        run: python -m tarzan.data.protected_cache key-id
+
+      - name: Restore encrypted market snapshot
+        if: steps.cache_key.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tarzan-sealed/market.sealed
+          key: tarzan-sealed-market-v1-r3-${{ runner.os }}-${{ steps.cache_key.outputs.key_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            tarzan-sealed-market-v1-r3-${{ runner.os }}-${{ steps.cache_key.outputs.key_id }}-
+
+      - name: Validate and import encrypted market snapshot
+        if: steps.cache_key.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
+        run: python -m tarzan.data.protected_cache import --directory "$RUNNER_TEMP/tarzan-sealed"
+
       # A speed optimisation, never a precondition: the run refetches whatever
       # the cache does not hand back, so a cache service outage or a future
       # incompatible action release must not cost a digest.
@@ -76,12 +109,27 @@ jobs:
 
       - name: Validate and import public macro snapshot
         continue-on-error: true
-        run: python -m tarzan.data.public_cache import
+        # Never replace an already authenticated, newer run-local history
+        # with an older independently restored public projection.
+        run: python -m tarzan.data.public_cache import --only-missing
 
-      # Publication credentials are scoped only to the step that consumes
-      # them. Validation, checkout, setup, installation, and cache restore see
-      # no Drive, Gemini, claim-store, recipient, or SMTP credential.
+      # Verification has only read-only input access and the snapshot key.
+      # It has no mail/recipient/Gemini/claim credential and uses a separate
+      # entry point, not the delivery path's dry-run switch.
+      - name: Verify newsletter without delivery
+        if: inputs.verify_only
+        env:
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
+          TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
+          TARZAN_DIAGNOSTIC_DIR: ${{ runner.temp }}/tarzan-diagnostics
+          TARZAN_RESTRICTED_CONSOLE: "1"
+        run: python scripts/verify_newsletter.py
+
+      # Publication credentials remain scoped only to the actual send step.
+      # Checkout/setup/install/cache actions see no input or mail credential.
       - name: Render & send newsletter
+        if: ${{ !inputs.verify_only }}
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
@@ -101,7 +149,27 @@ jobs:
           DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
           DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
+          TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
+          TARZAN_DIAGNOSTIC_DIR: ${{ runner.temp }}/tarzan-diagnostics
         run: python scripts/send_newsletter.py
+
+      - name: Encrypt updated market snapshot
+        id: protected_export
+        if: always() && !cancelled() && steps.cache_key.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
+        run: python -m tarzan.data.protected_cache export --directory "$RUNNER_TEMP/tarzan-sealed"
+
+      - name: Save encrypted market snapshot
+        if: always() && !cancelled() && steps.protected_export.outcome == 'success' && steps.protected_export.outputs.nonempty == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tarzan-sealed/market.sealed
+          # A unique immutable key per attempt saves newly learned mappings and
+          # tails even after a same-day hit, including useful partial evidence.
+          key: tarzan-sealed-market-v1-r3-${{ runner.os }}-${{ steps.cache_key.outputs.key_id }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Project public macro snapshot
         id: cache_export
@@ -116,3 +184,14 @@ jobs:
         with:
           path: ~/.cache/tarzan-public/snapshot.json
           key: tarzan-public-macro-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Retain encrypted diagnostic evidence
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarzan-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tarzan-diagnostics/report.sealed
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: ignore

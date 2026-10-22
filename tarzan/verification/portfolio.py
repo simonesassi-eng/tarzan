@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -27,6 +28,16 @@ from tarzan.verification.tape import ProviderTape, decode
 
 def _private_json(path: Path, value) -> None:
     atomic_write_bytes(path, canonical_json_bytes(value, default=str), fsync_dir=True)
+
+
+@contextmanager
+def _snapshot_cache_clock(captured_at):
+    """Replay TTL selection against the captured clock, not a later host day."""
+    from tarzan.data import price_cache
+
+    # Replace this module's clock port, never the process-wide stdlib time.
+    with patch.object(price_cache, "time", SimpleNamespace(time=lambda: captured_at.timestamp())):
+        yield
 
 
 @contextmanager
@@ -208,7 +219,8 @@ def run_snapshot(snapshot: Path, *, label: str, capture: bool, input_dir: Path, 
         working_cache = Path(directory) / "cache"
         shutil.copytree(initial, working_cache)
         with patch.dict(os.environ, {"TARZAN_CACHE_DIR": str(working_cache), "TARZAN_DISABLE_AI": "1"}), \
-                patch.object(runtime, "_build_context", frozen_context), tape:
+                patch.object(runtime, "_build_context", frozen_context), \
+                _snapshot_cache_clock(captured_at), tape:
             metrics, config = orchestrator.run(
                 orders_source=str(inputs / "order_list.csv"),
                 config_source=str(inputs / "targets.csv") if (inputs / "targets.csv").exists() else None,

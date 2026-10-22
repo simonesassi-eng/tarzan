@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+import yaml
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PUBLICATION_STEP = "Render & send newsletter"
@@ -44,6 +45,22 @@ _HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)")
 
 def _text(relative: str) -> str:
     return (_ROOT / relative).read_text(encoding="utf-8")
+
+
+def _workflow():
+    # BaseLoader preserves "on" as a key (YAML 1.1 otherwise treats it as True)
+    # and cannot construct executable Python objects.
+    return yaml.load(_text(".github/workflows/newsletter.yml"), Loader=yaml.BaseLoader)
+
+
+def _steps():
+    steps = _workflow()["jobs"]["send"]["steps"]
+    assert len({step["name"] for step in steps}) == len(steps)
+    return {step["name"]: step for step in steps}
+
+
+def _condition(value):
+    return value.removeprefix("${{").removesuffix("}}").strip()
 
 
 def _canonical(name: str) -> str:
@@ -83,20 +100,23 @@ class TestOnlyDeliveryReasonsCanStopADelivery:
 
         Native event age is intentionally a delivery condition: an obsolete queued
         request must not authorize SMTP. It is not an expiring dependency manifest.
-        Cache import/export are explicitly best-effort and carry no personal data.
+        Cache import/export are explicitly best-effort. Queried market data
+        leave the runner only through the encrypted allowlist.
         """
-        workflow = _text(".github/workflows/newsletter.yml")
-        commands = re.findall(r"(?m)^        run:\s*(.+?)\s*$", workflow)
-
-        assert commands == [
-            "python scripts/resolve_newsletter_event.py",
-            "python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt",
-            "python -m compileall -q tarzan scripts",
-            "python -m pip check",
-            "python -m tarzan.data.public_cache import",
-            "python scripts/send_newsletter.py",
-            "python -m tarzan.data.public_cache export",
-        ], commands
+        steps = _steps()
+        expected = {
+            "Resolve native event context": "python scripts/resolve_newsletter_event.py",
+            "Compile positive Tarzan scopes": "python -m compileall -q tarzan scripts",
+            "Check installed dependency consistency": "python -m pip check",
+            _PUBLICATION_STEP: "python scripts/send_newsletter.py",
+            "Verify newsletter without delivery": "python scripts/verify_newsletter.py",
+        }
+        assert all(steps[name]["run"] == command for name, command in expected.items())
+        assert list(steps).index("Check installed dependency consistency") < list(steps).index(_PUBLICATION_STEP)
+        for step in steps.values():
+            if "cache" in step.get("run", "") or "/cache/" in step.get("uses", ""):
+                assert step.get("continue-on-error") == "true", step["name"]
+        assert _condition(steps[_PUBLICATION_STEP]["if"]) == "!inputs.verify_only"
 
 
 class TestCredentialsReachOnlyThePublicationStep:
@@ -108,18 +128,28 @@ class TestCredentialsReachOnlyThePublicationStep:
     third-party action compromised upstream sees none of them.
     """
 
-    def test_secrets_appear_in_no_other_step(self):
-        workflow = _text(".github/workflows/newsletter.yml")
-
-        step = ""
+    def test_native_credentials_are_scoped_to_their_actual_consumers(self):
+        verify = "Verify newsletter without delivery"
+        allowed = {
+            "SMTP_USER": {_PUBLICATION_STEP},
+            "SMTP_PASS": {_PUBLICATION_STEP},
+            "RECIPIENT_EMAIL": {_PUBLICATION_STEP},
+            "GEMINI_API_KEY": {_PUBLICATION_STEP},
+            "DELIVERY_CLAIM_ENDPOINT": {_PUBLICATION_STEP},
+            "DELIVERY_CLAIM_TOKEN": {_PUBLICATION_STEP},
+            "DRIVE_FOLDER_ID": {_PUBLICATION_STEP, verify},
+            "GOOGLE_DRIVE_CREDENTIALS_JSON": {_PUBLICATION_STEP, verify},
+            "TARZAN_CACHE_KEY_B64": {
+                "Verify protected cache key", "Validate and import encrypted market snapshot",
+                "Encrypt updated market snapshot", _PUBLICATION_STEP, verify,
+            },
+        }
         offenders = []
-        for line in workflow.splitlines():
-            named = re.match(r"^      - name:\s*(.+?)\s*$", line)
-            if named:
-                step = named.group(1)
-            if "secrets." in line and step != _PUBLICATION_STEP:
-                offenders.append((step, line.strip()))
-
+        for name, step in _steps().items():
+            secret_names = re.findall(r"secrets\.([A-Z0-9_]+)", str(step))
+            for secret in secret_names:
+                if name not in allowed.get(secret, set()) or "uses" in step:
+                    offenders.append((name, secret))
         assert offenders == [], offenders
 
     def test_the_publication_step_is_the_one_that_sends(self):
@@ -131,9 +161,48 @@ class TestCredentialsReachOnlyThePublicationStep:
     def test_credentials_are_not_job_scoped(self):
         """A job-level ``env:`` would hand the secrets to every step in the job,
         which is the same exposure with tidier indentation."""
-        workflow = _text(".github/workflows/newsletter.yml")
-        assert not re.search(r"(?ms)^    env:\s*\n(?:      .+\n)*?      .+secrets\.",
-                             workflow)
+        workflow = _workflow()
+        assert "secrets." not in str(workflow.get("env", {}))
+        assert all("secrets." not in str(job.get("env", {})) for job in workflow["jobs"].values())
+
+    def test_no_email_mode_is_explicit_exclusive_and_has_no_delivery_credential(self):
+        workflow = _workflow()
+        option = workflow["on"]["workflow_dispatch"]["inputs"]["verify_only"]
+        assert option["type"] == "boolean" and option["default"] == "false"
+        step = _steps()["Verify newsletter without delivery"]
+        assert _condition(step["if"]) == "inputs.verify_only"
+        assert not any(name.startswith(("SMTP_", "RECIPIENT_", "GEMINI_", "DELIVERY_CLAIM_"))
+                       for name in step["env"])
+        assert "tarzan-newsletter-verify" in workflow["concurrency"]["group"]
+        assert "inputs.verify_only" in workflow["concurrency"]["group"]
+
+
+class TestPrivateStateLeavesOnlyAsCiphertext:
+    def test_queried_cache_and_diagnostics_use_explicit_ciphertext_files_not_directories(self):
+        from tarzan.data.protected_cache import FILENAME as MARKET_FILE, SCHEMA_VERSION
+        from tarzan.data.price_cache import _HISTORY_REPAIR_VERSION
+        from tarzan.runtime.diagnostics import FILENAME as DIAGNOSTIC_FILE
+
+        steps = _steps()
+        restore = steps["Restore encrypted market snapshot"]
+        save = steps["Save encrypted market snapshot"]
+        for step in (restore, save):
+            assert step["with"]["path"] == "${{ runner.temp }}/tarzan-sealed/" + MARKET_FILE
+            key = step["with"]["key"]
+            assert key.startswith(f"tarzan-sealed-market-v{SCHEMA_VERSION}-r{_HISTORY_REPAIR_VERSION}-")
+            assert all(fragment in key for fragment in (
+                "steps.cache_key.outputs.key_id", "github.run_id", "github.run_attempt",
+            ))
+        assert "steps.protected_export.outputs.nonempty == 'true'" in save["if"]
+        artifact = steps["Retain encrypted diagnostic evidence"]
+        assert artifact["with"]["path"] == "${{ runner.temp }}/tarzan-diagnostics/" + DIAGNOSTIC_FILE
+        assert artifact["if"] == "always() && !cancelled()"
+        assert artifact["with"]["retention-days"] == "14"
+        assert "secrets." not in str(artifact)
+
+    def test_the_public_projection_only_fills_missing_macro_histories(self):
+        step = _steps()["Validate and import public macro snapshot"]
+        assert "--only-missing" in step["run"]
 
 
 class TestTheSupplyChainIsPinned:

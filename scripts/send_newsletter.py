@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 # Make the tarzan package importable when invoked as a bare script from repo root.
@@ -24,20 +25,35 @@ from tarzan import log_redaction  # noqa: E402
 from tarzan.delivery import run_and_send  # noqa: E402
 
 from tarzan.runtime.logging import setup_logging  # noqa: E402
+from tarzan.runtime.diagnostics import capture_configured  # noqa: E402
+from tarzan.runtime.session import last_run_result  # noqa: E402
 
 setup_logging()
 log_redaction.install()
 
 
 def main():
+    previous_result = last_run_result()
+    started = time.monotonic()
+    exit_code = 1
+    error_type = None
     try:
-        return run_and_send()
-    except Exception:
+        exit_code = run_and_send()
+    except Exception as error:
+        error_type = type(error).__name__
         logging.getLogger("tarzan.delivery").exception(
             "Newsletter entry point failed.",
             extra={"public_code": "NEWSLETTER_ENTRYPOINT_FAILED"},
         )
-        return 1
+    finally:
+        result = last_run_result()
+        capture_configured(
+            result if result is not previous_result else None,
+            operation="send", exit_code=exit_code,
+            duration_seconds=time.monotonic() - started,
+            entrypoint_error_type=error_type,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

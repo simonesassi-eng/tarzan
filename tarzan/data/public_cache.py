@@ -173,19 +173,24 @@ def export_snapshot(directory) -> int:
     return len(tables)
 
 
-def import_snapshot(directory) -> int:
+def import_snapshot(directory, *, only_missing=False) -> int:
     source = _directory(directory)
     frames = _read_snapshot(source / _FILENAME)
     # Validate the entire snapshot before any private cache write.
+    count = 0
     for symbol, frame in frames.items():
+        if only_missing and price_cache.load_history(symbol) is not None:
+            continue
         price_cache.store_history(symbol, frame)
-    return len(frames)
+        count += 1
+    return count
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("import", "export"))
     parser.add_argument("--directory", default=str(Path.home() / ".cache" / "tarzan-public"))
+    parser.add_argument("--only-missing", action="store_true", help="Preserve already restored run-local histories")
     args = parser.parse_args(argv)
     # Corrupt private-cache readers may log before they return a miss. Protect
     # their console too; the projection's generic exception message is not enough.
@@ -193,7 +198,9 @@ def main(argv=None):
     from tarzan import log_redaction
     log_redaction.install()
     try:
-        count = export_snapshot(args.directory) if args.operation == "export" else import_snapshot(args.directory)
+        count = export_snapshot(args.directory) if args.operation == "export" else import_snapshot(
+            args.directory, only_missing=args.only_missing,
+        )
         output = os.environ.get("GITHUB_OUTPUT")
         if output and args.operation == "export":
             with open(output, "a", encoding="utf-8") as handle:

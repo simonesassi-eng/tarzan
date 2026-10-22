@@ -110,6 +110,8 @@ def test_export_excludes_inputs_claims_cookies_output_and_manual_or_custom_histo
     price_cache.store_history("manual:LICENSED", prices())
     custom = prices().assign(quantity=12345)
     price_cache.store_history("ACCOUNT.MI", custom)
+    custom_dates = prices().assign(account_opened=pd.Timestamp("2025-01-01"))
+    price_cache.store_history("ACCOUNT-DATES.MI", custom_dates)
     for name in ("input", "output", "claims", "yahoo"):
         directory = private / name
         directory.mkdir()

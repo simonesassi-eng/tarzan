@@ -94,6 +94,19 @@ def test_new_run_exports_incremental_changes_and_retains_other_validated_macro_t
     assert tables[second]["Close"].iloc[-1] == 108
 
 
+def test_public_macro_fallback_cannot_replace_an_authenticated_run_local_history(cache_locations):
+    _, staging = cache_locations
+    first, second = sorted(public.PUBLIC_SYMBOLS)[:2]
+    price_cache.store_history(first, prices())
+    price_cache.store_history(second, prices())
+    public.export_snapshot(staging)
+    price_cache.store_history(first, prices(offset=10))
+    price_cache._history_path(second).unlink()
+    assert public.import_snapshot(staging, only_missing=True) == 1
+    assert price_cache.load_history(first)["Close"].iloc[-1] == 113
+    assert price_cache.load_history(second)["Close"].iloc[-1] == 103
+
+
 @pytest.mark.parametrize("case", [
     "schema", "policy", "repair", "checksum", "root-field", "private-symbol",
     "table-field", "private-column", "duplicates", "row-shape", "boolean",
@@ -251,7 +264,9 @@ def test_corrupt_private_cache_diagnostics_are_not_published(cache_locations, mo
         log_redaction.install(enabled=False)
 
 
-def test_workflow_caches_only_the_public_projection_and_updates_each_run():
+def test_workflow_public_plaintext_cache_is_still_only_the_fixed_projection():
+    import yaml
+
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/newsletter.yml").read_text()
     assert "queue: max" in workflow
@@ -259,10 +274,19 @@ def test_workflow_caches_only_the_public_projection_and_updates_each_run():
     assert workflow.count("path: ~/.cache/tarzan-public/snapshot.json") == 2
     assert "path: ~/.cache/tarzan\n" not in workflow
     assert "tarzan-market-cache-" not in workflow
-    assert workflow.count("${{ github.run_id }}-${{ github.run_attempt }}") == 2
+    steps = yaml.load(workflow, Loader=yaml.BaseLoader)["jobs"]["send"]["steps"]
+    public_steps = [
+        step for step in steps
+        if step.get("with", {}).get("path") == "~/.cache/tarzan-public/snapshot.json"
+    ]
+    assert len(public_steps) == 2
+    assert all("${{ github.run_id }}-${{ github.run_attempt }}" in step["with"]["key"]
+               for step in public_steps)
     assert "actions/cache/restore@" in workflow and "actions/cache/save@" in workflow
     assert "steps.cache_export.outcome == 'success'" in workflow
     assert "steps.cache_export.outputs.nonempty == 'true'" in workflow
     assert "python -m tarzan.data.public_cache import" in workflow
     assert "python -m tarzan.data.public_cache export" in workflow
-    assert "upload-artifact" not in workflow
+    artifacts = [step for step in steps if "upload-artifact@" in step.get("uses", "")]
+    assert all(step["with"]["path"].endswith("/report.sealed") for step in artifacts)
+    assert all("secrets." not in str(step) for step in artifacts)

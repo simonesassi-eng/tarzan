@@ -23,7 +23,9 @@ Neither authenticated request headers nor credentials belong in a tape.
 
 Inputs are copied and checksummed. Identity-cache evidence is copied separately;
 history starts cold to retain the raw prices before any split repair. The
-captured run boundary is reused. Tape JSON is non-executable and checksummed.
+captured run boundary is reused, including cache TTL selection. Advancing the
+host date cannot silently expire the copied identity evidence during replay;
+the process-wide transport clock is not changed. Tape JSON is non-executable and checksummed.
 An unknown provider request or an uncaptured network transport terminates
 replay; it must never silently introduce a fresh quote.
 

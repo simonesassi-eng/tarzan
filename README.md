@@ -44,7 +44,7 @@ output/<effective-or-live-date>/<attempt-id>/
   newsletter.html       # when normal/degraded rendering is allowed
 ```
 
-The manifest maps the operational Attempt ID to the deterministic Analysis ID and declares `storage_scope=local`, ephemerality, checksums, and `retention_guarantee=none`. Automation-local files are ephemeral; no workflow uploads them or promises remote recovery.
+The manifest maps the operational Attempt ID to the deterministic Analysis ID and declares `storage_scope=local`, ephemerality, checksums, and `retention_guarantee=none`. Automation-local files remain ephemeral. The newsletter workflow separately retains an authenticated **encrypted** diagnostic projection for 14 days; it never uploads this plaintext artifact set or raw SDK logs. Recovery requires the dedicated snapshot key.
 
 Optional candidate backtests/workbooks require `--what-if`. They run after the
 core manifest commits, under `output/<date>/what-if/<attempt-id>/`, and cannot
@@ -92,6 +92,10 @@ Provider transport policies in `tarzan/config/constants.yaml` enforce native
 I/O timeouts, bounded retries and a shared run deadline. They are separate from
 instrument/data-class acceptance policies for freshness, coverage and permitted
 fallbacks. The deadline does not forcibly terminate arbitrary Python/CPU work.
+Portfolio history (including closed positions) and required risk/geography
+references precede optional watchlist discovery. Optional native work has its
+own deadline and leaves a configured reserve for final evidence/publication.
+Yahoo batches retain bounded per-symbol concurrency and the native run owner.
 
 Primary, fallback, stale, missing and unsupported valuations remain labeled.
 An anchor cannot become primary because display taxonomy changes. Accepted
@@ -127,15 +131,22 @@ acknowledgment means server acceptance, not inbox receipt or exactly-once delive
 Apps Script owns the schedule and authenticated per-message Update requests.
 Actions uses a bounded native queue and checks the oldest request/run age
 through the final SMTP boundary; a request older than 45 minutes is skipped.
-This is not a timing/receipt SLA. Only one fixed macro-price projection is
-publicly cached, never portfolio queries, identities or manual/licensed data.
+This is not a timing/receipt SLA. One fixed macro-price projection is publicly
+cached. Queried market histories/identities can persist **only as authenticated
+ciphertext** under `TARZAN_CACHE_KEY_B64`, never as a public plaintext directory.
+Inputs, claims, SDK cookies and manual/licensed histories are excluded.
+Restoration preserves original timestamps; it does not make stale data fresh.
+Unique cache keys per attempt persist learned mappings even after a same-day hit.
 Public console output contains fixed status codes, not financial prose or
 tracebacks. Older public logs/history do not become private retroactively.
 
 The standalone `Checks` workflow runs the full suite on pushes/pull requests.
 Newsletter preflight validates native event metadata, compilation and installed
 dependency consistency, without Drive/Gemini/claim/recipient/SMTP credentials.
-Those secrets are scoped to the publication step. Actions are SHA-pinned;
+Mail/Gemini/claim secrets are scoped to the publication step. The explicit
+`verify_only` mode reads Drive inputs and renders with no mail/recipient/claim
+credentials, no AI, no SMTP and no delivery claim. The snapshot key is bound
+only to native consumers, not external actions. Actions are SHA-pinned;
 installation enforces package hashes. A failed `Checks` run adds a notice rather
 than itself withholding a digest; operational freshness, financial/semantic
 gates, claims and SMTP can still block it. Dependency pins do not expire merely
@@ -143,6 +154,8 @@ because a calendar date passes.
 
 See [automation setup](docs/setup-newsletter.md) for the actual schedule,
 permissions and the separate Apps Script update/deployment steps.
+See [newsletter recovery and no-email verification](docs/NEWSLETTER_RESILIENCE.md)
+for encrypted diagnostics, key recovery and cold/warm checks.
 
 ## Development and evidence
 

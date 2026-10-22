@@ -7,6 +7,7 @@ results. The final context is used to build a PortfolioMetrics DTO.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable, Optional
 
 import pandas as pd
@@ -191,9 +192,13 @@ class MetricsEngine:
         degraded: list[str] = []
         for computer in self._computers:
             name = getattr(computer, "__name__", str(computer))
+            started = time.perf_counter()
+            outcome = "INTERRUPTED"
             try:
                 computer(ctx)
+                outcome = "SUCCEEDED"
             except Exception as e:
+                outcome = "FAILED"
                 logger.error("Metric computer '%s' failed: %s", name, e)
                 degraded.append(name)
                 dq.error(
@@ -202,6 +207,18 @@ class MetricsEngine:
                     "defaults (blank/zero) and should NOT be read as a real result",
                     context=name,
                 )
+            finally:
+                from tarzan.runtime.ledger import LedgerEntryType
+                from tarzan.runtime.session import current_session
+
+                session = current_session()
+                if session is not None:
+                    session.ledger.append(LedgerEntryType.STAGE, {
+                        "stage": f"metrics:{name}",
+                        "outcome": "DEGRADED" if outcome == "SUCCEEDED"
+                        and name in ctx.get("_degraded", []) else outcome,
+                        "duration_ms": max(0.0, time.perf_counter() - started) * 1000,
+                    })
         degraded = list(dict.fromkeys(
             degraded + list(ctx.get("_degraded", []))
         ))

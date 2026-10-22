@@ -173,7 +173,7 @@ is not treated as absence.
 In your repo on github.com:
 
 1. **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-2. Add these five secrets exactly:
+2. Add these input/mail secrets exactly:
 
 | Name                            | Value                                                  |
 |---------------------------------|--------------------------------------------------------|
@@ -194,24 +194,49 @@ not fall back locally. With neither present, the intentional fallback is
 host-local: an empty ephemeral runner cannot promise cross-run deduplication.
 SMTP acknowledgment never proves inbox receipt.
 
-Actions logs fixed status codes. Its public cache is one allowlisted
-fixed-macro price snapshot, not the private runtime cache or the Drive files.
-Private staging/output are ephemeral and not uploaded as artifacts.
+For encrypted cache persistence and recoverable diagnostics, configure one
+additional dedicated secret, `TARZAN_CACHE_KEY_B64`. Generate a new key only on
+first installation, after installing the pinned dependencies:
+
+```bash
+python -m tarzan.data.protected_cache generate-key \
+  --key-file .private/secrets/tarzan-cache-key.b64
+gh secret set TARZAN_CACHE_KEY_B64 < .private/secrets/tarzan-cache-key.b64
+```
+
+Keep that owner-only recovery file safe and outside git. Never reuse a mail,
+Drive or GitHub credential as the encryption key. Do not regenerate a working
+key just to update code: old diagnostics require the old key.
+
+Actions logs fixed status codes. The public macro cache remains a fixed
+allowlist; queried market histories and identity maps persist only as
+authenticated ciphertext. Inputs, claims, cookies and manual/licensed data are
+excluded. Plaintext staging/output remain ephemeral and are never uploaded.
+Only `report.sealed` is retained as a diagnostic artifact, for 14 days.
 
 ---
 
-## 5. Test the workflow with a manual run
+## 5. Verify without email, then optionally test a real delivery
 
 1. github.com → your repo → **Actions** tab → **Tarzan Newsletter**.
-2. Click **Run workflow** → leave the label as `manual` → **Run**.
+2. Click **Run workflow**, select the intended branch and enable **verify_only**.
+   Run it: this separate entry point has no mail credentials, cannot claim or
+   invoke SMTP, and disables AI. Ordinary automatic requests still send normally.
 3. Wait for completion; queueing, providers and native services affect duration.
-4. A normal subject has the form `Portfolio Digest - HH:MM - <session date>
+4. Inspect the step **Verify newsletter without delivery**, then privately
+   decrypt its diagnostic artifact as described in
+   [the recovery guide](NEWSLETTER_RESILIENCE.md). Check source coverage and
+   required references, not just a green badge.
+5. Only if you intend to send an actual email, launch another run with
+   **verify_only** disabled. A normal subject has the form
+   `Portfolio Digest - HH:MM - <session date>
    ±X.XX%`. Fallback bases are labeled `1D` or `uP&L`; trigger labels and
    portfolio totals are not appended.
-5. Check fixed statuses such as `SMTP_ACKNOWLEDGED`. A green run can also be
+6. Check fixed statuses such as `SMTP_ACKNOWLEDGED`. A green delivery run can also be
    `SKIPPED_STALE`, `SUPPRESSED_DUPLICATE` or a sanitized failure notification;
    it does not itself prove a fresh normal newsletter reached the inbox.
-   Full financial diagnostics belong in a private local run, not public logs.
+   Full financial diagnostics belong in a private local/decrypted report,
+   never public logs.
 
 > **Something failed?** Jump to the troubleshooting section at the bottom.
 

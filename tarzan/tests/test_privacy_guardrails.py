@@ -105,17 +105,33 @@ class TestTheLogRedactionStaysWired:
             "found no workflow entrypoints — the regex above no longer matches"
 
 
-class TestNoWorkflowPublishesAnArtifact:
-    """On a public repo a run's artifacts are downloadable by anyone, and a
-    rendered issue carries the positions AND their values. Nothing uploads one
-    today; this is what keeps that true."""
+class TestNoWorkflowPublishesPrivatePlaintext:
+    """Public artifacts remain public storage. Only the explicitly encrypted
+    diagnostic file may leave a runner; a rendered issue or directory may not."""
 
-    def test_no_upload_artifact_step(self):
-        offenders = [wf.name for wf in (REPO / ".github" / "workflows").glob("*.yml")
-                     if "upload-artifact" in wf.read_text(encoding="utf-8")]
+    def test_only_the_exact_encrypted_diagnostic_artifact_can_be_uploaded(self):
+        import yaml
+        from tarzan.runtime.diagnostics import FILENAME
+
+        offenders = []
+        for wf in (REPO / ".github" / "workflows").glob("*.yml"):
+            workflow = yaml.load(wf.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+            for job in workflow.get("jobs", {}).values():
+                for step in job.get("steps", []):
+                    if "upload-artifact" not in step.get("uses", ""):
+                        continue
+                    if (
+                        wf.name != "newsletter.yml"
+                        or step.get("name") != "Retain encrypted diagnostic evidence"
+                        or step.get("with", {}).get("path")
+                        != "${{ runner.temp }}/tarzan-diagnostics/" + FILENAME
+                        or "secrets." in str(step)
+                    ):
+                        offenders.append((wf.name, step.get("name")))
         assert not offenders, (
-            f"{offenders} upload an artifact. On a public repo anyone can "
-            f"download it. Print what you need into the (redacted) log instead.")
+            f"{offenders} publish an unapproved artifact. Never upload private "
+            "HTML, inputs, plaintext reports, cache directories or SDK logs."
+        )
 
 
 class TestNoPersonalIdentityOnCommits:
