@@ -196,16 +196,26 @@ def test_real_yfinance_http_port_obeys_policy_without_sdk_retry_multiplication(m
     assert max(caps) == 2
 
 
-def test_owned_batch_retains_operation_context_and_disables_public_progress(monkeypatch):
+def test_owned_batch_retains_the_native_owner_without_shared_sdk_batch_state(monkeypatch):
     import yfinance
+    from tarzan.runtime.session import current_session
     owner, _ = budget()
     observed = []
-    monkeypatch.setattr(yfinance, "download", lambda symbols, **kwargs: observed.append(kwargs) or pd.DataFrame())
+
+    class Ticker:
+        def __init__(self, symbol, **kwargs):
+            observed.append((kwargs["session"], current_session()))
+
+        def history(self, **kwargs):
+            assert "progress" not in kwargs
+            return pd.DataFrame()
+
+    monkeypatch.setattr(yfinance, "Ticker", Ticker)
+    monkeypatch.setattr(yfinance, "download", lambda *args, **kwargs: pytest.fail("shared SDK coordinator"))
     with owned(owner), owner.operation("yahoo"):
         _yf_net.download(["SYNTHETIC.X"], threads=True, progress=True)
-    assert observed[0]["threads"] is False
-    assert observed[0]["progress"] is False
-    assert "session" in observed[0]
+        assert observed[0][0] is owner.yahoo_client()
+        assert observed[0][1].transport is owner
 
 
 @pytest.mark.parametrize("provider", ["justetf", "openfigi", "borsa"])

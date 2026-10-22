@@ -11,6 +11,8 @@ the spacing holds ACROSS modules, not just within one.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import logging
 import random
 import threading
@@ -92,14 +94,100 @@ def ticker(symbol):
 
 
 def download(symbols, **kwargs):
-    """Native batch port; owned SDK threads must not lose the operation context."""
+    """Batch native Ticker.history calls with owned, bounded worker contexts.
+
+    The SDK's batch coordinator has process-global result dictionaries and
+    disables threads under DEBUG logging. Neither owns Tarzan's ContextVars.
+    Owned runs therefore keep the SDK's history/HTTP ports, but coordinate
+    them themselves; no shared SDK batch state is changed.
+    """
     import yfinance as yf
     from tarzan.runtime.transport import current_budget
     budget = current_budget()
     kwargs["progress"] = False
-    if budget is not None:
-        kwargs.update(session=budget.yahoo_client(), threads=False)
-    return yf.download(symbols, **kwargs)
+    if budget is None:
+        return yf.download(symbols, **kwargs)
+    return _owned_download(symbols, **kwargs)
+
+
+def _owned_download(symbols, **kwargs):
+    import pandas as pd
+    from yfinance.utils import empty_df
+    from tarzan import config
+
+    raw_symbols = symbols.replace(",", " ").split() if isinstance(symbols, str) else symbols
+    ordered = sorted({str(symbol).upper() for symbol in raw_symbols})
+    if not ordered:
+        return pd.DataFrame()
+    arguments = {
+        "period": None, "interval": "1d", "start": None, "end": None,
+        "prepost": False, "actions": False, "auto_adjust": True,
+        "back_adjust": False, "repair": False, "rounding": False,
+        "keepna": False, "timeout": 10,
+    }
+    group_by = kwargs.pop("group_by", "column")
+    ignore_tz = kwargs.pop("ignore_tz", None)
+    multi_level_index = kwargs.pop("multi_level_index", True)
+    threads = kwargs.pop("threads", True)
+    kwargs.pop("progress", None)
+    kwargs.pop("session", None)  # a caller cannot replace the run-owned session
+    if set(kwargs) - set(arguments):
+        raise TypeError("unsupported Yahoo batch parameter")
+    arguments.update(kwargs)
+    if ignore_tz is None:
+        ignore_tz = arguments["interval"][-1] not in {"m", "h"}
+    maximum = config.max_workers()
+    if type(maximum) is not int or maximum < 1:
+        raise ValueError("max_workers must be a positive integer")
+    if threads is True:
+        workers = maximum
+    elif threads is False or threads is None:
+        workers = 1
+    elif type(threads) is int and threads > 0:
+        workers = min(maximum, threads)
+    else:
+        raise ValueError("Yahoo batch threads must be boolean or a positive integer")
+
+    def fetch(symbol):
+        # Each history operation, including its cookie/crumb requests/retries,
+        # owns its timeout. A large catalog is NOT one 20-second operation.
+        frame = retry(lambda: ticker(symbol).history(**arguments), what="batch history")
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return empty_df()
+        frame = frame.copy()
+        if ignore_tz:
+            frame.index = frame.index.tz_localize(None)
+        return frame
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(ordered))) as pool:
+        pending = {
+            symbol: pool.submit(copy_context().run, fetch, symbol)
+            for symbol in ordered
+        }
+        frames = {symbol: future.result() for symbol, future in pending.items()}
+    # Match yfinance.download's public dataframe/index/column contract.
+    frame = pd.concat(frames, axis=1, sort=True, names=["Ticker", "Price"])
+    frame.index = pd.to_datetime(frame.index, utc=not ignore_tz)
+    if group_by == "column":
+        frame.columns = frame.columns.swaplevel(0, 1)
+        frame.sort_index(level=0, axis=1, inplace=True)
+    if not multi_level_index and len(ordered) == 1:
+        frame = frame.droplevel(0 if group_by == "ticker" else 1, axis=1).rename_axis(None, axis=1)
+    return frame
+
+
+def fetch_download(symbols, *, what: str, log: Optional[logging.Logger] = None, **kwargs):
+    """Pace a batch once; cap native I/O per child and by the global run budget."""
+    from tarzan.runtime.transport import current_budget
+    budget = current_budget()
+    if budget is None:
+        return fetch_yf(lambda: download(symbols, **kwargs), what=what, log=log)
+    try:
+        space_yf_call()
+        return download(symbols, **kwargs)
+    except Exception as error:
+        (log or logger).debug("%s batch unavailable (%s)", what, type(error).__name__)
+        return None
 
 
 def yahoo_data():

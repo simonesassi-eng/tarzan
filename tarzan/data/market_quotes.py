@@ -1009,10 +1009,12 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                 # keeps exactly the CURRENT session out of whatever comes
                 # back, so a wider window never means a multi-day chart,
                 # only a better chance of finding a single real one.
-                return _yf_net.download(symbols, period="5d", interval="15m",
-                                   group_by="ticker", progress=False, threads=True)
-        # Shared spacing+retry so the intraday batch survives a 429 burst.
-        raw = _yf_net.fetch_yf(_download, what="intraday batch", log=logger)
+                return _yf_net.fetch_download(
+                    symbols, period="5d", interval="15m", group_by="ticker",
+                    progress=False, threads=True, what="intraday batch", log=logger,
+                )
+        # The catalog has per-symbol deadlines, not one timeout for all rows.
+        raw = _download()
         if raw is None or len(raw) == 0:
             return {}
         # One instant for the whole batch: every symbol's session and freshness
