@@ -211,6 +211,44 @@ def test_foreign_daily_fx_labels_and_per_100_units_are_causal(currency, rate):
     assert bonds.price_on(prices, ISIN, date(2026, 1, 14)) is None  # FX itself is stale
 
 
+@pytest.mark.parametrize("currency,rate", [("ZAR", 0.05), ("USD", 0.9)])
+def test_new_fx_revalues_last_native_close_even_without_a_security_trade(currency, rate):
+    raw = entry(currency)
+    raw["prices"] = raw["prices"][::2]  # Jan 5, 7, 9: no bond print on Jan 6/8
+    fx = pd.Series(
+        [rate, rate * 1.01, rate * 1.02, rate * 1.03, rate * 1.04],
+        index=pd.date_range("2026-01-05", periods=5, tz="Europe/London"),
+    )
+    prices = bonds.eur_per_nominal(raw, as_of=END, fx=fx)
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 6)) == pytest.approx(98 * rate * 1.01 / 100)
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 8)) == pytest.approx(100 * rate * 1.03 / 100)
+    assert prices.attrs[bonds.OBSERVATIONS_ATTR]["2026-01-06"] == "2026-01-05"
+    assert prices.attrs[bonds.OBSERVATIONS_ATTR]["2026-01-08"] == "2026-01-07"
+
+
+def test_fresh_fx_cannot_hide_an_overage_native_bond_price():
+    fx = pd.Series([0.05] * 16, index=pd.date_range("2026-01-05", periods=16))
+    prices = bonds.eur_per_nominal(entry("ZAR"), as_of=date(2026, 1, 20), fx=fx)
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 16)) == pytest.approx(102 * 0.05 / 100)
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 17)) is None
+
+
+def test_fx_dates_before_first_bond_print_and_after_analysis_are_not_backward_evidence():
+    raw = entry("ZAR")
+    raw["prices"] = raw["prices"][2:]  # first native close Jan 7
+    fx = pd.Series([0.05] * 5 + [0.99], index=pd.date_range("2026-01-05", periods=6))
+    prices = bonds.eur_per_nominal(raw, as_of=date(2026, 1, 8), fx=fx)
+    assert prices.index[0] == pd.Timestamp("2026-01-07")
+    assert prices.index[-1] == pd.Timestamp("2026-01-08")
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 6)) is None
+    assert bonds.price_on(prices, ISIN, date(2026, 1, 8)) == pytest.approx(101 * 0.05 / 100)
+
+
+def test_analysis_before_all_native_prices_is_empty_even_when_fx_exists():
+    fx = pd.Series([0.05], index=pd.to_datetime(["2026-01-02"]))
+    assert bonds.eur_per_nominal(entry("ZAR"), as_of=date(2026, 1, 4), fx=fx).empty
+
+
 def test_missing_stale_invalid_or_future_fx_is_never_a_one_to_one_conversion():
     for fx in (
         pd.Series(dtype=float),

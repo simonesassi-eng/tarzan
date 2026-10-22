@@ -401,6 +401,8 @@ def eur_per_nominal(entry, *, as_of: date, fx=None) -> pd.Series:
         index=pd.to_datetime([point["date"] for point in points]), dtype=float,
     )
     prices = prices[prices.index.date <= as_of]
+    if prices.empty:
+        return pd.Series(dtype=float)
     observations = pd.Series(prices.index, index=prices.index)
     if entry["currency"] != "EUR":
         from tarzan.data import enricher
@@ -415,11 +417,21 @@ def eur_per_nominal(entry, *, as_of: date, fx=None) -> pd.Series:
         fx = fx[~fx.index.duplicated(keep="last")]
         if fx.empty:
             return pd.Series(dtype=float)
-        rates = fx.reindex(prices.index, method="ffill")
-        observations = pd.Series(fx.index, index=fx.index).reindex(prices.index, method="ffill")
-        age = (pd.Series(prices.index, index=prices.index) - observations).dt.days
-        prices = (prices * rates)[age.between(0, MAX_CARRY_DAYS)].dropna()
-        observations = observations.reindex(prices.index)
+        # Security and currency calendars are independent. A new FX rate
+        # revalues the last known native close even on a venue holiday or
+        # a day without a bond trade; it must not renew that close's age.
+        days = prices.index.union(fx.index).sort_values()
+        days = days[days >= prices.index[0]]
+        dated = pd.Series(days, index=days)
+        native_observations = observations.reindex(days, method="ffill")
+        fx_observations = pd.Series(fx.index, index=fx.index).reindex(days, method="ffill")
+        native_age = (dated - native_observations).dt.days
+        fx_age = (dated - fx_observations).dt.days
+        valid = native_age.between(0, MAX_CARRY_DAYS) & fx_age.between(0, MAX_CARRY_DAYS)
+        prices = (prices.reindex(days, method="ffill") * fx.reindex(days, method="ffill"))[valid].dropna()
+        observations = native_observations.where(
+            native_observations <= fx_observations, fx_observations,
+        ).reindex(prices.index)
     prices = prices / 100.0
     prices = prices[prices.map(lambda value: math.isfinite(value) and value > 0)]
     prices.attrs = {

@@ -54,6 +54,11 @@ chart's Euronext Milan history with:
   neither prices nor FX are backward-filled. Both observations have a
   seven-calendar-day carry limit.
 
+Security and FX observation calendars are aligned independently. A new FX
+observation revalues the last known native bond close even when its venue
+is closed or no bond trade occurred. The original price date remains attached:
+fresh FX cannot turn an overage security close into fresh market evidence.
+
 The loader runs once before valuation, with at most three context-owned
 workers and the existing optional-provider budget and publication reserve.
 No provider I/O occurs inside the daily price resolver. Complete cached closed
