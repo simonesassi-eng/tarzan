@@ -192,6 +192,7 @@ def preprocess_benchmarks(
     fetch_history: Callable[[str], pd.Series] | None = None,
     required_names: tuple[str, ...] = (),
     workers: int = 1,
+    before_optional: Callable[[Mapping[str, ResolvedBenchmark]], None] | None = None,
 ) -> tuple[dict[str, ResolvedBenchmark], tuple[str, ...]]:
     """Resolve the complete benchmark universe exactly once for one run.
 
@@ -201,6 +202,9 @@ def preprocess_benchmarks(
     are returned for the pre-delivery semantic gate.
 
     Required analytical references are resolved before the optional catalog.
+    An owned caller may prefetch primary evidence through ``before_optional``;
+    this callback receives only positively resolved required identities and
+    runs before the optional deadline is entered.
     Optional work shares a bounded deadline across workers, but the returned
     catalog and errors retain input order regardless of scheduling.
     """
@@ -252,6 +256,12 @@ def preprocess_benchmarks(
     for name, input_ticker in requested.items():
         if name in required:
             outcomes[name] = resolve(name, input_ticker)
+
+    if before_optional is not None:
+        before_optional({
+            name: outcome[0] for name, outcome in outcomes.items()
+            if outcome[0] is not None
+        })
 
     def optional(name, input_ticker):
         if budget is not None and not budget.optional_request_allowed("yahoo"):

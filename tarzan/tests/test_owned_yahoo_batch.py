@@ -179,3 +179,101 @@ def test_exhausted_run_starts_no_child_native_requests(monkeypatch, owner):
     monkeypatch.setattr(_yf_net, "ticker", lambda symbol: pytest.fail("started after the run deadline"))
     frame = _yf_net.download(["A.MI", "B.MI"], group_by="ticker")
     assert frame.empty
+
+
+def test_overlapping_batches_reuse_owned_history_and_return_defensive_copies(monkeypatch, owner):
+    seen = []
+    monkeypatch.setattr(_yf_net, "ticker", lambda symbol: SimpleNamespace(
+        history=lambda **kwargs: seen.append(symbol) or history(symbol),
+    ))
+    first = _yf_net.download(["A.MI"], period="5d", interval="15m", group_by="ticker")
+    first.loc[:, ("A.MI", "Close")] = 999.0
+    second = _yf_net.download(["A.MI", "B.MI"], period="5d", interval="15m", group_by="ticker")
+    assert sorted(seen) == ["A.MI", "B.MI"]
+    assert second["A.MI"]["Close"].tolist() == [11.0, 12.0]
+    assert second["B.MI"]["Close"].tolist() == [11.0, 12.0]
+
+
+def test_batch_memo_never_combines_different_history_parameters(monkeypatch, owner):
+    seen = []
+    monkeypatch.setattr(_yf_net, "ticker", lambda symbol: SimpleNamespace(
+        history=lambda **kwargs: seen.append((symbol, kwargs["period"])) or history(symbol),
+    ))
+    _yf_net.download(["A.MI"], period="5d", interval="15m")
+    _yf_net.download(["A.MI"], period="1d", interval="15m")
+    _yf_net.download(["A.MI"], period="5d", interval="15m", group_by="ticker")
+    assert seen == [("A.MI", "5d"), ("A.MI", "1d")]
+
+
+def test_batch_memo_belongs_to_the_run_not_the_module(monkeypatch, owner):
+    from contextvars import Context
+
+    seen = []
+    monkeypatch.setattr(_yf_net, "ticker", lambda symbol: SimpleNamespace(
+        history=lambda **kwargs: seen.append(symbol) or history(symbol),
+    ))
+    _yf_net.download(["A.MI"], period="5d", interval="15m")
+    context = RunContext("independent-batch", RunMode.LIVE, None, datetime.now(timezone.utc))
+    budget = ProviderBudget(ProviderTransportSettings.configured(), RunLedger(context.attempt_id))
+    other = RunSession(context, {}, budget.ledger, transport=budget)
+    def independent_run():
+        with runtime.bind_context(context), activate_session(other):
+            _yf_net.download(["A.MI"], period="5d", interval="15m")
+            _yf_net.download(["A.MI"], period="5d", interval="15m")
+
+    try:
+        Context().run(independent_run)
+    finally:
+        budget.close()
+    assert seen == ["A.MI", "A.MI"]
+
+
+def test_prefetched_facts_survive_expired_io_authority_without_new_requests(monkeypatch, owner):
+    seen = []
+    monkeypatch.setattr(_yf_net, "ticker", lambda symbol: SimpleNamespace(
+        history=lambda **kwargs: seen.append(symbol) or history(symbol),
+    ))
+    _yf_net.download(["A.MI"], period="5d", interval="15m", group_by="ticker")
+    owner.transport.deadline = 0
+    monkeypatch.setattr(_yf_net, "space_yf_call", lambda:
+                        owner.transport.call("yahoo", lambda timeout: None))
+    frame = _yf_net.fetch_download(
+        ["A.MI", "MISSING.MI"], period="5d", interval="15m",
+        group_by="ticker", what="expired synthetic batch",
+    )
+    assert frame["A.MI"]["Close"].tolist() == [11.0, 12.0]
+    assert frame["MISSING.MI"]["Close"].dropna().empty
+    assert seen == ["A.MI"]
+
+
+def test_concurrent_overlapping_batches_coalesce_the_same_native_history(monkeypatch, owner):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+
+    first_started, second_started, release = (threading.Event() for _ in range(3))
+    seen = []
+
+    def ticker(symbol):
+        def fetch(**kwargs):
+            assert current_session() is owner
+            seen.append(symbol)
+            if symbol == "A.MI":
+                first_started.set()
+                assert release.wait(timeout=3)
+            else:
+                second_started.set()
+            return history(symbol)
+        return SimpleNamespace(history=fetch)
+
+    monkeypatch.setattr(_yf_net, "ticker", ticker)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(copy_context().run, _yf_net.download, ["A.MI"], interval="15m")
+        assert first_started.wait(timeout=3)
+        second = pool.submit(copy_context().run, _yf_net.download, ["A.MI", "B.MI"], interval="15m")
+        try:
+            assert second_started.wait(timeout=3)
+        finally:
+            release.set()
+        assert not first.result(timeout=3).empty
+        assert not second.result(timeout=3).empty
+    assert sorted(seen) == ["A.MI", "B.MI"]

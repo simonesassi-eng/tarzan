@@ -88,6 +88,16 @@ optional reference discovery and 90 seconds reserved for final evidence and
 publication. Native timeout/retry/pacing budgets apply in copied worker contexts;
 these limits do not terminate arbitrary Python CPU work.
 
+After closed-position history and required reference resolution, the owned run
+prefetches canonical holding/target/reference bars and the fixed macro histories
+before optional listing discovery. Optional probes can consume a provider's
+rate quota even without exhausting the time budget. Existing quote, baseline,
+currency, identity and freshness selection still happens on the ordinary paths.
+Per-symbol batch histories are memoized only within that run, with every native
+history parameter in the key and defensive copies. Previously acquired facts
+remain readable after I/O authority expires; missing symbols cannot start new
+native requests. No disk TTL is renewed and no intraday snapshot is exported.
+
 For a code-only financial comparison, use
 [frozen KPI verification](FROZEN_KPI_VERIFICATION.md): same observations, input
 hashes, initial cache and captured clock. Two live runs answering at different

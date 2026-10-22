@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Callable, Optional
 
 import pandas as pd
@@ -244,6 +246,7 @@ class MetricsEngine:
             fetch_history=_fetch_benchmark_history,
             required_names=required_names,
             workers=cfg.max_workers(),
+            before_optional=self._prefetch_priority_quotes,
         )
         ctx["_benchmark_catalog"] = catalog
         ctx["benchmark_tickers"] = {
@@ -273,6 +276,87 @@ class MetricsEngine:
                 "Required benchmark source history is unavailable.",
                 extra={"public_code": "ESSENTIAL_BENCHMARK_UNAVAILABLE"},
             )
+
+    def _prefetch_priority_quotes(self, required_catalog) -> None:
+        """Acquire primary bars/history before optional discovery spends quota.
+
+        This only warms existing run-owned provider facts. Final quote selection,
+        baselines, identities and financial computations use their ordinary
+        paths; neither holdings nor analytical context are rewritten here.
+        """
+        from tarzan import runtime
+        from tarzan.runtime.ledger import LedgerEntryType
+        from tarzan.runtime.session import current_session
+
+        session = current_session()
+        required_names = (cfg.benchmark_beta_name(), cfg.benchmark_geo_allocation())
+        if (
+            session is None or not runtime.allows_live_transport()
+            or not self.holdings
+            or any(name not in required_catalog for name in required_names)
+        ):
+            return
+
+        from tarzan.data import _yf_net, enricher, market_quotes
+
+        macro_symbols = tuple(dict.fromkeys(symbol for _, symbol, _ in market_quotes.MARKETS))
+        symbols = list(macro_symbols)
+        primary_instruments = [
+            *self.holdings,
+            *(holding for holding in self.rebalance_seeds
+              if float(getattr(holding, "target_portfolio", 0.0) or 0.0) > 0),
+        ]
+        for holding in primary_instruments:
+            ticker = str(getattr(holding, "ticker", "") or "").strip()
+            isin = str(getattr(holding, "isin", "") or "").strip()
+            # An unresolved ISIN is not a discovered Yahoo listing.
+            if ticker and ticker.upper() != isin.upper() and ticker not in symbols:
+                symbols.append(ticker)
+        for record in required_catalog.values():
+            if record.ticker not in symbols:
+                symbols.append(record.ticker)
+
+        started = time.perf_counter()
+        outcome = "INTERRUPTED"
+        try:
+            try:
+                raw = _yf_net.fetch_download(
+                    symbols, period="5d", interval="15m", group_by="ticker",
+                    progress=False, threads=True, what="primary quote prefetch", log=logger,
+                )
+                outcome = "SUCCEEDED" if isinstance(raw, pd.DataFrame) and not raw.empty else "DEGRADED"
+            except Exception:
+                outcome = "DEGRADED"
+            # The immutable macro list has no identity discovery dependency.
+            # Every child inherits the owner and its native per-symbol deadline.
+            with ThreadPoolExecutor(max_workers=cfg.max_workers(), thread_name_prefix="tarzan-primary") as pool:
+                pending = [
+                    pool.submit(copy_context().run, enricher._fetch_history, symbol)
+                    for symbol in macro_symbols
+                ]
+                for future in pending:
+                    try:
+                        history = future.result()
+                    except Exception:
+                        outcome = "DEGRADED"
+                        continue
+                    if history is None or history.empty:
+                        outcome = "DEGRADED"
+        except Exception:
+            outcome = "DEGRADED"
+            logger.warning(
+                "Primary quote prefetch unavailable; ordinary quality policies remain active.",
+                extra={"public_code": "PRIMARY_QUOTE_PREFETCH_UNAVAILABLE"},
+            )
+        except BaseException:
+            outcome = "INTERRUPTED"
+            raise
+        finally:
+            session.ledger.append(LedgerEntryType.STAGE, {
+                "stage": "provider_prefetch:essential_quotes",
+                "outcome": outcome,
+                "duration_ms": max(0.0, time.perf_counter() - started) * 1000,
+            })
 
     @staticmethod
     def _benchmark_record(

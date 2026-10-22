@@ -114,6 +114,7 @@ def _owned_download(symbols, **kwargs):
     import pandas as pd
     from yfinance.utils import empty_df
     from tarzan import config
+    from tarzan.runtime.memo import memoized
 
     raw_symbols = symbols.replace(",", " ").split() if isinstance(symbols, str) else symbols
     ordered = sorted({str(symbol).upper() for symbol in raw_symbols})
@@ -151,7 +152,11 @@ def _owned_download(symbols, **kwargs):
     def fetch(symbol):
         # Each history operation, including its cookie/crumb requests/retries,
         # owns its timeout. A large catalog is NOT one 20-second operation.
-        frame = retry(lambda: ticker(symbol).history(**arguments), what="batch history")
+        frame = memoized(
+            "yahoo.batch_history", (symbol, tuple(arguments.items())),
+            lambda: retry(lambda: ticker(symbol).history(**arguments), what="batch history"),
+            legacy={},
+        )
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             return empty_df()
         frame = frame.copy()
@@ -178,12 +183,18 @@ def _owned_download(symbols, **kwargs):
 
 def fetch_download(symbols, *, what: str, log: Optional[logging.Logger] = None, **kwargs):
     """Pace a batch once; cap native I/O per child and by the global run budget."""
-    from tarzan.runtime.transport import current_budget
+    from tarzan.runtime.transport import ProviderBudgetExceeded, current_budget
     budget = current_budget()
     if budget is None:
         return fetch_yf(lambda: download(symbols, **kwargs), what=what, log=log)
     try:
-        space_yf_call()
+        try:
+            space_yf_call()
+        except ProviderBudgetExceeded:
+            # Previously acquired, owned facts need no new I/O authority.
+            # Missing children still enter retry's operation guard and cannot
+            # start native requests after the deadline.
+            pass
         return download(symbols, **kwargs)
     except Exception as error:
         (log or logger).debug("%s batch unavailable (%s)", what, type(error).__name__)
