@@ -32,6 +32,13 @@ _FIGI_ALIASES = ["0WAX", "18MF", "18MFD", "AM64", "AM64V",
                  "CL2", "CL22USD", "CL2GR", "CL2M", "CL2P"]
 
 
+@pytest.fixture(autouse=True)
+def _no_unstubbed_mapping_transport(monkeypatch):
+    from tarzan.data import enricher as E
+
+    monkeypatch.setattr(E, "_openfigi_raw", lambda isin: [])
+
+
 def test_taxonomy_membership_distinguishes_curated_from_alias():
     """The bridge needs a real membership test, not the echoing resolver."""
     # resolve_taxonomy_identity echoes unknown input back, so it cannot answer

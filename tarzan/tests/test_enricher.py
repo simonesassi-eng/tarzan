@@ -351,6 +351,7 @@ class TestTheResolutionCacheSelfHealsOnADeadFeed:
         monkeypatch.setattr(price_cache, "store_resolution", lambda *a, **kw: None)
         monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: "SAME FUND")
         monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: [])
+        monkeypatch.setattr(enricher, "_openfigi_raw", lambda isin: [])
         monkeypatch.setattr(enricher, "_fetch_ticker_info",
                             lambda symbol: {"currency": "EUR",
                                             "regularMarketPrice": 28.0,
@@ -400,6 +401,7 @@ class TestResolveIsinDeterminism:
     def _patch(self, monkeypatch, candidates_by_symbol, canonical_name, openfigi_syms):
         monkeypatch.setattr(enricher, "_openfigi_name", lambda isin: canonical_name)
         monkeypatch.setattr(enricher, "_openfigi_lookup", lambda isin: list(openfigi_syms))
+        monkeypatch.setattr(enricher, "_openfigi_raw", lambda isin: [])
 
         def fake_fetch(symbol):
             return candidates_by_symbol.get(symbol)
@@ -473,6 +475,7 @@ class TestResolveIsinDeterminism:
         }
         monkeypatch.setattr(enricher, "_openfigi_name", lambda i: "UBS CMCI Commodity Carry")
         monkeypatch.setattr(enricher, "_openfigi_lookup", lambda i: ["UEQC.DE"])
+        monkeypatch.setattr(enricher, "_openfigi_raw", lambda isin: [])
         monkeypatch.setattr(enricher, "_fetch_candidate_meta",
                             lambda s: cands.get(s))
         # Only UEQC.DE has a real series; the .SG line quotes but has no history.
@@ -524,6 +527,7 @@ class TestResolveIsinDeterminism:
         monkeypatch.setattr(enricher, "_openfigi_name", lambda i: canonical)
         monkeypatch.setattr(enricher, "_openfigi_lookup",
                             lambda i: ["CL2.PA", "CL2", "18MF.MU"])
+        monkeypatch.setattr(enricher, "_openfigi_raw", lambda isin: [])
         monkeypatch.setattr(enricher, "_fetch_ticker_info",
                             lambda s: info_by_symbol.get(s, {}))
         monkeypatch.setattr(enricher, "_fetch_history",

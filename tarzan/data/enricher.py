@@ -1302,98 +1302,81 @@ def _neg_str(s: str) -> tuple:
 
 
 def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candidate]:
-    """Build the deterministic candidate-symbol list and fetch metadata.
+    """Probe at most the declared number of symbols, including failed answers.
 
-    Symbols are probed in a deterministic order and de-duplicated:
-
-      1. the CSV/order ticker hint (if any), immediately followed by its
-         configured exchange variants when the hint is bare;
-      2. OpenFIGI-mapped exchange tickers;
-      3. every OpenFIGI *bare* ticker combined with each configured
-         exchange suffix — this is what lets the order-list path (which
-         only knows the ISIN) discover the same local listing, e.g.
-         ``EXUS`` + ``.MI`` → ``EXUS.MI``, that the holdings path finds
-         via its ticker hint;
-      4. the bare ISIN combined with each exchange suffix;
-      5. the raw ISIN as-is.
-
-    To bound network cost and rate-limit exposure the number of *fetched*
-    candidates is capped; because hint-derived listings precede the generic
-    sweep, a curated bare identity cannot be pushed beyond that cap.
+    Identity/name/currency/history ranking remains in ``_resolve_isin``.
+    Discovery prioritises explicit hints and mapped venues over speculative
+    alias × suffix combinations. A suffixless listing is prioritised only
+    when OpenFIGI's exchange/MIC maps to that venue, never from ISIN domicile.
     """
-    symbols: list[str] = []
-
-    def _add(sym: str) -> None:
-        if sym and sym not in symbols:
-            symbols.append(sym)
-
-    if hint_ticker and hint_ticker != clean_isin:
-        _add(hint_ticker)
-        if _is_expandable_bare_ticker(hint_ticker):
-            for suffix in ISIN_EXCHANGE_SUFFIXES:
-                _add(f"{hint_ticker}{suffix}")
-        else:
-            # hint_ticker already carries a venue suffix (e.g. "CL2.PA" from
-            # an OpenFIGI alias match against the curated taxonomy). Expand
-            # its bare root across every configured venue too, the same way
-            # a genuinely bare hint is expanded below -- otherwise the one
-            # exact suffixed form the alias bridge happened to return is the
-            # only qualified candidate tried, and the instrument's actual
-            # primary listing (e.g. CL2.MI) stays buried behind the
-            # unrelated alias roots in the generic sweep, unreached within
-            # the fetch budget -- which is exactly how 18MF.MU won originally.
-            bare_root = hint_ticker.split(".", 1)[0]
-            if _is_expandable_bare_ticker(bare_root):
-                _add(bare_root)
-                for suffix in ISIN_EXCHANGE_SUFFIXES:
-                    _add(f"{bare_root}{suffix}")
-
-    figi_syms = _openfigi_lookup(clean_isin)
-    bare_figi = [sym for sym in figi_syms if "." not in sym]
-
-    # Already-qualified OpenFIGI symbols (they carry a venue) go first.
-    for sym in figi_syms:
-        if "." in sym:
-            _add(sym)
-
-    # Then the bare tickers crossed with the configured venues, SUFFIX-MAJOR:
-    # every root on .MI, then every root on .SG, and so on. Ticker-major order
-    # (all eight venues of the first root, then the second) buried the primary
-    # listing behind the aliases of roots that do not trade.
-    #
-    # A BARE Yahoo symbol only quotes for suffixless US listings, so for a
-    # non-US ISIN every bare candidate is a Bloomberg/venue code that 404s. They
-    # are therefore probed LAST, after the qualified listings: OpenFIGI returned
-    # ten bare tickers for FR0010755611 (Amundi MSCI USA 2x) — exactly
-    # ``_MAX_RESOLVE_FETCHES`` — so the budget was spent entirely on 404s.
-    # CL2.MI (1276 closes) sat at candidate 51 and was never probed, and the
-    # ISIN resolved to a venue carrying a single close, which left the fund with
-    # no usable history at all.
-    for suffix in ISIN_EXCHANGE_SUFFIXES:
-        for sym in bare_figi:
-            _add(f"{sym}{suffix}")
-
-    # US listings are genuinely suffixless, so the bare roots still have to be
-    # tried — just not before every qualified venue candidate.
-    for sym in bare_figi:
-        _add(sym)
-
-    for suffix in ISIN_EXCHANGE_SUFFIXES:
-        _add(f"{clean_isin}{suffix}")
-    _add(clean_isin)
-
     metas: list[_Candidate] = []
-    for sym in symbols:
-        if len(metas) >= _MAX_RESOLVE_FETCHES:
-            break
+    for sym in _resolution_candidate_symbols(clean_isin, hint_ticker)[:_MAX_RESOLVE_FETCHES]:
         meta = _fetch_candidate_meta(sym)
         if meta is not None:
             metas.append(meta)
     return metas
 
 
-# Upper bound on how many candidate symbols we fetch per ISIN. Probed in a
-# deterministic order so the cap never changes the resolved result.
+def _resolution_candidate_symbols(clean_isin: str, hint_ticker: str) -> list[str]:
+    """Deterministic, deduplicated discovery plan, before any Yahoo probe."""
+    symbols: list[str] = []
+
+    def _add(sym: str) -> None:
+        if sym and sym not in symbols:
+            symbols.append(sym)
+
+    hinted_venues: list[str] = []
+    bare_root = ""
+    if hint_ticker and hint_ticker != clean_isin:
+        _add(hint_ticker)
+        if _is_expandable_bare_ticker(hint_ticker):
+            bare_root = hint_ticker
+        else:
+            bare_root = hint_ticker.split(".", 1)[0]
+            if _is_expandable_bare_ticker(bare_root):
+                _add(bare_root)
+            else:
+                bare_root = ""
+        if bare_root:
+            hinted_venues = [f"{bare_root}{suffix}" for suffix in ISIN_EXCHANGE_SUFFIXES]
+
+    figi_syms = _openfigi_lookup(clean_isin)
+    bare_figi = [sym for sym in figi_syms if "." not in sym]
+    # Raw OpenFIGI evidence is already run-memoized by the lookup above.
+    # Read every mapped venue: the compatibility alias list's eight-entry cap
+    # must not hide an authoritative US or primary European listing.
+    verified = _mapped_figi_symbols(_openfigi_raw(clean_isin))
+    for sym in verified:
+        if "." not in sym:
+            _add(sym)
+
+    venues = list(dict.fromkeys([
+        *hinted_venues,
+        *(sym for sym in verified if "." in sym),
+        *(sym for sym in figi_syms if "." in sym),
+    ]))
+    # Preserve the curated root within the real attempt cap while respecting
+    # configured venue preference. Metadata will still reject collisions.
+    for _, sym in sorted(enumerate(venues), key=lambda pair: (
+        _suffix_priority(pair[1]), pair[1] not in hinted_venues, pair[0],
+    )):
+        _add(sym)
+
+    # Unmapped aliases are speculative. Sweep suffix-major only after the
+    # verified venues and hinted root, then leave bare aliases/ISIN last.
+    for suffix in ISIN_EXCHANGE_SUFFIXES:
+        for sym in bare_figi:
+            _add(f"{sym}{suffix}")
+    for sym in bare_figi:
+        _add(sym)
+    for suffix in ISIN_EXCHANGE_SUFFIXES:
+        _add(f"{clean_isin}{suffix}")
+    _add(clean_isin)
+    return symbols
+
+
+# Upper bound on Yahoo metadata probes per ISIN, not on successful responses.
+# A bounded search may remain unresolved; never invent an identity at the cap.
 _MAX_RESOLVE_FETCHES = 10
 
 
@@ -1727,10 +1710,7 @@ def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
 def _today_local():
     """Today's date in the run's own clock (as_of when pinned)."""
     from tarzan import runtime
-    as_of = runtime.as_of()
-    if as_of is not None:
-        return as_of
-    return pd.Timestamp.now().date()
+    return runtime.today()
 
 
 def _is_previous_trading_day(symbol: str, own_last_date, today) -> bool:
@@ -1790,7 +1770,11 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
             last_timestamp = pd.Timestamp(result.index.max())
             if last_timestamp.tz is not None:
                 last_timestamp = last_timestamp.tz_convert("UTC").tz_localize(None)
-            age_days = (pd.Timestamp.now() - last_timestamp).days
+            from tarzan import runtime
+            captured = pd.Timestamp(runtime.context().captured_at)
+            if captured.tz is not None:
+                captured = captured.tz_convert("UTC").tz_localize(None)
+            age_days = (captured - last_timestamp).days
             if age_days > price_cache.REFRESH_TAIL_DAYS:
                 logger.warning(
                     "%s: live fetch returned no data; newest close is %d day(s) "
@@ -2004,6 +1988,21 @@ def _openfigi_lookup(isin: str) -> list[str]:
                 tickers.append(ticker)
 
     return tickers[:8]
+
+
+def _mapped_figi_symbols(results: list) -> list[str]:
+    """Exact venue mappings only; unknown venues do not imply US listings."""
+    mapped: dict[str, None] = {}
+    for group in results:
+        for item in group.get("data", []):
+            ticker = item.get("ticker", "")
+            if ticker:
+                symbol = _map_figi_to_yfinance(
+                    ticker, item.get("exchCode", ""), item.get("micCode", ""),
+                )
+                if symbol:
+                    mapped.setdefault(symbol, None)
+    return list(mapped)
 
 
 def _map_figi_to_yfinance(ticker: str, exchange: str, mic: str) -> Optional[str]:
