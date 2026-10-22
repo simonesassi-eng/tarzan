@@ -155,9 +155,10 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
        the holding keeps its last close and the issue's "priced today" coverage says
        so, an honest gap instead of a wrong number.
 
-    Without a dispute the caller's priority order decides exactly as before. A quote
-    with no timestamp is judged on level alone and takes no part in a consensus,
-    having no session to share.
+    Without a dispute the caller's priority order decides among the newest
+    observed session's peers. An older or undated preferred venue cannot
+    supersede a dated newer session. Undated quotes remain usable on level
+    alone only when no coherent dated quote is available.
 
     Returns ``{}`` when nothing qualifies, so the caller keeps the feed's own close.
 
@@ -187,10 +188,16 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
     peers = [(sym, q) for sym, q in same_session
              if (freshest - observed[sym]).total_seconds() / 60.0
              <= _CONSENSUS_WINDOW_MINUTES]
-    superseded = {sym for sym, _q in same_session} - {sym for sym, _q in peers}
+    current_venues = {sym for sym, _q in peers}
 
-    # Priority order, with superseded venues out of the running.
-    ranked = [(sym, q) for sym, q in eligible if sym not in superseded]
+    # Priority applies within one observed session, not across vintages. A
+    # thin primary venue may have no trade today while a sibling does; keeping
+    # yesterday's primary first would silently discard that current evidence.
+    # Unknown-time compatibility quotes cannot prove a newer session either.
+    ranked = [
+        (sym, q) for sym, q in eligible
+        if not current_venues or sym in current_venues
+    ]
 
     # An independent previous close for the same session judges every venue's 1D
     # BASELINE, not only in a dispute. A fictitious close inside the move tolerance
