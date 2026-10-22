@@ -43,9 +43,21 @@ def _probe_counting(monkeypatch, kind):
     return calls
 
 
-def test_a_bond_listed_nowhere_is_not_reprobed(cache, monkeypatch):
+def test_inconclusive_bond_discovery_does_not_poison_the_isin_cache(cache, monkeypatch):
     calls = _probe_counting(monkeypatch, "BOND")
     assert en._resolve_isin("IT0000000001", "") is None
+    assert en._resolve_isin("IT0000000001", "") is None
+    assert calls == ["IT0000000001", "IT0000000001"]
+    assert price_cache.load_timed(en._NO_LISTING, "IT0000000001", 7) is None
+
+
+def test_an_existing_bond_negative_answer_keeps_its_original_ttl(cache, monkeypatch):
+    calls = _probe_counting(monkeypatch, "BOND")
+    price_cache.store_timed(en._NO_LISTING, "IT0000000001", True)
+    assert en._resolve_isin("IT0000000001", "") is None
+    assert calls == []
+    real = price_cache.time.time
+    monkeypatch.setattr(price_cache.time, "time", lambda: real() + 8 * 86400)
     assert en._resolve_isin("IT0000000001", "") is None
     assert calls == ["IT0000000001"]
 

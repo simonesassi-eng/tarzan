@@ -83,6 +83,11 @@ max_workers: 4                    # Parallel threads for yfinance API calls (kep
 # and enclosing Yahoo operation is additionally capped. It does not kill CPU work.
 provider_transport:
   run_budget_seconds: 540
+  # Closed order positions and the configured risk/geo references are fetched
+  # first. Optional watchlist discovery has its own ceiling and must leave
+  # time for intraday evidence, macro data and publication finalization.
+  optional_budget_seconds: 120
+  publication_reserve_seconds: 90
   providers:
     yahoo: {timeout_seconds: 20, retry_budget: 1}
     openfigi: {timeout_seconds: 10, retry_budget: 1}

@@ -1195,15 +1195,10 @@ def _resolve_isin(
                 break
     candidates = _collect_candidate_metas(clean_isin, resolution_hint)
     if not candidates:
-        # Every candidate's metadata was throttled away. Rather than surrender
-        # the curated identity to the raw ISIN (no quote, no siblings, no 1D),
-        # confirm a EUR venue through the sturdier v7 quote batch.
+        # A bounded or throttled sweep is inconclusive, not proof that Yahoo
+        # lists this ISIN nowhere. Try the curated quote boundary, but never
+        # turn this absence of evidence into a seven-day ISIN-wide negative.
         resolved = _resolve_via_taxonomy_quote(clean_isin, taxonomy_ticker)
-        # ponytail: a fully THROTTLED probe is recorded too, so a bond Yahoo does
-        # list would sit on carry-flat for up to the TTL; none of the held bonds is
-        # listed. Record only definitive 404s if one ever is.
-        if resolved is None and is_bond:
-            price_cache.store_timed(_NO_LISTING, clean_isin, True)
         return resolved
 
     # An ISIN may only resolve to a symbol something POSITIVELY identifies. The

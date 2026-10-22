@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+import logging
 import math
 import threading
 import time
@@ -17,6 +18,8 @@ import time
 
 _PROVIDERS = frozenset({"yahoo", "openfigi", "borsa", "justetf", "manual", "gemini"})
 _operation = ContextVar("tarzan_provider_operation", default=None)
+_optional_work = ContextVar("tarzan_optional_provider_work", default=None)
+logger = logging.getLogger(__name__)
 
 
 def _positive(value, name):
@@ -42,9 +45,13 @@ class ProviderTransportPolicy:
 class ProviderTransportSettings:
     run_budget_seconds: float
     providers: tuple[ProviderTransportPolicy, ...]
+    optional_budget_seconds: float = 120
+    publication_reserve_seconds: float = 90
 
     def __post_init__(self):
         _positive(self.run_budget_seconds, "run_budget_seconds")
+        _positive(self.optional_budget_seconds, "optional_budget_seconds")
+        _positive(self.publication_reserve_seconds, "publication_reserve_seconds")
         object.__setattr__(self, "providers", tuple(self.providers))
         if len(self.providers) != len(_PROVIDERS) or {p.provider for p in self.providers} != _PROVIDERS:
             raise ValueError("each provider transport must be declared exactly once")
@@ -53,19 +60,27 @@ class ProviderTransportSettings:
     def configured(cls):
         from tarzan import config
         raw = config.get("provider_transport")
-        if not isinstance(raw, dict) or set(raw) != {"run_budget_seconds", "providers"}:
-            raise ValueError("provider_transport must declare run_budget_seconds and providers")
+        if not isinstance(raw, dict) or set(raw) != {
+            "run_budget_seconds", "optional_budget_seconds", "publication_reserve_seconds", "providers",
+        }:
+            raise ValueError("provider_transport must declare run, optional and reserve budgets and providers")
         if not isinstance(raw["providers"], dict):
             raise ValueError("provider_transport providers must be a mapping")
         return cls(
             raw["run_budget_seconds"],
             tuple(ProviderTransportPolicy(provider=name, **values)
                   for name, values in sorted(raw["providers"].items())),
+            raw["optional_budget_seconds"],
+            raw["publication_reserve_seconds"],
         )
 
 
 class ProviderBudgetExceeded(RuntimeError):
     """A deadline is exhausted; further retries cannot restore authority."""
+
+class OptionalProviderBudgetExceeded(ProviderBudgetExceeded):
+    """Optional discovery stopped; the essential run still owns its reserve."""
+
 
 
 class ProviderRequestFailure(RuntimeError):
@@ -100,22 +115,40 @@ class ProviderBudget:
         self._reported = set()
         self._yahoo_client = None
 
-    def _remaining(self, provider):
-        remaining = self.deadline - self.clock()
+    def _limiting_deadline(self, provider):
+        deadline = self.deadline
+        optional = False
         active = _operation.get()
         if active is not None and active[0] is self and active[1] == provider:
-            remaining = min(remaining, active[2] - self.clock())
+            deadline = min(deadline, active[2])
+        stage = _optional_work.get()
+        if stage is not None and stage[0] is self and stage[2] <= deadline:
+            deadline, optional = stage[2], True
+        return deadline, optional
+
+    def _exhausted(self, provider):
+        _, optional = self._limiting_deadline(provider)
+        code = "OPTIONAL_PROVIDER_BUDGET_EXHAUSTED" if optional else "PROVIDER_BUDGET_EXHAUSTED"
+        self._failure(provider, code)
+        error = OptionalProviderBudgetExceeded if optional else ProviderBudgetExceeded
+        raise error(f"{provider} provider budget exhausted")
+
+    def _remaining(self, provider):
+        deadline, _ = self._limiting_deadline(provider)
+        remaining = deadline - self.clock()
         if remaining <= 0:
-            self._failure(provider, "PROVIDER_BUDGET_EXHAUSTED")
-            raise ProviderBudgetExceeded(f"{provider} provider budget exhausted")
+            self._exhausted(provider)
         return remaining
 
     def _failure(self, provider, code):
         with self._lock:
             key = (provider, code)
-            if key in self._reported or self.ledger is None:
+            if key in self._reported:
                 return
             self._reported.add(key)
+        logger.warning("Provider evidence is bounded by its configured policy.", extra={"public_code": code})
+        if self.ledger is None:
+            return
         self.ledger.open_failure(
             stage="provider_transport", stable_code=code, severity="WARNING",
             error={"provider": provider, "code": code},
@@ -123,6 +156,34 @@ class ProviderBudget:
             analytical_impact="provider evidence unavailable; only explicit data-quality fallbacks remain",
             context={"provider": provider},
         )
+
+    @contextmanager
+    def optional_work(self, name):
+        """Cap optional work without spending the final publication reserve.
+
+        The scope is copied into provider workers with the other run context.
+        It limits native timeouts, retries and pacing, not arbitrary Python CPU.
+        """
+        deadline = min(
+            self.clock() + self.settings.optional_budget_seconds,
+            self.deadline - self.settings.publication_reserve_seconds,
+        )
+        parent = _optional_work.get()
+        if parent is not None and parent[0] is self:
+            deadline = min(deadline, parent[2])
+        token = _optional_work.set((self, name, deadline))
+        try:
+            yield
+        finally:
+            _optional_work.reset(token)
+
+    def optional_request_allowed(self, provider):
+        """Check before starting discovery, including work with cached leaves."""
+        try:
+            self._remaining(provider)
+        except ProviderBudgetExceeded:
+            return False
+        return True
 
     @contextmanager
     def operation(self, provider):
@@ -143,8 +204,7 @@ class ProviderBudget:
     def wait(self, seconds, provider):
         remaining = self._remaining(provider)
         if seconds >= remaining:
-            self._failure(provider, "PROVIDER_BUDGET_EXHAUSTED")
-            raise ProviderBudgetExceeded(f"{provider} provider pacing exceeds remaining budget")
+            self._exhausted(provider)
         if seconds > 0:
             self.sleep(seconds)
         self._remaining(provider)
@@ -245,6 +305,8 @@ def current_budget():
                 ProviderTransportSettings(
                     raw["run_budget_seconds"],
                     tuple(ProviderTransportPolicy(**policy) for policy in raw["providers"]),
+                    raw.get("optional_budget_seconds", 120),
+                    raw.get("publication_reserve_seconds", 90),
                 )
                 if raw else ProviderTransportSettings.configured()
             )

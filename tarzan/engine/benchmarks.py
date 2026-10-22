@@ -10,6 +10,9 @@ for a benchmark or a performance row. The pure math it relies on lives in
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from contextvars import copy_context
 from dataclasses import dataclass
 import logging
 
@@ -187,6 +190,8 @@ def preprocess_benchmarks(
     definitions: Mapping[str, str] | None = None,
     *,
     fetch_history: Callable[[str], pd.Series] | None = None,
+    required_names: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> tuple[dict[str, ResolvedBenchmark], tuple[str, ...]]:
     """Resolve the complete benchmark universe exactly once for one run.
 
@@ -194,28 +199,33 @@ def preprocess_benchmarks(
     record exposes only one operational ticker: the full provider symbol that
     supplied its historical series.  Resolution failures remain explicit and
     are returned for the pre-delivery semantic gate.
+
+    Required analytical references are resolved before the optional catalog.
+    Optional work shares a bounded deadline across workers, but the returned
+    catalog and errors retain input order regardless of scheduling.
     """
-    requested = BENCHMARKS if definitions is None else definitions
+    requested = dict(BENCHMARKS if definitions is None else definitions)
     fetch = fetch_history or _fetch_benchmark_history
-    catalog: dict[str, ResolvedBenchmark] = {}
-    errors: list[str] = []
-    for name, input_ticker in requested.items():
+    if type(workers) is not int or workers < 1:
+        raise ValueError("benchmark workers must be a positive integer")
+    from tarzan.runtime.transport import current_budget
+
+    budget = current_budget()
+
+    def resolve(name, input_ticker):
         try:
             history = fetch(input_ticker)
         except Exception as error:  # noqa: BLE001
-            errors.append(f"{name}: resolution failed ({type(error).__name__})")
-            continue
+            return None, f"{name}: resolution failed ({type(error).__name__})"
         if history is None or history.empty or len(history) < 2:
-            errors.append(f"{name}: no usable history for {input_ticker}")
-            continue
+            return None, f"{name}: no usable history for {input_ticker}"
         resolved_ticker = str(
             history.attrs.get("resolved_ticker")
             or history.attrs.get("provider_ticker")
             or input_ticker
         ).strip()
         if not resolved_ticker:
-            errors.append(f"{name}: resolved ticker is empty")
-            continue
+            return None, f"{name}: resolved ticker is empty"
         canonical_history = history.copy()
         canonical_history.name = resolved_ticker
         canonical_history.attrs.update({
@@ -226,7 +236,7 @@ def preprocess_benchmarks(
         if native is not None and len(native):
             native = native.copy()
             native.name = resolved_ticker
-        catalog[name] = ResolvedBenchmark(
+        return ResolvedBenchmark(
             name=name,
             requested_ticker=input_ticker,
             ticker=resolved_ticker,
@@ -235,13 +245,44 @@ def preprocess_benchmarks(
             # Same rule as the attr above: re-fabricating EUR here would undo it,
             # and this branch also covers an injected fetch stub that sets no attr.
             currency=canonical_history.attrs.get(_CURRENCY_ATTR) or "",
-        )
+        ), None
+
+    required = set(required_names)
+    outcomes = {}
+    for name, input_ticker in requested.items():
+        if name in required:
+            outcomes[name] = resolve(name, input_ticker)
+
+    def optional(name, input_ticker):
+        if budget is not None and not budget.optional_request_allowed("yahoo"):
+            return None, f"{name}: optional provider budget exhausted"
+        return resolve(name, input_ticker)
+
+    extras = [(name, ticker) for name, ticker in requested.items() if name not in required]
+    scope = budget.optional_work("optional_benchmarks") if budget is not None else nullcontext()
+    with scope:
+        if workers == 1:
+            outcomes.update({name: optional(name, ticker) for name, ticker in extras})
+        elif extras:
+            # Native requests in each worker inherit both the run and this
+            # stage's deadline; no global SDK batch context is involved.
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tarzan-benchmark") as pool:
+                pending = {
+                    name: pool.submit(copy_context().run, optional, name, ticker)
+                    for name, ticker in extras
+                }
+                outcomes.update({name: future.result() for name, future in pending.items()})
+
+    catalog = {
+        name: outcomes[name][0] for name in requested if outcomes[name][0] is not None
+    }
+    errors = tuple(outcomes[name][1] for name in requested if outcomes[name][1] is not None)
 
     logger.info(
         "Benchmark preprocessing resolved %d/%d full provider tickers",
         len(catalog), len(requested),
     )
-    return catalog, tuple(errors)
+    return catalog, errors
 
 
 def _compute_single_benchmark_metrics(

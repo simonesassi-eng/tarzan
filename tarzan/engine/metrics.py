@@ -103,14 +103,14 @@ class MetricsEngine:
         # the portfolio snapshot (holdings, returns, allocations).
         self.rebalance_seeds = rebalance_seeds or []
         self._computers: list[Callable] = [
-            # Resolve every venue-neutral benchmark identity once, before any
-            # metric, table or chart can consume it.  All later stages receive
-            # only the resulting full provider ticker and its matching series.
-            self._preprocess_benchmarks,
             self._valuation,
-            # One current point per price series, before anything reads one.
-            self._current_prices,
+            # Closed order positions are portfolio evidence, not an optional
+            # watchlist. Fetch them before reference discovery spends any time.
             self._portfolio_history,
+            # Every later benchmark consumer receives only the resolved listing
+            # and matching series, including the benchmark current-point stamp.
+            self._preprocess_benchmarks,
+            self._current_prices,
             self._performance,
             self._risk,
             self._allocations,
@@ -219,9 +219,14 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     def _preprocess_benchmarks(self, ctx: dict) -> None:
         """Resolve all benchmark tickers once before analytical consumers."""
+        required_names = tuple(dict.fromkeys((
+            cfg.benchmark_beta_name(), cfg.benchmark_geo_allocation(),
+        )))
         catalog, errors = _preprocess_benchmark_catalog(
             BENCHMARKS,
             fetch_history=_fetch_benchmark_history,
+            required_names=required_names,
+            workers=cfg.max_workers(),
         )
         ctx["_benchmark_catalog"] = catalog
         ctx["benchmark_tickers"] = {
@@ -232,6 +237,24 @@ class MetricsEngine:
             logger.warning(
                 "Benchmark preprocessing left %d unresolved instrument(s): %s",
                 len(errors), "; ".join(errors),
+            )
+        missing = [name for name in required_names if name not in catalog]
+        if missing:
+            ctx.setdefault("_degraded", []).append("_preprocess_benchmarks")
+            from tarzan.runtime.session import current_session
+
+            session = current_session()
+            if session is not None:
+                session.ledger.open_failure(
+                    stage="benchmark_preprocessing", stable_code="ESSENTIAL_BENCHMARK_UNAVAILABLE",
+                    severity="CRITICAL", error={"missing_references": missing},
+                    affected_outputs=["benchmark_metrics", "benchmark_charts"],
+                    analytical_impact="Required analytical references have no usable source history.",
+                    publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+                )
+            logger.error(
+                "Required benchmark source history is unavailable.",
+                extra={"public_code": "ESSENTIAL_BENCHMARK_UNAVAILABLE"},
             )
 
     @staticmethod

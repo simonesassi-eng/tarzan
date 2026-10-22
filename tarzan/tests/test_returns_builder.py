@@ -1905,6 +1905,9 @@ class TestUnavailableOrderHistory:
         assert set(result.degraded_computers) == {
             "_portfolio_history_from_orders",
             "_returns",
+            # This fixture deliberately removes every required reference.
+            # That absence is now explicit, independently of order mechanics.
+            "_preprocess_benchmarks",
         }
 
 
