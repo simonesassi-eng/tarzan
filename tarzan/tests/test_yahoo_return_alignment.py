@@ -957,7 +957,7 @@ class TestTheEighthOfOctoberEndToEnd:
         monkeypatch.setattr(market_quotes, "official_quotes",
                             lambda syms: {s: quotes[s] for s in syms if s in quotes})
         monkeypatch.setattr(market_quotes, "_sibling_symbols",
-                            lambda tk: ["ABC.MI", "ABC.PA"])
+                            lambda tk, **kwargs: ["ABC.MI", "ABC.PA"])
         tape = TestVenueConsensus._history(level=29.445)
         h = Holding(isin="IE0000000001", ticker="ABC.DE", quantity=100.0,
                     cost_basis_eur=2800.0, market_value_eur=2944.5, currency="EUR",

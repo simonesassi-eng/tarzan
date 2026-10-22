@@ -865,15 +865,25 @@ def _previous_close_before(fetch_history, ticker: str, iday):
         return None
 
 
-def _sibling_symbols(ticker: str) -> list[str]:
-    """Candidate sibling listings (same root, alternate EUR venue) for a
-    ticker, in priority order. Empty for indices (^...), FX/futures (=X/=F),
-    crypto (-USD), suffixless US tickers, and non-EUR venues."""
+def _sibling_symbols(ticker: str, *, isin: Optional[str] = None) -> list[str]:
+    """Verified aliases first, then bounded same-root EUR venue candidates.
+
+    Explicit different roots require matching causal ISIN authority. Empty
+    for indices, FX/futures, crypto, suffixless US tickers and non-EUR venues.
+    """
     t = (ticker or "").upper()
     if not t or "." not in t or t.startswith("^") or "=" in t or "-" in t:
         return []
     root, suf = t.rsplit(".", 1)
-    return [f"{root}.{s}" for s in _SIBLING_SUFFIXES.get(suf, ())]
+    suffixes = _SIBLING_SUFFIXES.get(suf, ())
+    if not suffixes:
+        return []
+    from tarzan.data.listing_aliases import verified_siblings
+
+    return list(dict.fromkeys((
+        *verified_siblings(t, isin=isin),
+        *(f"{root}.{s}" for s in suffixes),
+    )))
 
 
 def _resolve_intraday(

@@ -522,7 +522,7 @@ def stamping_allowed() -> tuple[bool, Optional[pd.Timestamp]]:
     return True, pd.Timestamp(runtime.today())
 
 
-def _candidates(tickers) -> dict[str, list[str]]:
+def _candidates(tickers, *, isin_by_ticker=None) -> dict[str, list[str]]:
     """Each ticker plus its sibling venues, in priority order.
 
     Resolved the same way the intraday feed resolves it: a ``.MI`` quote can be
@@ -532,7 +532,12 @@ def _candidates(tickers) -> dict[str, list[str]]:
     """
     from tarzan.data.market_quotes import _sibling_symbols
 
-    return {tk: [tk, *_sibling_symbols(tk)] for tk in tickers if tk}
+    return {
+        tk: [tk, *_sibling_symbols(
+            tk, isin=isin_by_ticker.get(tk, "") if isin_by_ticker is not None else None,
+        )]
+        for tk in tickers if tk
+    }
 
 
 def _fx_on(fx, day):
@@ -574,13 +579,26 @@ def _holding_quotes(holding, symbols, quotes, today):
         return native_quotes, eur_quotes
     for symbol in symbols:
         original = quotes.get(symbol) or {}
+        from tarzan.data.listing_aliases import alias_currency
+
+        expected_currency = alias_currency(
+            str(holding.ticker), symbol, isin=str(holding.isin or ""),
+        )
+        supplied_currency = original.get("currency")
+        if (
+            expected_currency is not None and supplied_currency
+            and major_code(str(supplied_currency).strip()).upper() != expected_currency
+        ):
+            continue  # a venue suffix cannot override contradictory quote units
         currency = (
             enricher.venue_currency(symbol) or original.get("currency")
             or holding.price_quote_currency or holding.price_currency
             or holding.currency or "EUR"
         )
         currency = str(currency).strip()
-        quote = dict(original)
+        # The requested mapping key is the provider fact. A missing or
+        # contradictory payload symbol must not erase the selected venue.
+        quote = dict(original, symbol=symbol)
         for key in ("price", "prev_close"):
             try:
                 value = float(quote.get(key))
@@ -657,7 +675,17 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
     if not allowed:
         return ()
 
-    candidates = _candidates({str(h.ticker) for h in holdings if h.ticker})
+    identities: dict[str, set[str]] = {}
+    for holding in holdings:
+        if holding.ticker:
+            identities.setdefault(str(holding.ticker), set()).add(
+                str(holding.isin or "").strip().upper()
+            )
+    isin_by_ticker = {
+        ticker: next(iter(isins)) if len(isins) == 1 else ""
+        for ticker, isins in identities.items()
+    }
+    candidates = _candidates(identities, isin_by_ticker=isin_by_ticker)
     if not candidates:
         return ()
     quotes = official_quotes(
