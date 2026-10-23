@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from datetime import datetime, time
+from datetime import date, datetime, time
 from html import escape as _esc
 from numbers import Integral, Real
 from typing import Any, Optional
@@ -12,6 +12,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from tarzan.models.portfolio import PortfolioMetrics
+from tarzan.contracts.session_move import SessionMoveEvidence
 from tarzan.export._format import (
     display_instrument_name,
     eur_smart as _eur_smart,
@@ -128,6 +129,53 @@ def _priced_today_note(perf: Optional[dict]) -> str:
     if coverage >= 99.5:
         return ""
     return f"{coverage:.0f}% of the book priced today"
+
+
+def _session_move_display(metrics, percent):
+    """Project paired source evidence; never infer euros from today's wealth."""
+    proof = getattr(metrics, "session_move_evidence", None)
+    receipt = {
+        "availability": "UNAVAILABLE", "percent": str(float(percent)),
+        "profit": "", "basis": "UNPREPARED",
+        "anchor": "", "end": "", "source_anchor": "", "source_end": "",
+    }
+    if type(proof) is not SessionMoveEvidence:
+        return None, receipt
+    receipt["basis"] = str(proof.source_basis)
+    valid_dates = all(
+        type(value) is date for value in (
+            proof.anchor_date, proof.end_date, proof.source_anchor_date, proof.source_end_date,
+        )
+    )
+    values = (proof.return_pct, proof.profit_eur, proof.external_flow_eur)
+    try:
+        valid_values = all(
+            isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+            for value in values
+        )
+    except (TypeError, ValueError, OverflowError):
+        valid_values = False
+    if not (
+        proof.availability in ("AVAILABLE", "DEGRADED")
+        and proof.source_basis in ("HOLDINGS_PRICE_AGGREGATE", "ORDER_FLOW_ADJUSTED_NAV")
+        and proof.source_basis == getattr(metrics, "history_source_basis", "UNPREPARED")
+        and getattr(metrics, "history_availability", "AVAILABLE") in ("AVAILABLE", "DEGRADED")
+        and not (
+            getattr(metrics, "history_availability", "AVAILABLE") == "DEGRADED"
+            and proof.availability != "DEGRADED"
+        )
+        and valid_dates and valid_values
+        and proof.anchor_date < proof.end_date
+        and proof.source_anchor_date < proof.source_end_date
+        and math.isclose(float(proof.return_pct), float(percent), rel_tol=1e-12, abs_tol=1e-10)
+    ):
+        return None, receipt
+    receipt.update(
+        availability=proof.availability, profit=str(float(proof.profit_eur)),
+        anchor=proof.anchor_date.isoformat(), end=proof.end_date.isoformat(),
+        source_anchor=proof.source_anchor_date.isoformat(), source_end=proof.source_end_date.isoformat(),
+    )
+    return float(proof.profit_eur), receipt
 
 
 _FUNDING_AMOUNT_FIELDS = (
@@ -496,31 +544,18 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     perf = getattr(m, "performance", None) or {}
     cagr_pct = perf.get("cagr")
     session_pct = perf.get("1d")
-    # The session move in euros, for the tile caption: derived from the very
-    # percentage shown beside it, so the two can never describe different
-    # windows. (_window_money_pnl below walks a CALENDAR-day window, while
-    # session_pct is the last-TRADING-day change — across a weekend those are
-    # different spans, which is how a -0.18% session came to print a
-    # four-figure euro loss.)
-    #
-    # The base is invested_value, not total_value: session_pct is a price-only
-    # return over the priced holdings (see metrics._portfolio_history, which
-    # sums price_history x quantity), and cash contributes no price move to
-    # it. Applying it to a total that includes cash inflates the euro figure
-    # by the cash weight.
-    # base is an END-of-session value, while session_pct is measured against
-    # the session's START, so the percentage is de-compounded rather than
-    # applied directly: end - end/(1+p) == end * p/(1+p).
-    session_eur = None
-    if not is_missing(session_pct):
-        base = m.invested_value if m.invested_value > 0 else m.total_value
-        pct_val = float(session_pct) / 100.0
-        if pct_val != -1.0:
-            session_eur = base * pct_val / (1.0 + pct_val)
-    if session_eur is None and m.pnl_series is not None and m.actual_value_series is not None:
-        pair = _window_money_pnl(m.pnl_series, m.actual_value_series, "1d")
-        if pair and pair[0] is not None:
-            session_eur = float(pair[0])
+    try:
+        known_session_pct = (
+            isinstance(session_pct, Real) and not isinstance(session_pct, bool)
+            and math.isfinite(session_pct)
+        )
+    except (TypeError, ValueError, OverflowError):
+        known_session_pct = False
+    if not known_session_pct:
+        session_pct = None
+    session_eur, session_receipt = (
+        _session_move_display(m, session_pct) if session_pct is not None else (None, None)
+    )
     def _tile(label, value, caption, tone="flat"):
         # The context API retains escaped text; its type prevents a second
         # escape at the now-enabled .html.j2 template boundary.
@@ -643,15 +678,32 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         # alone does not say either.
         parts = []
         if session_eur is not None:
-            parts.append(_eur_smart(session_eur, signed=True))
+            parts.append(_eur(session_eur, signed=True))
+            parts.append(
+                "flow-adjusted NAV" if session_receipt["basis"] == "ORDER_FLOW_ADJUSTED_NAV"
+                else "historical holdings basket"
+            )
+            if session_receipt["availability"] == "DEGRADED":
+                parts.append("estimated historical data")
+            if (
+                session_receipt["source_anchor"] != session_receipt["anchor"]
+                or session_receipt["source_end"] != session_receipt["end"]
+            ):
+                parts.append(
+                    f'source {session_receipt["source_anchor"]} to {session_receipt["source_end"]}'
+                )
+        else:
+            parts.append("EUR attribution unavailable")
         parts.append(_session_basis(perf, m))
         # How much of the book that figure covers, when it is not all of it.
         note = _priced_today_note(perf)
         if note:
             parts.append(note)
-        state_tiles.append(_tile(
+        session_tile = _tile(
             "Session", _pct(session_pct, signed=True),
-            " \u00b7 ".join(parts), _tone(session_pct)))
+            " \u00b7 ".join(parts), _tone(session_pct))
+        session_tile["session_proof"] = session_receipt
+        state_tiles.append(session_tile)
     if m.avg_ter is not None:
         # avg_ter arrives already in percent (metrics.py multiplies the stored
         # fractions by 100), so it must not be scaled again here. The synthetic

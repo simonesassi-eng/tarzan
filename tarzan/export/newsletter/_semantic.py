@@ -12,6 +12,7 @@ import logging
 import math
 import re
 from collections.abc import Mapping
+from datetime import date
 from html.parser import HTMLParser
 from numbers import Integral, Real
 
@@ -328,6 +329,268 @@ def _validate_funding_markup(metrics, document: str) -> list[str]:
     return errors
 
 
+class _SessionMarkup(HTMLParser):
+    """Inspect the actual session tile, not a renderer's context audit."""
+
+    def __init__(self, document):
+        super().__init__(convert_charrefs=True)
+        self.records = []
+        self.frames = []
+        self.feed(document)
+
+    def handle_starttag(self, tag, attributes):
+        attrs = dict(attributes)
+        _, record, component = self.frames[-1] if self.frames else (None, None, None)
+        if "data-tarzan-session-move" in attrs:
+            record = {"attrs": attrs, "components": {}, "duplicate_attrs": len(attrs) != len(attributes)}
+            self.records.append(record)
+            component = None
+        if record is not None:
+            for kind in ("percent", "caption"):
+                if f"data-tarzan-session-{kind}" in attrs:
+                    component = {"text": "", "duplicate_attrs": len(attrs) != len(attributes)}
+                    record["components"].setdefault(kind, []).append(component)
+        if tag not in _FundingMarkup._VOID:
+            self.frames.append((tag, record, component))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.frames) - 1, -1, -1):
+            if self.frames[index][0] == tag:
+                del self.frames[index:]
+                break
+
+    def handle_data(self, text):
+        if self.frames and self.frames[-1][2] is not None:
+            self.frames[-1][2]["text"] += text
+
+
+def _validate_session_markup(metrics, document):
+    """Independently reconcile euro attribution with its original NAV facts."""
+    import pandas as pd
+    from tarzan.contracts.session_move import DailyReturnStep, SessionMoveEvidence
+    from tarzan.engine.stats import normalize_session_index, window_anchor
+
+    def finite(value):
+        try:
+            return (
+                isinstance(value, Real) and not isinstance(value, bool)
+                and math.isfinite(value)
+            )
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def equal(first, second, *, absolute=1e-9):
+        return finite(first) and finite(second) and math.isclose(
+            float(first), float(second), rel_tol=1e-12, abs_tol=absolute,
+        )
+
+    percent = (getattr(metrics, "performance", None) or {}).get("1d")
+    records = _SessionMarkup(document).records
+    if not finite(percent):
+        return ["session display claims an unavailable return"] if records else []
+    if len(records) != 1:
+        return ["session display is missing or duplicates the source return"]
+    record = records[0]
+    errors = []
+    attrs = record["attrs"]
+    components = record["components"]
+    if record["duplicate_attrs"] or attrs.get("data-tarzan-session-move") != "true":
+        errors.append("session display has an ambiguous evidence marker")
+    try:
+        raw_percent = float(attrs.get("data-tarzan-session-return", ""))
+    except (TypeError, ValueError, OverflowError):
+        raw_percent = float("nan")
+    if not equal(raw_percent, percent, absolute=1e-10):
+        errors.append("session display return differs from source percentage")
+    percent_parts, caption_parts = components.get("percent", []), components.get("caption", [])
+    if len(percent_parts) != 1 or len(caption_parts) != 1:
+        return errors + ["session display is missing or duplicates visible components"]
+    if any(part["duplicate_attrs"] for part in (*percent_parts, *caption_parts)):
+        errors.append("session display has ambiguous visible components")
+    percent_text = percent_parts[0]["text"].strip()
+    sign = (
+        "" if abs(round(float(percent), 2)) < 1e-9
+        else "+" if percent > 0 else "\u2212"
+    )
+    expected_percent = f"{sign}{abs(float(percent)):.2f}%"
+    if _DISPLAYED_PERCENT_RE.fullmatch(percent_text) is None or percent_text != expected_percent:
+        errors.append("session visible percentage differs from source return")
+    caption = caption_parts[0]["text"].strip()
+    proof = getattr(metrics, "session_move_evidence", None)
+    if type(proof) is not SessionMoveEvidence or proof.availability not in ("AVAILABLE", "DEGRADED"):
+        if (
+            attrs.get("data-tarzan-session-availability") != "UNAVAILABLE"
+            or attrs.get("data-tarzan-session-profit") != ""
+            or not caption.startswith("EUR attribution unavailable")
+            or "€" in caption
+            or re.search(r"\bEUR\s*[+\-\u2212]?\d", caption) is not None
+            or any(attrs.get(f"data-tarzan-session-{field}", "") for field in (
+                "anchor", "end", "source-anchor", "source-end",
+            ))
+        ):
+            errors.append("session display invents unavailable euro attribution")
+        return errors
+
+    dates = (proof.anchor_date, proof.end_date, proof.source_anchor_date, proof.source_end_date)
+    values = (proof.return_pct, proof.profit_eur, proof.external_flow_eur)
+    if not all(type(value) is date for value in dates) or not all(finite(value) for value in values):
+        return errors + ["session source evidence contains unavailable dates or amounts"]
+    if not (
+        proof.anchor_date < proof.end_date and proof.source_anchor_date < proof.source_end_date
+        and equal(proof.return_pct, percent, absolute=1e-10)
+        and getattr(metrics, "history_availability", "AVAILABLE") in ("AVAILABLE", "DEGRADED")
+        and not (
+            getattr(metrics, "history_availability", "AVAILABLE") == "DEGRADED"
+            and proof.availability != "DEGRADED"
+        )
+        and proof.source_basis == getattr(metrics, "history_source_basis", "UNPREPARED")
+    ):
+        errors.append("session source evidence contradicts its return window")
+    source_attrs = {
+        "availability": proof.availability, "basis": proof.source_basis,
+        "anchor": proof.anchor_date.isoformat(), "end": proof.end_date.isoformat(),
+        "source-anchor": proof.source_anchor_date.isoformat(),
+        "source-end": proof.source_end_date.isoformat(),
+    }
+    for field, expected in source_attrs.items():
+        if attrs.get(f"data-tarzan-session-{field}") != expected:
+            errors.append(f"session display {field} differs from source evidence")
+    try:
+        raw_profit = float(attrs.get("data-tarzan-session-profit", ""))
+    except (TypeError, ValueError, OverflowError):
+        raw_profit = float("nan")
+    if not equal(raw_profit, proof.profit_eur):
+        errors.append("session display euros differ from paired source evidence")
+    # Deliberately independent of the newsletter's currency formatting helper.
+    money = ("+" if proof.profit_eur >= 0 else "\u2212") + f"€{abs(proof.profit_eur):,.2f}"
+    prefix = [
+        money,
+        "flow-adjusted NAV" if proof.source_basis == "ORDER_FLOW_ADJUSTED_NAV"
+        else "historical holdings basket",
+    ]
+    if proof.availability == "DEGRADED":
+        prefix.append("estimated historical data")
+    source_notes = []
+    if (
+        proof.source_anchor_date != proof.anchor_date
+        or proof.source_end_date != proof.end_date
+    ):
+        source_notes.append(f"source {proof.source_anchor_date} to {proof.source_end_date}")
+        prefix.extend(source_notes)
+    if (
+        not caption.startswith(" \u00b7 ".join(prefix) + " \u00b7 ")
+        or re.findall(r"source \S+ to \S+", caption) != source_notes
+        or caption.count("€") != 1
+        or re.search(r"\bEUR\s*[+\-\u2212]?\d", caption) is not None
+    ):
+        errors.append("session visible euro amount differs from source evidence")
+    if proof.availability == "DEGRADED" and "estimated historical data" not in caption:
+        errors.append("session display hides degraded historical evidence")
+    history = getattr(metrics, "portfolio_history", None)
+    if not (
+        isinstance(history, pd.Series) and isinstance(history.index, pd.DatetimeIndex)
+        and history.index.is_unique and history.index.is_monotonic_increasing
+    ):
+        return errors + ["session source history cannot prove its displayed window"]
+    observed = history.dropna()
+    anchor = window_anchor(observed, "1d")
+    if anchor is None or observed.empty:
+        return errors + ["session source history has no measured window"]
+    start_raw, end_raw = observed.loc[:anchor].iloc[-1], observed.iloc[-1]
+    if not finite(start_raw) or not finite(end_raw):
+        return errors + ["session source history contains unavailable endpoint values"]
+    start, end = float(start_raw), float(end_raw)
+    if not (
+        finite(start) and start > 0 and finite(end) and end >= 0
+        and anchor.date() == proof.anchor_date
+        and observed.index[-1].date() == proof.end_date
+        and equal((end / start - 1.0) * 100.0, percent, absolute=1e-10)
+    ):
+        errors.append("session displayed return is not its original history window")
+    if proof.source_basis == "HOLDINGS_PRICE_AGGREGATE":
+        if (
+            proof.steps or proof.external_flow_eur != 0
+            or proof.source_anchor_date != proof.anchor_date
+            or proof.source_end_date != proof.end_date
+            or not equal(proof.profit_eur, end - start)
+        ):
+            errors.append("session euro attribution differs from the historical holdings basket")
+        if "historical holdings basket" not in caption:
+            errors.append("session display mislabels its historical holdings basis")
+        return errors
+    if proof.source_basis != "ORDER_FLOW_ADJUSTED_NAV":
+        return errors + ["session euro attribution has an unsupported source basis"]
+    if "flow-adjusted NAV" not in caption:
+        errors.append("session display mislabels its flow-adjusted basis")
+    actual = getattr(metrics, "actual_value_series", None)
+    flows = getattr(metrics, "external_flows", None)
+    if not (
+        isinstance(actual, pd.Series) and isinstance(actual.index, pd.DatetimeIndex)
+        and actual.index.is_unique and actual.index.is_monotonic_increasing
+        and isinstance(flows, Mapping)
+    ):
+        return errors + ["session euro attribution lacks original values or capital flows"]
+    if any(type(day) is not date or not finite(amount) for day, amount in flows.items()):
+        return errors + ["session original capital flows contain unavailable dates or amounts"]
+    actual = actual.copy(deep=False)
+    actual.index = normalize_session_index(actual.index)
+    if not actual.index.is_unique:
+        return errors + ["session original values contain duplicate native sessions"]
+    try:
+        native = pd.Series(list(actual.index.date), index=actual.index, dtype=object)
+        native = native.where(actual.notna()).resample("B").last()
+        if (
+            native.loc[pd.Timestamp(proof.anchor_date)] != proof.source_anchor_date
+            or native.loc[pd.Timestamp(proof.end_date)] != proof.source_end_date
+        ):
+            errors.append("session attribution changes its native observation dates")
+        cursor, factor, total_profit, total_flow = proof.source_anchor_date, 1.0, 0.0, 0.0
+        previous_value = None
+        for step in proof.steps:
+            if not (
+                type(step) is DailyReturnStep and step.state == "MEASURED"
+                and type(step.start_date) is date and type(step.end_date) is date
+                and step.start_date == cursor and cursor < step.end_date <= proof.source_end_date
+                and all(finite(value) for value in (
+                    step.starting_value_eur, step.ending_value_eur, step.external_flow_eur,
+                    step.factor, step.profit_eur,
+                ))
+                and step.starting_value_eur > 0 and step.ending_value_eur >= 0
+                and step.factor > 0
+            ):
+                errors.append("session euro attribution contains an unmeasured NAV step")
+                break
+            before_flow = step.ending_value_eur - step.external_flow_eur
+            expected_flow = sum(
+                amount for day, amount in flows.items()
+                if step.start_date < day <= step.end_date
+            )
+            if (
+                before_flow <= 0
+                or not equal(step.starting_value_eur, actual.loc[pd.Timestamp(step.start_date)])
+                or not equal(step.ending_value_eur, actual.loc[pd.Timestamp(step.end_date)])
+                or not equal(step.external_flow_eur, expected_flow)
+                or not equal(step.factor, before_flow / step.starting_value_eur, absolute=1e-12)
+                or not equal(step.profit_eur, before_flow - step.starting_value_eur)
+                or (previous_value is not None and not equal(step.starting_value_eur, previous_value))
+            ):
+                errors.append("session euro attribution contradicts original NAV values or flows")
+            cursor, previous_value = step.end_date, step.ending_value_eur
+            factor *= step.factor
+            total_profit += step.profit_eur
+            total_flow += step.external_flow_eur
+        if (
+            not proof.steps or cursor != proof.source_end_date
+            or not equal((factor - 1.0) * 100.0, percent, absolute=1e-10)
+            or not equal(total_profit, proof.profit_eur)
+            or not equal(total_flow, proof.external_flow_eur)
+        ):
+            errors.append("session euro attribution does not cover the exact return window")
+    except (TypeError, ValueError, KeyError, OverflowError):
+        errors.append("session euro attribution cannot reconcile original NAV facts")
+    return errors
+
+
 def validate_newsletter_semantics(
     metrics,
     semantic_audit: Mapping[str, object] | None,
@@ -340,6 +603,7 @@ def validate_newsletter_semantics(
     explicit resolution errors, or a degraded preprocessing computer.
     """
     errors = _validate_funding_markup(metrics, newsletter_html)
+    errors.extend(_validate_session_markup(metrics, newsletter_html))
     resolution_errors = tuple(
         _text(error)
         for error in (getattr(metrics, "benchmark_resolution_errors", ()) or ())

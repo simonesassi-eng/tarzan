@@ -447,11 +447,21 @@ def test_plan_labels_are_escaped_once_and_cannot_inject_funding_markup(make_labe
 
 def test_ui_change_does_not_modify_session_euro_or_any_financial_output():
     metrics, config = _cube()
+    from tarzan.contracts.session_move import paired_session_move
+
+    # The session source is independent of today's invested/cash subtotals.
+    metrics.portfolio_history = pd.Series(
+        [1000.0, 1010.0], index=pd.to_datetime(["2026-10-22", "2026-10-23"]),
+    )
+    metrics.session_move_evidence = paired_session_move(
+        metrics.portfolio_history, metrics.performance["1d"],
+        source_basis="HOLDINGS_PRICE_AGGREGATE",
+    )
+    metrics.history_source_basis = "HOLDINGS_PRICE_AGGREGATE"
     before = portfolio_kpis(metrics)
     hero = sections._build_hero(_context(metrics, config))
     session = next(tile for tile in hero["tiles"] if tile["label"] == "Session")
-    expected_eur = sections._eur_smart(metrics.invested_value * .01 / 1.01, signed=True)
-    assert expected_eur in session["caption"]
+    assert "+€10.00" in session["caption"]  # synthetic paired endpoint delta
     _render(metrics, config)
     assert portfolio_kpis(metrics) == before
 

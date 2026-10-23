@@ -46,14 +46,14 @@
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;{% if not loop.first %}margin-top:14px;{% endif %}">
                       <tr>
                         {% for t in row %}
-                        <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;">
+                        <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;"{% if t.session_proof %} data-tarzan-session-move="true" data-tarzan-session-availability="{{ t.session_proof.availability }}" data-tarzan-session-return="{{ t.session_proof.percent }}" data-tarzan-session-profit="{{ t.session_proof.profit }}" data-tarzan-session-basis="{{ t.session_proof.basis }}" data-tarzan-session-anchor="{{ t.session_proof.anchor }}" data-tarzan-session-end="{{ t.session_proof.end }}" data-tarzan-session-source-anchor="{{ t.session_proof.source_anchor }}" data-tarzan-session-source-end="{{ t.session_proof.source_end }}"{% endif %}>
                           <div style="{{ type.label }}color:{{ palette.muted }};">{{ t.label }}</div>
                           {# nowrap: a figure is one token. In a pane narrower
                              than the tables a signed P&L (synthetic: "+€12.3k")
                              broke after the sign and left a "+" alone on its
                              own line. #}
-                          <div style="margin-top:3px;{{ type.display }}white-space:nowrap;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};">{{ t.value }}</div>
-                          <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};">{{ t.caption }}</div>
+                          <div style="margin-top:3px;{{ type.display }}white-space:nowrap;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};"{% if t.session_proof %} data-tarzan-session-percent="true"{% endif %}>{{ t.value }}</div>
+                          <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};"{% if t.session_proof %} data-tarzan-session-caption="true"{% endif %}>{{ t.caption }}</div>
                         </td>
                         {% endfor %}
                         {% for _ in range(3 - row|length) %}

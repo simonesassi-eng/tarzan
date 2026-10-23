@@ -2893,6 +2893,7 @@ class MetricsEngine:
             allocation_timeline=ctx.get("allocation_timeline"),
             degraded_computers=ctx.get("_degraded", []),
             session_move_evidence=ctx.get("session_move_evidence"),
+            history_source_basis=ctx.get("_portfolio_history_basis", "UNPREPARED"),
         )
 
 

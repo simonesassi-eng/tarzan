@@ -266,6 +266,10 @@ class PortfolioMetrics:
     # Paired source evidence for the hero's 1D euro caption. Additive internal
     # fact; stable to_summary_dict/schema-3 external keys stay unchanged.
     session_move_evidence: Optional["SessionMoveEvidence"] = None
+    # Independent authority for the units of portfolio_history. A flow-adjusted
+    # NAV index must never become a euro basket through a display packet.
+    # Internal additive fact; the external schema-3 summary stays unchanged.
+    history_source_basis: str = "UNPREPARED"
 
     @property
     def unrealized_pnl_eur(self) -> float:
