@@ -58,7 +58,16 @@ def material_value(value):
             "values": material_value(value.tolist()),
         }
     if isinstance(value, np.generic):
-        return material_value(value.item())
+        item = value.item()
+        if isinstance(item, np.generic):
+            # longdouble/clongdouble may have no lossless Python scalar and
+            # .item() returns another NumPy scalar (even on some float64
+            # longdouble platforms). Re-entering this branch never terminates.
+            # Do not truncate extended-precision financial facts to float.
+            if isinstance(value, np.floating) and not np.isfinite(value):
+                return None
+            raise TypeError(f"unsupported material fact: {type(value).__name__}")
+        return material_value(item)
     if is_dataclass(value):
         return {
             item.name: material_value(getattr(value, item.name))
