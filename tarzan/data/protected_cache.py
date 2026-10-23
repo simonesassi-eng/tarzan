@@ -8,7 +8,10 @@ restoration does not renew TTLs or make an old price newly observed.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import logging
 import math
@@ -171,11 +174,89 @@ def export_snapshot(directory, key: bytes) -> int:
     return len(files)
 
 
-def import_snapshot(directory, key: bytes) -> int:
+@dataclass(frozen=True)
+class _ImportResult:
+    restored_files: int
+    public_macro_complete: bool = False
+
+
+def _authenticated_public_macro_complete(documents, *, reference_time=None) -> bool:
+    """Prove a usable recent head for every fixed macro, never a live quote.
+
+    Only the authenticated import may supply ``documents``: each entry was
+    validated and either written or found byte-identical at its destination.
+    No map TTL is renewed, and every normal history tail/intraday refresh still
+    runs. The existing refresh-tail window is a conservative bootstrap guard;
+    old, partial, future or disabled cache evidence keeps the public fallback.
+    """
+    from tarzan.data import public_cache
+    import pandas as pd
+
+    if not price_cache.is_enabled():
+        return False
+    now = reference_time if reference_time is not None else datetime.now(timezone.utc)
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        return False
+    now = now.astimezone(timezone.utc)
+    try:
+        for symbol in public_cache.PUBLIC_SYMBOLS:
+            cached = documents.get(f"history/{price_cache._safe(symbol)}.json")
+            if cached is None:
+                return False
+            entries = cached["entries"]
+            if (
+                entries.get("kind") != "dataframe"
+                or entries.get("symbol") != symbol
+                or entries.get("repair_version") != price_cache._HISTORY_REPAIR_VERSION
+            ):
+                return False
+            table = entries["table"]
+            rows, fields = table["data"], table["schema"]["fields"]
+            if not isinstance(rows, list) or not 1 <= len(rows) <= public_cache.MAX_ROWS:
+                return False
+            names = {field["name"] for field in fields}
+            numeric = {field["name"] for field in fields if field["type"] != "datetime"}
+            # pandas can coerce a JSON boolean/string into a number. Such bytes
+            # must never become the authority to skip an independent fallback.
+            if any(
+                not isinstance(row, dict) or set(row) != names
+                or any(row[name] is not None and type(row[name]) not in (int, float)
+                       for name in numeric)
+                for row in rows
+            ):
+                return False
+            frame = pd.read_json(io.StringIO(json.dumps(table)), orient="table")
+            public_cache._table(frame)  # same bounded dates/values/columns contract
+            closes = frame["Close"].dropna()
+            if closes.empty or not math.isfinite(float(closes.iloc[-1])):
+                return False
+            latest_label = frame.index[-1].to_pydatetime()
+            observed = closes.index[-1].to_pydatetime()
+            # Yahoo's aligned daily tables can end with a null placeholder.
+            # Like the actual macro consumer, date the last REAL close, never
+            # that padding; even a null future row keeps the guard conservative.
+            if latest_label.tzinfo is None:
+                latest_label = latest_label.replace(tzinfo=timezone.utc)
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            if latest_label.astimezone(timezone.utc) > now:
+                return False
+            # This date guard is not an invented venue or quote freshness rule.
+            age = (now - observed.astimezone(timezone.utc)).total_seconds()
+            if not 0 <= age <= price_cache.REFRESH_TAIL_DAYS * 86400:
+                return False
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return False
+    return True
+
+
+def _import_snapshot(
+    directory, key: bytes, *, prove_public_macro=False, reference_time=None,
+) -> _ImportResult:
     private, staging = _locations(directory)
     path = staging / FILENAME
     if not path.exists():
-        return 0
+        return _ImportResult(0)
     document = _json(sealed.unseal(
         sealed.read_bounded_file(path, sealed.MAX_SEALED_BYTES), key, purpose=PURPOSE,
     ))
@@ -199,17 +280,36 @@ def import_snapshot(directory, key: bytes) -> int:
             raise ValueError("protected cache destination cannot use symlinks")
         if target.exists() and not target.is_file():
             raise ValueError("protected cache destination is not a file")
-        validated.append((target, content))
+        validated.append((relative, target, content, cache_document))
     # Authenticate and validate ALL files/paths before writing the first one.
     # Existing run-local entries are newer authority and must not be replaced.
     count = 0
-    for target, content in validated:
+    authenticated = {}
+    for relative, target, content, cache_document in validated:
         if target.exists():
+            if prove_public_macro:
+                try:
+                    identical = sealed.read_bounded_file(target, MAX_FILE_BYTES) == content
+                except (OSError, ValueError):
+                    identical = False
+                if identical:
+                    authenticated[relative] = cache_document
             continue
         sealed.owned_directory(target.parent)
         atomic_write_bytes(target, content, fsync_dir=True)
         count += 1
-    return count
+        if prove_public_macro:
+            authenticated[relative] = cache_document
+    complete = bool(
+        prove_public_macro
+        and _authenticated_public_macro_complete(authenticated, reference_time=reference_time)
+    )
+    return _ImportResult(count, complete)
+
+
+def import_snapshot(directory, key: bytes) -> int:
+    """Import the snapshot without changing the established count-only API."""
+    return _import_snapshot(directory, key).restored_files
 
 
 def _output(name, value):
@@ -229,6 +329,10 @@ def main(argv=None):
     from tarzan import log_redaction
     log_redaction.install()
     try:
+        if args.operation == "import":
+            # A missing file, invalid key/tag/schema or optional proof failure
+            # must keep the fallback enabled even with continue-on-error.
+            _output("public_macro_complete", "false")
         if args.operation == "generate-key":
             if args.key_file is None:
                 raise ValueError("generate-key requires a local recovery file")
@@ -241,11 +345,13 @@ def main(argv=None):
             _output("enabled", "true")
             print("Protected cache key configuration verified.")
             return 0
-        count = (
-            import_snapshot(args.directory, key) if args.operation == "import"
-            else export_snapshot(args.directory, key)
-        )
-        if args.operation == "export":
+        if args.operation == "import":
+            result = _import_snapshot(args.directory, key, prove_public_macro=True)
+            count = result.restored_files
+            if result.public_macro_complete:
+                _output("public_macro_complete", "true")
+        else:
+            count = export_snapshot(args.directory, key)
             _output("nonempty", "true" if count else "false")
         print("Protected market cache restored." if args.operation == "import" and count
               else "Protected market cache miss; fresh data will be requested."

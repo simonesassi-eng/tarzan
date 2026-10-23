@@ -91,6 +91,7 @@ jobs:
             tarzan-sealed-market-v1-r3-${{ runner.os }}-${{ steps.cache_key.outputs.key_id }}-
 
       - name: Validate and import encrypted market snapshot
+        id: protected_import
         if: steps.cache_key.outputs.enabled == 'true'
         continue-on-error: true
         env:
@@ -102,6 +103,9 @@ jobs:
       # incompatible action release must not cost a digest.
       - name: Restore public macro snapshot
         id: public_cache
+        # A successful import may be empty/partial. Skip only after the native
+        # validator proves all fixed macro heads authenticated and recent.
+        if: steps.protected_import.outputs.public_macro_complete != 'true'
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -111,6 +115,7 @@ jobs:
             tarzan-public-macro-v1-${{ runner.os }}-
 
       - name: Validate and import public macro snapshot
+        if: steps.protected_import.outputs.public_macro_complete != 'true'
         continue-on-error: true
         # Never replace an already authenticated, newer run-local history
         # with an older independently restored public projection.
@@ -176,6 +181,8 @@ jobs:
 
       - name: Project public macro snapshot
         id: cache_export
+        # Keep updating the independent public fallback even when its restore
+        # was unnecessary; a future key/cache outage must not find it abandoned.
         if: always() && !cancelled()
         continue-on-error: true
         run: python -m tarzan.data.public_cache export

@@ -143,12 +143,20 @@ def _read_snapshot(path):
 
 def export_snapshot(directory) -> int:
     destination = _directory(directory)
-    previous = _read_snapshot(destination / _FILENAME)
+    previous = None
     tables = {}
     for symbol in sorted(PUBLIC_SYMBOLS):
         frame = price_cache.load_history(symbol)
         from_private = frame is not None
         if frame is None:
+            if previous is None:
+                try:
+                    previous = _read_snapshot(destination / _FILENAME)
+                except (OSError, ValueError, TypeError, KeyError, OverflowError):
+                    # A corrupt previous projection is not evidence. Still
+                    # publish newly validated private macro tables so the
+                    # next run can recover without carrying corrupt bytes.
+                    previous = {}
             frame = previous.get(symbol)
         if frame is None:
             continue

@@ -46,10 +46,25 @@ run-local files win; the public macro fallback only fills missing histories.
 Every attempt saves under a unique run-ID/attempt/key-fingerprint key, avoiding
 same-day immutable-key freezes. Native cache eviction/retention is best-effort.
 
+The encrypted import can skip the redundant public **restore/import** only
+after proving all fixed macro histories authenticated, schema-compatible and
+usable within the existing five-calendar-day refresh-tail window. A successful
+but empty/partial import, disabled cache, invalid key/tag, stale data or future
+date keeps the fallback enabled. Null daily padding is not an observation: the
+guard dates the last real close, exactly as the macro consumer does. This is
+only a bootstrap reuse guard, not a relaxed quote policy; ordinary daily-tail
+and intraday refreshes still run, and no timestamp or map TTL is renewed.
+The public **export/save** continues on every attempt to keep the independent
+fallback recoverable. A corrupt previous public projection cannot block
+export of new validated macro tables; valid previous tables are reused only
+when their private counterparts are missing.
+
 The diagnostic upload requests 14-day retention. A killed/cancelled process,
 missing key or storage outage can still prevent capture/upload. A normal send's
 diagnostic failure cannot change its delivery outcome or authorize a resend.
 An explicit verification fails if its requested encrypted capture is unavailable.
+Repository/organization limits may shorten requested artifact retention:
+check the upload warning and artifact expiration rather than assuming 14 days.
 
 ## Recover an exact failure privately
 
