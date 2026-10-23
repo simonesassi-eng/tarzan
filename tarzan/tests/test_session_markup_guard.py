@@ -183,7 +183,15 @@ def test_nav_index_units_cannot_be_relabelled_as_euro_basket_values():
 
 
 @pytest.mark.parametrize("unavailable", [False, True])
-@pytest.mark.parametrize("invented", [" · +€999.00", " · EUR 999.00"])
+@pytest.mark.parametrize("invented", [
+    " · +€999.00",
+    " · EUR 999.00",
+    " · EUR −999.00",
+    " · 999.00 EUR",
+    " · +999.00 EUR",
+    " · −999.00 EUR",
+    " · 999,00 EUR",
+])
 def test_session_caption_cannot_append_a_second_or_unavailable_money_claim(unavailable, invented):
     m = order_nav()
     if unavailable:

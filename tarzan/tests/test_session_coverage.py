@@ -25,6 +25,7 @@ import html as H
 import pandas as pd
 import pytest
 
+from tarzan.contracts.session_move import paired_session_move
 from tarzan.engine.metrics import MetricsEngine
 from tarzan.export.newsletter._constants import _NewsletterContext
 from tarzan.export.newsletter._sections_alloc import (
@@ -253,10 +254,20 @@ class TestTheNoteSaysWhatIsCovered:
 
 class TestTheSessionTileCarriesIt:
     @staticmethod
-    def _session_tile(perf):
+    def _session_tile(perf, *, paired=False):
         m = PortfolioMetrics(total_value=243_205.0, invested_value=243_205.0,
                              holdings_df=pd.DataFrame([{"cost_basis_eur": 220_000.0}]))
         m.performance = perf
+        if paired:
+            # Synthetic source endpoints, independent of today's subtotals.
+            m.portfolio_history = pd.Series(
+                [1000.0, 1000.0 * (1.0 + perf["1d"] / 100.0)],
+                index=pd.DatetimeIndex([_TODAY - dt.timedelta(days=1), _TODAY]),
+            )
+            m.history_source_basis = "HOLDINGS_PRICE_AGGREGATE"
+            m.session_move_evidence = paired_session_move(
+                m.portfolio_history, perf["1d"], source_basis=m.history_source_basis,
+            )
         tiles = _build_hero(_NewsletterContext(
             metrics=m, config=InvestorConfig()))["tiles"]
         return next(t for t in tiles if t["label"] == "Session")
@@ -278,8 +289,19 @@ class TestTheSessionTileCarriesIt:
         assert "market open" in caption
 
     def test_the_value_still_leads_the_caption(self):
-        """The euro amount keeps its place; the note is appended, not swapped in."""
+        """A proved euro amount leads; the coverage note remains appended."""
+        tile = self._session_tile(
+            {"1d": 0.0637, "1d_intraday": True, "market_open": True,
+             "1d_coverage_pct": 12.3}, paired=True)
+        caption = H.unescape(tile["caption"])
+        assert caption.startswith("+€0.64")
+        assert caption.endswith("12% of the book priced today")
+
+    def test_missing_pair_keeps_coverage_without_inventing_a_euro_amount(self):
         tile = self._session_tile(
             {"1d": 0.0637, "1d_intraday": True, "market_open": True,
              "1d_coverage_pct": 12.3})
-        assert H.unescape(tile["caption"]).startswith("+€")
+        caption = H.unescape(tile["caption"])
+        assert caption.startswith("EUR attribution unavailable")
+        assert "€" not in caption
+        assert caption.endswith("12% of the book priced today")

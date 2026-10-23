@@ -26,6 +26,9 @@ logger = logging.getLogger("tarzan.newsletter")
 # unparseable label is reported as disagreeing with its endpoint \u2014 blocking
 # delivery over a line that was drawn and labelled correctly.
 _DISPLAYED_PERCENT_RE = re.compile(r"([+\-\u2212]?)(\d+(?:\.\d+)?)%$")
+_EXPLICIT_EUR_AMOUNT_RE = re.compile(
+    r"\bEUR\s*[+\-\u2212]?\d|[+\-\u2212]?\d[\d.,]*\s*EUR\b",
+)
 
 
 def _text(value: object) -> str:
@@ -423,7 +426,7 @@ def _validate_session_markup(metrics, document):
             or attrs.get("data-tarzan-session-profit") != ""
             or not caption.startswith("EUR attribution unavailable")
             or "€" in caption
-            or re.search(r"\bEUR\s*[+\-\u2212]?\d", caption) is not None
+            or _EXPLICIT_EUR_AMOUNT_RE.search(caption) is not None
             or any(attrs.get(f"data-tarzan-session-{field}", "") for field in (
                 "anchor", "end", "source-anchor", "source-end",
             ))
@@ -481,7 +484,7 @@ def _validate_session_markup(metrics, document):
         not caption.startswith(" \u00b7 ".join(prefix) + " \u00b7 ")
         or re.findall(r"source \S+ to \S+", caption) != source_notes
         or caption.count("€") != 1
-        or re.search(r"\bEUR\s*[+\-\u2212]?\d", caption) is not None
+        or _EXPLICIT_EUR_AMOUNT_RE.search(caption) is not None
     ):
         errors.append("session visible euro amount differs from source evidence")
     if proof.availability == "DEGRADED" and "estimated historical data" not in caption:
