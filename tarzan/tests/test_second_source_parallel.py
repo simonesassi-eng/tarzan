@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import date
+import logging
 from threading import Barrier, Event, Lock, get_ident
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from tarzan import config, runtime
 from tarzan.data import enricher, justetf, listing_identity, listing_aliases, market_quotes
 from tarzan.engine import cross_check as xc, metrics, third_source_votes as votes
+from tarzan.log_redaction import RestrictedConsoleFormatter
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.runtime import data_quality as dq
 from tarzan.runtime.session import current_session
@@ -312,7 +314,10 @@ def test_ordinary_venue_failure_keeps_searching_the_remaining_venues(monkeypatch
     assert trace["adopt"] == [("AAA0.MI", "5d", 1), ("AAA0.MI", "1m", 1)]
 
 
-def test_unaccepted_prepared_row_preserves_original_owner_fault(monkeypatch, ports, caplog):
+@pytest.mark.parametrize("restricted_console", (False, True))
+def test_unaccepted_prepared_row_preserves_original_owner_fault(
+    monkeypatch, ports, caplog, restricted_console,
+):
     subject, trace, worker, faults, parent = ports
     engine, ctx = subject()
     original = RuntimeError("synthetic callback setup interrupted")
@@ -323,8 +328,18 @@ def test_unaccepted_prepared_row_preserves_original_owner_fault(monkeypatch, por
 
     monkeypatch.setattr(votes, "acquire_third_source_votes", before_accept)
     with owner(monkeypatch):
+        caplog.handler.setFormatter(
+            RestrictedConsoleFormatter() if restricted_console
+            else logging.Formatter("%(levelname)s %(message)s")
+        )
         engine._second_source(ctx)
-    assert "synthetic callback setup interrupted" in caplog.text
-    assert "list index out of range" not in caplog.text
+    # The original record retains diagnostic detail while CI's public
+    # formatter deliberately withholds it; test the original authority.
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "synthetic callback setup interrupted" in messages
+    assert "list index out of range" not in messages
+    if restricted_console:
+        assert "synthetic callback setup interrupted" not in caplog.text
+        assert "PRIVATE_DIAGNOSTIC" in caplog.text
     assert trace["fetch"] == trace["adopt"] == []
     assert ctx["holding_performance"]["5d"].tolist() == [10.0] * 4

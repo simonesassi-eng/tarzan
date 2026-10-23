@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime, timezone
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +16,7 @@ import pytest
 from tarzan.data import current_session, market_quotes
 from tarzan.data import listing_identity as li
 from tarzan.engine import cross_check as xc
+from tarzan.log_redaction import RestrictedConsoleFormatter
 from tarzan.runtime.ledger import RunLedger
 from tarzan.runtime.session import RunContext, RunMode, RunSession, activate_session
 
@@ -368,8 +370,9 @@ def test_a_borrowed_baseline_cannot_masquerade_as_a_native_common_close():
 
 @pytest.mark.parametrize("with_alias", (False, True))
 @pytest.mark.parametrize("failure", ("none", "history", "discovery"))
+@pytest.mark.parametrize("restricted_console", (False, True))
 def test_production_voter_searches_every_venue_after_a_vote_or_provider_error(
-        monkeypatch, caplog, with_alias, failure):
+        monkeypatch, caplog, with_alias, failure, restricted_console):
     from tarzan.data import justetf, listing_aliases
     from tarzan.engine.metrics import MetricsEngine
     from tarzan.models.holding import AssetClass, Holding
@@ -449,6 +452,10 @@ def test_production_voter_searches_every_venue_after_a_vote_or_provider_error(
     if with_alias:
         records.append(_quote(symbol="OTHER.DE", longName="A Different Verified Name"))
     with activate_session(_session()):
+        caplog.handler.setFormatter(
+            RestrictedConsoleFormatter() if restricted_console
+            else logging.Formatter("%(levelname)s %(message)s")
+        )
         li.remember_quote_identities(records, ["SYNTH.MI", *expected])
         engine._second_source(ctx)
     assert histories == ([] if failure == "discovery" else expected)
@@ -460,6 +467,13 @@ def test_production_voter_searches_every_venue_after_a_vote_or_provider_error(
     )
     assert ctx["holding_performance"].iloc[0]["1m"] == 10.0
     if failure != "none":
-        assert "(ValueError)" in caplog.text
-        assert "synthetic-secret" not in caplog.text
-        assert "example.invalid" not in caplog.text
+        # CI intentionally formats the public console as fixed status codes.
+        # Inspect original private records without disabling that protection.
+        messages = "\n".join(record.getMessage() for record in caplog.records)
+        assert "(ValueError)" in messages
+        for output in (messages, caplog.text):
+            assert "synthetic-secret" not in output
+            assert "example.invalid" not in output
+        if restricted_console:
+            assert "(ValueError)" not in caplog.text
+            assert "PRIVATE_DIAGNOSTIC" in caplog.text
