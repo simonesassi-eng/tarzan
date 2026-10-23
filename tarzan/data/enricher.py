@@ -1613,6 +1613,9 @@ def _sibling_close_series(symbol: str):
         return None
 
 
+_NATIVE_SIBLING_CLOSE_SERIES = _sibling_close_series
+
+
 def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
     """Give ``symbol`` today's close by borrowing a sibling venue's own return.
 

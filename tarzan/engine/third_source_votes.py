@@ -87,7 +87,7 @@ def can_acquire_together(*, native: bool = False, workers: int | None = None) ->
     return bool(
         session is not None
         and runtime.allows_live_transport()
-        and runtime.context().attempt_id == session.context.attempt_id
+        and runtime.context() is session.context
         and _worker_limit(workers) >= 2
     )
 

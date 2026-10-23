@@ -185,3 +185,7 @@ def quote(isin: str) -> Optional[dict]:
     return memoized(
         "justetf.quote", isin, lambda: _fetch_quote(isin), legacy=_quote_memo,
     )
+
+
+# Audited consumer scheduling must not reorder injected/custom transport ports.
+_NATIVE_REFEREE_PORTS = (prefetch, series, quote)

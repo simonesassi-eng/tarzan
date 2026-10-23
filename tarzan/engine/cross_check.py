@@ -3,8 +3,9 @@
 The engine prices off Yahoo, so before this nothing in a run could tell a Yahoo error
 from a market move: the oracle proved Tarzan's arithmetic matched Yahoo, never that Yahoo
 was right. Here each holding's figures are compared with justETF (FactSet/Xetra) and a
-figure the two sources disagree on is MARKED in the issue as not verified. Nothing is
-replaced: the referee decides whether a number is corroborated, it never supplies one.
+figure the two sources disagree on is MARKED in the issue as not verified. A qualified
+third venue can confirm the original figure or, under the existing settlement rule,
+corroborate a correction. A lone second-source discrepancy never replaces a figure.
 
 Two parts, which together cover the whole printed span:
 
@@ -352,3 +353,6 @@ def check_one_day(ours_1d, quote: Optional[dict], today: _dt.date,
     allowance = max(_ONE_DAY_FLOOR_PP, _ONE_DAY_SIGMAS * sigma_pp if sigma_pp else 0.0)
     return {"status": DIVERGED if abs(ours - alt) > allowance else OK,
             "alt": alt}
+
+
+_NATIVE_REFEREE_PORTS = (check_windows, check_one_day, settle, qualify_sibling)

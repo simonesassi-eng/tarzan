@@ -2160,10 +2160,11 @@ class MetricsEngine:
         ``tarzan.engine.cross_check`` for what is compared and why the threshold is
         what it is.
 
-        A referee, never a supplier: no figure changes here. And it cannot fail a run:
-        justETF down, slow, or without data for an ISIN reads as ``na`` — not
-        cross-checked — and the issue goes out. Skipped on a pinned or transport-less
-        run, which must not reach the network.
+        A discrepancy can replace a figure only under the existing independent
+        third-venue settlement rule, never on a lone second-source answer.
+        Ordinary source failures cannot fail a run: justETF without data reads
+        as ``na``. Owner/source cancellation still propagates after accepted
+        work drains. Pinned or transport-less runs never reach the network.
         """
         hp = ctx.get("holding_performance")
         if hp is None or getattr(hp, "empty", True) or "ticker" not in hp.columns:
@@ -2280,16 +2281,18 @@ class MetricsEngine:
                 eligible_isins.setdefault(eligible_isin, None)
             justetf.prefetch(eligible_isins)
             checked = diverged = 0
-            for i, row in hp.iterrows():
+
+            def _prepare_row(i, row):
+                """Owner-only setup; never write a verdict before acquisition."""
                 subject = subjects.get((str(row.get("ticker") or ""), str(row.get("type") or "")))
                 if subject is None:
-                    continue
+                    return None
                 isin, eur_tape, native_tape, listing_ccy = subject
                 from types import SimpleNamespace
                 h = SimpleNamespace(ticker=str(row.get("ticker")), isin=isin)
                 tape, ccy = self._own_tape(eur_tape, native_tape, listing_ccy)
                 if tape is None or str(ccy or "").upper() != "EUR":
-                    continue   # the second source is a EUR series
+                    return None   # the second source is a EUR series
                 # The SAME capped tape ``_holding_performance`` computes the printed
                 # figures from: the cap moves the 5Y anchor, and checking an uncapped
                 # tape would referee a number the issue never printed.
@@ -2316,10 +2319,13 @@ class MetricsEngine:
                 # no dispute and a few history reads on the days with one).
                 disputed = [w for w in xc.LONG_WINDOWS
                             if verdicts[w].get("status") == xc.DIVERGED]
+                return i, row, h, tape, verdicts, disputed
+
+            def _adopt_row(prepared, thirds):
+                """The only financial writer, always in original row order."""
+                nonlocal checked, diverged
+                i, row, h, tape, verdicts, disputed = prepared
                 if disputed:
-                    thirds = _third_sources(
-                        h.ticker, h.isin, tape, verdicts[disputed[0]].get("at"), ambiguous,
-                    )
                     for w in disputed:
                         verdicts[w] = xc.settle(verdicts[w], tape, thirds)
                 for w in windows:
@@ -2353,6 +2359,119 @@ class MetricsEngine:
                             float(v["ours"]), float(v["alt"]))
                     elif v.get("status") == xc.OK:
                         checked += 1
+
+            from tarzan.data import enricher
+            from tarzan.engine.third_source_votes import (
+                acquire_third_source_votes, can_acquire_together,
+            )
+            from tarzan.runtime.session import current_session
+            from tarzan.runtime.transport import ProviderBudget
+
+            def _native_ports(module, names):
+                originals = getattr(module, "_NATIVE_REFEREE_PORTS", None)
+                return (
+                    type(originals) is tuple and len(originals) == len(names)
+                    and all(
+                        getattr(module, name, None) is original
+                        for name, original in zip(names, originals)
+                    )
+                )
+
+            session = current_session()
+            native = (
+                type(self) is MetricsEngine
+                and session is not None
+                and type(session.transport) is ProviderBudget
+                and session.transport.optional_work_token() is None
+                and self._own_tape is _NATIVE_REFEREE_OWN_TAPE
+                and _native_ports(justetf, ("prefetch", "series", "quote"))
+                and _native_ports(xc, ("check_windows", "check_one_day", "settle", "qualify_sibling"))
+                and enricher._sibling_close_series is getattr(
+                    enricher, "_NATIVE_SIBLING_CLOSE_SERIES", None,
+                )
+            )
+            if not can_acquire_together(native=native):
+                # Legacy, injected and capacity-one callers keep incremental
+                # setup -> acquisition -> adoption, including failure prefixes.
+                for i, row in hp.iterrows():
+                    prepared = _prepare_row(i, row)
+                    if prepared is None:
+                        continue
+                    _i, _row, h, tape, verdicts, disputed = prepared
+                    thirds = (
+                        _third_sources(
+                            h.ticker, h.isin, tape, verdicts[disputed[0]].get("at"), ambiguous,
+                        ) if disputed else []
+                    )
+                    _adopt_row(prepared, thirds)
+            else:
+                # Each callback owns one complete venue sweep. It returns
+                # qualified facts only; no worker writes the financial frame.
+                prepared_rows = []
+                vote_index = 0
+
+                def acquisitions():
+                    nonlocal vote_index
+                    for i, row in hp.iterrows():
+                        prepared = _prepare_row(i, row)
+                        if prepared is None:
+                            continue
+                        _i, _row, h, tape, verdicts, disputed = prepared
+                        if not disputed:
+                            prepared_rows.append((prepared, None))
+                            continue
+                        prepared_rows.append((prepared, vote_index))
+                        vote_index += 1
+                        at = verdicts[disputed[0]].get("at")
+                        yield lambda h=h, tape=tape, at=at: _third_sources(
+                            h.ticker, h.isin, tape, at, ambiguous,
+                        )
+
+                batch = acquire_third_source_votes(acquisitions(), parallel=True)
+                adoption_error = None
+                try:
+                    from tarzan.runtime import data_quality as dq
+
+                    for prepared, outcome_index in prepared_rows:
+                        thirds = []
+                        if outcome_index is not None:
+                            if outcome_index >= len(batch.outcomes):
+                                # Setup can fail after retaining a row but
+                                # before its callback is accepted. Preserve
+                                # the original owner fault, not an IndexError.
+                                if batch.interruption is None:
+                                    raise RuntimeError("missing third-source acquisition")
+                                break
+                            outcome = batch.outcomes[outcome_index]
+                            if not (outcome.submitted and outcome.started and outcome.completed):
+                                # A canceled/failed submission is not a price
+                                # miss. Adopt only the proven earlier prefix.
+                                if batch.interruption is None:
+                                    raise RuntimeError("unobserved third-source acquisition")
+                                break
+                            dq.replay(outcome.diagnostics)
+                            if outcome.error is not None:
+                                if isinstance(outcome.error, Exception):
+                                    raise outcome.error
+                                break
+                            if not isinstance(outcome.result, list):
+                                raise TypeError("third-source acquisition did not return owned votes")
+                            thirds = outcome.result
+                        _adopt_row(prepared, thirds)
+                except BaseException as error:
+                    adoption_error = error
+                # Accepted work has already drained, including hidden submit
+                # orphans. An ordinary adoption error cannot mask a genuine
+                # source interruption; a true owner interruption wins.
+                interruption = batch.interruption
+                if adoption_error is not None:
+                    if not isinstance(adoption_error, Exception):
+                        raise adoption_error
+                    if interruption is not None and not isinstance(interruption, Exception):
+                        raise interruption
+                    raise adoption_error
+                if interruption is not None:
+                    raise interruption
             logger.info("Second-source check: %d figure(s) corroborated, %d diverged",
                         checked, diverged)
         except Exception as e:  # noqa: BLE001 — a referee must never fail the issue
@@ -2847,3 +2966,6 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
         [{"category": k, "weight_pct": v} for k, v in geo_weights.items()],
         columns=["category", "weight_pct"],
     )
+
+
+_NATIVE_REFEREE_OWN_TAPE = MetricsEngine._own_tape
