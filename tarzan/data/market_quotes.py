@@ -1246,10 +1246,12 @@ _quote_memo: dict[str, dict] = {}
 
 def reset_quote_memo() -> None:
     """Drop the run-scoped quote pairs (mirrors ``enricher.reset_run_caches``)."""
+    from tarzan.data.listing_identity import reset_quote_identities
     from tarzan.runtime.memo import provider_memo, provider_store
 
     with provider_memo().lock:
         provider_store("market.official", _quote_memo).clear()
+        reset_quote_identities()
 
 
 def official_quotes(symbols: list[str]) -> dict:
@@ -1449,6 +1451,8 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
     futures this fixes). Empty on any failure so the caller falls back to the
     daily-history close. Never raises."""
     from tarzan import runtime
+    from tarzan.data.listing_identity import remember_quote_identities
+    from tarzan.data.referee import finite_number
 
     if not runtime.allows_live_transport() or not symbols:
         return {}
@@ -1467,21 +1471,27 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
             return resp.json()
 
         payload = _yf_net.fetch_yf(_get, what="markets quote batch", log=logger)
-        if not payload:
+        if not isinstance(payload, dict):
             return {}
-        for q in payload.get("quoteResponse", {}).get("result", []):
+        response = payload.get("quoteResponse")
+        if not isinstance(response, dict):
+            return {}
+        records = response.get("result")
+        if not isinstance(records, (list, tuple)):
+            return {}
+        remember_quote_identities(records, symbols)
+        for q in records:
+            if not isinstance(q, dict):
+                continue
             sym = q.get("symbol")
-            if not sym:
+            if not isinstance(sym, str) or not sym:
                 continue
             fields: dict = {}
             for key, name in (("price", "regularMarketPrice"),
                               ("prev_close", "regularMarketPreviousClose")):
-                try:
-                    value = q.get(name)
-                    if value is not None and math.isfinite(float(value)) and float(value) > 0:
-                        fields[key] = float(value)
-                except (TypeError, ValueError, OverflowError):
-                    continue
+                value = finite_number(q.get(name), positive=True)
+                if value is not None:
+                    fields[key] = value
             currency = q.get("currency")
             if isinstance(currency, str) and currency.strip():
                 fields["currency"] = currency.strip()
@@ -1490,21 +1500,21 @@ def _fetch_official_quotes(symbols: list[str]) -> dict:
             # policy dates freshness on the OBSERVATION, not on when the
             # request ran — without it a live quote would have to be booked
             # as undated (i.e. fallback) evidence.
-            try:
-                observed = q.get("regularMarketTime")
-                if observed is not None:
-                    fields["time"] = int(observed)
-            except (TypeError, ValueError, OverflowError):
-                pass
+            raw_observed = q.get("regularMarketTime")
+            observed = finite_number(raw_observed)
+            if raw_observed is not None and observed is None:
+                # An explicitly malformed clock is not an undated quote.
+                # Dropping just its time would turn stale/bad evidence into
+                # unknown-age evidence that downstream compatibility accepts.
+                continue
+            if observed is not None:
+                fields["time"] = int(observed)
             # Today's traded volume on this venue: the evidence ``pick_quote`` weighs
             # when two venues dispute an instrument's 1D. Already in this response,
             # so carrying it costs no request.
-            try:
-                volume = q.get("regularMarketVolume")
-                if volume is not None and math.isfinite(float(volume)) and float(volume) >= 0:
-                    fields["volume"] = float(volume)
-            except (TypeError, ValueError, OverflowError):
-                pass
+            volume = finite_number(q.get("regularMarketVolume"))
+            if volume is not None and volume >= 0:
+                fields["volume"] = volume
             if fields.get("price") or fields.get("prev_close"):
                 out[sym] = fields
         missing = [s for s in symbols if s not in out]

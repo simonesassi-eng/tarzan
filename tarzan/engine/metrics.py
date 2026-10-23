@@ -1931,22 +1931,44 @@ class MetricsEngine:
         from tarzan.data import justetf
         from tarzan.engine import cross_check as xc
 
-        def _third_sources(ticker):
-            """The same instrument's other venues, as daily closes, for a vote."""
+        def _third_sources(ticker, isin, tape, at, ambiguous):
+            """Search every venue, admitting only comparable qualified votes."""
             try:
                 from tarzan.data.enricher import _sibling_close_series
-                from tarzan.data.market_quotes import _sibling_symbols
+                from tarzan.data.listing_aliases import alias_currency, verified_siblings
+                from tarzan.data.listing_identity import quote_identities
+                from tarzan.data.market_quotes import (
+                    _SIBLING_PRICE_TOLERANCE, _sibling_symbols,
+                )
 
+                symbols = _sibling_symbols(ticker, isin=isin)
+                aliases = set(verified_siblings(ticker, isin=isin))
+                identities = quote_identities([ticker, *symbols])
                 out = []
-                for sym in _sibling_symbols(ticker):
+                for sym in symbols:
                     if sym == ticker:
                         continue
-                    closes = _sibling_close_series(sym)
-                    if closes is not None and len(closes):
-                        out.append(closes)
+                    try:
+                        closes = _sibling_close_series(sym)
+                        if closes is None or not len(closes):
+                            continue
+                        vote = xc.qualify_sibling(
+                            tape, closes, ticker=ticker, symbol=sym, isin=isin, at=at,
+                            primary_identity=identities.get(ticker.upper()),
+                            sibling_identity=identities.get(sym.upper()),
+                            ambiguous_signatures=ambiguous, verified_alias=sym in aliases,
+                            verified_currency=(
+                                alias_currency(ticker, sym, isin=isin) if sym in aliases else None
+                            ),
+                            level_tolerance=_SIBLING_PRICE_TOLERANCE,
+                        )
+                        if vote is not None:
+                            out.append(vote)
+                    except Exception as e:  # noqa: BLE001 — keep searching later venues
+                        logger.info("No third-source vote from %s (%s)", sym, type(e).__name__)
                 return out
             except Exception as e:  # noqa: BLE001 — a vote must never fail the issue
-                logger.info("No third source for %s: %s", ticker, e)
+                logger.info("No third source for %s (%s)", ticker, type(e).__name__)
                 return []
 
         windows = ("1d",) + xc.LONG_WINDOWS
@@ -1991,6 +2013,13 @@ class MetricsEngine:
                 if isin:
                     subjects[(str(record.ticker), "Benchmark index")] = (
                         isin, record.history, record.history_native, record.currency)
+            from tarzan.data.listing_identity import (
+                ambiguous_relative_signatures, quote_identities,
+            )
+            identities = quote_identities(t for t, _kind in subjects)
+            ambiguous = ambiguous_relative_signatures(
+                ((t, values[0]) for (t, _kind), values in subjects.items()), identities,
+            )
             # Buy only facts this consumer can actually use. The referee serves
             # EUR series; native USD/unknown rows still retain their own figures
             # but are not compared here. Use the same row identity and tape
@@ -2047,7 +2076,9 @@ class MetricsEngine:
                 disputed = [w for w in xc.LONG_WINDOWS
                             if verdicts[w].get("status") == xc.DIVERGED]
                 if disputed:
-                    thirds = _third_sources(h.ticker)
+                    thirds = _third_sources(
+                        h.ticker, h.isin, tape, verdicts[disputed[0]].get("at"), ambiguous,
+                    )
                     for w in disputed:
                         verdicts[w] = xc.settle(verdicts[w], tape, thirds)
                 for w in windows:
