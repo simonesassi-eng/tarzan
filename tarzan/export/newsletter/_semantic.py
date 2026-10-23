@@ -12,6 +12,8 @@ import logging
 import math
 import re
 from collections.abc import Mapping
+from html.parser import HTMLParser
+from numbers import Integral, Real
 
 logger = logging.getLogger("tarzan.newsletter")
 
@@ -68,6 +70,264 @@ def _displayed_percent(label: str) -> float | None:
     return -value if match.group(1) in {"-", "\u2212"} else value
 
 
+class _FundingMarkup(HTMLParser):
+    """Read the delivered HTML, independently of section/context builders."""
+
+    _VOID = frozenset({
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    })
+
+    def __init__(self, document: str):
+        super().__init__(convert_charrefs=True)
+        self.plans: list[dict] = []
+        self.frames: list[tuple] = []
+        self.feed(document)
+
+    def handle_starttag(self, tag, attributes):
+        attrs = dict(attributes)
+        _, plan, field, component = (
+            self.frames[-1] if self.frames else (None, None, None, None)
+        )
+        if "data-tarzan-funding-plan" in attrs:
+            plan = len(self.plans)
+            field = component = None
+            self.plans.append({
+                "attrs": attrs, "fields": {}, "components": {}, "actions": 0,
+            })
+        if plan is not None:
+            record = self.plans[plan]
+            if "data-tarzan-funding-field" in attrs:
+                name = attrs["data-tarzan-funding-field"]
+                field = {"attrs": attrs, "text": ""}
+                record["fields"].setdefault(name, []).append(field)
+            for kind in ("badge", "scope", "outcome"):
+                if f"data-tarzan-funding-{kind}" in attrs:
+                    component = {"attrs": attrs, "text": ""}
+                    record["components"].setdefault(kind, []).append(component)
+            if attrs.get("data-tarzan-funding-action") == "true":
+                record["actions"] += 1
+        if tag not in self._VOID:
+            self.frames.append((tag, plan, field, component))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.frames) - 1, -1, -1):
+            if self.frames[index][0] == tag:
+                del self.frames[index:]
+                break
+
+    def handle_data(self, text):
+        if self.frames:
+            _, _, field, component = self.frames[-1]
+            if field is not None:
+                field["text"] += text
+            if component is not None:
+                component["text"] += text
+
+
+def _validate_funding_markup(metrics, document: str) -> list[str]:
+    """Reconcile model-proof labels/amounts without sharing renderer helpers.
+
+    Cash & Cash Equivalents is a strategic classification, not bank cash.
+    Funding/position/policy success never proves broker lot sizes, settlement
+    timing or execution prices. This guard reads only the final source proof;
+    it does not recalculate trades, target percentages or portfolio returns.
+    """
+    source_plans = getattr(metrics, "rebalancing_plans", None)
+    if not source_plans:
+        actions = getattr(metrics, "rebalancing_suggestions", None) or []
+        checks = getattr(metrics, "rebalancing_verifications", None) or []
+        if not actions and not checks:
+            return []
+        source_plans = [{"suggestions": actions, "verifications": checks}]
+
+    parsed = _FundingMarkup(document)
+    errors: list[str] = []
+    if len(parsed.plans) != len(source_plans):
+        return ["funding display plan count differs from source plans"]
+    amount_fields = (
+        "initial_settlement_cash_eur", "ending_settlement_cash_eur",
+        "cash_equivalent_securities_before_eur", "cash_equivalent_securities_after_eur",
+        "initial_cash_equivalents_eur", "ending_cash_equivalents_eur",
+        "cash_equivalents_target_eur", "protected_cash_eur",
+        "external_contribution_eur", "gross_sales_eur", "gross_purchases_eur",
+        "estimated_tax_eur", "fees_eur", "residual_eur",
+    )
+    required_flags = (
+        "position_invariants_satisfied", "protected_cash_satisfied",
+        "settlement_cash_satisfied", "frozen_positions_satisfied",
+        "no_sell_satisfied", "serialized_actions_satisfied",
+        "action_identity_satisfied", "units_invariants_satisfied",
+        "wealth_invariants_satisfied", "cash_mechanics_satisfied",
+        "non_cost_only_progress_satisfied",
+    )
+    locked_fields = (
+        "locked_settlement_cash_eur", "initial_free_settlement_cash_eur",
+        "ending_free_settlement_cash_eur",
+    )
+    target_kinds = {
+        "asset", "geography", "per_holding_equity", "per_holding_fi",
+        "per_holding_portfolio", "cash",
+    }
+    expected_scope = (
+        "Funding, position and policy checks use selected prices only. "
+        "Broker lot sizes/fractional orders, settlement timing and execution prices "
+        "are not verified. These are modeled proposals, not broker instructions."
+    )
+
+    def numeric(value) -> bool:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            return False
+        try:
+            return math.isfinite(value)
+        except (OverflowError, TypeError, ValueError):
+            return False
+
+    for index, (source, rendered) in enumerate(zip(source_plans, parsed.plans)):
+        prefix = f"funding plan {index}"
+        if not isinstance(source, Mapping):
+            errors.append(f"{prefix} source is not a plan record")
+            continue
+        checks = source.get("verifications") or []
+        actions = source.get("suggestions") or []
+        proof = None
+        target_checks = []
+        uncertain_targets = False
+        source_infeasible = False
+        for check in checks:
+            if not isinstance(check, Mapping):
+                uncertain_targets = True
+                continue
+            kind = check.get("kind")
+            if isinstance(kind, str):
+                if kind == "funding":
+                    proof = check
+                elif kind in target_kinds:
+                    target_checks.append(check)
+            if check.get("no_solution") is not None and check.get("no_solution") is not False:
+                uncertain_targets = True
+                source_infeasible = True
+
+        for target in target_checks:
+            items = target.get("items")
+            if not isinstance(items, (list, tuple)):
+                uncertain_targets = True
+                continue
+            expected_fields = (
+                ("actual_eur", "target_eur") if target["kind"] == "cash"
+                else ("actual_pct", "target_pct")
+            )
+            if any(
+                not isinstance(item, Mapping)
+                or any(not numeric(item.get(name)) for name in expected_fields)
+                for item in items
+            ):
+                uncertain_targets = True
+
+        fields, flags = amount_fields, required_flags
+        if proof is not None and (
+            "locked_cash_balances_satisfied" in proof
+            or any(name in proof for name in locked_fields)
+        ):
+            fields += locked_fields
+            flags += ("locked_cash_balances_satisfied",)
+        status = "UNKNOWN"
+        if proof is not None:
+            source_status = proof.get("status")
+            if isinstance(source_status, str) and source_status == "NON_EXECUTABLE":
+                status = "NON_EXECUTABLE"
+            elif (
+                isinstance(source_status, str) and source_status == "EXECUTABLE"
+                and all(proof.get(name) is True for name in flags)
+                and all(numeric(proof.get(name)) for name in fields)
+            ):
+                status = "EXECUTABLE"
+        aligned = bool(
+            not actions and status == "EXECUTABLE" and not uncertain_targets
+            and target_checks
+            and any(isinstance(check.get("items"), (list, tuple)) and check["items"]
+                    for check in target_checks)
+            and all(isinstance(check.get("status"), str) and check["status"] == "✓ OK"
+                    for check in target_checks)
+        )
+        expected_attributes = {
+            "data-tarzan-funding-plan": str(index),
+            "data-tarzan-funding-status": status,
+            "data-tarzan-target-alignment": "proven" if aligned else "unproven",
+            "data-tarzan-broker-execution-verified": "false",
+            "data-tarzan-action-count": str(len(actions)),
+        }
+        for name, expected in expected_attributes.items():
+            if rendered["attrs"].get(name) != expected:
+                errors.append(f"{prefix} {name} disagrees with final source proof")
+        if rendered["actions"] != len(actions):
+            errors.append(f"{prefix} rendered trade count disagrees with source actions")
+        if set(rendered["fields"]) != set(fields):
+            errors.append(f"{prefix} displayed amount fields differ from final source proof")
+        for name in fields:
+            cells = rendered["fields"].get(name, [])
+            if len(cells) != 1:
+                errors.append(f"{prefix} amount {name} is missing or duplicated")
+                continue
+            value = proof.get(name) if proof is not None else None
+            available = numeric(value)
+            expected_raw = str(value) if available else ""
+            expected_text = "—"
+            if available:
+                display_value = int(value) if isinstance(value, Integral) else value
+                sign = "−" if round(display_value, 2) < 0 else ""
+                expected_text = (
+                    f"{sign}€{abs(display_value):,}.00" if isinstance(value, Integral)
+                    else f"{sign}€{abs(display_value):,.2f}"
+                )
+            if (
+                cells[0]["attrs"].get("data-eur") != expected_raw
+                or cells[0]["text"].strip() != expected_text
+            ):
+                errors.append(f"{prefix} displayed amount {name} differs from final source proof")
+        badge = (
+            "CHECKS PASSED" if status == "EXECUTABLE"
+            else "NOT EXECUTABLE · DRAFT" if status == "NON_EXECUTABLE"
+            else "UNKNOWN · DRAFT"
+        )
+        badges = rendered["components"].get("badge", [])
+        if len(badges) != 1 or badges[0]["text"].strip() != badge:
+            errors.append(f"{prefix} visible model-check badge disagrees with source proof")
+        scopes = rendered["components"].get("scope", [])
+        if (
+            len(scopes) != 1
+            or scopes[0]["attrs"].get("data-tarzan-funding-scope") != "limited"
+            or " ".join(scopes[0]["text"].split()) != expected_scope
+        ):
+            errors.append(f"{prefix} broker execution disclaimer is missing or incorrect")
+        outcomes = rendered["components"].get("outcome", [])
+        if actions:
+            if outcomes:
+                errors.append(f"{prefix} no-trade/alignment outcome contradicts source actions")
+        else:
+            outcome = (
+                "not-executable" if status == "NON_EXECUTABLE"
+                else "aligned" if aligned else "unproven"
+            )
+            if status == "NON_EXECUTABLE":
+                expected_outcome_text = "No executable trade set was produced; draft only."
+            elif aligned:
+                expected_outcome_text = "Checked targets within tolerance; no trades proposed."
+            else:
+                expected_outcome_text = (
+                    "No trades proposed"
+                    + ("; no feasible plan was produced" if source_infeasible else "")
+                    + ". Target alignment has not been proven."
+                )
+            if (
+                len(outcomes) != 1
+                or outcomes[0]["attrs"].get("data-tarzan-funding-outcome") != outcome
+                or outcomes[0]["text"].strip() != expected_outcome_text
+            ):
+                errors.append(f"{prefix} visible no-trade/alignment outcome disagrees with proof")
+    return errors
+
+
 def validate_newsletter_semantics(
     metrics,
     semantic_audit: Mapping[str, object] | None,
@@ -75,10 +335,11 @@ def validate_newsletter_semantics(
 ) -> tuple[str, ...]:
     """Return every identity/window violation that must block delivery.
 
-    Empty legacy/test metrics with no benchmark contract are ignored. A real
+    Empty legacy/test metrics without benchmark or planner contracts are ignored. A real
     MetricsEngine result always exposes either resolved benchmark tickers,
     explicit resolution errors, or a degraded preprocessing computer.
     """
+    errors = _validate_funding_markup(metrics, newsletter_html)
     resolution_errors = tuple(
         _text(error)
         for error in (getattr(metrics, "benchmark_resolution_errors", ()) or ())
@@ -102,12 +363,11 @@ def validate_newsletter_semantics(
         or not getattr(comparison, "empty", True)
     )
     if not has_contract:
-        return ()
+        return tuple(errors)
 
     from tarzan.contracts.reference import reference_for
     reference = reference_for(metrics)
 
-    errors: list[str] = []
     definitions = {_text(name): _text(ticker)
                    for name, ticker in reference.benchmarks.items()}
     expected_names = set(definitions)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from datetime import datetime, time
 from html import escape as _esc
+from numbers import Integral, Real
 from typing import Any, Optional
 
 import pandas as pd
@@ -128,16 +130,151 @@ def _priced_today_note(perf: Optional[dict]) -> str:
     return f"{coverage:.0f}% of the book priced today"
 
 
-def _funding_verification(verifications) -> Optional[dict[str, Any]]:
+_FUNDING_AMOUNT_FIELDS = (
+    "initial_settlement_cash_eur", "ending_settlement_cash_eur",
+    "cash_equivalent_securities_before_eur", "cash_equivalent_securities_after_eur",
+    "initial_cash_equivalents_eur", "ending_cash_equivalents_eur",
+    "cash_equivalents_target_eur", "protected_cash_eur",
+    "external_contribution_eur", "gross_sales_eur", "gross_purchases_eur",
+    "estimated_tax_eur", "fees_eur", "residual_eur",
+)
+_FUNDING_INVARIANTS = (
+    "position_invariants_satisfied", "protected_cash_satisfied",
+    "settlement_cash_satisfied", "frozen_positions_satisfied",
+    "no_sell_satisfied", "serialized_actions_satisfied",
+    "action_identity_satisfied", "units_invariants_satisfied",
+    "wealth_invariants_satisfied", "cash_mechanics_satisfied",
+    "non_cost_only_progress_satisfied",
+)
+_LOCKED_FUNDING_FIELDS = (
+    "locked_settlement_cash_eur", "initial_free_settlement_cash_eur",
+    "ending_free_settlement_cash_eur",
+)
+_TARGET_CHECK_KINDS = frozenset({
+    "asset", "geography", "per_holding_equity", "per_holding_fi",
+    "per_holding_portfolio", "cash",
+})
+
+
+def _funding_verification(verifications) -> Optional[Mapping[str, Any]]:
     """Return the final serialized-action funding proof, when available."""
-    return next(
-        (
-            verification
-            for verification in (verifications or [])
-            if verification.get("kind") == "funding"
-        ),
-        None,
+    final = None
+    for verification in verifications or []:
+        if (
+            isinstance(verification, Mapping)
+            and isinstance(verification.get("kind"), str)
+            and verification["kind"] == "funding"
+        ):
+            final = verification
+    return final
+
+
+def _funding_amount(value):
+    """Keep a finite numeric source fact; missing/invalid is not numeric zero."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        if not math.isfinite(value):
+            return None
+        # Numpy's abs(int64.min) overflows; convert integers without a float
+        # roundtrip so the raw marker and cent display remain lossless.
+        return int(value) if isinstance(value, Integral) else value
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
+def _funding_status(funding: Optional[Mapping[str, Any]]) -> str:
+    """The engine's model proof is not evidence of broker-order execution."""
+    if funding is None:
+        return "UNKNOWN"
+    status = funding.get("status")
+    if not isinstance(status, str):
+        return "UNKNOWN"
+    if status == "NON_EXECUTABLE":
+        return status
+    if status != "EXECUTABLE":
+        return "UNKNOWN"
+    fields = _FUNDING_AMOUNT_FIELDS
+    invariants = _FUNDING_INVARIANTS
+    if (
+        "locked_cash_balances_satisfied" in funding
+        or any(key in funding for key in _LOCKED_FUNDING_FIELDS)
+    ):
+        fields += _LOCKED_FUNDING_FIELDS
+        invariants += ("locked_cash_balances_satisfied",)
+    if (
+        any(_funding_amount(funding.get(key)) is None for key in fields)
+        or any(funding.get(key) is not True for key in invariants)
+    ):
+        return "UNKNOWN"
+    return "EXECUTABLE"
+
+
+def _targets_in_tolerance(verifications) -> bool:
+    """Only nonempty native target evidence can support an alignment claim."""
+    checks = []
+    for verification in verifications or []:
+        if not isinstance(verification, Mapping):
+            return False
+        no_solution = verification.get("no_solution")
+        if no_solution is not None and no_solution is not False:
+            return False
+        if (
+            isinstance(verification.get("kind"), str)
+            and verification["kind"] in _TARGET_CHECK_KINDS
+        ):
+            items = verification.get("items")
+            if not isinstance(items, (list, tuple)):
+                return False
+            fields = ("actual_eur", "target_eur") if verification["kind"] == "cash" else (
+                "actual_pct", "target_pct")
+            if any(
+                not isinstance(item, Mapping)
+                or any(_funding_amount(item.get(field)) is None for field in fields)
+                for item in items
+            ):
+                return False
+            checks.append(verification)
+    return bool(
+        checks
+        and any(isinstance(check.get("items"), (list, tuple)) and check["items"]
+                for check in checks)
+        and all(isinstance(check.get("status"), str) and check["status"] == "✓ OK"
+                for check in checks)
     )
+
+
+def _rebalance_evidence(verifications, n_actions: int) -> tuple[str, bool, bool]:
+    status = _funding_status(_funding_verification(verifications))
+    infeasible = any(
+        isinstance(verification, Mapping)
+        and verification.get("no_solution") is not None
+        and verification.get("no_solution") is not False
+        for verification in verifications or []
+    )
+    aligned = bool(
+        n_actions == 0 and status == "EXECUTABLE"
+        and _targets_in_tolerance(verifications)
+    )
+    return status, bool(infeasible), aligned
+
+
+def _funding_cell(funding, key: str) -> dict:
+    value = _funding_amount(funding.get(key)) if funding is not None else None
+    # Round display only. The data marker retains the unrounded source fact,
+    # and neither funding success nor a cash deficit is inferred from the text.
+    sign = "−" if value is not None and round(value, 2) < 0 else ""
+    if value is None:
+        text = "—"
+    elif isinstance(value, Integral):
+        text = f"{sign}€{abs(value):,}.00"
+    else:
+        text = f"{sign}€{abs(value):,.2f}"
+    return {
+        "field": key,
+        "raw": str(value) if value is not None else "",
+        "text": text,
+    }
 
 
 def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
@@ -174,13 +311,20 @@ def _build_headline(ctx: _NewsletterContext, hero: dict) -> dict:
     # Action clause. A failed funding proof takes precedence over the mere
     # presence of draft actions: those trades must never read as instructions.
     suggestions = list(m.rebalancing_suggestions or [])
-    funding = _funding_verification(m.rebalancing_verifications)
-    if funding and funding.get("status") == "NON_EXECUTABLE":
-        parts.append("and the draft rebalance is not executable until cash funding is resolved")
+    status, infeasible, aligned = _rebalance_evidence(
+        m.rebalancing_verifications, len(suggestions))
+    if status == "NON_EXECUTABLE":
+        parts.append("and the draft rebalance is not executable until funding or policy checks are resolved")
+    elif infeasible:
+        parts.append("and no feasible rebalance was produced")
+    elif status != "EXECUTABLE":
+        parts.append("and any rebalance remains a draft with unverified funding")
     elif suggestions:
-        parts.append("and the optimizer suggests rebalancing below")
+        parts.append("and the optimizer shows a modeled rebalance below")
+    elif aligned:
+        parts.append("and checked targets are within tolerance")
     else:
-        parts.append("and your allocation is on target")
+        parts.append("and no trades were proposed; target alignment is unproven")
 
     return {
         "text": ", ".join(parts) + ".",
@@ -596,32 +740,34 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # the configured tolerance ceiling (distinct from "already
     # aligned"). A serialized-action funding proof is a separate final
     # authority: draft actions are not actionable unless it is executable.
-    rebal_infeasible = bool(
-        m.rebalancing_verifications
-        and any(v.get("no_solution") for v in m.rebalancing_verifications)
-    )
-    funding = _funding_verification(m.rebalancing_verifications)
-    funding_non_executable = bool(
-        funding and funding.get("status") == "NON_EXECUTABLE"
-    )
+    funding_status, rebal_infeasible, rebal_aligned = _rebalance_evidence(
+        m.rebalancing_verifications, n_actions)
 
-    if rebal_infeasible:
+    if funding_status == "NON_EXECUTABLE":
+        rebal_label = "Not executable"
+        rebal_sublabel = "funding or policy checks failed"
+        rebal_color = PALETTE["red"]
+        rebal_bg = PALETTE["red_bg"]
+    elif rebal_infeasible:
         rebal_label = "Infeasible"
         rebal_sublabel = "no feasible plan"
         rebal_color = PALETTE["red"]
         rebal_bg = PALETTE["red_bg"]
-    elif funding_non_executable:
-        rebal_label = "Not executable"
-        rebal_sublabel = "cash funding unresolved"
-        rebal_color = PALETTE["red"]
-        rebal_bg = PALETTE["red_bg"]
-    elif n_actions == 0:
-        # Solved cleanly with no trades (inside tolerance, or pinned by
-        # locked positions / auto-relax). Nothing for the user to do.
+    elif rebal_aligned:
         rebal_label = "Aligned"
-        rebal_sublabel = "no action needed"
+        rebal_sublabel = "checked targets within tolerance"
         rebal_color = PALETTE["green"]
         rebal_bg = PALETTE["green_bg"]
+    elif funding_status != "EXECUTABLE":
+        rebal_label = "Unverified"
+        rebal_sublabel = "funding proof unavailable or incomplete"
+        rebal_color = PALETTE["amber"]
+        rebal_bg = PALETTE["amber_bg"]
+    elif n_actions == 0:
+        rebal_label = "No trades"
+        rebal_sublabel = "target alignment unproven"
+        rebal_color = PALETTE["amber"]
+        rebal_bg = PALETTE["amber_bg"]
     else:
         # Actions to take. Communicate only that action is needed — no
         # count, no sublabel. The Optimizer section below carries specifics.
@@ -718,7 +864,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "rebal_color": rebal_color,
         "rebal_bg": rebal_bg,
         "rebal_n_actions": n_actions,
-        "rebal_executable": not rebal_infeasible and not funding_non_executable,
+        "rebal_executable": funding_status == "EXECUTABLE" and not rebal_infeasible,
     }
 
 def _build_tax_note(ctx: _NewsletterContext) -> dict:
@@ -950,7 +1096,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "leverage": leverage,
         })
 
-    # Cash buffer (EUR-based, appended after invested classes).
+    # Strategic Cash & Cash Equivalents reserve, not spendable bank cash.
     # The bar width is scaled as % of total portfolio so cash visually
     # matches the other rows (it would otherwise dominate the bar
     # because target_cash_buffer_eur is small relative to invested
@@ -963,11 +1109,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         cash_band = float(getattr(cfg, "allocation_band_rel_pctg", 25.0)) / 100.0 * cash_tgt
         cash_pct_of_total = (cash_actual / m.total_value * 100) if m.total_value > 0 else 0
         rows.append({
-            # Shorter label only inside the Diversification block where
-            # horizontal space is critical; other sections (Holdings,
-            # Optimizer, Insights) keep the full "Cash & Cash
-            # Equivalents" string.
-            "name": "Cash & Cash Eq.",
+            "name": "Strategic reserve",
             "color": ASSET_COLORS["Cash & Cash Equivalents"],
             "actual_pct": _eur_smart(cash_actual),
             "actual_pct_raw": cash_pct_of_total,
@@ -977,7 +1119,7 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
                             else PALETTE["red"]),
             "bar_width": min(max(cash_pct_of_total, 1), 100),
             "is_eur": True,
-            # Raw EUR figures so the diversification table can show cash as a
+            # Raw EUR figures so the diversification table can show reserve as a
             # normal row without it participating in the invested base.
             "cash_actual_eur": cash_actual,
             "cash_target_eur": cash_tgt,
@@ -1779,13 +1921,14 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                  "plan_pc": _pc1(tt), "plan_eur": _eur_smart(tt / 100 * invested_base),
                  "gap": _signed_pp(tn - tt), "colour": _band_colour(tn - tt, tt, cfg)}]
         if cash is not None:
-            # Cash is an amount outside invested capital, so it has no weight: its
-            # row states the two amounts and their gap in euros, banded at
+            # The strategic reserve is outside the invested allocation base.
+            # It may contain securities, not just settlement cash. Its row
+            # states the amounts and their gap in euros, banded at
             # ±allocation_band_rel_pctg of its target.
             c_now = float(cash.get("cash_actual_eur") or 0.0)
             c_tgt = float(cash.get("cash_target_eur") or 0.0)
             c_ok = abs(c_now - c_tgt) <= rel / 100.0 * c_tgt + 1e-9
-            tail.append({"name": "Cash", "move": "", "now_pc": "",
+            tail.append({"name": "Strategic reserve", "move": "", "now_pc": "",
                          "now_eur": _eur_smart(c_now), "plan_pc": "",
                          "plan_eur": _eur_smart(c_tgt), "gap": _signed_eur(c_now - c_tgt),
                          "colour": P["green"] if c_ok else P["red"]})
@@ -1798,7 +1941,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         elif levs:
             note.append(f"Leverage by class: {', '.join(levs)}, the rest 1.00\u00d7.")
         if cash is not None:
-            note.append("Cash is outside invested capital.")
+            note.append(
+                "Strategic reserve (Cash & Cash Equivalents) is outside the "
+                "invested allocation base, not bank cash available for trades."
+            )
         specs.append({"title": "Asset class", "left": asset_rows, "right": asset_rows,
                       "tail": tail, "stack_h": 120.0,
                       "total_now": tn, "total_tgt": tt, "note": " ".join(note),
@@ -2023,12 +2169,13 @@ def _optimizer_plan_ctx(m: PortfolioMetrics, suggestions: list, taxonomy=None,
 
     def _pill(direction):
         c = PALETTE["green"] if direction == "BUY" else PALETTE["red"]
-        return (f'<span style="display:inline-block;padding:1px 6px;'
+        return (f'<span data-tarzan-funding-action="true" '
+                f'style="display:inline-block;padding:1px 6px;'
                 f'background:{PALETTE["card"]};'
                 f'color:{c};border:1px solid {c}33;border-radius:999px;'
                 f'font-weight:700;font-size:{TYPE_PX["label"]}px;'
                 f'vertical-align:middle;'
-                f'margin-right:5px;">{direction}</span>')
+                f'margin-right:5px;">{_esc(direction)}</span>')
 
     actions = []
     for s in sorted(suggestions, key=lambda s: -float(s["amount_eur"])):
@@ -2120,28 +2267,46 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
 
     def _attach_execution(pc: dict, verifications) -> None:
         funding = _funding_verification(verifications)
-        if funding is None:
-            pc["execution_status"] = None
-            pc["executable"] = None
-            return
-
-        status = str(funding.get("status") or "UNKNOWN").upper()
-        residual = float(funding.get("residual_eur") or 0.0)
+        status, infeasible, aligned = _rebalance_evidence(verifications, pc["n_total"])
+        pairs = [
+            ("Bank cash", "initial_settlement_cash_eur", "ending_settlement_cash_eur"),
+            ("Cash-equivalent securities", "cash_equivalent_securities_before_eur",
+             "cash_equivalent_securities_after_eur"),
+            ("Strategic reserve (Cash & Cash Equivalents)",
+             "initial_cash_equivalents_eur", "ending_cash_equivalents_eur"),
+        ]
+        singles = [
+            ("Strategic reserve target", "cash_equivalents_target_eur"),
+            ("Protected bank cash", "protected_cash_eur"),
+            ("External contribution", "external_contribution_eur"),
+            ("Gross security sales", "gross_sales_eur"),
+            ("Gross security purchases", "gross_purchases_eur"),
+            ("Estimated sale tax", "estimated_tax_eur"),
+            ("Estimated fees", "fees_eur"),
+            ("Bank cash above protected amount", "residual_eur"),
+        ]
+        if funding is not None and (
+            "locked_cash_balances_satisfied" in funding
+            or any(key in funding for key in _LOCKED_FUNDING_FIELDS)
+        ):
+            pairs.append(("Free bank cash", "initial_free_settlement_cash_eur",
+                          "ending_free_settlement_cash_eur"))
+            singles.insert(0, ("Locked bank cash", "locked_settlement_cash_eur"))
         pc.update({
             "execution_status": status,
             "executable": status == "EXECUTABLE",
-            "funding_initial_cash_eur": _eur_smart(
-                float(funding.get("initial_cash_eur") or 0.0)),
-            "funding_external_contribution_eur": _eur_smart(
-                float(funding.get("external_contribution_eur") or 0.0)),
-            "funding_ending_cash_eur": _eur_smart(
-                float(funding.get("ending_cash_eur") or 0.0)),
-            "funding_protected_cash_eur": _eur_smart(
-                float(funding.get("protected_cash_eur") or 0.0)),
-            "funding_residual_eur": _eur_smart(residual, signed=True),
-            "funding_shortfall_eur": (
-                _eur_smart(abs(residual)) if residual < -0.005 else None
-            ),
+            "funding_available": funding is not None,
+            "infeasible": infeasible,
+            "aligned": aligned,
+            "funding_pairs": [
+                {"label": label, "before": _funding_cell(funding, before),
+                 "after": _funding_cell(funding, after)}
+                for label, before, after in pairs
+            ],
+            "funding_details": [
+                {"label": label, "amount": _funding_cell(funding, key)}
+                for label, key in singles
+            ],
         })
 
     if plans_src:
@@ -2149,7 +2314,10 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
         for p in plans_src:
             pc = _optimizer_plan_ctx(
                 m, list(p.get("suggestions") or []), _tax, ctx.reference)
-            pc["label"] = p.get("label", "")
+            # Strip a caller's Markup subclass: a plan label is untrusted text,
+            # not HTML, even when it was marked safe upstream.
+            label = p.get("label")
+            pc["label"] = str(label) if label is not None else ""
             pc["no_sell"] = p.get("no_sell")
             # Which plan the configuration actually runs. Both are computed
             # every run and both can be executable, so without this the reader
@@ -2159,14 +2327,12 @@ def _build_optimizer(ctx: _NewsletterContext) -> dict:
             _attach_cost(pc, p)
             _attach_execution(pc, p.get("verifications"))
             plans.append(pc)
-        if not any(pc["actions"] for pc in plans):
-            return {"available": False}
         return {"available": True, "plans": plans,
                 "subtitle": _optimizer_subtitle(plans)}
 
     # Back-compat: single plan.
     suggestions = list(m.rebalancing_suggestions or [])
-    if not suggestions:
+    if not suggestions and not m.rebalancing_verifications:
         return {"available": False}
     pc = _optimizer_plan_ctx(m, suggestions, _tax, ctx.reference)
     pc["label"] = "Suggested actions"
@@ -2184,20 +2350,12 @@ def _optimizer_subtitle(plans: list[dict]) -> str:
     it cannot claim a plan is executable when the funding proof says otherwise.
     """
     n = len(plans)
-    if n == 1:
-        one = plans[0]
-        state = ("executable as it stands" if one.get("executable")
-                 else "a draft until cash funding is resolved")
-        return f"One plan, {state}."
-    live = [p for p in plans if p.get("executable")]
-    if len(live) == n:
-        return (f"{n} plans, both executable as they stand. The first buys "
-                f"only, because selling is switched off in the configuration.")
-    if not live:
-        return (f"{n} plans, neither executable until cash funding is "
-                f"resolved. Do not treat either list as instructions.")
-    return (f"{n} plans, {len(live)} executable as it stands. The first buys "
-            f"only, because selling is switched off in the configuration.")
+    checked = sum(plan.get("executable") is True for plan in plans)
+    noun = "modeled proposal" if n == 1 else "modeled proposals"
+    return (
+        f"{n} {noun}; {checked} passed funding, position and policy checks at "
+        "selected prices. ACTIVE marks the configured proposal, not a broker order."
+    )
 
 
 def _wf_label(row: dict) -> str:
@@ -2216,12 +2374,21 @@ def _build_preheader(ctx: _NewsletterContext, hero: dict) -> str:
     """Preview text shown in inbox preview."""
     m = ctx.metrics
     n_actions = len(m.rebalancing_suggestions or [])
-    funding = _funding_verification(m.rebalancing_verifications)
+    status, infeasible, aligned = _rebalance_evidence(
+        m.rebalancing_verifications, n_actions)
     parts = [f"Portfolio at {hero['total_value']} ({hero['gain_pct']} since inception)"]
-    if funding and funding.get("status") == "NON_EXECUTABLE":
+    if status == "NON_EXECUTABLE":
         parts.append("rebalance draft not executable")
+    elif infeasible:
+        parts.append("no feasible rebalance")
+    elif status != "EXECUTABLE":
+        parts.append("rebalance draft, funding unverified")
     elif n_actions > 0:
-        parts.append("rebalancing suggested")
+        parts.append("modeled rebalance")
+    elif aligned:
+        parts.append("checked targets within tolerance")
+    else:
+        parts.append("no trades proposed, target alignment unproven")
     parts.append(f"{len(m.holdings_df)} holdings tracked")
     return " · ".join(parts)
 

@@ -281,31 +281,41 @@
             <td class="px-32" style="padding:20px 20px 0 20px;">
               {{ sec(secn, "Optimizer", optimizer.subtitle) }}
               {% for plan in optimizer.plans %}
+              <div data-tarzan-funding-plan="{{ loop.index0 }}" data-tarzan-funding-status="{{ plan.execution_status|default('UNKNOWN', true) }}" data-tarzan-target-alignment="{{ 'proven' if plan.aligned else 'unproven' }}" data-tarzan-broker-execution-verified="false" data-tarzan-action-count="{{ plan.n_total|default(0) }}">
               <div style="margin-top:16px;{{ type.title }}color:{{ palette.accent }};">
                 {{ plan.label|e }}
-                {# Which plan the configuration runs, then whether it can be
-                   executed. Both plans are computed every run and both can be
-                   executable, so the status alone left the reader with two trade
-                   lists and no way to tell which one is the proposal. #}
+                {# ACTIVE selects a modeled proposal. Funding/model checks are
+                   not an assertion that a broker can execute these orders. #}
                 <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.accent_bg if plan.active else palette.card_alt }};color:{{ palette.accent if plan.active else palette.muted }};font-size:{{ type_px.label }}px;font-weight:700;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span>
-                {% if plan.execution_status %}
-                <span style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg }};color:{{ palette.green if plan.executable else palette.red }};border:1px solid {{ palette.green if plan.executable else palette.red }};font-size:{{ type_px.label }}px;font-weight:700;vertical-align:middle;">{% if plan.executable %}✓ {% endif %}{{ plan.execution_status|replace('_', ' ') }}</span>
-                {% endif %}
+                <span data-tarzan-funding-badge="true" style="display:inline-block;margin-left:6px;padding:2px 7px;border-radius:999px;background:{{ palette.green_bg if plan.executable else palette.red_bg if plan.execution_status == 'NON_EXECUTABLE' else palette.amber_bg }};color:{{ palette.green if plan.executable else palette.red if plan.execution_status == 'NON_EXECUTABLE' else palette.amber }};font-size:{{ type_px.label }}px;font-weight:700;vertical-align:middle;">{{ 'CHECKS PASSED' if plan.executable else 'NOT EXECUTABLE · DRAFT' if plan.execution_status == 'NON_EXECUTABLE' else 'UNKNOWN · DRAFT' }}</span>
               </div>
+              <div data-tarzan-funding-scope="limited" style="margin-top:8px;{{ type.prose }}color:{{ palette.muted }};">Funding, position and policy checks use selected prices only. Broker lot sizes/fractional orders, settlement timing and execution prices are not verified. These are modeled proposals, not broker instructions.</div>
               {% if plan.execution_status == 'NON_EXECUTABLE' %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;background:{{ palette.red_bg }};border:1px solid {{ palette.red }};border-radius:8px;border-collapse:separate;border-spacing:0;">
                 <tr><td style="padding:10px 12px;{{ type.prose }}color:{{ palette.ink }};">
                   <strong style="color:{{ palette.red }};">Not executable — draft only.</strong>
-                  The funding proof ends with {{ plan.funding_ending_cash_eur }} cash against a protected {{ plan.funding_protected_cash_eur }} buffer{% if plan.funding_shortfall_eur %}, a {{ plan.funding_shortfall_eur }} shortfall{% endif %}. Do not treat the trades below as executable instructions.
+                  Final funding, position or policy checks failed. The components below come from the final planner proof; a strategic reserve held in securities is not spendable bank cash.
                 </td></tr>
               </table>
+              {% elif not plan.executable %}
+              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.amber_bg }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">{% if not plan.funding_available %}Funding proof unavailable.{% else %}Funding proof incomplete or unrecognized.{% endif %} Draft only; missing amounts are unavailable, not zero.</div>
               {% endif %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;border-collapse:collapse;{{ type.prose }}">
+                <tr style="color:{{ palette.muted }};"><th align="left" style="padding:4px 6px;">Final proof components</th><th align="right" style="padding:4px 6px;">Before</th><th align="right" style="padding:4px 6px;">After</th></tr>
+                {% for row in plan.funding_pairs %}
+                <tr><td style="padding:4px 6px;color:{{ palette.ink }};">{{ row.label }}</td><td align="right" style="padding:4px 6px;color:{{ palette.ink }};"><span data-tarzan-funding-field="{{ row.before.field }}" data-eur="{{ row.before.raw }}">{{ row.before.text }}</span></td><td align="right" style="padding:4px 6px;color:{{ palette.ink }};"><span data-tarzan-funding-field="{{ row.after.field }}" data-eur="{{ row.after.raw }}">{{ row.after.text }}</span></td></tr>
+                {% endfor %}
+                {% for row in plan.funding_details %}
+                <tr><td colspan="2" style="padding:4px 6px;color:{{ palette.muted }};">{{ row.label }}</td><td align="right" style="padding:4px 6px;color:{{ palette.ink }};"><span data-tarzan-funding-field="{{ row.amount.field }}" data-eur="{{ row.amount.raw }}">{{ row.amount.text }}</span></td></tr>
+                {% endfor %}
+              </table>
+              <div style="margin-top:4px;{{ type.prose }}color:{{ palette.muted }};">Bank cash funds the modeled trades; securities require an explicit sale. The strategic reserve combines cash and cash-equivalent securities. Amounts are displayed to cents; proof facts retain their source precision.</div>
               {# One summary line, the concept's: how many trades, the money in
                  and out, and what executing costs. It was three lines -- a
                  green "funding verified" strip repeating the EXECUTABLE pill
                  beside the plan name, a totals line, and a cost line. #}
               <div style="margin-top:6px;{{ type.prose }}color:{{ palette.muted }};">
-                {% if plan.execution_status == 'NON_EXECUTABLE' %}Draft: {% endif %}{{ plan.n_buy }} buy &middot; {{ plan.n_sell }} sell &middot; in <strong style="color:{{ palette.green }};">{{ plan.total_buy }}</strong> &middot; out <strong style="color:{{ palette.red }};">{{ plan.total_sell }}</strong>{% if plan.cost_total_eur %} &middot; estimated cost <strong style="color:{{ palette.red }};">{{ plan.cost_total_eur }}</strong>{% if plan.cgt_eur and plan.fees_eur %} of which CGT {{ plan.cgt_eur }} and fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}, all tax (CGT){% else %}, all commission fees{% endif %}{% endif %}
+                {% if not plan.executable %}Draft: {% endif %}{{ plan.n_buy }} buy &middot; {{ plan.n_sell }} sell &middot; in <strong style="color:{{ palette.green }};">{{ plan.total_buy }}</strong> &middot; out <strong style="color:{{ palette.red }};">{{ plan.total_sell }}</strong>{% if plan.cost_total_eur %} &middot; estimated cost <strong style="color:{{ palette.red }};">{{ plan.cost_total_eur }}</strong>{% if plan.cgt_eur and plan.fees_eur %} of which CGT {{ plan.cgt_eur }} and fees {{ plan.fees_eur }}{% elif plan.cgt_eur %}, all tax (CGT){% else %}, all commission fees{% endif %}{% endif %}
               </div>
               {% if plan.actions %}
               {# Unified instrument table: per instrument, Now → Target → Trade
@@ -313,10 +323,13 @@
                  evidence but is explicitly labeled draft-only above. #}
               {{ plan.table_html|safe }}
               {% elif plan.execution_status == 'NON_EXECUTABLE' %}
-              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.red_bg }};border-radius:8px;{{ type.prose }}color:{{ palette.red }};">No executable trade set was produced.</div>
+              <div data-tarzan-funding-outcome="not-executable" style="margin-top:8px;padding:9px 12px;background:{{ palette.red_bg }};border-radius:8px;{{ type.prose }}color:{{ palette.red }};">No executable trade set was produced; draft only.</div>
+              {% elif plan.aligned %}
+              <div data-tarzan-funding-outcome="aligned" style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">Checked targets within tolerance; no trades proposed.</div>
               {% else %}
-              <div style="margin-top:8px;padding:9px 12px;background:{{ palette.green_bg }};border:1px solid {{ palette.green_border }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">Already on target: no trades needed.</div>
+              <div data-tarzan-funding-outcome="unproven" style="margin-top:8px;padding:9px 12px;background:{{ palette.amber_bg }};border-radius:8px;{{ type.prose }}color:{{ palette.ink }};">No trades proposed{% if plan.infeasible %}; no feasible plan was produced{% endif %}. Target alignment has not been proven.</div>
               {% endif %}
+              </div>
               {% endfor %}
             </td>
           </tr>
