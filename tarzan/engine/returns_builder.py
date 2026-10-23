@@ -1149,7 +1149,14 @@ def build_order_derived_series(
         set(terminal_provenance["yfinance"])
         | set(terminal_provenance["borsa_italiana"])
     )
-    for isin in real_isins:
+    # Accumulate the same constituents in the SAME order as value_on. Iterating
+    # the provenance set made full coverage randomly 100.0 or
+    # 99.99999999999999 across interpreter hash seeds, changing Analysis IDs and
+    # sometimes inventing a fallback disclosure. No rounding or tolerance
+    # promotes a genuinely unpriced instrument to market evidence.
+    for isin in timeline.isins():
+        if isin not in real_isins:
+            continue
         qty = timeline.qty_at(isin, today)
         price, source = resolver.price_on(isin, today)
         if price is not None and source in ("yfinance", "borsa_italiana"):
