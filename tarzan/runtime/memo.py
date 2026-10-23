@@ -68,10 +68,15 @@ class ProviderMemo:
     flight: SingleFlight = field(default_factory=SingleFlight)
     lock: RLock = field(default_factory=RLock)
     stores: dict[str, dict] = field(default_factory=dict)
+    optional_stores: dict[Hashable, dict] = field(default_factory=dict)
 
     def store(self, namespace: str) -> dict:
         with self.lock:
             return self.stores.setdefault(namespace, {})
+
+    def optional_store(self, namespace: str, authority: Hashable) -> dict:
+        with self.lock:
+            return self.optional_stores.setdefault((namespace, authority), {})
 
 
 _compatibility = ProviderMemo()
@@ -91,6 +96,28 @@ def provider_store(namespace: str, legacy: dict) -> dict:
     return provider_memo().store(namespace) if current_session() is not None else legacy
 
 
+def _has_provider_payload(value) -> bool:
+    """Distinguish established missing-result conventions, not market validity.
+
+    A nonempty raw payload is reusable only as the same provider/request fact;
+    the caller's decoder, ``cache_if`` and financial policies still decide
+    identity, dates, currencies and usability. Numeric zero/False are legitimate
+    scalar facts and must not be discarded by a generic truthiness check.
+    """
+    if value is None:
+        return False
+    import numpy as np
+    import pandas as pd
+
+    if value is pd.NA or value is pd.NaT:
+        return False
+    if isinstance(value, np.ndarray):
+        return bool(value.size)
+    if isinstance(value, (Mapping, list, tuple, set, frozenset, str, bytes, pd.Series, pd.DataFrame)):
+        return bool(len(value))
+    return True
+
+
 def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) -> dict:
     """Coalesce missing keys and return defensive copies of provider facts.
 
@@ -98,17 +125,43 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
     selective admission: rejected observations still reach concurrent waiters,
     but a later request can retry. Admission is validated before storing any
     member of a batch.
+
+    Optional work may borrow completed essential facts, but it neither leads
+    essential single-flight waiters nor publishes its misses into their cache.
+    Its missing results and pending work belong to that exact run/optional
+    deadline. Nonempty completed provider facts remain reusable without
+    rescheduling I/O. Another optional deadline can retry independently. No market
+    identity, freshness, absence or inception is inferred by this boundary.
     """
     owner = provider_memo()
-    store = provider_store(namespace, legacy)
+    common = provider_store(namespace, legacy)
+    from tarzan.runtime.session import current_session
+
+    session = current_session()
+    budget = getattr(session, "transport", None)
+    optional_token = getattr(budget, "optional_work_token", None)
+    work = optional_token() if callable(optional_token) else None
+    authority = (budget, work[2]) if work is not None else None
+    store = owner.optional_store(namespace, authority) if authority is not None else common
+
+    def cached(key):
+        # A completed essential fact needs no fresh transport authority.
+        return key in common or key in store
+
+    def fact(key):
+        return common[key] if key in common else store[key]
+
+    def flight_key(key):
+        return namespace, key, authority
+
     ordered = list(dict.fromkeys(keys))
     with owner.lock:
-        missing = [key for key in ordered if key not in store]
+        missing = [key for key in ordered if not cached(key)]
 
     def load_reserved(reserved):
         actual = [key[1] for key in reserved]
         with owner.lock:
-            still_missing = [key for key in actual if key not in store]
+            still_missing = [key for key in actual if not cached(key)]
         fetched = loader(still_missing) if still_missing else {}
         if any(key not in fetched for key in still_missing):
             raise ValueError("provider loader omitted a requested key")
@@ -118,19 +171,32 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
         ]
         with owner.lock:
             for key in admitted:
-                store[key] = deepcopy(fetched[key])
+                value = deepcopy(fetched[key])
+                if authority is None:
+                    # An independently completed optional payload can arrive
+                    # while an essential leader was fetching. Its existence
+                    # must not be overwritten by a later missing result.
+                    if key not in common or _has_provider_payload(value):
+                        common[key] = value
+                elif _has_provider_payload(value):
+                    # First completed common fact wins; source selection stays
+                    # with the ordinary caller, never this presence predicate.
+                    if key not in common or not _has_provider_payload(common[key]):
+                        common[key] = value
+                else:
+                    store[key] = value
             return {
-                (namespace, key): store[key] if key in store else fetched[key]
+                flight_key(key): fact(key) if cached(key) else fetched[key]
                 for key in actual
             }
 
     resolved = {}
     if missing:
-        resolved = owner.flight.many([(namespace, key) for key in missing], load_reserved)
+        resolved = owner.flight.many([flight_key(key) for key in missing], load_reserved)
     with owner.lock:
         return {
             key: deepcopy(
-                resolved[(namespace, key)] if (namespace, key) in resolved else store[key]
+                resolved[flight_key(key)] if flight_key(key) in resolved else fact(key)
             )
             for key in ordered
         }
@@ -147,3 +213,6 @@ def clear_provider_stores(*namespaces: str) -> None:
     with owner.lock:
         for namespace in namespaces:
             owner.store(namespace).clear()
+        for key in tuple(owner.optional_stores):
+            if key[0] in namespaces:
+                del owner.optional_stores[key]
