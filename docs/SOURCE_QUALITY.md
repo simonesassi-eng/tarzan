@@ -43,7 +43,7 @@ Manual or licensed data and credentials must not enter public artifacts.
 
 `tarzan.data.bond_history` supplements historical-only holdings that have an
 exact BOND kind and no usable price-only tape. It uses the public Borsa Italiana
-chart's Euronext Milan history with:
+chart's Euronext MOT/EuroTLX history with:
 
 - exact ISIN, exchange, BOND kind and matching native instrument currency;
 - five-year daily `closePx`, without adjustment or an added last-trade point;
@@ -62,9 +62,12 @@ fresh FX cannot turn an overage security close into fresh market evidence.
 The loader runs once before valuation, with at most three context-owned
 workers and the existing optional-provider budget and publication reserve.
 No provider I/O occurs inside the daily price resolver. Complete cached closed
-intervals require no new transport; an explicit native no-data receipt is
-reused for 24 hours. Timeout, authorization or malformed-response failures are
-not cached as proof that market history does not exist.
+intervals require no new transport. A missing MOT listing can fall back to the
+same exact ISIN on EuroTLX, with independently verified exchange, currency and
+daily cadence. Each full packet is acquired at most once per venue and run.
+Partial windows from different venues are never spliced into one history.
+No-data, timeout, authorization or malformed-response failures are not persisted
+as proof that market history does not exist; legacy negative entries are ignored.
 
 Raw cache facts retain their real observation dates and receipt timestamps.
 Only the strict credential-free namespace is eligible for the existing
@@ -73,11 +76,24 @@ descriptor is used in memory with fixed-origin requests and no redirects:
 no access HTML/header/token enters the cache or frozen market tape.
 
 Required date windows follow documented economic-equivalence groups, but
-price authority stays exact-ISIN. A cum/ex closure is not authorization to
-borrow another identifier's market prices. Existing market histories, canonical
+price authority stays exact-ISIN unless a separately documented pricing link
+authorizes a specific use. A cum/ex closure is not authorization to borrow
+another identifier's market prices. Existing market histories, canonical
 tickers, current values, orders, tax cost basis and target inputs are not
 replaced by this adapter. Unsupported or uncovered intervals retain the
 explicit approximation warning and DEGRADED history state.
+
+`tarzan.data.bond_pricing_authority` contains only exact, directional
+issuer-documented liquidation-price links. For the explicitly listed BTP Valore
+issues, the MEF Information Memorandum names both ISINs and states that selling
+the loyalty-coded security converts it to the negotiable code. The latter's
+clean price measures liquidation value, not the value of keeping the loyalty
+right. Native packets and their encrypted cache retain the source's real ISIN;
+the derived price series separately records the target ISIN, native exchange,
+policy ID and authority timestamp. A run earlier than the authority verification,
+a wrong currency/source/policy, pre-issue dates or maturity dates cannot use it.
+These links must never net positions, rewrite orders or tax basis, accrue a
+loyalty premium, or be inferred from a name or a neighboring ISIN.
 
 Incoming securities transfers are valued at market for contributed-capital
 and return calculations. Better historical prices can therefore change that
@@ -85,6 +101,32 @@ capital, XIRR, TWR, historical P&L and risk even when the bonds are now closed.
 This is a correction of the historical measurement, not a current cash loss.
 The existing clean-price-plus-booked-coupon convention is unchanged; importing
 these closes does not introduce a dirty-price/accrued-interest valuation model.
+
+## Intraday evidence versus drawable charts
+
+One positive, finite observation in the correct session is valid evidence,
+even if an illiquid listing has no second trade. A chart's previous-close
+reference or independently dated official endpoint can make that observation
+drawable, but neither is counted as an additional native bar. A baseline alone
+does not establish intraday availability. Invalid prices, conflicting duplicate
+timestamps, observations after the capture and previous-session bars at the
+start of a new session are rejected.
+
+The existing bounded EUR sibling search and price-coherence guard remain in
+force. A fresh qualifying sibling wins over a lagged canonical path; a lagged
+same-session cash-market path can otherwise be shown as lagged, without changing
+the freshness threshold or extending it to now using an undated quote. A closed
+market's last session is labelled separately from a fresh active-market feed.
+The audit and private diagnostics retain the real source ticker, actual last
+bar instant, native bar count and availability state for every requested symbol,
+including missing symbols. These are display facts, not portfolio valuation or
+daily-return authority.
+
+Counts of requested/drawable paths include watchlist instruments. Private
+diagnostics separately report missing/lagged current holdings. The newsletter
+states that chart counts are not portfolio-value coverage. Adding an alternative
+intraday provider requires exact instrument/currency/session evidence and real
+timestamped observations; a daily OHLC point cannot be relabelled as intraday.
 
 ## Verification
 

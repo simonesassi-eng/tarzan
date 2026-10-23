@@ -152,6 +152,9 @@ class PortfolioMetrics:
     # consumes this catalog and never performs provider I/O.
     intraday_requested_tickers: tuple[str, ...] = ()
     intraday_quotes: dict[str, dict] = field(default_factory=dict)
+    # Includes absent and lagged rows too. A drawable path is not proof of a
+    # fresh quote, nor is watchlist coverage the portfolio's valuation coverage.
+    intraday_evidence: dict[str, dict] = field(default_factory=dict)
     # Fixed public macro universe, prepared inside the analysis owner. ``None``
     # denotes a legacy unprepared cube; an empty tuple is an explicit miss.
     market_quotes: Optional[tuple[dict, ...]] = None

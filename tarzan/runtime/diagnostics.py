@@ -82,6 +82,7 @@ def _quality(metrics):
     from tarzan.data.market_quotes import MARKETS
 
     reference = reference_for(metrics)
+    held = set(metrics.holdings_df.get("ticker", ())) & set(metrics.intraday_requested_tickers)
     return {
         "valuation_availability": metrics.valuation_availability,
         "history_availability": metrics.history_availability,
@@ -97,6 +98,24 @@ def _quality(metrics):
         "benchmark_resolution_errors": list(metrics.benchmark_resolution_errors),
         "intraday_requested": len(metrics.intraday_requested_tickers),
         "intraday_with_bars": len(metrics.intraday_quotes),
+        "intraday_missing": [
+            ticker for ticker in metrics.intraday_requested_tickers
+            if ticker not in metrics.intraday_quotes
+        ],
+        "intraday_lagged": [
+            ticker for ticker, fact in metrics.intraday_evidence.items()
+            if fact.get("state") == "LAGGED_CURRENT_SESSION"
+        ],
+        "intraday_single_observation": [
+            ticker for ticker, fact in metrics.intraday_evidence.items()
+            if fact.get("native_bar_count") == 1
+        ],
+        "intraday_evidence": dict(metrics.intraday_evidence),
+        "intraday_current_holdings_missing": sorted(held - set(metrics.intraday_quotes)),
+        "intraday_current_holdings_lagged": sorted(
+            ticker for ticker in held
+            if metrics.intraday_evidence.get(ticker, {}).get("state") == "LAGGED_CURRENT_SESSION"
+        ),
         "macro_requested": len(MARKETS),
         "macro_available": len(metrics.market_quotes) if metrics.market_quotes is not None else None,
         "degraded_computers": list(metrics.degraded_computers),

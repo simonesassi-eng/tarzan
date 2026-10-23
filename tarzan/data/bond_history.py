@@ -1,9 +1,10 @@
 """Official, unadjusted bond closes for historical-only holdings.
 
-The public Borsa Italiana chart delegates to Euronext's Milan history API.
+The public Borsa Italiana chart delegates to Euronext's MOT/EuroTLX history API.
 Its public-view access descriptor is used only in memory, never logged or
 cached. Exact ISIN, BOND kind, currency and non-adjustment evidence are
-required. There is no cross-ISIN substitution or generated price history.
+required. Cross-ISIN prices require a separate, exact issuer-documented
+liquidation-price link; packets always retain their real native ISIN.
 """
 
 from __future__ import annotations
@@ -30,11 +31,16 @@ SOURCE_ATTR = "_tarzan_bond_history_source"
 BASIS_ATTR = "_tarzan_bond_history_basis"
 ISIN_ATTR = "_tarzan_bond_history_isin"
 OBSERVATIONS_ATTR = "_tarzan_bond_history_observations"
+SOURCE_ISIN_ATTR = "_tarzan_bond_history_native_isin"
+EXCHANGE_ATTR = "_tarzan_bond_history_exchange"
+PRICING_LINK_ATTR = "_tarzan_bond_history_liquidation_policy"
+AUTHORITY_TIME_ATTR = "_tarzan_bond_history_authority_as_of"
 SCHEMA_VERSION = "1"
 MAX_POINTS = 5000
 MAX_CARRY_DAYS = 7
 _BASE = "https://grafici.borsaitaliana.it/"
 _EXCHANGE = "XMIL"
+_MARKETS = {"MOTX": _EXCHANGE, "ETLX": "ETLX"}
 _KNOWN_AT = datetime(2026, 10, 22, 12, 27, tzinfo=timezone.utc)
 _ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
@@ -50,9 +56,10 @@ class _PublicView:
 
 
 class _ViewParser(HTMLParser):
-    def __init__(self, isin):
+    def __init__(self, isin, *, exchange=_EXCHANGE):
         super().__init__()
         self.isin = isin
+        self.exchange = exchange
         self.views = []
 
     def handle_starttag(self, tag, attrs):
@@ -64,12 +71,13 @@ class _ViewParser(HTMLParser):
         token = values.get("token") or ""
         if (
             values.get("code") == self.isin
-            and values.get("exchcode") == _EXCHANGE
+            and self.exchange in _MARKETS.values()
+            and values.get("exchcode") == self.exchange
             and values.get("url") == _BASE + "api/"
             and 0 < len(token) <= 4096
             and all(0x21 <= ord(character) <= 0x7E for character in token)
         ):
-            self.views.append(_PublicView(self.isin, _EXCHANGE, token))
+            self.views.append(_PublicView(self.isin, self.exchange, token))
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -139,15 +147,15 @@ def _contains_descriptor(value, token):
     return False
 
 
-def _request_raw(isin: str):
+def _request_raw(isin: str, *, market: str = "MOTX"):
     """Credential-free market-input port used by the frozen verification tape."""
-    if not _ISIN.fullmatch(str(isin)):
+    if not _ISIN.fullmatch(str(isin)) or not isinstance(market, str) or market not in _MARKETS:
         return None
     opener = build_opener(_NoRedirect())
     view_html = _read_body(
-        opener, _BASE + f"interactive-chart/{isin}-MOTX?lang=it", limit=100_000,
+        opener, _BASE + f"interactive-chart/{isin}-{market}?lang=it", limit=100_000,
     ).decode("utf-8")
-    parser = _ViewParser(isin)
+    parser = _ViewParser(isin, exchange=_MARKETS[market])
     parser.feed(view_html)
     if len(parser.views) != 1:
         return None
@@ -196,7 +204,7 @@ def cache_entry_valid(entry, isin: str) -> bool:
     if (
         entry.get("schema_version") != SCHEMA_VERSION
         or entry.get("source") != SOURCE or entry.get("isin") != isin
-        or entry.get("exchange") != _EXCHANGE
+        or entry.get("exchange") not in _MARKETS.values()
         or _instant(entry.get("fetched_at")) is None
     ):
         return False
@@ -250,7 +258,7 @@ def parse_packet(packet, isin: str, *, closed_before: date | None = None):
     Its receipt is not the market date: an optional run cutoff excludes closes
     that were not completed on the run's Milan calendar.
     """
-    if not isinstance(packet, dict) or packet.get("exchange") != _EXCHANGE:
+    if not isinstance(packet, dict) or packet.get("exchange") not in _MARKETS.values():
         return None
     observed = _instant(packet.get("fetched_at"))
     body = packet.get("payload")
@@ -261,7 +269,7 @@ def parse_packet(packet, isin: str, *, closed_before: date | None = None):
         settled_before = min(settled_before, closed_before)
     common = {
         "schema_version": SCHEMA_VERSION, "source": SOURCE, "isin": isin,
-        "exchange": _EXCHANGE, "fetched_at": observed.isoformat(),
+        "exchange": packet["exchange"], "fetched_at": observed.isoformat(),
     }
     if (
         body.get("entityID") != "euronext" or body.get("period") != "5Y"
@@ -275,7 +283,7 @@ def parse_packet(packet, isin: str, *, closed_before: date | None = None):
         type(body.get("status")) is not int or body["status"] != 0
         or not isinstance(transco, dict)
         or transco.get("code") != isin or transco.get("codification") != "ISIN"
-        or transco.get("exchCode") != _EXCHANGE
+        or transco.get("exchCode") != packet["exchange"]
         or not isinstance(history, dict) or history.get("instrType") != "BOND"
         or not _CURRENCY.fullmatch(str(history.get("currency") or ""))
     ):
@@ -368,13 +376,17 @@ def raw_history(isin: str, since: date, until: date):
             or not _native_identity_authorized(isin, context.captured_at)
         ):
             return cached
-        def fetch_packet():
+        def fetch_packet(market):
             budget = current_budget()
             if budget is None or not budget.optional_request_allowed("borsa"):
                 return None
             try:
                 with budget.operation("borsa"):
-                    packet = _request_raw(isin)
+                    # Keep the original MOT port shape compatible with already
+                    # captured tapes; EuroTLX is a distinct, exact market port.
+                    packet = _request_raw(isin) if market == "MOTX" else _request_raw(isin, market=market)
+                    if not isinstance(packet, dict) or packet.get("exchange") != _MARKETS[market]:
+                        return None
                     acquired_at = datetime.now(timezone.utc)
                     result = parse_packet(
                         packet, isin,
@@ -388,26 +400,46 @@ def raw_history(isin: str, since: date, until: date):
             except Exception:
                 return None  # no raw SDK/access/error text enters diagnostics
 
-        fresh = memoized(
-            "bond_history.packet", (isin, context.captured_at), fetch_packet,
-            legacy={}, cache_if=lambda value: value is not None,
-        )
-        if fresh is None:
-            return cached
-        if fresh["state"] == "UNAVAILABLE":
-            return cached
+        best = cached
+        markets = list(_MARKETS)
         if cached is not None:
-            if cached["currency"] != fresh["currency"]:
-                return cached  # native rulers must never be merged across currencies
-            points = {point["date"]: point["close"] for point in cached["prices"]}
-            points.update({point["date"]: point["close"] for point in fresh["prices"]})
-            fresh["prices"] = [
-                {"date": day, "close": price} for day, price in sorted(points.items())
-            ]
-            if not cache_entry_valid(fresh, isin):
-                return cached
-        price_cache.store_timed(NAMESPACE, isin, fresh)
-        return fresh
+            # Refresh a known positive venue first. An incomplete MOT cache
+            # never changes the identity or ruler of a EuroTLX packet.
+            markets.sort(key=lambda market: _MARKETS[market] != cached["exchange"])
+        for market in markets:
+            fresh = memoized(
+                "bond_history.packet", (isin, context.captured_at, market),
+                lambda market=market: fetch_packet(market),
+                legacy={}, cache_if=lambda value: value is not None,
+            )
+            if fresh is None or fresh["state"] != "AVAILABLE":
+                continue
+            if cached is not None and cached["currency"] != fresh["currency"]:
+                continue
+            if cached is not None and cached["exchange"] == fresh["exchange"]:
+                # Copy before extending; a memoized packet is native evidence,
+                # not a mutable workspace shared by requests for other windows.
+                points = {point["date"]: point["close"] for point in cached["prices"]}
+                points.update({point["date"]: point["close"] for point in fresh["prices"]})
+                fresh = {**fresh, "prices": [
+                    {"date": day, "close": price} for day, price in sorted(points.items())
+                ]}
+                if not cache_entry_valid(fresh, isin):
+                    continue
+            complete = (
+                date.fromisoformat(fresh["prices"][0]["date"]) <= since
+                and date.fromisoformat(fresh["prices"][-1]["date"]) >= until
+            )
+            if complete:
+                price_cache.store_timed(NAMESPACE, isin, fresh)
+                return fresh
+            # Keep a useful partial from the current venue; do not fabricate
+            # complete coverage by attaching a different venue's tail or head.
+            if best is None or best["exchange"] == fresh["exchange"]:
+                best = fresh
+        if best is not None and best != cached:
+            price_cache.store_timed(NAMESPACE, isin, best)
+        return best
 
     if current_session() is None:
         return load()
@@ -464,11 +496,30 @@ def eur_per_nominal(entry, *, as_of: date, fx=None) -> pd.Series:
     prices = prices[prices.map(lambda value: math.isfinite(value) and value > 0)]
     prices.attrs = {
         SOURCE_ATTR: SOURCE, BASIS_ATTR: "EUR_PER_NOMINAL", ISIN_ATTR: entry["isin"],
+        SOURCE_ISIN_ATTR: entry["isin"], EXCHANGE_ATTR: entry["exchange"],
         OBSERVATIONS_ATTR: {
             index.date().isoformat(): pd.Timestamp(observations.loc[index]).date().isoformat()
             for index in prices.index
         },
     }
+    return prices
+
+
+def _liquidation_prices(entry, link, *, as_of: date, captured_at: datetime):
+    """Attach separate authority to a derived series, never to the raw packet."""
+    if entry["isin"] != link.market_isin or entry["currency"] != link.currency:
+        return pd.Series(dtype=float)
+    prices = eur_per_nominal(entry, as_of=as_of)
+    if prices.empty:
+        return prices
+    prices = prices[
+        (prices.index.date >= link.first_trading_day) & (prices.index.date < link.maturity)
+    ].copy()
+    prices.attrs.update({
+        ISIN_ATTR: link.held_isin,
+        PRICING_LINK_ATTR: link.policy_id,
+        AUTHORITY_TIME_ATTR: captured_at.isoformat(),
+    })
     return prices
 
 
@@ -482,6 +533,25 @@ def price_on(series, isin: str, day: date):
         or series.attrs.get(ISIN_ATTR) != isin
     ):
         return None
+    from tarzan.runtime.session import current_session
+
+    session = current_session()
+    native_isin = series.attrs.get(SOURCE_ISIN_ATTR, isin)
+    policy = series.attrs.get(PRICING_LINK_ATTR)
+    if policy is not None or native_isin != isin:
+        from tarzan.data.bond_pricing_authority import liquidation_price_link
+
+        known_at = _instant(series.attrs.get(AUTHORITY_TIME_ATTR))
+        link = liquidation_price_link(isin, currency="EUR", captured_at=known_at)
+        if (
+            link is None or link.policy_id != policy or link.market_isin != native_isin
+            or not link.first_trading_day <= day < link.maturity
+            or (session is not None and (
+                session.context.captured_at.tzinfo is None
+                or known_at > session.context.captured_at
+            ))
+        ):
+            return None
     timestamp = pd.Timestamp(day)
     if series.index.tz is not None:
         timestamp = timestamp.tz_localize(series.index.tz)
@@ -506,6 +576,7 @@ def price_on(series, isin: str, day: date):
 def hydrate_historical_bonds(holdings, windows, *, as_of: date) -> tuple[str, ...]:
     """One preprocessing boundary; no current prices, identities or orders change."""
     from tarzan import runtime
+    from tarzan.data.bond_pricing_authority import liquidation_price_link
     from tarzan.instruments.registry import InstrumentKind
     from tarzan.instruments.valuation import holding_kind_resolution
     from tarzan.runtime.transport import current_budget
@@ -532,10 +603,16 @@ def hydrate_historical_bonds(holdings, windows, *, as_of: date) -> tuple[str, ..
 
     def prepare(holding):
         try:
-            raw = raw_history(holding.isin, *windows[holding.isin])
+            link = liquidation_price_link(
+                holding.isin, currency=holding.currency, captured_at=captured_at,
+            )
+            raw = raw_history(link.market_isin if link else holding.isin, *windows[holding.isin])
             if raw is None or raw.get("state") != "AVAILABLE" or raw["currency"] != holding.currency:
                 return holding, None
-            prices = eur_per_nominal(raw, as_of=as_of)
+            prices = (
+                _liquidation_prices(raw, link, as_of=as_of, captured_at=captured_at)
+                if link else eur_per_nominal(raw, as_of=as_of)
+            )
             return holding, prices if not prices.empty else None
         except Exception:
             # A supplementary provider must not erase otherwise computable

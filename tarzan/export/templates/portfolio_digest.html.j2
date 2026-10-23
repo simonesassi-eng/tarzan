@@ -402,13 +402,14 @@
             <td class="px-32" style="padding:12px 20px 0 20px;">
               <div style="{{ type.title }}color:{{ palette.accent }};">Instrument data sources</div>
               <div style="margin-top:3px;{{ type.prose }}color:{{ palette.muted }};">Every instrument this issue names · the exact provider listing behind its daily bars (Hist.) and its intraday series (Intr.). Held first, then watchlist, then closed positions; alphabetical within each.</div>
+              {% if ticker_sources.quality_note %}<div style="margin-top:5px;{{ type.prose }}color:{{ palette.muted }};">{{ ticker_sources.quality_note }}</div>{% endif %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:8px;table-layout:fixed;border:1px solid {{ palette.border }};background:{{ palette.card_alt }};">
                 <tr style="background:{{ palette.page }};">
                   <td width="11%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Ticker</td>
                   <td width="27%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Name</td>
                   <td width="15%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">ISIN</td>
-                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Hist. RIC</td>
-                  <td width="15%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Intr. RIC</td>
+                  <td width="14%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Hist. feed</td>
+                  <td width="15%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Intr. feed</td>
                   <td width="18%" style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};{{ type.label }}color:{{ palette.muted }};">Presence</td>
                 </tr>
                 {% for row in ticker_sources.rows %}
@@ -416,8 +417,8 @@
                   <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.accent }};">{{ row.ticker or "—" }}</td>
                   <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;{{ type.data }}color:{{ palette.ink }};">{{ row.name or "—" }}</td>
                   <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.subtle }};">{{ row.isin or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.hist_ric or "—" }}</td>
-                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.intr_ric or "—" }}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.hist_ric or "—" }}{% if row.history_note %}<div style="margin-top:2px;{{ type.label }}color:{{ palette.muted }};">{{ row.history_note }}</div>{% endif %}</td>
+                  <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;word-break:break-all;{{ type.data }}color:{{ palette.ink }};">{{ row.intr_ric or "—" }}{% if row.intraday_note %}<div style="margin-top:2px;{{ type.label }}color:{{ palette.muted }};">{{ row.intraday_note }}</div>{% endif %}</td>
                   <td style="padding:4px 5px;border-bottom:1px solid {{ palette.border }};vertical-align:top;{{ type.data }}color:{{ palette.muted }};">{{ row.presence or "—" }}</td>
                 </tr>
                 {% endfor %}

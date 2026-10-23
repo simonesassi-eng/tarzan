@@ -746,3 +746,108 @@ def test_real_negative_receipts_are_eligible_for_encrypted_cache_not_fake_price_
         tmp_path / "sealed", b"synthetic-key-is-not-a-secret-00",
     ) == 1
     assert bonds.eur_per_nominal(negative(), as_of=END).empty
+
+
+def etlx_packet(currency="USD"):
+    raw = packet(currency)
+    raw["exchange"] = raw["payload"]["transco"]["exchCode"] = "ETLX"
+    return raw
+
+
+def test_eurotlx_packet_requires_exact_native_venue_identity_and_keeps_currency():
+    raw = etlx_packet()
+    original = deepcopy(raw)
+    value = bonds.parse_packet(raw, ISIN)
+    assert value["exchange"] == "ETLX"
+    assert value["currency"] == "USD"
+    assert bonds.cache_entry_valid(value, ISIN)
+    assert raw == original
+    raw["payload"]["transco"]["exchCode"] = "XMIL"
+    assert bonds.parse_packet(raw, ISIN) is None
+
+
+def test_exact_eurotlx_request_does_not_accept_a_mot_descriptor(monkeypatch):
+    calls = []
+
+    def read(opener, url, **kwargs):
+        calls.append(url)
+        return (
+            f'<chart-allinone code="{ISIN}" exchcode="XMIL" '
+            'url="https://grafici.borsaitaliana.it/api/" token="public">'
+        ).encode()
+
+    monkeypatch.setattr(bonds, "_read_body", read)
+    assert bonds._request_raw(ISIN, market="ETLX") is None
+    assert len(calls) == 1
+    assert calls[0].endswith(f"{ISIN}-ETLX?lang=it")
+
+
+@pytest.mark.parametrize("market", ["XETL", "../ETLX", "OTC", "", None, True])
+def test_arbitrary_market_names_cannot_open_a_native_request(monkeypatch, market):
+    monkeypatch.setattr(bonds, "_read_body", lambda *args, **kwargs: pytest.fail("unbound market"))
+    assert bonds._request_raw(ISIN, market=market) is None
+
+
+def test_eurotlx_recovers_a_completed_mot_absence_once_per_run(monkeypatch, live):
+    calls = []
+    missing = packet()
+    missing["payload"]["status"] = 2304
+    monkeypatch.setattr(bonds, "_request_raw", lambda isin, market="MOTX": (
+        calls.append((isin, market)) or deepcopy(missing if market == "MOTX" else etlx_packet())
+    ))
+    with activate_session(RunSession(live[0], {}, ledger=None)):
+        first = bonds.raw_history(ISIN, START, END)
+        second = bonds.raw_history(ISIN, START, date(2026, 1, 12))
+    assert first["exchange"] == second["exchange"] == "ETLX"
+    assert first["currency"] == "USD"
+    assert calls == [(ISIN, "MOTX"), (ISIN, "ETLX")]
+    assert all(write[2]["exchange"] == "ETLX" for write in live[2])
+
+
+def test_positive_mot_history_does_not_speculatively_probe_eurotlx(monkeypatch, live):
+    calls = []
+    monkeypatch.setattr(bonds, "_request_raw", lambda isin, market="MOTX": (
+        calls.append(market) or packet()
+    ))
+    with activate_session(RunSession(live[0], {}, ledger=None)):
+        assert bonds.raw_history(ISIN, START, END)["exchange"] == "XMIL"
+    assert calls == ["MOTX"]
+
+
+def test_two_venues_cannot_be_spliced_to_manufacture_a_longer_history(monkeypatch, live):
+    old = entry()
+    old["prices"] = old["prices"][:3]
+    monkeypatch.setattr(price_cache, "load_timed", lambda *args, **kwargs: deepcopy(old))
+    absent = packet()
+    absent["payload"]["status"] = 2304
+    fresh = etlx_packet("EUR")
+    fresh["payload"]["history"]["historyDt"] = fresh["payload"]["history"]["historyDt"][2:]
+    monkeypatch.setattr(bonds, "_request_raw", lambda isin, market="MOTX": (
+        deepcopy(absent if market == "MOTX" else fresh)
+    ))
+    with activate_session(RunSession(live[0], {}, ledger=None)):
+        result = bonds.raw_history(ISIN, START, END)
+    # A three-point tail from another order book cannot inherit the old head.
+    assert result["exchange"] == "XMIL"
+    assert result["prices"] == old["prices"]
+    assert live[2] == []
+
+
+def test_frozen_ports_distinguish_exact_mot_and_eurotlx_packets(monkeypatch):
+    from tarzan.verification.tape import ProviderTape
+
+    calls = []
+    monkeypatch.setattr(bonds, "_request_raw", lambda isin, market="MOTX": (
+        calls.append((isin, market)) or deepcopy(packet() if market == "MOTX" else etlx_packet())
+    ))
+    with ProviderTape() as capture:
+        mot = bonds._request_raw(ISIN)
+        tlx = bonds._request_raw(ISIN, market="ETLX")
+    assert len(capture.records) == 2
+    with ProviderTape(records=capture.records, replay=True) as replay:
+        assert bonds._request_raw(ISIN) == mot
+        assert bonds._request_raw(ISIN, market="ETLX") == tlx
+        with pytest.raises(UnrecordedInput):
+            bonds._request_raw(OTHER, market="ETLX")
+    assert calls == [(ISIN, "MOTX"), (ISIN, "ETLX")]
+    assert replay.network_attempts == []

@@ -735,6 +735,37 @@ def _clip_to_reference(ser, now, tz=None):
         return ser
 
 
+def _clean_intraday_series(ser):
+    """Validate native observations, without manufacturing bars or timestamps."""
+    import pandas as pd
+    from numbers import Real
+
+    if (
+        not isinstance(ser, pd.Series)
+        or not isinstance(ser.index, pd.DatetimeIndex)
+        or ser.index.hasnans
+    ):
+        return None
+
+    def price(value):
+        if not isinstance(value, Real) or pd.api.types.is_bool(value):
+            return float("nan")
+        try:
+            value = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return float("nan")
+        return value if math.isfinite(value) and value > 0 else float("nan")
+
+    clean = ser.map(price).dropna().sort_index()
+    # Equal repetitions are harmless; conflicting prices at the same instant
+    # do not establish which trade happened and must not be arbitrarily picked.
+    if clean.index.has_duplicates:
+        if clean.groupby(level=0).nunique().gt(1).any():
+            return None
+        clean = clean[~clean.index.duplicated()]
+    return clean
+
+
 def _select_session_series(ser, ticker: str, now: Optional[datetime] = None):
     """Narrow an intraday close series to ONE session: the current one.
 
@@ -750,14 +781,18 @@ def _select_session_series(ser, ticker: str, now: Optional[datetime] = None):
 
     Bars are also matched in the EXCHANGE's timezone, not UTC: a session that
     straddles UTC midnight (Sydney on summer time) would otherwise be cut in
-    half. Returns an empty series when the current session has fewer than two
-    bars. Continuous markets (futures/FX/crypto) have no cash session, so they
+    half. One genuine observation is useful evidence; the drawing boundary,
+    not the acquisition boundary, decides whether a line has enough points.
+    Continuous markets (futures/FX/crypto) have no cash session, so they
     keep the last-day-present convention."""
     now = now or _intraday_reference_now()
     tz = _exchange_tz(ticker)
+    ser = _clean_intraday_series(ser)
+    if ser is None:
+        return None
     ser = _clip_to_reference(ser, now, tz)
-    if ser is None or len(ser) < 2:
-        return ser[:0] if ser is not None else ser
+    if not len(ser):
+        return ser
     # No cash session modelled (futures/FX/crypto) → session_day is None and
     # this falls back to the last day present, their own day convention.
     day = session_day(ticker, now) or _observed_day(ser.index[-1], tz)
@@ -823,11 +858,24 @@ def _no_trading_day_skipped(ticker: str, last_ts, now) -> bool:
 
 
 def _has_intraday(ser, ticker: Optional[str] = None) -> bool:
-    if ser is None or len(ser) < 2:
+    import pandas as pd
+
+    ser = _clean_intraday_series(ser)
+    if ser is None or not len(ser):
         return False
     try:
         last_ts = ser.index[-1]
-        now = _intraday_reference_now(getattr(last_ts, "tzinfo", None))
+        now = pd.Timestamp(_intraday_reference_now(getattr(last_ts, "tzinfo", None)))
+        # A malformed/future observation cannot authenticate a live feed.
+        if last_ts.tzinfo is None:
+            tz = _exchange_tz(ticker) if ticker else None
+            now = now.tz_convert(tz or "UTC").tz_localize(None)
+        if last_ts > now:
+            return False
+        if ticker is not None:
+            expected = session_day(ticker, _intraday_reference_now())
+            if expected is not None and _observed_day(last_ts, _exchange_tz(ticker)) != expected:
+                return False
         if (ticker is not None
                 and market_open_now(ticker, now=now) is False
                 and _no_trading_day_skipped(ticker, last_ts, now)):
@@ -841,10 +889,8 @@ def _has_intraday(ser, ticker: Optional[str] = None) -> bool:
             return True
         age_seconds = (now - last_ts.to_pydatetime()).total_seconds()
     except Exception:  # noqa: BLE001
-        # Unexpected index type: don't newly reject on a shape we can't
-        # evaluate — fall back to the pre-existing length-only behavior.
-        return True
-    return age_seconds <= _INTRADAY_STALE_AFTER_SECONDS
+        return False
+    return 0 <= age_seconds <= _INTRADAY_STALE_AFTER_SECONDS
 
 
 def _previous_close_before(fetch_history, ticker: str, iday):
@@ -860,9 +906,47 @@ def _previous_close_before(fetch_history, ticker: str, iday):
             return None
         dclose = hist["Close"].dropna()
         prior = dclose[[ts.date() < iday for ts in dclose.index]]
-        return float(prior.iloc[-1]) if len(prior) else None
+        return _positive_quote_number(prior.iloc[-1]) if len(prior) else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _positive_quote_number(value):
+    """A missing/nonfinite/bool/overflow price is never a numeric reference."""
+    import pandas as pd
+
+    if pd.api.types.is_bool(value):
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _quote_baseline(quote, ticker, now, *, day=None):
+    """The published previous close must belong to the bars' own session."""
+    import pandas as pd
+
+    value = _positive_quote_number((quote or {}).get("prev_close"))
+    if value is None:
+        return None
+    observed = (quote or {}).get("time")
+    if observed is not None:
+        try:
+            if pd.api.types.is_bool(observed):
+                return None
+            timestamp = pd.Timestamp(int(observed), unit="s", tz="UTC")
+            if timestamp > pd.Timestamp(now):
+                return None
+            expected = day or session_day(ticker, now)
+            if expected is not None and _observed_day(timestamp, _exchange_tz(ticker)) != expected:
+                return None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    # Older fixtures/providers supply an undated pair. Its value is a baseline,
+    # not a bar or a proof of intraday freshness.
+    return value
 
 
 def _sibling_symbols(ticker: str, *, isin: Optional[str] = None) -> list[str]:
@@ -897,8 +981,55 @@ def _resolve_intraday(
     preprocessing boundary. Downstream analytics and presentation consume the
     selected series and provenance without resolving another venue.
     """
+    symbols = list(dict.fromkeys(s for s in symbols if s))
     prim = _fetch_intraday(symbols)
     out: dict = {s: (prim[s], s) for s in symbols if _has_intraday(prim.get(s), s)}
+    policy = {
+        "policy_id": "intraday_resolution-v2",
+        "freshness_seconds": _INTRADAY_STALE_AFTER_SECONDS,
+        "allow_sibling_fallback": allow_sibling_fallback,
+    }
+
+    def finish():
+        evidence = {}
+        primary_evidence = getattr(prim, "policy", {}).get("evidence", {})
+        now = _intraday_reference_now()
+        for symbol in symbols:
+            if symbol not in out and session_day(symbol, now) is not None:
+                lagged = _select_session_series(prim.get(symbol), symbol, now)
+                if lagged is not None and len(lagged):
+                    # Display evidence, not a fresh-price fallback. Keep the
+                    # actual last print and let a fresh guarded sibling win first.
+                    out[symbol] = (lagged, symbol)
+                    evidence[symbol] = _intraday_evidence(
+                        lagged, symbol, now, state="LAGGED_CURRENT_SESSION",
+                    )
+            if symbol in evidence:
+                continue
+            if symbol in out:
+                series, source = out[symbol]
+                state = "FRESH_CANONICAL" if source == symbol else "FRESH_SIBLING"
+                if market_open_now(source, now=now) is False:
+                    state = "LAST_COMPLETED_SESSION"
+                evidence[symbol] = _intraday_evidence(
+                    series, source, now, state=state,
+                )
+            else:
+                evidence[symbol] = {
+                    "state": "MISSING", "source_ticker": symbol, "native_bar_count": 0,
+                    "reason": primary_evidence.get(symbol, {}).get("reason", "NO_USABLE_CURRENT_SESSION"),
+                }
+        lagged = tuple(s for s in symbols if evidence[s]["state"] == "LAGGED_CURRENT_SESSION")
+        missing = tuple(s for s in symbols if s not in out)
+        policy.update(evidence=evidence, lagged_tickers=lagged, missing_tickers=missing)
+        availability = (
+            Availability.AVAILABLE if not missing and not lagged
+            else Availability.DEGRADED if out else Availability.UNAVAILABLE
+        )
+        return ProviderResult(
+            out, availability=availability, attempts=(), policy=policy,
+            selected_source="yfinance" if out else None,
+        )
     missing = [s for s in symbols if s not in out]
     if missing:
         stale = [s for s in missing if prim.get(s) is not None]
@@ -915,12 +1046,12 @@ def _resolve_intraday(
                 ", ".join(empty),
             )
     if not missing or not allow_sibling_fallback:
-        return out
+        return finish()
 
     cand_map = {s: _sibling_symbols(s) for s in missing}
     all_cands = list(dict.fromkeys(c for cs in cand_map.values() for c in cs))
     if not all_cands:
-        return out
+        return finish()
 
     sib = _fetch_intraday(all_cands)
     try:
@@ -994,7 +1125,24 @@ def _resolve_intraday(
                 ", ".join(stale_candidates) or "none",
                 ", ".join(rejected_candidates) or "none",
             )
-    return out
+    return finish()
+
+
+def _intraday_evidence(series, source, now, *, state):
+    """Native evidence, recorded before any chart-only reference is appended."""
+    import pandas as pd
+
+    observed = pd.Timestamp(series.index[-1])
+    if observed.tzinfo is None:
+        observed = observed.tz_localize(_exchange_tz(source) or "UTC")
+    observed = observed.tz_convert("UTC")
+    return {
+        "state": state,
+        "source_ticker": source,
+        "native_bar_count": len(series),
+        "observed_at": observed.isoformat(),
+        "age_seconds": max(0.0, (pd.Timestamp(now) - observed).total_seconds()),
+    }
 
 
 def _fetch_intraday(symbols: list[str]) -> dict:
@@ -1002,10 +1150,29 @@ def _fetch_intraday(symbols: list[str]) -> dict:
     any failure (the caller falls back to the daily history)."""
     from tarzan import runtime
 
-    if not runtime.allows_live_transport():
-        return {}
-
+    symbols = list(dict.fromkeys(symbols))
     out: dict = {}
+    evidence = {
+        symbol: {"reason": "NO_RESPONSE", "native_bar_count": 0}
+        for symbol in symbols
+    }
+
+    def result():
+        return ProviderResult(
+            out,
+            availability=(
+                Availability.AVAILABLE if len(out) == len(symbols)
+                else Availability.DEGRADED if out else Availability.UNAVAILABLE
+            ),
+            attempts=(),
+            policy={"policy_id": "intraday_ingress-v2", "evidence": evidence},
+            selected_source="yfinance" if out else None,
+        )
+
+    if not runtime.allows_live_transport():
+        for record in evidence.values():
+            record["reason"] = "LIVE_TRANSPORT_DISABLED"
+        return result()
     try:
         import warnings
         from tarzan.data import _yf_net
@@ -1026,7 +1193,7 @@ def _fetch_intraday(symbols: list[str]) -> dict:
         # The catalog has per-symbol deadlines, not one timeout for all rows.
         raw = _download()
         if raw is None or len(raw) == 0:
-            return {}
+            return result()
         # One instant for the whole batch: every symbol's session and freshness
         # is judged against the same moment, so two strips in one issue cannot
         # disagree about what "now" is.
@@ -1035,10 +1202,20 @@ def _fetch_intraday(symbols: list[str]) -> dict:
         for s in symbols:
             try:
                 if s in level0 and "Close" in raw[s].columns:
-                    cl = _select_session_series(raw[s]["Close"].dropna(), s, now)
-                    if cl is not None and len(cl) >= 2:
+                    native = _clean_intraday_series(raw[s]["Close"])
+                    cl = _select_session_series(native, s, now)
+                    if cl is not None and len(cl):
                         out[s] = cl
+                        evidence[s] = {"reason": "CURRENT_SESSION", "native_bar_count": len(cl)}
+                    else:
+                        evidence[s]["reason"] = (
+                            "INVALID_OR_EMPTY_OBSERVATIONS" if native is None or native.empty
+                            else "NO_CURRENT_SESSION_OBSERVATIONS"
+                        )
+                else:
+                    evidence[s]["reason"] = "NO_SYMBOL_OR_CLOSE"
             except Exception:  # noqa: BLE001
+                evidence[s]["reason"] = "MALFORMED_RESPONSE"
                 continue
         missing = [s for s in symbols if s not in out]
         if missing:
@@ -1052,7 +1229,7 @@ def _fetch_intraday(symbols: list[str]) -> dict:
                         len(missing), len(symbols), ", ".join(missing))
     except Exception as e:  # noqa: BLE001
         logger.debug("intraday batch failed: %s", e)
-    return out
+    return result()
 
 
 def _fetch_official_prev_closes(symbols: list[str]) -> dict:
@@ -1128,11 +1305,13 @@ def _prepend_session_open(intra, baseline, *, ticker: str, now):
 
     if intra is None or len(intra) < 1:
         return intra
+    if isinstance(baseline, bool):
+        return intra
     try:
         base = float(baseline)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return intra
-    if not (base > 0):
+    if not (math.isfinite(base) and base > 0):
         return intra
     span = session_span(ticker, now)
     if not span:
@@ -1182,11 +1361,13 @@ def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
 
     if not own_feed or intra is None or len(intra) < 1:
         return intra
+    if isinstance((quote or {}).get("price"), bool):
+        return intra
     try:
         price = float((quote or {}).get("price"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return intra
-    if not (price > 0):
+    if not (math.isfinite(price) and price > 0):
         return intra
 
     last_ts = pd.Timestamp(intra.index[-1])
@@ -1218,6 +1399,16 @@ def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
         stamp = close if (close is not None and now is not None
                           and pd.Timestamp(now) >= close) else pd.Timestamp(now)
     if stamp is None:
+        return intra
+    ref = pd.Timestamp(now)
+    try:
+        if ref.tzinfo is None:
+            ref = ref.tz_localize(_exchange_tz(ticker) or "UTC")
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize(_exchange_tz(ticker) or "UTC")
+        if stamp > ref:
+            return intra
+    except (TypeError, ValueError):
         return intra
 
     tz = getattr(last_ts, "tz", None)
@@ -1447,8 +1638,12 @@ def intraday_feeds(
     quote pair that at least supplies a baseline. Never raises.
     """
     import pandas as pd
-    uniq = [t for t in {t for t in tickers if t}]
-    policy = {"policy_id": "intraday_feeds-v1", "requested_tickers": len(uniq)}
+    uniq = list(dict.fromkeys(t for t in tickers if t))
+    policy = {
+        "policy_id": "intraday_feeds-v2", "requested_tickers": len(uniq),
+        "drawable_tickers": 0, "missing_tickers": tuple(uniq),
+        "lagged_tickers": (), "evidence": {},
+    }
     if not uniq:
         return ProviderResult(
             {}, availability=Availability.AVAILABLE, attempts=(), policy=policy
@@ -1477,6 +1672,8 @@ def intraday_feeds(
         uniq,
         allow_sibling_fallback=allow_sibling_fallback,
     )
+    native_evidence = getattr(resolved, "policy", {}).get("evidence", {})
+    evidence = {}
     official = _fetch_official_quotes(uniq)
     # A sibling-served listing needs the SIBLING's own published pair, not the
     # canonical's: that is the pair the baseline and the closing stamp below read,
@@ -1490,8 +1687,8 @@ def intraday_feeds(
     out: dict = {}
     for tk in uniq:
         intra, src = resolved.get(tk, (None, tk))
-        q_prev = (official.get(tk) or {}).get("prev_close")
         now_ref = _intraday_reference_now()
+        q_prev = _quote_baseline(official.get(tk), tk, now_ref)
 
         # ONE bar is now enough, because the session's opening reference is added
         # below: a thinly traded instrument prints its second bar hours into the day,
@@ -1509,17 +1706,29 @@ def intraday_feeds(
                     "intraday_series": None,
                     "intraday_baseline": q_prev,
                     "intraday_observation_timestamp": None,
+                    "native_bar_count": 0,
+                    "intraday_state": "MISSING",
                     "source_reason": "yahoo official quote (no intraday feed)",
                 }
+            evidence[tk] = dict(native_evidence.get(tk) or {
+                "state": "MISSING", "source_ticker": tk, "native_bar_count": 0,
+                "reason": "NO_USABLE_CURRENT_SESSION",
+            })
             continue
 
+        facts = dict(native_evidence.get(tk) or _intraday_evidence(
+            intra, src, now_ref,
+            state=("FRESH_CANONICAL" if src == tk else "FRESH_SIBLING")
+            if _has_intraday(intra, src) else "LAGGED_CURRENT_SESSION",
+        ))
+        native_count = len(intra)
         last_ts = intra.index[-1]
         try:
             observation = pd.Timestamp(last_ts)
-            observation = (observation.tz_localize("UTC")
+            observation = (observation.tz_localize(_exchange_tz(src) or "UTC")
                            if observation.tzinfo is None
                            else observation.tz_convert("UTC"))
-            observed_at = observation.to_pydatetime()
+            observed_at = observation.tz_convert("UTC").to_pydatetime()
         except (TypeError, ValueError, OverflowError):
             observed_at = None
 
@@ -1566,8 +1775,8 @@ def intraday_feeds(
         iday = _observed_day(last_ts, _exchange_tz(src))
         feed_prev = _previous_close_before(_fetch_history, src, iday)
         src_quote = official.get(src) or {}
-        baseline = ((q_prev if (src == tk and q_prev) else None)
-                    or src_quote.get("prev_close")
+        baseline = ((q_prev if src == tk else None)
+                    or _quote_baseline(src_quote, src, now_ref, day=iday)
                     or feed_prev
                     or float(intra.iloc[0]))
 
@@ -1584,8 +1793,14 @@ def intraday_feeds(
         # also that venue's published previous close, both ends of the drawn line and
         # its denominator come from one order book -- which is the one the tape is
         # already valuing this instrument with.
-        intra = _stamp_session_close(intra, src_quote, own_feed=True,
-                                     ticker=src, now=now_ref)
+        if facts["state"] != "LAGGED_CURRENT_SESSION" or src_quote.get("time"):
+            # An undated quote must not invent a current endpoint for a feed
+            # explicitly retained as lagged display evidence.
+            intra = _stamp_session_close(intra, src_quote, own_feed=True,
+                                         ticker=src, now=now_ref)
+        facts["drawable"] = len(intra) >= 2
+        facts["chart_reference_points"] = len(intra) - native_count
+        evidence[tk] = facts
 
         out[tk] = {
             "live": bool(is_live),
@@ -1594,14 +1809,27 @@ def intraday_feeds(
             "intraday_series": intra,
             "intraday_baseline": baseline,
             "intraday_observation_timestamp": observed_at,
+            "native_bar_count": native_count,
+            "intraday_state": facts["state"],
             "source_reason": (
+                "lagged canonical current-session path (not a fresh quote)"
+                if facts["state"] == "LAGGED_CURRENT_SESSION" else
+                "last completed session path"
+                if facts["state"] == "LAST_COMPLETED_SESSION" else
                 "canonical intraday feed" if src == tk
                 else "price-coherent EUR venue intraday fallback"
             ),
         }
-    coverage = len(out) / len(uniq) * 100.0 if uniq else 100.0
+    drawable = tuple(tk for tk in uniq if evidence[tk].get("drawable"))
+    missing = tuple(tk for tk in uniq if tk not in drawable)
+    lagged = tuple(tk for tk in uniq if evidence[tk]["state"] == "LAGGED_CURRENT_SESSION")
+    policy.update(
+        evidence=evidence, drawable_tickers=len(drawable),
+        missing_tickers=missing, lagged_tickers=lagged,
+    )
+    coverage = len(drawable) / len(uniq) * 100.0 if uniq else 100.0
     availability = (
-        Availability.AVAILABLE if len(out) == len(uniq)
+        Availability.AVAILABLE if not missing and not lagged
         else Availability.DEGRADED if out
         else Availability.UNAVAILABLE
     )

@@ -352,14 +352,17 @@ class ProviderTape:
 
         original_bond_history = bond_history._request_raw
 
-        def official_bond_history(isin):
+        def official_bond_history(isin, *, market="MOTX"):
             # Freeze only raw market fields. The publisher's anonymous public
             # view HTML/access descriptor is never a verification artifact.
             return tape.call(
                 "borsa.bond_history",
-                {"isin": isin, "exchange": "XMIL", "period": "5Y",
+                {"isin": isin, "exchange": bond_history._MARKETS.get(market), "period": "5Y",
                  "adjustment": False, "add-last-price": False},
-                lambda: original_bond_history(isin),
+                lambda: (
+                    original_bond_history(isin) if market == "MOTX"
+                    else original_bond_history(isin, market=market)
+                ),
             )
 
         self._stack.enter_context(patch.object(yf, "Ticker", Ticker))

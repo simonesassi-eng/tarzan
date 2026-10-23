@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+import pandas as pd
+
 from tarzan.models.holding import Holding
 from tarzan.models.instrument_key import normalize_isin
 
@@ -91,6 +93,7 @@ def build_ticker_resolution_records(
             "current_tickers": set(),
             "intraday_tickers": set(),
             "intraday_reasons": set(),
+            "historical_price_sources": set(),
         })
         name = _clean(holding.name)
         if name and not record["name"]:
@@ -123,6 +126,18 @@ def build_ticker_resolution_records(
             cleaned = _clean(value)
             if cleaned:
                 record[field].add(cleaned)
+        prices = holding.price_history_price_only
+        if prices is not None and len(prices) and isinstance(prices.index, pd.DatetimeIndex):
+            from tarzan.data import bond_history
+
+            if (
+                isin
+                and bond_history.price_on(prices, isin, prices.index[-1].date()) is not None
+            ):
+                native_isin = prices.attrs.get(bond_history.SOURCE_ISIN_ATTR, isin)
+                venue = prices.attrs.get(bond_history.EXCHANGE_ATTR, "")
+                link = prices.attrs.get(bond_history.PRICING_LINK_ATTR, "")
+                record["historical_price_sources"].add((native_isin, venue, link))
 
     rows: list[dict[str, object]] = []
     for key, grouped_record in grouped.items():
@@ -196,6 +211,7 @@ def build_ticker_resolution_records(
             "intraday_default_ticker": intraday_default,
             "intraday_effective_ticker": " / ".join(intraday),
             "intraday_reason": " | ".join(sorted(grouped_record["intraday_reasons"])),
+            "historical_price_sources": tuple(sorted(grouped_record["historical_price_sources"])),
             "status": status,
         })
 

@@ -798,6 +798,22 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
     rows: list[dict] = []
     by_identity: dict[str, dict] = {}
+    evidence = getattr(m, "intraday_evidence", {}) or {}
+
+    def intraday_note(ticker):
+        fact = evidence.get(ticker, {})
+        if not fact:
+            return ""
+        if fact.get("state") == "MISSING":
+            return "No current-session bars"
+        observed = str(fact.get("observed_at") or "")
+        instant = (observed[11:16] + " UTC") if observed.endswith("+00:00") else ""
+        label = (
+            "Lagged bars" if fact.get("state") == "LAGGED_CURRENT_SESSION"
+            else "Last session" if fact.get("state") == "LAST_COMPLETED_SESSION"
+            else "Single bar" if fact.get("native_bar_count") == 1 else ""
+        )
+        return _escaped_text(" · ".join(item for item in (label, instant) if item))
 
     def _add(row: dict, *keys: str) -> None:
         rows.append(row)
@@ -809,6 +825,13 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
         canonical = str(record.get("canonical_ticker") or "")
         isin = normalize_isin(record.get("isin"))
         presence = str(record.get("portfolio_presence") or "")
+        native = record.get("historical_price_sources") or ()
+        history_note = ""
+        history_feed = str(record.get("history_ticker") or record.get("current_ticker") or canonical)
+        if len(native) == 1:
+            native_isin, venue, link = native[0]
+            history_feed = f"{native_isin} · {venue}"
+            history_note = "Official clean liquidation price" if link else "Official clean price"
         _add({
             "ticker": _escaped_text(_display_ticker(canonical) or ""),
             "name": _escaped_text(ctx.reference.name_for(isin, canonical)
@@ -816,9 +839,10 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
             "isin": isin,
             # The listing the daily bars came from; the selected symbol when the
             # instrument resolved but never returned history.
-            "hist_ric": str(record.get("history_ticker")
-                            or record.get("current_ticker") or canonical),
+            "hist_ric": history_feed,
+            "history_note": history_note,
             "intr_ric": str(record.get("intraday_effective_ticker") or ""),
+            "intraday_note": intraday_note(canonical),
             "presence": _PRESENCE_BAND_OF.get(presence, presence),
         }, isin, normalize_ticker(canonical))
 
@@ -840,16 +864,29 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
             "name": _escaped_text(name),
             "isin": isin,
             "hist_ric": hist,
+            "history_note": "",
             # A benchmark's intraday series can come from a sibling venue, and
             # it is the catalog — not the request — that records which one.
             "intr_ric": str(quote.get("intraday_source_ticker")
                             or quote.get("source_ticker") or ""),
+            "intraday_note": intraday_note(hist),
             "presence": "Watchlist",
         }, isin, normalize_ticker(hist or requested))
 
     rows.sort(key=lambda r: (_presence_rank(r["presence"]),
                              (r["ticker"] or r["name"]).upper()))
-    return {"available": bool(rows), "rows": tuple(rows)}
+    requested = tuple(getattr(m, "intraday_requested_tickers", ()) or ())
+    quotes = getattr(m, "intraday_quotes", {}) or {}
+    quality_note = ""
+    if evidence and requested:
+        lagged = sum(fact.get("state") == "LAGGED_CURRENT_SESSION" for fact in evidence.values())
+        missing = len(set(requested) - set(quotes))
+        quality_note = (
+            f"Intraday paths: {len(quotes)}/{len(requested)} requested listings "
+            f"(portfolio and watchlist); {lagged} lagged, {missing} without a drawable path. "
+            "These counts are not portfolio valuation coverage. Bar times remain the actual last observations."
+        )
+    return {"available": bool(rows), "rows": tuple(rows), "quality_note": quality_note}
 
 
 def _build_allocation(ctx: _NewsletterContext) -> dict:

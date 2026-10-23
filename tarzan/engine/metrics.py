@@ -1678,6 +1678,7 @@ class MetricsEngine:
                 keys.append(ticker)
         ctx["intraday_requested_tickers"] = tuple(keys)
         ctx["intraday_quotes"] = {}
+        ctx["intraday_evidence"] = {}
 
         from tarzan import runtime
         if not runtime.allows_live_transport():
@@ -1734,6 +1735,9 @@ class MetricsEngine:
             from tarzan.data.market_quotes import intraday_feeds, _sibling_symbols
 
             res = intraday_feeds(keys, allow_sibling_fallback=True)
+            ctx["intraday_evidence"] = dict(
+                getattr(res, "policy", {}).get("evidence", {})
+            )
             identity_errors: list[str] = []
             resolved: dict[str, dict] = {}
             intraday_quotes: dict[str, dict] = {}
@@ -1757,6 +1761,10 @@ class MetricsEngine:
                     if source not in allowed_sources
                 }
                 if invalid_sources:
+                    ctx["intraday_evidence"][ticker] = {
+                        "state": "MISSING", "reason": "INVALID_SOURCE_IDENTITY",
+                        "source_ticker": ticker, "native_bar_count": 0,
+                    }
                     identity_errors.append(
                         f"{ticker} returned invalid source(s) "
                         f"{sorted(invalid_sources)!r}"
@@ -1789,7 +1797,7 @@ class MetricsEngine:
                 if not canonical:
                     continue
                 selected = resolved.get(canonical)
-                if selected is None:
+                if canonical not in intraday_quotes:
                     holding.intraday_ticker = None
                     holding.intraday_observation_timestamp = None
                     holding.intraday_ticker_reason = (
@@ -1807,6 +1815,9 @@ class MetricsEngine:
                     "intraday_observation_timestamp"
                 )
                 holding.intraday_ticker_reason = (
+                    "The canonical ticker supplied a lagged current-session "
+                    "path for display only; its last print is not a fresh quote."
+                    if selected.get("intraday_state") == "LAGGED_CURRENT_SESSION" else
                     "The canonical ticker supplied the intraday series."
                     if effective == canonical
                     else (
@@ -2421,6 +2432,7 @@ class MetricsEngine:
                 ctx.get("intraday_requested_tickers", ())
             ),
             intraday_quotes=ctx.get("intraday_quotes", {}),
+            intraday_evidence=ctx.get("intraday_evidence", {}),
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
             target_weights=ctx.get("target_weights") or {},
