@@ -1,19 +1,19 @@
-"""justETF as a SECOND, independent source of ETF market prices.
+"""Separately acquired justETF quote pairs and EUR histories for corroboration.
 
-Everything else in Tarzan prices off Yahoo, so its checks could only ever prove that
-Tarzan's arithmetic agrees with Yahoo — never that Yahoo was right. On 8 Oct 2026 Yahoo
-itself was wrong twice for one thin fund (a stray trade, and a "previous close" no one
-dealt at), and nothing in the run could tell. justETF serves FactSet/Xetra data through
-the JSON its own pages read: a daily series from inception, and today's quote.
+The primary ETF tape is not overwritten by a lone justETF answer. A quote may
+corroborate a disputed daily baseline under current-session arbitration; a
+printed long-window return may be corrected only under the existing settlement
+rule with a qualified, comparable third-venue witness. Yahoo venue siblings
+are not additional independent providers merely because their suffix differs.
 
-Used only as a REFEREE. It never supplies a figure the issue prints; it decides whether
-a figure the issue prints is corroborated. That keeps its failure modes harmless: when it
-is down, slow, rate-limited, or has no data for an ISIN (it returns its HTML page), the
-answer is "not cross-checked" and the issue still goes out.
+Missing, malformed or nonfinite source facts stay unavailable, never verified.
+Ordinary provider failures degrade corroboration; owner/source cancellation
+still propagates after accepted work drains. Final publication remains the
+run's typed availability/semantic policy, not this fetcher's decision.
 
-The API is undocumented, so it is used gently: one series call and one quote call per
-holding per run, memoized, in a small thread pool, with a short timeout and no retry
-storm. Measured: 17 series calls in 2.9 s sequentially, ~245 KB each.
+The undocumented endpoints are used with run-owned memoization, bounded pools,
+native timeouts and the existing retry/admission policy. No alias, venue or
+history search is pruned here to obtain a faster answer.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def _response_matches_quote_request(body: dict, isin: str) -> bool:
 
 
 def prefetch(isins) -> None:
-    """Fetch every missing series and quote in one small pool. Never raises."""
+    """Fetch missing series/quotes and join accepted work before propagating faults."""
     from tarzan import runtime
 
     wanted = [i for i in dict.fromkeys(isins) if i]
