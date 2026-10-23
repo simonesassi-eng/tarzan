@@ -45,6 +45,7 @@ total_value, lump_sum) -> (actions, verifications)``.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -528,6 +529,8 @@ def _net_cash_cost(t: np.ndarray, tax: np.ndarray, fee_buy: float, fee_sell: flo
 # ---------------------------------------------------------------------------
 
 class _Cost:
+    """Scalar evaluator for one search with fixed values, targets and tolerance."""
+
     def __init__(self, model: _ObjectiveModel, values: np.ndarray, config: InvestorConfig,
                  lump_sum: float, params: LSParams):
         self.model = model
@@ -548,6 +551,10 @@ class _Cost:
         else:  # absolute
             self.scale = np.ones_like(gap0)
         self.gap0 = gap0
+        # Model targets/tolerance are fixed for the lifetime of this search.
+        # Keep the guard's exact array operation, but do it once rather than
+        # allocating the same vector for every candidate.
+        self.allowed = np.maximum(gap0, model.tol)
 
         # Ambit groups: indices per ambit, restricted to ambits that have at
         # least one objective initially OUT of tolerance (so we only push
@@ -594,11 +601,11 @@ class _Cost:
         # Protects in-tolerance objectives (e.g. the cash buffer) from being
         # used as a dumping ground, and stops out-of-tol objectives from
         # getting worse.
-        allowed = np.maximum(self.gap0, self.model.tol)
-        excess = np.clip(g - allowed, 0.0, None)
+        excess = np.clip(g - self.allowed, 0.0, None)
         j += p.guard_weight * float(np.sum(excess ** 2))
-        turnover = float(np.abs(t).sum())
-        n_trades = int((np.abs(t) >= p.min_trade_eur).sum())
+        abs_t = np.abs(t)
+        turnover = float(abs_t.sum())
+        n_trades = int((abs_t >= p.min_trade_eur).sum())
         residual = _net_cash_cost(t, self.tax, self.fee_buy, self.fee_sell, p.min_trade_eur) - self.lump_sum
         j += p.turnover_weight * (turnover / max(self.tv, 1e-9))
         j += p.trade_count_weight * n_trades
@@ -643,14 +650,29 @@ def _bounds(holdings: list[Holding], values: np.ndarray, no_sell: bool,
 
 
 def _descent(t: np.ndarray, cost: _Cost, lo, hi, tradeable, steps, params: LSParams):
-    """Best-improvement coordinate descent with a short anti-reversal tabu."""
+    """Best-improvement coordinate descent with a short anti-reversal tabu.
+
+    ``cost`` is deterministic for a fixed vector during the descent. Bounds
+    can make several steps produce exactly the same candidate: evaluate only
+    its first eligible occurrence, retaining that occurrence's sign and the
+    original strict tie-breaking. No approximate/rounded candidates are merged.
+    """
     t = t.copy()
     cur = cost(t)
     tabu: dict[tuple[int, int], int] = {}  # (idx, sign) -> expiry iteration
+    tradeable_indices = np.where(tradeable)[0]
+    # The public optimizer constructs float64 trades. Conversion to Python
+    # float is also exact for smaller floating dtypes, but not for wide ints,
+    # object arrays or extended-precision floats passed to this private helper.
+    deduplicate = (
+        np.issubdtype(t.dtype, np.floating)
+        and t.dtype.itemsize <= np.dtype(np.float64).itemsize
+    )
     for it in range(params.max_iters_per_descent):
         best_gain = 1e-12
         best_move = None
-        for i in np.where(tradeable)[0]:
+        for i in tradeable_indices:
+            evaluated: set[str] = set()
             for s in steps:
                 for sign in (+1.0, -1.0):
                     if tabu.get((int(i), int(sign)), -1) > it:
@@ -660,6 +682,20 @@ def _descent(t: np.ndarray, cost: _Cost, lo, hi, tradeable, steps, params: LSPar
                         continue
                     old = t[i]
                     t[i] = new_ti
+                    # Key the value actually assigned to this coordinate, not
+                    # a ticker or a rounded trade. float.hex preserves signed
+                    # zero and every finite float64 bit; nonfinite candidates
+                    # retain the original scalar path. Mark only after tabu
+                    # and no-op guards, and never share across coordinates or
+                    # iterations (the rest of the vector may have changed).
+                    if deduplicate:
+                        candidate = float(t[i])
+                        if math.isfinite(candidate):
+                            key = candidate.hex()
+                            if key in evaluated:
+                                t[i] = old
+                                continue
+                            evaluated.add(key)
                     c = cost(t)
                     t[i] = old
                     gain = cur - c
