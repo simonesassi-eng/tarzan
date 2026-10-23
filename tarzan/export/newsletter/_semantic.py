@@ -371,7 +371,7 @@ def _validate_session_markup(metrics, document):
     """Independently reconcile euro attribution with its original NAV facts."""
     import pandas as pd
     from tarzan.contracts.session_move import DailyReturnStep, SessionMoveEvidence
-    from tarzan.engine.stats import normalize_session_index, window_anchor
+    from tarzan.engine.stats import normalize_index, normalize_session_index, window_anchor
 
     def finite(value):
         try:
@@ -387,7 +387,8 @@ def _validate_session_markup(metrics, document):
             float(first), float(second), rel_tol=1e-12, abs_tol=absolute,
         )
 
-    percent = (getattr(metrics, "performance", None) or {}).get("1d")
+    performance = getattr(metrics, "performance", None) or {}
+    percent = performance.get("1d")
     records = _SessionMarkup(document).records
     if not finite(percent):
         return ["session display claims an unavailable return"] if records else []
@@ -419,12 +420,43 @@ def _validate_session_markup(metrics, document):
     if _DISPLAYED_PERCENT_RE.fullmatch(percent_text) is None or percent_text != expected_percent:
         errors.append("session visible percentage differs from source return")
     caption = caption_parts[0]["text"].strip()
+
+    # Verify the whole visible claim, not only the euro/source prefix. The
+    # renderer's caption helpers are deliberately not this guard's authority:
+    # an altered session date, open-market claim or coverage tail must fail
+    # before a delivery claim or SMTP invocation.
+    intraday = bool(performance.get("1d_intraday"))
+    if intraday:
+        open_now = performance.get("market_open")
+        market_open = intraday if open_now is None else bool(open_now)
+        caption_tail = [f'market {"open" if market_open else "closed"}']
+        coverage = performance.get("1d_coverage_pct")
+        if coverage is not None:
+            if not finite(coverage) or not 0 <= coverage <= 100:
+                errors.append("session source coverage contains an unavailable percentage")
+            elif coverage < 99.5:
+                caption_tail.append(f"{coverage:.0f}% of the book priced today")
+    else:
+        end_label = ""
+        try:
+            history = getattr(metrics, "portfolio_history", None)
+            source = normalize_index(history.dropna(), drop_duplicates=True)
+            if len(source) >= 2:
+                end_label = pd.Timestamp(source.index[-1]).strftime("%d %b")
+        except Exception:
+            # Match the established legacy/unavailable-history display, not a
+            # date inferred from the wall clock or an unverified proof packet.
+            pass
+        caption_tail = [
+            f"{end_label} session, close to close" if end_label else "close-to-close",
+        ]
+    expected_tail = " \u00b7 ".join(caption_tail)
     proof = getattr(metrics, "session_move_evidence", None)
     if type(proof) is not SessionMoveEvidence or proof.availability not in ("AVAILABLE", "DEGRADED"):
         if (
             attrs.get("data-tarzan-session-availability") != "UNAVAILABLE"
             or attrs.get("data-tarzan-session-profit") != ""
-            or not caption.startswith("EUR attribution unavailable")
+            or caption != "EUR attribution unavailable \u00b7 " + expected_tail
             or "€" in caption
             or _EXPLICIT_EUR_AMOUNT_RE.search(caption) is not None
             or any(attrs.get(f"data-tarzan-session-{field}", "") for field in (
@@ -487,6 +519,8 @@ def _validate_session_markup(metrics, document):
         or _EXPLICIT_EUR_AMOUNT_RE.search(caption) is not None
     ):
         errors.append("session visible euro amount differs from source evidence")
+    if caption != " \u00b7 ".join([*prefix, expected_tail]):
+        errors.append("session visible basis or coverage differs from source facts")
     if proof.availability == "DEGRADED" and "estimated historical data" not in caption:
         errors.append("session display hides degraded historical evidence")
     history = getattr(metrics, "portfolio_history", None)

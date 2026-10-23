@@ -201,3 +201,152 @@ def test_session_caption_cannot_append_a_second_or_unavailable_money_claim(unava
     assert original in html
     assert validate_newsletter_semantics(m, {}, html) == ()
     assert validate_newsletter_semantics(m, {}, html.replace(original, original + invented))
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+@pytest.mark.parametrize("invented", [
+    "01 Jan session, close to close",
+    "22 Oct session, close to close",
+    "24 Oct session, close to close",
+    "market open",
+    "market closed",
+    "close-to-close",
+    "23 Oct session, close to close · 100% of the book priced today",
+    "23 Oct session, close to close · 50% of the book priced today",
+    "23 Oct session, close to close · market open",
+    "23 Oct session, close to close · 23 Oct session, close to close",
+    "23 Oct session, close to close · source 2026-10-01 to 2026-10-23",
+])
+def test_closed_session_caption_cannot_invent_dates_market_state_or_coverage(unavailable, invented):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    html = render(m)
+    original = caption(m)
+    tail = "23 Oct session, close to close"
+    assert original.endswith(tail)
+    assert validate_newsletter_semantics(m, {}, html) == ()
+    tampered = html.replace(original, original.removesuffix(tail) + invented)
+    assert tampered != html
+    assert validate_newsletter_semantics(m, {}, tampered)
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+@pytest.mark.parametrize("market_open", [None, False, True])
+@pytest.mark.parametrize("coverage", [None, 0.0, 1.4, 49.5, 97.5, 99.49, 99.5, 100.0])
+def test_intraday_caption_uses_original_flags_and_existing_coverage_rounding(
+    unavailable, market_open, coverage,
+):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    m.performance.update(
+        {"1d_intraday": True, "market_open": market_open, "1d_coverage_pct": coverage},
+    )
+    html = render(m)
+    original = caption(m)
+    state = "market closed" if market_open is False else "market open"
+    tail = state
+    if coverage is not None and coverage < 99.5:
+        tail += f" · {coverage:.0f}% of the book priced today"
+    assert original.endswith(tail)
+    assert validate_newsletter_semantics(m, {}, html) == ()
+
+    opposite = "market open" if state == "market closed" else "market closed"
+    tampered = html.replace(original, original.removesuffix(tail) + opposite)
+    assert tampered != html
+    assert validate_newsletter_semantics(m, {}, tampered)
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+@pytest.mark.parametrize("invented", [
+    "market open",
+    "market open · 99% of the book priced today",
+    "market open · 100% of the book priced today",
+    "market open · 50% of the book priced today · 75% of the book priced today",
+    "market open · 50% of the book priced today · 50% of the book priced today",
+    "23 Oct session, close to close · 50% of the book priced today",
+])
+def test_intraday_caption_cannot_hide_or_duplicate_partial_coverage(unavailable, invented):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    m.performance.update(
+        {"1d_intraday": True, "market_open": True, "1d_coverage_pct": 50.0},
+    )
+    html = render(m)
+    original = caption(m)
+    tail = "market open · 50% of the book priced today"
+    assert original.endswith(tail)
+    assert validate_newsletter_semantics(m, {}, html) == ()
+    tampered = html.replace(original, original.removesuffix(tail) + invented)
+    assert tampered != html
+    assert validate_newsletter_semantics(m, {}, tampered)
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+@pytest.mark.parametrize("coverage", [
+    True, False, np.bool_(True), float("nan"), float("inf"), float("-inf"),
+    -0.1, 100.1, 10 ** 1000,
+])
+def test_intraday_unknown_or_invalid_coverage_is_not_a_numeric_source_fact(unavailable, coverage):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    m.performance.update(
+        {"1d_intraday": True, "market_open": True, "1d_coverage_pct": coverage},
+    )
+    assert validate_newsletter_semantics(m, {}, render(m))
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_delivered_caption_is_rechecked_against_original_market_facts(unavailable):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    m.performance.update(
+        {"1d_intraday": True, "market_open": True, "1d_coverage_pct": 50.0},
+    )
+    html = render(m)
+    assert validate_newsletter_semantics(m, {}, html) == ()
+    m.performance["market_open"] = False
+    assert validate_newsletter_semantics(m, {}, html)
+    m.performance["market_open"] = True
+    m.performance["1d_coverage_pct"] = 75.0
+    assert validate_newsletter_semantics(m, {}, html)
+    m.performance["1d_coverage_pct"] = 50.0
+    m.performance["1d_intraday"] = False
+    assert validate_newsletter_semantics(m, {}, html)
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_caption_date_comes_from_the_original_history_not_the_wall_clock(unavailable, monkeypatch):
+    m = order_nav()
+    if unavailable:
+        m.session_move_evidence = None
+    monkeypatch.setattr("tarzan.runtime.today", lambda: date(2026, 10, 26))
+    html = render(m)
+    assert caption(m).endswith("23 Oct session, close to close")
+    assert validate_newsletter_semantics(m, {}, html) == ()
+
+
+def test_unavailable_legacy_history_does_not_invent_a_session_date():
+    m = order_nav()
+    m.session_move_evidence = None
+    m.portfolio_history = pd.Series(dtype=float)
+    html = render(m)
+    original = caption(m)
+    assert original == "EUR attribution unavailable · close-to-close"
+    assert validate_newsletter_semantics(m, {}, html) == ()
+    assert validate_newsletter_semantics(
+        m, {}, html.replace(original, original + " · 23 Oct session, close to close"),
+    )
+
+
+def test_caption_text_can_be_styled_without_changing_the_native_claim():
+    m = order_nav()
+    html = render(m)
+    original = caption(m)
+    styled = original.replace("23 Oct", "<strong>23 Oct</strong>")
+    assert styled != original
+    assert validate_newsletter_semantics(m, {}, html.replace(original, styled)) == ()
