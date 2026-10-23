@@ -31,6 +31,7 @@ _MAPS = {
     "resolution/isin_to_symbol.json": "resolution",
     "instrument_profiles/profiles_v1.json": price_cache._INSTRUMENT_PROFILE_NAMESPACE,
     "timed/openfigi.json": "openfigi",
+    # Compatibility with deployed archives, not an authority to skip probes.
     "timed/no_listing.json": "no_listing",
     "timed/bond_history_v1.json": "bond_history_v1",
     "geo/geo_breakdown.json": "geo",

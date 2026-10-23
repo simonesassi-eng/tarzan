@@ -1,9 +1,4 @@
-"""Provider answers that do not change between issues are not re-asked every run.
-
-Measured on a warm run, 9 Oct 2026: eight bonds probed on nine Yahoo venues each, all
-404, ~100s of request time, every run; 25 of 36 third-source venue fetches empty.
-Network-free.
-"""
+"""Positive identity caching and recovery from legacy absence observations."""
 
 from __future__ import annotations
 
@@ -31,6 +26,41 @@ def test_a_timed_entry_expires(cache, monkeypatch):
     assert price_cache.load_timed("m", "k", 7) is None
 
 
+@pytest.mark.parametrize("stamp", [
+    None, True, False, "1", [], {}, 0, -1, 10 ** 400,
+])
+def test_malformed_timestamps_degrade_to_a_miss_without_crashing(cache, stamp):
+    price_cache._atomic_write_json(
+        price_cache._timed_path("m"), "m", {"k": {"ts": stamp, "value": [1]}},
+    )
+    assert price_cache.load_timed("m", "k", 7) is None
+
+
+@pytest.mark.parametrize("ttl", [
+    None, True, False, "1", [], {}, 0, -1, float("nan"), float("inf"),
+    10 ** 400, 1e308,
+])
+def test_malformed_ttls_degrade_to_a_miss_without_crashing(cache, ttl):
+    price_cache.store_timed("m", "k", [1])
+    assert price_cache.load_timed("m", "k", ttl) is None
+
+
+def test_future_receipt_cannot_renew_an_observation(cache, monkeypatch):
+    price_cache.store_timed("m", "k", [1])
+    real_now = price_cache.time.time()
+    monkeypatch.setattr(price_cache.time, "time", lambda: real_now - 60)
+    assert price_cache.load_timed("m", "k", 7) is None
+
+
+@pytest.mark.parametrize("stamp", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_timestamp_is_rejected_by_writer_and_reader(cache, monkeypatch, stamp):
+    entries = {"k": {"ts": stamp, "value": [1]}}
+    with pytest.raises(ValueError):
+        price_cache._atomic_write_json(price_cache._timed_path("m"), "m", entries)
+    monkeypatch.setattr(price_cache, "_read_map", lambda *args: entries)
+    assert price_cache.load_timed("m", "k", 7) is None
+
+
 def _probe_counting(monkeypatch, kind):
     calls = []
     monkeypatch.setattr(price_cache, "load_instrument_profile",
@@ -48,18 +78,18 @@ def test_inconclusive_bond_discovery_does_not_poison_the_isin_cache(cache, monke
     assert en._resolve_isin("IT0000000001", "") is None
     assert en._resolve_isin("IT0000000001", "") is None
     assert calls == ["IT0000000001", "IT0000000001"]
-    assert price_cache.load_timed(en._NO_LISTING, "IT0000000001", 7) is None
+    assert price_cache.load_timed("no_listing", "IT0000000001", 7) is None
 
 
-def test_an_existing_bond_negative_answer_keeps_its_original_ttl(cache, monkeypatch):
+def test_legacy_bond_absence_never_suppresses_live_discovery_or_renews_its_ttl(cache, monkeypatch):
     calls = _probe_counting(monkeypatch, "BOND")
-    price_cache.store_timed(en._NO_LISTING, "IT0000000001", True)
-    assert en._resolve_isin("IT0000000001", "") is None
-    assert calls == []
-    real = price_cache.time.time
-    monkeypatch.setattr(price_cache.time, "time", lambda: real() + 8 * 86400)
+    price_cache.store_timed("no_listing", "IT0000000001", True)
+    original = price_cache._timed_path("no_listing").read_bytes()
     assert en._resolve_isin("IT0000000001", "") is None
     assert calls == ["IT0000000001"]
+    assert en._resolve_isin("IT0000000001", "") is None
+    assert calls == ["IT0000000001", "IT0000000001"]
+    assert price_cache._timed_path("no_listing").read_bytes() == original
 
 
 def test_an_etf_that_fails_to_resolve_keeps_being_retried(cache, monkeypatch):
@@ -80,19 +110,20 @@ class _Ticker:
         return pd.DataFrame()
 
 
-def test_a_venue_with_no_data_is_not_refetched(cache, monkeypatch):
+def test_an_empty_sdk_answer_does_not_claim_a_missing_venue(cache, monkeypatch):
     _Ticker.fetches = 0
     monkeypatch.setattr(en.yf, "Ticker", _Ticker)
     monkeypatch.setattr(en, "_space_yf_call", lambda: None)
     assert en._sibling_close_series("ABC.DE") is None
     assert en._sibling_close_series("ABC.DE") is None
-    assert _Ticker.fetches == 1
+    assert _Ticker.fetches == 2
+    assert price_cache.load_timed("no_listing", "ABC.DE", 7) is None
 
 
 def test_a_throttled_venue_is_not_recorded_as_missing(cache, monkeypatch):
     monkeypatch.setattr(en, "_retry", lambda fn, what: None)   # retries exhausted
     en._sibling_close_series("ABC.DE")
-    assert price_cache.load_timed(en._NO_LISTING, "ABC.DE", 7) is None
+    assert price_cache.load_timed("no_listing", "ABC.DE", 7) is None
 
 
 def test_an_openfigi_mapping_is_reused_across_runs(cache, monkeypatch):

@@ -316,7 +316,9 @@ def current_budget():
 
 def provider_call(provider, callback, *, timeout):
     budget = current_budget()
-    return callback(timeout) if budget is None else budget.call(provider, callback)
+    return callback(timeout) if budget is None else budget.call(
+        provider, callback, requested_timeout=timeout,
+    )
 
 
 def provider_wait(seconds, provider):

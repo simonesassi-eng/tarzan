@@ -124,6 +124,25 @@ def _validate_json_value(value) -> bool:
     return value is None or isinstance(value, (str, int, bool))
 
 
+def _entry_is_fresh(entry, ttl_days: float) -> bool:
+    """One finite, causal TTL rule for every ordinary timestamped cache map."""
+    if not isinstance(entry, dict):
+        return False
+    stamp = entry.get("ts")
+    if type(stamp) not in (int, float) or type(ttl_days) not in (int, float):
+        return False
+    try:
+        stamp, ttl_seconds = float(stamp), float(ttl_days) * 86400
+    except (ValueError, OverflowError):
+        return False
+    now = time.time()
+    return bool(
+        math.isfinite(stamp) and math.isfinite(ttl_seconds)
+        and 0 < stamp <= now and ttl_seconds > 0
+        and now - stamp <= ttl_seconds
+    )
+
+
 def _envelope(namespace: str, entries) -> dict:
     body = {
         "schema_version": _CACHE_SCHEMA_VERSION,
@@ -486,14 +505,10 @@ def load_resolution(isin: str) -> Optional[str]:
     """Return the cached resolved symbol for an ISIN if present and not
     expired, else None."""
     entry = _load_resolution_map().get(isin)
-    if not entry:
+    if not _entry_is_fresh(entry, RESOLUTION_TTL_DAYS):
         return None
-    symbol, ts = entry.get("symbol"), entry.get("ts", 0)
-    if not symbol:
-        return None
-    if time.time() - ts > RESOLUTION_TTL_DAYS * 86400:
-        return None
-    return symbol
+    symbol = entry.get("symbol")
+    return symbol if isinstance(symbol, str) and symbol.strip() else None
 
 
 def store_resolution(isin: str, symbol: str) -> None:
@@ -725,7 +740,7 @@ def load_timed(name: str, key: str, ttl_days: float):
     if not is_enabled() or not key:
         return None
     entry = _read_map(_timed_path(name), name).get(key)
-    if not isinstance(entry, dict) or time.time() - entry.get("ts", 0) > ttl_days * 86400:
+    if not _entry_is_fresh(entry, ttl_days):
         return None
     return entry.get("value")
 
@@ -763,14 +778,18 @@ def load_geo(key: str) -> Optional[dict]:
     if not key:
         return None
     entry = _load_geo_map().get(key)
-    if not entry:
+    if not _entry_is_fresh(entry, RESOLUTION_TTL_DAYS):
         return None
     breakdown = entry.get("breakdown")
-    if not breakdown:
+    if not isinstance(breakdown, dict) or not breakdown or any(
+        not isinstance(name, str) or not name.strip()
+        or type(pct) not in (int, float) or not 0 <= pct <= 100
+        or not math.isfinite(pct)
+        for name, pct in breakdown.items()
+    ):
         return None
-    if time.time() - entry.get("ts", 0) > RESOLUTION_TTL_DAYS * 86400:
-        return None
-    return {"breakdown": breakdown, "source": entry.get("source", "cache")}
+    source = entry.get("source")
+    return {"breakdown": breakdown, "source": source if isinstance(source, str) else "cache"}
 
 
 def store_geo(key: str, breakdown: dict, source: str) -> None:
@@ -806,6 +825,16 @@ def _load_ter_map() -> dict:
     return _read_map(_ter_path(), "ter")
 
 
+def _valid_ter_entry(entry) -> bool:
+    if not _entry_is_fresh(entry, RESOLUTION_TTL_DAYS) or "ter" not in entry:
+        return False
+    value = entry["ter"]
+    return bool(
+        value is None
+        or (type(value) in (int, float) and 0 <= value <= 1 and math.isfinite(value))
+    )
+
+
 def load_ter(key: str) -> Optional[float]:
     """Return the cached TER FRACTION for a key (ISIN/ticker) if present and
     not expired, else None. A cached "miss" (None value) is honoured within the
@@ -813,9 +842,7 @@ def load_ter(key: str) -> Optional[float]:
     if not key:
         return None
     entry = _load_ter_map().get(key)
-    if not entry:
-        return None
-    if time.time() - entry.get("ts", 0) > RESOLUTION_TTL_DAYS * 86400:
+    if not _valid_ter_entry(entry):
         return None
     return entry.get("ter")  # may be None (a cached miss)
 
@@ -826,9 +853,7 @@ def has_ter(key: str) -> bool:
     if not key:
         return False
     entry = _load_ter_map().get(key)
-    if not entry:
-        return False
-    return time.time() - entry.get("ts", 0) <= RESOLUTION_TTL_DAYS * 86400
+    return _valid_ter_entry(entry)
 
 
 def store_ter(key: str, ter: Optional[float]) -> None:

@@ -131,6 +131,83 @@ def test_overlapping_batches_only_fetch_new_keys():
     assert sorted(key for batch in batches for key in batch) == ["a", "b", "c"]
 
 
+def test_selective_admission_returns_uncached_misses_and_retries_only_them():
+    batches, legacy = [], {}
+    answers = {"a": {"value": 1}, "b": None}
+
+    def load(keys):
+        batches.append(tuple(keys))
+        return {key: answers[key] for key in keys}
+
+    with activate_session(session("selective")):
+        first = memoized_many(
+            "selective", ["a", "b"], load, legacy=legacy,
+            cache_if=lambda value: value is not None,
+        )
+        assert first == {"a": {"value": 1}, "b": None}
+        answers["b"] = {"value": 2}
+        first["a"]["value"] = 999
+        second = memoized_many(
+            "selective", ["a", "b"], load, legacy=legacy,
+            cache_if=lambda value: value is not None,
+        )
+        assert second == {"a": {"value": 1}, "b": {"value": 2}}
+        assert memoized_many(
+            "selective", ["a", "b"], lambda keys: pytest.fail("refetch"), legacy=legacy,
+            cache_if=lambda value: value is not None,
+        ) == second
+    assert batches == [("a", "b"), ("b",)]
+    assert legacy == {}
+
+
+def test_selective_concurrent_misses_share_work_and_isolate_unstored_results():
+    calls, legacy = [], {}
+    response = {"nested": {"observations": ["original"]}}
+
+    def load():
+        calls.append(1)
+        time.sleep(0.03)
+        return response
+
+    def fetch():
+        return memoized("selective", "a", load, legacy=legacy, cache_if=lambda value: False)
+
+    owner = session("selective-concurrent")
+    with activate_session(owner):
+        results = parallel(fetch)
+        assert owner.providers.store("selective") == {}
+        assert len(calls) == 1
+        results[0]["nested"]["observations"].append("mutated")
+        assert results[1] == {"nested": {"observations": ["original"]}}
+        assert fetch() == {"nested": {"observations": ["original"]}}
+    assert len(calls) == 2
+
+
+def test_admission_failure_has_no_partial_store_and_does_not_poison_single_flight():
+    owner = session("selective-error")
+    error = ValueError("synthetic admission failure")
+    visited = []
+
+    def admit(value):
+        visited.append(value)
+        if value == 2:
+            raise error
+        return True
+
+    with activate_session(owner):
+        with pytest.raises(ValueError) as caught:
+            memoized_many(
+                "selective", ["a", "b"], lambda keys: {"a": 1, "b": 2},
+                legacy={}, cache_if=admit,
+            )
+        assert caught.value is error
+        assert owner.providers.store("selective") == {}
+        assert memoized(
+            "selective", "a", lambda: 3, legacy={}, cache_if=lambda value: True,
+        ) == 3
+    assert visited == [1, 2]
+
+
 @pytest.mark.parametrize("namespace", ["enricher.info", "enricher.fx", "bond.price", "justetf.quote"])
 def test_completed_runs_keep_separate_cache_values(namespace):
     legacy = {"same": "legacy"}

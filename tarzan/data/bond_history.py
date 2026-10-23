@@ -243,14 +243,22 @@ def cache_entry_valid(entry, isin: str) -> bool:
     return len(prices) >= 3 and statistics.median(gaps) <= 4
 
 
-def parse_packet(packet, isin: str):
-    """Validate native identity/units before constructing a cache representation."""
+def parse_packet(packet, isin: str, *, closed_before: date | None = None):
+    """Validate identity/units and retain the actual acquisition timestamp.
+
+    A live download may finish after the run began, even across local midnight.
+    Its receipt is not the market date: an optional run cutoff excludes closes
+    that were not completed on the run's Milan calendar.
+    """
     if not isinstance(packet, dict) or packet.get("exchange") != _EXCHANGE:
         return None
     observed = _instant(packet.get("fetched_at"))
     body = packet.get("payload")
     if observed is None or not isinstance(body, dict) or not _ISIN.fullmatch(isin):
         return None
+    settled_before = observed.astimezone(ZoneInfo("Europe/Rome")).date()
+    if closed_before is not None:
+        settled_before = min(settled_before, closed_before)
     common = {
         "schema_version": SCHEMA_VERSION, "source": SOURCE, "isin": isin,
         "exchange": _EXCHANGE, "fetched_at": observed.isoformat(),
@@ -289,7 +297,7 @@ def parse_packet(packet, isin: str):
         price = _positive_price(price)
         if price is None:
             continue
-        if day >= observed.astimezone(ZoneInfo("Europe/Rome")).date():
+        if day >= settled_before:
             continue
         if day in prices and prices[day] != price:
             return None
@@ -319,7 +327,13 @@ def _native_identity_authorized(isin, captured_at):
 
 
 def raw_history(isin: str, since: date, until: date):
-    """Run-owned raw facts, reusing complete closed history without new I/O."""
+    """Reuse positive history and exact run-owned packets, never old absences.
+
+    The native port always returns the same full five-year packet, regardless
+    of the caller's window. Coalesce that packet per ISIN/captured run, so a
+    completed absence can be shared within one run without suppressing recovery
+    in the next. Transport errors and malformed packets remain retryable.
+    """
     from tarzan import runtime
     from tarzan.data import price_cache
     from tarzan.runtime.memo import memoized
@@ -341,8 +355,7 @@ def raw_history(isin: str, since: date, until: date):
             cached = None
         if cached is not None:
             if cached["state"] == "UNAVAILABLE":
-                if (context.captured_at - _instant(cached["fetched_at"])).total_seconds() <= 86400:
-                    return None
+                # An old structured absence is not current price evidence.
                 cached = None
             elif (
                 date.fromisoformat(cached["prices"][0]["date"]) <= since
@@ -355,19 +368,33 @@ def raw_history(isin: str, since: date, until: date):
             or not _native_identity_authorized(isin, context.captured_at)
         ):
             return cached
-        budget = current_budget()
-        if budget is None or not budget.optional_request_allowed("borsa"):
-            return cached
-        try:
-            with budget.operation("borsa"):
-                fresh = parse_packet(_request_raw(isin), isin)
-        except Exception:
-            return cached  # no raw SDK/access/error text enters diagnostics
+        def fetch_packet():
+            budget = current_budget()
+            if budget is None or not budget.optional_request_allowed("borsa"):
+                return None
+            try:
+                with budget.operation("borsa"):
+                    packet = _request_raw(isin)
+                    acquired_at = datetime.now(timezone.utc)
+                    result = parse_packet(
+                        packet, isin,
+                        closed_before=context.captured_at.astimezone(ZoneInfo("Europe/Rome")).date(),
+                    )
+                # Normal downloads are observed after run start. Reject only
+                # impossible future receipts, never backdate real observations.
+                if result is not None and _instant(result["fetched_at"]) > acquired_at:
+                    return None
+                return result
+            except Exception:
+                return None  # no raw SDK/access/error text enters diagnostics
+
+        fresh = memoized(
+            "bond_history.packet", (isin, context.captured_at), fetch_packet,
+            legacy={}, cache_if=lambda value: value is not None,
+        )
         if fresh is None:
             return cached
         if fresh["state"] == "UNAVAILABLE":
-            if cached is None:
-                price_cache.store_timed(NAMESPACE, isin, fresh)
             return cached
         if cached is not None:
             if cached["currency"] != fresh["currency"]:
@@ -386,6 +413,7 @@ def raw_history(isin: str, since: date, until: date):
         return load()
     return memoized(
         "bond_history.raw", (isin, since, until, context.captured_at), load, legacy={},
+        cache_if=lambda value: value is not None,
     )
 
 

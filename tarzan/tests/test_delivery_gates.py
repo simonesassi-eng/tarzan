@@ -237,8 +237,10 @@ class TestTheSupplyChainIsPinned:
         and pinning the exact string made adding them look like weakening the gate —
         which is the opposite of what they do: every wheel is still hash-pinned."""
         workflow = _text(".github/workflows/newsletter.yml")
-        assert "--require-hashes" in workflow
-        assert "-r requirements.txt" in workflow
+        installer = _text("scripts/install_runtime_dependencies.py")
+        assert "python scripts/install_runtime_dependencies.py" in workflow
+        assert '"--require-hashes"' in installer
+        assert '"requirements.txt"' in installer
 
     def test_direct_dependencies_are_exactly_pinned(self):
         loose = [line for line in _requirement_lines("requirements.in")

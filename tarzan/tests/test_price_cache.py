@@ -147,6 +147,65 @@ def test_resolution_blank_inputs_ignored():
     assert price_cache.load_resolution("ISIN") is None
 
 
+def _map_reader(monkeypatch, kind, entry):
+    loaders = {
+        "resolution": ("_load_resolution_map", price_cache.load_resolution),
+        "geo": ("_load_geo_map", price_cache.load_geo),
+        "ter": ("_load_ter_map", price_cache.load_ter),
+        "has_ter": ("_load_ter_map", price_cache.has_ter),
+    }
+    loader, reader = loaders[kind]
+    monkeypatch.setattr(price_cache, loader, lambda: {"SYNTHETIC": entry})
+    return reader
+
+
+@pytest.mark.parametrize("kind", ["resolution", "geo", "ter", "has_ter"])
+@pytest.mark.parametrize("entry", [None, True, 42, "invalid", ["invalid"]])
+def test_malformed_positive_cache_entries_are_misses_not_discovery_errors(
+    monkeypatch, kind, entry,
+):
+    reader = _map_reader(monkeypatch, kind, entry)
+    assert reader("SYNTHETIC") is (False if kind == "has_ter" else None)
+
+
+@pytest.mark.parametrize("kind", ["resolution", "geo", "ter", "has_ter"])
+@pytest.mark.parametrize("stamp", [
+    None, True, "1", [], {}, 0, -1, float("nan"), float("inf"),
+    float("-inf"), 10 ** 400, "future",
+])
+def test_positive_cache_timestamps_must_be_finite_causal_and_well_typed(
+    monkeypatch, kind, stamp,
+):
+    entry = {
+        "symbol": "SYNTHETIC.MI", "breakdown": {"USA": 100.}, "source": "synthetic",
+        "ter": .001, "ts": time.time() + 60 if stamp == "future" else stamp,
+    }
+    reader = _map_reader(monkeypatch, kind, entry)
+    assert reader("SYNTHETIC") is (False if kind == "has_ter" else None)
+
+
+@pytest.mark.parametrize("kind,field", [
+    ("resolution", "symbol"), ("geo", "breakdown"), ("ter", "ter"), ("has_ter", "ter"),
+])
+@pytest.mark.parametrize("value", [True, 42, "invalid", ["invalid"], {"invalid": "value"}])
+def test_positive_cache_payload_shape_cannot_become_identity_allocation_or_fees(
+    monkeypatch, kind, field, value,
+):
+    # A nonempty string can be a real ticker, so use a blank for that case.
+    entry = {field: "" if kind == "resolution" and value == "invalid" else value, "ts": time.time()}
+    reader = _map_reader(monkeypatch, kind, entry)
+    assert reader("SYNTHETIC") is (False if kind == "has_ter" else None)
+
+
+def test_valid_zero_fee_and_completed_fee_absence_remain_distinct(monkeypatch):
+    for value in (0., .001, None):
+        reader = _map_reader(monkeypatch, "ter", {"ter": value, "ts": time.time()})
+        assert reader("SYNTHETIC") == value
+        assert price_cache.has_ter("SYNTHETIC")
+    _map_reader(monkeypatch, "has_ter", {"ts": time.time()})
+    assert not price_cache.has_ter("SYNTHETIC")
+
+
 # ── Geo breakdown cache (with TTL) ──────────────────────────────────────────
 
 def test_geo_roundtrip():

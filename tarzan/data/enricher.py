@@ -140,6 +140,7 @@ def reset_run_caches() -> None:
     with provider_memo().lock:
         for namespace, legacy in namespaces:
             provider_store("enricher." + namespace, legacy).clear()
+        provider_memo().store("enricher.price_download").clear()
     from tarzan.data import market_quotes as _mq
     _mq.reset_quote_memo()
     from tarzan.data import justetf as _je
@@ -474,9 +475,11 @@ def _history_has_market_evidence(history: object) -> bool:
 
 
 def _positive_market_quote(value: object) -> bool:
+    if pd.api.types.is_bool(value):
+        return False
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     return math.isfinite(numeric) and numeric > 0
 
@@ -1146,19 +1149,9 @@ def _resolve_isin(
         logger.debug("Pinned run has no cached market history for ISIN %s", isin)
         return None
 
-    # A bond Yahoo lists on no venue is asked again on every run otherwise: eight
-    # held bonds x nine exchanges, all 404, ~100s of request time per warm run, for
-    # an answer (carry-flat pricing) that was the same each time. Bonds only: an ETF
-    # that fails to resolve is a real defect and keeps being retried every run.
-    from tarzan.instruments.registry import InstrumentKind
-
-    is_bond = _profile_kind(price_cache.load_instrument_profile(clean_isin)) \
-        is InstrumentKind.BOND
-    if is_bond and price_cache.load_timed(_NO_LISTING, clean_isin, _NO_LISTING_TTL_DAYS):
-        logger.info("ISIN %s: a bond Yahoo listed nowhere when last asked; not re-probed",
-                    clean_isin)
-        return None
-
+    # Past absence is not listing authority. Even an explicit native 404 may
+    # recover on the next run; an ISIN-wide miss is weaker still. Positive
+    # mappings/history remain reusable, while live discovery stays bounded.
     canonical_name = _openfigi_name(clean_isin)
 
     # ISIN-only broker rows commonly carry the ISIN itself as their temporary
@@ -1220,9 +1213,16 @@ def _resolve_isin(
     identified = [
         c for c in candidates
         if cfg.instrument_taxonomy_has(c.symbol)
-        or _name_match_score(c.name, canonical_name) > 0
+        or (canonical_name and _name_match_score(c.name, canonical_name) > 0)
         or _currency_matches(c.currency, expected_currency)
     ]
+    if not identified:
+        # An exact ISIN→ticker+venue mapping is stronger than a missing name
+        # or settlement-currency agreement. Never confuse speculative alias
+        # suffixes with these verified full symbols. The discovery plan already
+        # read this run-owned response, so this does not add native I/O.
+        verified_symbols = set(_mapped_figi_symbols(_openfigi_raw(clean_isin)))
+        identified = [c for c in candidates if c.symbol in verified_symbols]
     if identified:
         candidates = identified
     elif candidates:
@@ -1305,7 +1305,8 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
     when OpenFIGI's exchange/MIC maps to that venue, never from ISIN domicile.
     """
     metas: list[_Candidate] = []
-    for sym in _resolution_candidate_symbols(clean_isin, hint_ticker)[:_MAX_RESOLVE_FETCHES]:
+    symbols = _resolution_candidate_symbols(clean_isin, hint_ticker)[:_MAX_RESOLVE_FETCHES]
+    for sym in symbols:
         meta = _fetch_candidate_meta(sym)
         if meta is not None:
             metas.append(meta)
@@ -1390,8 +1391,12 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
     quote-only design avoids for the common case.
     """
     info = _fetch_ticker_info(symbol)
-    price = info.get("regularMarketPrice") or info.get("previousClose")
-    if not price or price <= 0:
+    price = next(
+        (float(info[field]) for field in ("regularMarketPrice", "previousClose")
+         if _positive_market_quote(info.get(field))),
+        None,
+    )
+    if price is None:
         if not cfg.instrument_taxonomy_has(symbol):
             return None
         history = _fetch_history(symbol)
@@ -1402,12 +1407,17 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
         if closes.empty:
             return None
         price = float(closes.iloc[-1])
-    name = info.get("longName") or info.get("shortName") or info.get("name") or ""
+    name = next(
+        (info[field] for field in ("longName", "shortName", "name")
+         if isinstance(info.get(field), str) and info[field]),
+        "",
+    )
+    currency = info.get("currency")
     return _Candidate(
         symbol=symbol,
         info=info,
         price=float(price),
-        currency=info.get("currency", "") or "",
+        currency=currency if isinstance(currency, str) else "",
         name=name,
     )
 
@@ -1417,10 +1427,17 @@ def _fetch_ticker_info(symbol: str) -> dict:
     for the duration of the run."""
     def _call():
         _space_yf_call()
-        return _yf_net.ticker(symbol).info or {}
+        return _yf_net.ticker(symbol).info
+
+    def _load():
+        observed = _retry(_call, what=f"info {symbol}")
+        # A failed or malformed metadata response cannot abort other venues.
+        # Absence is shared only inside this owned run, never persisted as a
+        # reason to skip discovery in a future newsletter.
+        return observed if isinstance(observed, dict) else {}
 
     return memoized(
-        "enricher.info", symbol, lambda: _retry(_call, what=f"info {symbol}") or {},
+        "enricher.info", symbol, _load,
         legacy=_ticker_info_memo,
     )
 
@@ -1462,23 +1479,55 @@ def _history_origins(
     return origins
 
 
+def _reusable_price_observation(frame: Optional[pd.DataFrame]) -> bool:
+    """Do not retain unusable SDK answers that may hide transient failure."""
+    if frame is None or frame.empty or "Close" not in frame:
+        return False
+    close = pd.to_numeric(frame["Close"], errors="coerce")
+    usable = close.replace([float("inf"), float("-inf")], float("nan")).gt(0)
+    for column in ("Adj Close", "Price Close"):
+        if column in frame:
+            other = pd.to_numeric(frame[column], errors="coerce")
+            usable &= other.replace([float("inf"), float("-inf")], float("nan")).gt(0)
+    return bool(usable.any())
+
+
 def _download_price_history(
-    symbol: str, start=None,
+    symbol: str, start=None, *, force_refresh: bool = False,
 ) -> pd.DataFrame:
     """Retain raw market closes and an independent total-return tape.
 
     One unadjusted provider response contains Close and Adj Close. Applying
     that response's factor to OHLC reproduces auto_adjust=True without losing
     the actual prices needed for holdings and cash-distribution accounting.
+
+    Owned runs share only identical raw requests, with isolated copies before
+    any local transformation. Sibling fills and cache merges are never memoized
+    here. Empty/unusable SDK responses can mask transport failure, so they are
+    not retained and cannot hide a later recovery. A revised adjustment scale
+    requires a new full observation even if the same period was read earlier;
+    direct callers retain their fresh fetch.
     """
-    _space_yf_call()
-    ticker = _yf_net.ticker(symbol)
     arguments = {"interval": "1d", "auto_adjust": False}
     if start is None:
         arguments["period"] = _backtest_period()
     else:
         arguments["start"] = start
-    frame = ticker.history(**arguments)
+
+    def _call():
+        _space_yf_call()
+        return _yf_net.ticker(symbol).history(**arguments)
+
+    from tarzan.runtime.session import current_session
+
+    if force_refresh or current_session() is None:
+        frame = _call()
+    else:
+        frame = memoized(
+            "enricher.price_download", (symbol, tuple(arguments.items())),
+            _call, legacy={},
+            cache_if=_reusable_price_observation,
+        )
     if frame is None or frame.empty or "Close" not in frame:
         return frame
     frame = frame.copy()
@@ -1508,10 +1557,10 @@ def _coherent_price_inputs(
     if start is None:
         return None, fresh
     full = _retry(
-        lambda: _download_price_history(symbol),
+        lambda: _download_price_history(symbol, force_refresh=True),
         what=f"full adjusted history {symbol}",
     )
-    if full is not None and not full.empty and "Close" in full:
+    if _reusable_price_observation(full):
         return None, full
     dq.warning(
         "market_data",
@@ -1533,9 +1582,6 @@ def _sibling_close_series(symbol: str):
     """
     try:
         cached = price_cache.load_history(symbol)
-        if cached is None and price_cache.load_timed(
-                _NO_LISTING, symbol, _NO_LISTING_TTL_DAYS):
-            return None
         start = price_cache.refresh_start(cached)
         if cached is not None and "Price Close" not in cached:
             start = None
@@ -1543,10 +1589,6 @@ def _sibling_close_series(symbol: str):
             lambda: _download_price_history(symbol, start),
             what=f"sibling history {symbol}",
         )
-        if cached is None and fresh is not None and fresh.empty:
-            # Yahoo ANSWERED, with no data, for a venue never seen trading. (A
-            # throttled call returns None, not an empty frame, and is not recorded.)
-            price_cache.store_timed(_NO_LISTING, symbol, True)
         if fresh is None:
             fresh = pd.DataFrame()
         cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
@@ -1827,10 +1869,42 @@ _FIGI_MIC_MAP = cfg.figi_mic_map()
 
 _OPENFIGI_BATCH_SIZE = 10
 
-#: Timed-cache maps. An ISIN's OpenFIGI mapping is its identity, which does not
-#: change; "Yahoo has no such listing" is re-checked weekly.
+#: Positive OpenFIGI identity mappings retain their live refresh policy.
+#: Legacy no_listing files remain importable, but never exclude live probes.
 _OPENFIGI_CACHE, _OPENFIGI_TTL_DAYS = "openfigi", 30
-_NO_LISTING, _NO_LISTING_TTL_DAYS = "no_listing", 7
+
+
+_FIGI_TEXT_FIELDS = (
+    "ticker", "name", "exchCode", "micCode", "marketSector", "securityType",
+    "securityType2", "figi", "compositeFIGI", "shareClassFIGI",
+)
+
+
+def _figi_group_well_formed(group) -> bool:
+    """Validate fields consumed as identity before any discovery/classification."""
+    if not isinstance(group, dict):
+        return False
+    data = group.get("data", [])
+    return isinstance(data, list) and all(
+        isinstance(item, dict) and all(
+            item.get(field) is None or isinstance(item[field], str)
+            for field in _FIGI_TEXT_FIELDS
+        )
+        for item in data
+    )
+
+
+def _has_figi_mapping(groups) -> bool:
+    """Only substantive, well-formed mappings are reusable across runs."""
+    return bool(
+        isinstance(groups, list) and groups and all(
+            _figi_group_well_formed(group) and group.get("data") and all(
+                any((item.get(field) or "").strip() for field in _FIGI_TEXT_FIELDS)
+                for item in group["data"]
+            )
+            for group in groups
+        )
+    )
 
 
 def _openfigi_raw_many(isins: list[str]) -> dict[str, list]:
@@ -1855,9 +1929,9 @@ def _openfigi_load_many(missing: list[str]) -> dict[str, list]:
     stored = {isin: price_cache.load_timed(_OPENFIGI_CACHE, isin, _OPENFIGI_TTL_DAYS)
               for isin in missing}
     for isin, value in stored.items():
-        if value:
+        if _has_figi_mapping(value):
             result[isin] = value
-    missing = [isin for isin in missing if not stored[isin]]
+    missing = [isin for isin in missing if isin not in result]
 
     for offset in range(0, len(missing), _OPENFIGI_BATCH_SIZE):
         batch = missing[offset:offset + _OPENFIGI_BATCH_SIZE]
@@ -1901,12 +1975,13 @@ def _openfigi_load_many(missing: list[str]) -> dict[str, list]:
                 len(batch),
             )
         for index, isin in enumerate(batch):
-            result[isin] = [response[index]] if valid_response else []
-        if valid_response:
-            for index, isin in enumerate(batch):
-                # Only a mapping is an identity; an error/warning entry is retried.
-                if isinstance(response[index], dict) and response[index].get("data"):
-                    price_cache.store_timed(_OPENFIGI_CACHE, isin, [response[index]])
+            result[isin] = [response[index]] if (
+                valid_response and _figi_group_well_formed(response[index])
+            ) else []
+            # Completed provider errors remain run-local. Malformed or empty
+            # identity packets must never become a thirty-day cache authority.
+            if _has_figi_mapping(result[isin]):
+                price_cache.store_timed(_OPENFIGI_CACHE, isin, result[isin])
 
     return result
 

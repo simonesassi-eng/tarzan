@@ -40,9 +40,8 @@ def _load_static() -> dict:
         return yaml.safe_load(f)
 
 
-@lru_cache(maxsize=1)
-def _load_indexes_csv() -> pd.DataFrame:
-    """Load the curated instrument taxonomy deterministically.
+def _taxonomy_path():
+    """One taxonomy location for registry, classification and geography.
 
     The taxonomy is runtime data, not optional configuration. Resolve it from
     an explicit environment override first, then search upward from the
@@ -82,8 +81,16 @@ def _load_indexes_csv() -> pd.DataFrame:
             "benchmarks, beta reference and notional asset-class splits will use "
             "built-in defaults"
         )
-        return pd.DataFrame()
+        return None
+    return path
 
+
+@lru_cache(maxsize=1)
+def _load_indexes_csv() -> pd.DataFrame:
+    """Load the curated instrument taxonomy from its shared resolved location."""
+    path = _taxonomy_path()
+    if path is None:
+        return pd.DataFrame()
     try:
         df = pd.read_csv(path)
         df.columns = [c.strip().lower() for c in df.columns]

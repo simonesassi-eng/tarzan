@@ -318,30 +318,63 @@ class MetricsEngine:
 
         started = time.perf_counter()
         outcome = "INTERRUPTED"
-        try:
+        from tarzan.runtime import data_quality as dq
+
+        diagnostics = [[] for _ in macro_symbols]
+
+        def prefetch_bars(workers):
             try:
                 raw = _yf_net.fetch_download(
                     symbols, period="5d", interval="15m", group_by="ticker",
-                    progress=False, threads=True, what="primary quote prefetch", log=logger,
+                    progress=False, threads=workers, what="primary quote prefetch", log=logger,
                 )
-                outcome = "SUCCEEDED" if isinstance(raw, pd.DataFrame) and not raw.empty else "DEGRADED"
+                return "SUCCEEDED" if isinstance(raw, pd.DataFrame) and not raw.empty else "DEGRADED"
             except Exception:
-                outcome = "DEGRADED"
-            # The immutable macro list has no identity discovery dependency.
-            # Every child inherits the owner and its native per-symbol deadline.
-            with ThreadPoolExecutor(max_workers=cfg.max_workers(), thread_name_prefix="tarzan-primary") as pool:
+                return "DEGRADED"
+
+        def prefetch_history(index, symbol):
+            dq.defer_into(diagnostics[index])
+            return enricher._fetch_history(symbol)
+
+        def prefetch_macros(workers):
+            status = "SUCCEEDED"
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tarzan-primary") as pool:
                 pending = [
-                    pool.submit(copy_context().run, enricher._fetch_history, symbol)
-                    for symbol in macro_symbols
+                    pool.submit(copy_context().run, prefetch_history, index, symbol)
+                    for index, symbol in enumerate(macro_symbols)
                 ]
                 for future in pending:
                     try:
                         history = future.result()
                     except Exception:
-                        outcome = "DEGRADED"
+                        status = "DEGRADED"
                         continue
                     if history is None or history.empty:
-                        outcome = "DEGRADED"
+                        status = "DEGRADED"
+            return status
+
+        try:
+            maximum = cfg.max_workers()
+            if type(maximum) is not int or maximum < 1:
+                raise ValueError("primary quote workers must be a positive integer")
+            # Bars and macro history are independent facts. Overlap their I/O,
+            # splitting (not multiplying) the existing native worker allowance.
+            # The two coordinators own no native requests of their own. Yahoo
+            # pacing, per-symbol deadlines, source selection and all consumers
+            # retain the same contracts.
+            if maximum == 1 or not macro_symbols:
+                statuses = [prefetch_bars(maximum)]
+                if macro_symbols:
+                    statuses.append(prefetch_macros(maximum))
+            else:
+                macro_workers = min(len(macro_symbols), maximum // 2)
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="tarzan-prefetch") as pool:
+                    bars = pool.submit(
+                        copy_context().run, prefetch_bars, maximum - macro_workers,
+                    )
+                    macros = pool.submit(copy_context().run, prefetch_macros, macro_workers)
+                    statuses = [bars.result(), macros.result()]
+            outcome = "SUCCEEDED" if all(status == "SUCCEEDED" for status in statuses) else "DEGRADED"
         except Exception:
             outcome = "DEGRADED"
             logger.warning(
@@ -352,6 +385,11 @@ class MetricsEngine:
             outcome = "INTERRUPTED"
             raise
         finally:
+            # Replay only after every branch/child has exited, including on
+            # cancellation. Native scheduling must not reorder financial
+            # diagnostics or change their stable failure identities.
+            for buffered in diagnostics:
+                dq.replay(buffered)
             session.ledger.append(LedgerEntryType.STAGE, {
                 "stage": "provider_prefetch:essential_quotes",
                 "outcome": outcome,

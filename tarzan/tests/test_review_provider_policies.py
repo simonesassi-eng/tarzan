@@ -22,7 +22,7 @@ from tarzan.runtime.session import RunContext, RunMode, RunResult, RunSession, a
 from tarzan.runtime.summary import SummaryProjector
 from tarzan.runtime.transport import (
     ProviderBudget, ProviderBudgetExceeded, ProviderRequestFailure,
-    ProviderTransportPolicy, ProviderTransportSettings, provider_wait,
+    ProviderTransportPolicy, ProviderTransportSettings, provider_call, provider_wait,
 )
 
 
@@ -140,6 +140,24 @@ def test_run_deadline_caps_native_timeout_and_blocks_further_requests():
             owner.call("yahoo", lambda timeout: pytest.fail("a request started after exhaustion"))
     failures = [f for f in owner.ledger.failure_records() if f.stable_code == "PROVIDER_BUDGET_EXHAUSTED"]
     assert len(failures) == 1
+
+
+@pytest.mark.parametrize(("requested", "expected"), [(1.5, 1.5), (10., 3.), ((1., 2.), 1.)])
+def test_shared_adapter_respects_the_callers_native_timeout_ceiling(requested, expected):
+    owner, _ = budget(timeout=3.)
+    caps = []
+    answer = object()
+    with owned(owner):
+        result = provider_call(
+            "yahoo", lambda timeout: caps.append(timeout) or answer, timeout=requested,
+        )
+    assert result is answer
+    assert caps == [expected]
+    attempts = [
+        entry.payload for entry in owner.ledger.entries
+        if entry.entry_type is LedgerEntryType.PROVIDER_ATTEMPT
+    ]
+    assert attempts[0]["timeout_seconds"] == expected
 
 
 def test_pacing_cannot_sleep_past_remaining_provider_budget():

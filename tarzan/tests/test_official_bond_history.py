@@ -290,11 +290,14 @@ def test_future_cache_receipt_is_not_visible_at_capture_boundary(monkeypatch, li
     assert bonds.raw_history(ISIN, START, END) is None
 
 
-def test_recent_negative_receipt_prevents_repeated_native_discovery(monkeypatch, live):
+def test_recent_negative_receipt_does_not_suppress_a_recovered_native_source(monkeypatch, live):
     monkeypatch.setattr(price_cache, "load_timed", lambda *args, **kwargs: negative())
-    monkeypatch.setattr(bonds, "_request_raw", lambda *args: pytest.fail("recent negative transport"))
-    assert bonds.raw_history(ISIN, START, END) is None
-    assert live[2] == []
+    calls = []
+    monkeypatch.setattr(bonds, "_request_raw", lambda isin: calls.append(isin) or packet())
+    with activate_session(RunSession(live[0], {}, ledger=None)):
+        assert bonds.raw_history(ISIN, START, END) == entry()
+    assert calls == [ISIN]
+    assert len(live[2]) == 1
 
 
 def test_expired_negative_can_be_refreshed_without_caching_transport_errors(monkeypatch, live):

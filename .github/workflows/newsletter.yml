@@ -59,7 +59,10 @@ jobs:
         # the 4th after 41s of silence, same commit and same pinned hashes, and
         # `set -euo pipefail` turned that into no email at all. Retrying changes
         # nothing about WHAT is installed -- --require-hashes still pins every wheel.
-        run: python -m pip install --require-hashes --retries 5 --timeout 30 -r requirements.txt
+        # Install the runtime projection of the SAME hash lock. The five
+        # test-only packages remain in Checks; no installed environment is
+        # restored and no dependency/hash check is skipped.
+        run: python scripts/install_runtime_dependencies.py
 
       - name: Compile positive Tarzan scopes
         run: python -m compileall -q tarzan scripts

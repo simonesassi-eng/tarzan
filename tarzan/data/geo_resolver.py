@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 _GEO_MAP: Optional[dict[str, Geography]] = None
 _ASSET_GEO_DF: Optional[pd.DataFrame] = None
 
-ASSET_GEO_PATH = os.path.join("input", "instrument_taxonomy.csv")
+_DEFAULT_ASSET_GEO_PATH = os.path.join("input", "instrument_taxonomy.csv")
+ASSET_GEO_PATH = _DEFAULT_ASSET_GEO_PATH
 
 # Geo column names in the CSV → Geography enum value
 _GEO_COLUMNS = {
@@ -64,11 +65,15 @@ def _load_asset_geo() -> Optional[pd.DataFrame]:
     global _ASSET_GEO_DF
     if _ASSET_GEO_DF is not None:
         return _ASSET_GEO_DF
-    if not os.path.exists(ASSET_GEO_PATH):
-        logger.debug("No instrument_taxonomy.csv found at %s", ASSET_GEO_PATH)
+    path = ASSET_GEO_PATH
+    if path == _DEFAULT_ASSET_GEO_PATH:
+        from tarzan import config as cfg
+        path = cfg._taxonomy_path()
+    if path is None or not os.path.exists(path):
+        logger.debug("No instrument_taxonomy.csv found at the resolved location")
         return None
     try:
-        df = pd.read_csv(ASSET_GEO_PATH)
+        df = pd.read_csv(path)
         df.columns = [c.strip().lower() for c in df.columns]
         _ASSET_GEO_DF = df
         logger.info("Loaded %d rows from instrument_taxonomy.csv", len(df))
@@ -95,12 +100,15 @@ def _parse_geo_row(row: pd.Series) -> Optional[dict[Geography, float]]:
     for col_name, geo_value in _GEO_COLUMNS.items():
         if col_name in row.index:
             try:
-                pct = float(row[col_name])
-                if pct > 0:
+                value = row[col_name]
+                if pd.api.types.is_bool(value):
+                    continue
+                pct = float(value)
+                if 0 < pct <= 100:  # also excludes NaN/infinity and invalid rulers
                     geo = geo_lookup.get(geo_value)
                     if geo:
                         result[geo] = pct
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 pass
     return result if result else None
 
@@ -199,10 +207,22 @@ def _geo_from_own_country(ticker: str, isin: str = "") -> Optional[tuple[dict[Ge
     if not runtime.allows_live_transport():
         return None
     try:
-        from tarzan.data import _yf_net
+        from tarzan.runtime.session import current_session
 
-        info = _yf_net.fetch_yf(lambda: _yf_net.ticker(str(ticker)).info,
-                                what=f"info {ticker}", log=logger) or {}
+        if current_session() is not None:
+            # Enrichment already observes this listing in the owned run. Country
+            # and quoteType need that same metadata, not a second SDK/info fetch.
+            # Its single-flight memo also isolates callers and caches misses.
+            from tarzan.data.enricher import _fetch_ticker_info
+
+            info = _fetch_ticker_info(str(ticker))
+        else:
+            # Standalone helpers retain their direct-fetch contract; they must
+            # not inherit a previous run's legacy enrichment observation.
+            from tarzan.data import _yf_net
+
+            info = _yf_net.fetch_yf(lambda: _yf_net.ticker(str(ticker)).info,
+                                    what=f"info {ticker}", log=logger) or {}
     except Exception:  # noqa: BLE001 — geography must never break a run
         return None
     # Only for an actual share. A fund reports ETF/MUTUALFUND here, and its
@@ -332,8 +352,14 @@ def justetf_index_name(isin: str) -> Optional[str]:
         return None
     try:
         import requests as req
+        from tarzan.runtime.transport import provider_call
+
         url = f"https://www.justetf.com/en/etf-profile.html?isin={isin}"
-        resp = req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp = provider_call(
+            "justetf",
+            lambda timeout: req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout),
+            timeout=15,
+        )
         if resp.status_code != 200:
             return None
         import re
@@ -418,9 +444,10 @@ def justetf_ter(isin: str) -> Optional[float]:
     from its justETF profile page. yfinance rarely carries the TER for European
     UCITS ETFs, so this is the automatic source for a new EU ticker's real fee.
 
-    Disk-cached per ISIN (``price_cache`` TER map, TTL-refreshed) — including a
-    cached "miss" (None) so an ISIN justETF has no TER for is not re-fetched
-    every run. Returns None if unavailable (caller falls back to a class default).
+    Disk-cached per ISIN (``price_cache`` TER map, TTL-refreshed), including a
+    confirmed HTTP 404 miss. An unparseable HTTP 200 page may be a challenge or
+    provider error and is not evidence of an absent fee. Returns None if
+    unavailable (caller falls back to a class default).
     """
     if not isin:
         return None
@@ -436,8 +463,16 @@ def justetf_ter(isin: str) -> Optional[float]:
         import re
 
         import requests as req
+        from tarzan.runtime.transport import provider_call
+
         url = f"https://www.justetf.com/en/etf-profile.html?isin={isin}"
-        resp = req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        resp = provider_call(
+            "justetf",
+            lambda timeout: req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout),
+            timeout=15,
+        )
+        if resp.status_code not in (200, 404):
+            return None
         if resp.status_code == 200:
             m = re.search(r"[Tt]otal expense ratio[^0-9]{0,40}?(\d[.,]\d{1,2})\s*%",
                           resp.text)
@@ -446,8 +481,13 @@ def justetf_ter(isin: str) -> Optional[float]:
                 if 0.0 <= pct < 5.0:                 # sane TER band, in percent
                     ter = pct / 100.0                # → fraction
                     logger.info("justETF TER: %s → %.2f%%", isin, pct)
+            if ter is None:
+                return None
     except Exception as e:  # noqa: BLE001
         logger.debug("justETF TER failed for %s: %s", isin, e)
+        # A transport failure or exhausted deadline is not evidence that this
+        # profile lacks a fee. Only an answered absence belongs in the cache.
+        return None
     price_cache.store_ter(isin, ter)                 # cache hit OR miss
     return ter
 
