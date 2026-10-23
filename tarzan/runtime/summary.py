@@ -75,10 +75,18 @@ class SummaryProjector:
     ) -> VersionedRunSummary:
         failures = result.ledger.failure_records()
         publication = publication or PublicationEvaluator.evaluate(failures)
-        metrics = (
-            result.report_view.project()[0]
-            if result.report_view is not None else result.metrics
+        facts = (
+            result.report_view.project_summary_facts()
+            if result.report_view is not None else None
         )
+        # A legacy caller's direct metrics contract is intentionally retained,
+        # including its existing conversion/error boundaries. Prepared reports
+        # use immutable narrow facts; neither path caches mutable ledger state.
+        metrics = result.metrics if result.report_view is None else None
+        metrics_present = facts is not None or metrics is not None
+
+        def metric_fact(name, default=None):
+            return getattr(facts if facts is not None else metrics, name, default)
 
         critical = tuple(
             record for record in failures
@@ -93,21 +101,35 @@ class SummaryProjector:
             if cls._affects(record, {"planning", "plan", "rebalancing", "optimizer"})
         )
 
-        if metrics is None or any(record in critical for record in portfolio_failures):
+        if not metrics_present or any(
+            record in critical for record in portfolio_failures
+        ):
             portfolio_availability = Availability.UNAVAILABLE
-            machine_metrics: dict[str, Any] = {}
+            machine_metrics: Mapping[str, Any] = {}
         else:
-            machine_metrics = metrics.to_summary_dict()
+            if facts is None:
+                machine_metrics = metrics.to_summary_dict()
+            elif facts.machine_metrics is not None:
+                machine_metrics = facts.machine_metrics
+            else:
+                # Retain the legacy error boundary: a critical unavailable
+                # portfolio does not serialize its machine values at all.
+                # Unprepared legacy views or malformed serializers fall back
+                # to the original authority only when values are requested.
+                projected_metrics = result.report_view.project()[0]
+                machine_metrics = projected_metrics.to_summary_dict()
             portfolio_availability = (
                 Availability.UNAVAILABLE
-                if getattr(metrics, "valuation_availability", "") == "UNAVAILABLE"
+                if metric_fact("valuation_availability", "") == "UNAVAILABLE"
                 else Availability.DEGRADED
-                if failures or getattr(metrics, "degraded_computers", None)
+                if failures or metric_fact("degraded_computers")
                 else Availability.AVAILABLE
             )
 
-        planning_unavailable = metrics is None or getattr(metrics, "planning_availability", "") == "UNAVAILABLE" or any(
-            record in critical for record in planning_failures
+        planning_unavailable = (
+            not metrics_present
+            or metric_fact("planning_availability", "") == "UNAVAILABLE"
+            or any(record in critical for record in planning_failures)
         )
         planning_availability = (
             Availability.UNAVAILABLE
@@ -116,22 +138,29 @@ class SummaryProjector:
             if planning_failures
             else Availability.AVAILABLE
         )
-        planning_value = None if metrics is None else {
-            "actions": list(getattr(metrics, "rebalancing_suggestions", None) or []),
-            "verifications": list(getattr(metrics, "rebalancing_verifications", None) or []),
-        }
+        if not metrics_present:
+            planning_value = None
+        elif facts is not None:
+            planning_value = None if planning_unavailable else facts.planning_value
+        else:
+            planning_value = {
+                "actions": list(getattr(metrics, "rebalancing_suggestions", None) or []),
+                "verifications": list(
+                    getattr(metrics, "rebalancing_verifications", None) or []
+                ),
+            }
 
         portfolio_section = cls._section(
             portfolio_availability,
             machine_metrics,
             portfolio_failures,
         )
-        portfolio_section["trustworthy_total_eur"] = getattr(
-            metrics, "trustworthy_total_value_eur", None
-        ) if metrics is not None else None
-        portfolio_section["known_subtotal_eur"] = getattr(
-            metrics, "known_valuation_subtotal_eur", None
-        ) if metrics is not None else None
+        portfolio_section["trustworthy_total_eur"] = (
+            metric_fact("trustworthy_total_value_eur") if metrics_present else None
+        )
+        portfolio_section["known_subtotal_eur"] = (
+            metric_fact("known_valuation_subtotal_eur") if metrics_present else None
+        )
         sections = {
             "portfolio": portfolio_section,
             "planning": cls._section(
