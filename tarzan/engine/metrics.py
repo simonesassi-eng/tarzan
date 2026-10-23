@@ -51,6 +51,7 @@ from tarzan.engine.stats import (  # noqa: F401  (re-exported)
 )
 from tarzan.engine.benchmarks import (  # noqa: F401  (re-exported)
     BENCHMARKS,
+    BenchmarkPreparation,
     ResolvedBenchmark,
     _add_mix_to_histories,
     _clip_to_window,
@@ -1380,6 +1381,7 @@ class MetricsEngine:
             else pd.Series(dtype=float)
         )
         ab_benchmark_win = _clip_to_window(ab_benchmark, win_start, win_end)
+        benchmark_preparation = BenchmarkPreparation(ab_benchmark_win)
 
         for name, record in catalog.items():
             bench = record.history
@@ -1391,7 +1393,8 @@ class MetricsEngine:
             if len(bench_win) < 2:
                 bench_win = bench
             metrics = _compute_single_benchmark_metrics(
-                bench_win, ab_benchmark_win, self._rf_daily(ctx)
+                bench_win, ab_benchmark_win, self._rf_daily(ctx),
+                benchmark_preparation=benchmark_preparation,
             )
             metrics["benchmark"] = name
             metrics["ticker"] = record.ticker
@@ -1449,6 +1452,7 @@ class MetricsEngine:
             ab_record.history if ab_record is not None
             else pd.Series(dtype=float)
         )
+        benchmark_preparation = BenchmarkPreparation(bench_history)
 
         unavailable = set(ctx.get("_order_history_unavailable", []))
         for h in self.holdings:
@@ -1467,7 +1471,10 @@ class MetricsEngine:
                 "type": "In portfolio",
                 "currency": ccy,
             }
-            _populate_perf_row(row, s, bench_history, self._rf_daily(ctx))
+            _populate_perf_row(
+                row, s, bench_history, self._rf_daily(ctx),
+                benchmark_preparation=benchmark_preparation,
+            )
             row["today_priced"] = _tape_ends_today(s, _today)
             rows.append(row)
 
@@ -1499,7 +1506,10 @@ class MetricsEngine:
             tape, row["currency"] = self._own_tape(
                 h.price_history, h.price_history_native, h.price_currency)
             _seed_tape = _cap_to_years(tape, 5)
-            _populate_perf_row(row, _seed_tape, bench_history, self._rf_daily(ctx))
+            _populate_perf_row(
+                row, _seed_tape, bench_history, self._rf_daily(ctx),
+                benchmark_preparation=benchmark_preparation,
+            )
             row["today_priced"] = _tape_ends_today(_seed_tape, _today)
             rows.append(row)
 
@@ -1516,7 +1526,10 @@ class MetricsEngine:
                 "type": "Benchmark index",
                 "currency": ccy,
             }
-            _populate_perf_row(row, bs, bench_history, self._rf_daily(ctx))
+            _populate_perf_row(
+                row, bs, bench_history, self._rf_daily(ctx),
+                benchmark_preparation=benchmark_preparation,
+            )
             row["today_priced"] = _tape_ends_today(bs, _today)
             rows.append(row)
 
@@ -2263,6 +2276,7 @@ class MetricsEngine:
             ab_record.history if ab_record is not None
             else pd.Series(dtype=float)
         )
+        benchmark_preparation = BenchmarkPreparation(ab_bench)
 
         # ---- Portfolio: current-weight static backtest (common window) ----
         unavailable = set(ctx.get("_order_history_unavailable", []))
@@ -2305,7 +2319,10 @@ class MetricsEngine:
                 # Prepend the window-start baseline so the NAV starts at 100.
                 first_day = ret_df.index[0] - pd.Timedelta(days=1)
                 nav = pd.concat([pd.Series([100.0], index=[first_day]), nav])
-                metrics = _compute_single_benchmark_metrics(nav, ab_bench, self._rf_daily(ctx))
+                metrics = _compute_single_benchmark_metrics(
+                    nav, ab_bench, self._rf_daily(ctx),
+                    benchmark_preparation=benchmark_preparation,
+                )
                 notes = []
                 if unavailable:
                     notes.append(
@@ -2341,7 +2358,10 @@ class MetricsEngine:
             if bench.empty or len(bench) < 2:
                 continue
             bench = _norm(bench)
-            metrics = _compute_single_benchmark_metrics(bench, ab_bench, self._rf_daily(ctx))
+            metrics = _compute_single_benchmark_metrics(
+                bench, ab_bench, self._rf_daily(ctx),
+                benchmark_preparation=benchmark_preparation,
+            )
             # Taxonomy lookup is classification-only; the operational ticker
             # retained in the row is always the full preprocessed symbol.
             _meta = _taxonomy.get(normalize_ticker(record.ticker))

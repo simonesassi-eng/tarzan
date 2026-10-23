@@ -9,12 +9,16 @@ for a benchmark or a performance row. The pure math it relies on lives in
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from contextvars import copy_context
 from dataclasses import dataclass
 import logging
+import operator
+from threading import RLock
+from typing import Optional
 
 import pandas as pd
 
@@ -23,6 +27,7 @@ from tarzan.engine.stats import (
     DAYS_PER_YEAR,
     PERIOD_WINDOWS,
     PreparedStatistics,
+    PreparedWeeklyBenchmark,
     compute_period_return,
     compute_ytd_return,
     _compute_beta_alpha,
@@ -60,6 +65,54 @@ def _clip_to_window(series: pd.Series, start, end) -> pd.Series:
     s = normalize_index(series)
     lo, hi = _naive(start), _naive(end)
     return s[(s.index >= lo) & (s.index <= hi)]
+
+
+class BenchmarkPreparation:
+    """Bounded, phase-owned weekly facts for one exact stable reference.
+
+    No ticker/ISIN inference or cross-run cache. Construct after quote stamping
+    and keep the source stable for the phase. Each cached window is clipped
+    BEFORE weekly resampling, using the same venue-local dates as the original
+    helper. The original source and its evidence remain independently owned.
+    """
+
+    def __init__(self, reference: pd.Series, *, max_windows: int = 128):
+        max_windows = operator.index(max_windows)
+        if max_windows < 1:
+            raise ValueError("max_windows must be positive")
+        self._source = reference
+        self.full = PreparedWeeklyBenchmark(reference)
+        self._max_windows = max_windows
+        self._windows: OrderedDict[
+            tuple[pd.Timestamp, pd.Timestamp], PreparedWeeklyBenchmark
+        ] = OrderedDict()
+        self._lock = RLock()
+
+    def require_source(self, reference: pd.Series) -> None:
+        if reference is not self._source:
+            raise ValueError("benchmark preparation belongs to a different source")
+
+    def window(self, start, end) -> PreparedWeeklyBenchmark:
+        def _session_date(timestamp):
+            timestamp = pd.Timestamp(timestamp)
+            if timestamp.tz is not None:
+                timestamp = timestamp.tz_localize(None)
+            return timestamp.normalize()
+
+        key = (_session_date(start), _session_date(end))
+        with self._lock:
+            prepared = self._windows.get(key)
+            if prepared is not None:
+                self._windows.move_to_end(key)
+                return prepared
+            # Use the established helper, including its duplicate-label
+            # policy; never clip a pre-resampled whole-history tape instead.
+            history = _clip_to_window(self.full.history, *key)
+            prepared = PreparedWeeklyBenchmark(history)
+            self._windows[key] = prepared
+            if len(self._windows) > self._max_windows:
+                self._windows.popitem(last=False)
+            return prepared
 
 
 @dataclass(frozen=True)
@@ -305,6 +358,8 @@ def _compute_single_benchmark_metrics(
     bench: pd.Series,
     ab_benchmark: "pd.Series | None" = None,
     rf_daily=None,
+    *,
+    benchmark_preparation: BenchmarkPreparation | None = None,
 ) -> dict:
     """Compute the standard set of metrics for a benchmark series.
 
@@ -312,9 +367,8 @@ def _compute_single_benchmark_metrics(
         bench: The benchmark price series (in EUR).
         ab_benchmark: Optional reference series used to compute α and β
             for ``bench``. When provided, α/β are computed via the same
-            CAPM logic used for the portfolio (regression of daily
-            returns on overlap window; α annualized using benchmark
-            CAGR). Pass the same series as ``bench`` to get the trivial
+            CAPM logic used for the portfolio (OLS on aligned weekly
+            returns). Pass the same series as ``bench`` to get the trivial
             β=1.00 / α=0 (vs itself).
         rf_daily: Optional time-varying daily risk-free path forwarded to
             ``risk_metric_row`` for the Sharpe/Sortino excess-return form;
@@ -324,7 +378,12 @@ def _compute_single_benchmark_metrics(
     # Keep it on the source catalog; retain the listing/calendar on each copy.
     prepared = PreparedStatistics(bench, rf_daily)
     bench = prepared.series
-    if ab_benchmark is not None:
+    weekly_reference = None
+    if benchmark_preparation is not None:
+        benchmark_preparation.require_source(ab_benchmark)
+        weekly_reference = benchmark_preparation.full
+        ab_benchmark = weekly_reference.history
+    elif ab_benchmark is not None:
         ab_benchmark = statistical_series(ab_benchmark)
     rf_daily = prepared.rf_daily
     metrics = {
@@ -338,6 +397,7 @@ def _compute_single_benchmark_metrics(
         beta, alpha = _compute_beta_alpha(
             bench, ab_benchmark, metrics["cagr"],
             risk_free=rf_annual_pct(rf_daily),
+            prepared_benchmark=weekly_reference,
         )
         metrics["alpha"] = alpha
         metrics["beta"] = beta
@@ -379,7 +439,9 @@ def _add_mix_to_histories(
 
 
 def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
-                       rf_daily=None) -> None:
+                       rf_daily=None, *,
+                       benchmark_preparation: BenchmarkPreparation | None = None,
+                       ) -> None:
     """Populate a performance row dict with period returns + risk metrics + alpha/beta.
 
     All risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Alpha, Beta) use the full series `s`
@@ -390,7 +452,9 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     """
     prepared = PreparedStatistics(s, rf_daily)
     s = prepared.series
-    if bench_history is not None:
+    if benchmark_preparation is not None:
+        benchmark_preparation.require_source(bench_history)
+    elif bench_history is not None:
         bench_history = statistical_series(bench_history)
     rf_daily = prepared.rf_daily
     # Period returns — single shared bucket→window mapping (stats.PERIOD_WINDOWS)
@@ -411,10 +475,20 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     row["beta"] = float("nan")
     if (bench_history is not None and len(bench_history) > 1
             and len(s) > 1 and not daily_ret.empty):
-        bench_win = _clip_to_window(bench_history, s.index.min(), s.index.max())
+        weekly_reference = None
+        if benchmark_preparation is None:
+            bench_win = _clip_to_window(
+                bench_history, s.index.min(), s.index.max()
+            )
+        else:
+            weekly_reference = benchmark_preparation.window(
+                s.index.min(), s.index.max()
+            )
+            bench_win = weekly_reference.history
         if len(bench_win) > 1:
             beta, alpha = _compute_beta_alpha(
                 s, bench_win, cagr_val, risk_free=rf_annual_pct(rf_daily),
+                prepared_benchmark=weekly_reference,
             )
             row["beta"] = beta
             row["alpha"] = alpha

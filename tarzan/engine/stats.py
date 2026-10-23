@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
 from functools import cached_property
+from threading import Lock
 from typing import Optional
 
 import numpy as np
@@ -806,11 +807,41 @@ def normalize_session_index(index) -> pd.DatetimeIndex:
     return idx.normalize()
 
 
+class PreparedWeeklyBenchmark:
+    """Owned price snapshot for one exact reference/window.
+
+    Cache weekly PRICE levels, not returns: regression aligns the two weekly
+    tapes before pct_change, and missing whole weeks affect that ruler. This
+    object is phase-local and must not be mutated by numerical consumers.
+    """
+
+    def __init__(self, history: pd.Series):
+        self._history = statistical_series(history)
+        self._weekly_prices: Optional[pd.Series] = None
+        self._lock = Lock()
+
+    @property
+    def history(self) -> pd.Series:
+        return self._history
+
+    @property
+    def weekly_prices(self) -> pd.Series:
+        with self._lock:
+            if self._weekly_prices is None:
+                normalized = normalize_index(self.history)
+                self._weekly_prices = (
+                    normalized.resample("W-FRI").last().dropna()
+                )
+            return self._weekly_prices
+
+
 def _compute_beta_alpha(
     series_or_returns: pd.Series,
     benchmark_history: pd.Series,
     annual_return: float = 0.0,
     risk_free: float | None = None,
+    *,
+    prepared_benchmark: Optional[PreparedWeeklyBenchmark] = None,
 ) -> tuple[float, float]:
     """Compute beta and Jensen's alpha via OLS on weekly returns.
 
@@ -825,13 +856,21 @@ def _compute_beta_alpha(
 
     Alpha is the OLS intercept annualized (× 52 weeks).
     """
+    if (
+        prepared_benchmark is not None
+        and prepared_benchmark.history is not benchmark_history
+    ):
+        raise ValueError("weekly preparation belongs to a different reference")
     if benchmark_history is None or len(benchmark_history) < 10:
         return float("nan"), float("nan")
     if series_or_returns is None or len(series_or_returns) < 10:
         return float("nan"), float("nan")
 
     port_raw = normalize_index(series_or_returns)
-    bench_raw = normalize_index(benchmark_history)
+    bench_raw = (
+        normalize_index(benchmark_history)
+        if prepared_benchmark is None else None
+    )
 
     # If port is already returns (median abs < 0.5), reconstruct a price
     # index so we can resample to weekly cleanly.
@@ -844,7 +883,10 @@ def _compute_beta_alpha(
     # Resample both to weekly (Friday close) — robust to different exchange
     # calendars, public holidays, and index publication lags.
     port_w = port_prices.resample("W-FRI").last().dropna()
-    bench_w = bench_raw.resample("W-FRI").last().dropna()
+    if prepared_benchmark is None:
+        bench_w = bench_raw.resample("W-FRI").last().dropna()
+    else:
+        bench_w = prepared_benchmark.weekly_prices
 
     # Align and compute weekly returns
     aligned = pd.DataFrame({"port": port_w, "bench": bench_w}).dropna()
