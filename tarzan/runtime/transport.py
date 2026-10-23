@@ -104,7 +104,13 @@ def _transient(error):
 
 
 class ProviderBudget:
-    def __init__(self, settings, ledger=None, *, clock=time.monotonic, sleep=time.sleep):
+    def __init__(
+        self, settings, ledger=None, *, clock=time.monotonic, sleep=time.sleep,
+        capacity=None,
+    ):
+        from tarzan import config
+        from tarzan.runtime.acquisition import RequestCoordinator
+
         self.settings = settings
         self.policies = {policy.provider: policy for policy in settings.providers}
         self.ledger = ledger
@@ -114,6 +120,24 @@ class ProviderBudget:
         self._lock = threading.Lock()
         self._reported = set()
         self._yahoo_client = None
+        self.coordinator = RequestCoordinator(
+            config.max_workers() if capacity is None else capacity,
+        )
+
+    def optional_work_token(self):
+        """Pending-work authority, not a key for successfully observed facts.
+
+        Distinct optional deadlines must not lead essential callers or another
+        optional phase through a shorter-lived single-flight operation.
+        """
+        stage = _optional_work.get()
+        return stage if stage is not None and stage[0] is self else None
+
+    @contextmanager
+    def essential_work(self):
+        """Declare independent essential tasks before submit, until joined."""
+        with self.coordinator.essential_scope():
+            yield
 
     def _limiting_deadline(self, provider):
         deadline = self.deadline
@@ -216,44 +240,64 @@ class ProviderBudget:
         policy = self.policies[provider]
         with self.operation(provider):
             for ordinal in range(1, policy.retry_budget + 2):
-                cap = min(policy.timeout_seconds, self._remaining(provider))
-                if requested_timeout is not None:
-                    requested = requested_timeout
-                    if isinstance(requested, (tuple, list)):
-                        requested = min(requested)
-                    if isinstance(requested, (int, float)) and math.isfinite(requested) and requested > 0:
-                        cap = min(cap, requested)
-                started = self.clock()
                 retryable = False
-                outcome = "CANCELLED"
-                try:
-                    value = callback(cap)
-                    self._remaining(provider)
-                    status = getattr(value, "status_code", None)
-                    retryable = status in (429, 500, 502, 503, 504)
-                    outcome = f"HTTP_{status}" if status is not None else "SUCCEEDED"
-                    if retryable:
+                # A permit encloses only native I/O. SDK coordination, cache
+                # leaders/followers, pacing and retry backoff hold no permit.
+                with self.coordinator.lease(
+                    optional=self.optional_work_token() is not None,
+                    remaining=lambda: self._remaining(provider),
+                ):
+                    # Queue time consumes the original operation/run budget.
+                    # Do not pass a timeout calculated before admission.
+                    cap = min(policy.timeout_seconds, self._remaining(provider))
+                    if requested_timeout is not None:
+                        requested = requested_timeout
+                        if isinstance(requested, (tuple, list)):
+                            requested = min(requested)
+                        if isinstance(requested, (int, float)) and math.isfinite(requested) and requested > 0:
+                            cap = min(cap, requested)
+                    started = self.clock()
+                    outcome = "CANCELLED"
+                    value = None
+                    try:
+                        value = callback(cap)
+                        self._remaining(provider)
+                        status = getattr(value, "status_code", None)
+                        retryable = status in (429, 500, 502, 503, 504)
+                        outcome = f"HTTP_{status}" if status is not None else "SUCCEEDED"
+                        if retryable:
+                            close = getattr(value, "close", None)
+                            if callable(close):
+                                close()
+                        else:
+                            return value
+                    except ProviderBudgetExceeded:
+                        outcome = "BUDGET_EXHAUSTED"
+                        # The native response never reaches its usual caller's
+                        # finally block when the post-request deadline fails.
                         close = getattr(value, "close", None)
                         if callable(close):
-                            close()
-                    else:
-                        return value
-                except ProviderBudgetExceeded:
-                    outcome = "BUDGET_EXHAUSTED"
-                    raise
-                except Exception as error:
-                    retryable = _transient(error)
-                    outcome = type(error).__name__
-                    if not retryable:
+                            try:
+                                close()
+                            except Exception:
+                                logger.warning(
+                                    "Provider response cleanup failed; deadline retained.",
+                                    extra={"public_code": "PROVIDER_RESPONSE_CLEANUP_FAILED"},
+                                )
                         raise
-                finally:
-                    if self.ledger is not None:
-                        self.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
-                            "source": provider, "operation": "native_http",
-                            "ordinal": ordinal, "outcome": outcome,
-                            "timeout_seconds": cap, "retry_budget": policy.retry_budget,
-                            "latency_ms": max(0.0, self.clock() - started) * 1000.0,
-                        })
+                    except Exception as error:
+                        retryable = _transient(error)
+                        outcome = type(error).__name__
+                        if not retryable:
+                            raise
+                    finally:
+                        if self.ledger is not None:
+                            self.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
+                                "source": provider, "operation": "native_http",
+                                "ordinal": ordinal, "outcome": outcome,
+                                "timeout_seconds": cap, "retry_budget": policy.retry_budget,
+                                "latency_ms": max(0.0, self.clock() - started) * 1000.0,
+                            })
                 if ordinal <= policy.retry_budget:
                     self.wait(0.25 * 2 ** (ordinal - 1), provider)
             self._failure(provider, "PROVIDER_RETRY_BUDGET_EXHAUSTED")
@@ -287,6 +331,8 @@ class ProviderBudget:
             return self._yahoo_client
 
     def close(self):
+        # Close only the native client. A completed owner can still create a
+        # fresh client for its output under this SAME deadline and coordinator.
         with self._lock:
             client, self._yahoo_client = self._yahoo_client, None
         if client is not None:

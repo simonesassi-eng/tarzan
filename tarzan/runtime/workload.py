@@ -252,6 +252,36 @@ def build_workload_observation(
             "overlapping_measurements_are_inclusive": True,
             "exclusive_attribution": False,
         }
+    from tarzan.runtime.acquisition import RequestCoordinator
+
+    coordinator = getattr(getattr(session, "transport", None), "coordinator", None)
+    if isinstance(coordinator, RequestCoordinator):
+        native = coordinator.snapshot()
+        # Aggregate admission is separate from actual HTTP attempts. Rejected
+        # queue waiters have not made a native request; queue wait is a SUM of
+        # overlapping waiter intervals, not a wall-clock stage duration.
+        admission = {
+            name: _bounded_count(native[name]).to_dict()
+            for name in (
+                "capacity", "active", "active_optional", "essential_demand",
+                "queued_essential", "queued_optional", "requested", "acquired",
+                "released", "rejected", "peak",
+            )
+        }
+        admission["queue_wait_ms"] = _bounded(
+            native["queue_wait_seconds"] * 1000.0, "milliseconds", integral=False,
+        ).to_dict()
+        result["native_acquisition"] = admission
+        result["native_acquisition_semantics"] = {
+            "permit_scope": "synchronous_native_callback_only",
+            "priority": "essential_fifo_before_optional",
+            "reservation": "one_slot_only_while_essential_demand_exists",
+            "queue_wait_is_sum_of_overlapping_waiters": True,
+            "queue_rejection_is_not_native_http_attempt": True,
+        }
+        result["truncated"] = result["truncated"] or any(
+            measure["truncated"] for measure in admission.values()
+        )
     return result
 
 
