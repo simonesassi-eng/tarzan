@@ -707,6 +707,7 @@ class MetricsEngine:
     # Portfolio history
     # ------------------------------------------------------------------
     def _portfolio_history(self, ctx: dict) -> None:
+        ctx["_portfolio_history_basis"] = "HOLDINGS_PRICE_AGGREGATE"
         # Holdings whose price history span is below this threshold are excluded
         # from the TOTAL PORTFOLIO time series, otherwise they would force the
         # whole portfolio history to be capped to their (short) window via the
@@ -936,6 +937,11 @@ class MetricsEngine:
 
         ctx["portfolio_history"] = ph
         ctx["portfolio_history_full"] = ph
+        ctx["_portfolio_history_basis"] = (
+            "ORDER_FLOW_ADJUSTED_NAV"
+            if series.daily_series is not None and not series.daily_series.empty
+            else "ORDER_SPARSE_VALUATION"
+        )
         ctx["excluded_short_tenure"] = [
             {"ticker": isin, "name": isin, "value_eur": 0.0,
              "weight_pct": 0.0, "span_days": 0}
@@ -1189,6 +1195,18 @@ class MetricsEngine:
             for key in PERIOD_WINDOWS:
                 result[key] = compute_period_return(ph, key)
             ctx["performance"] = result
+        from tarzan.contracts.session_move import paired_session_move
+        order_series = ctx.get("_order_series")
+        ctx["session_move_evidence"] = paired_session_move(
+            ph, ctx["performance"].get("1d"),
+            source_basis=ctx.get("_portfolio_history_basis"),
+            steps=getattr(order_series, "daily_return_steps", ()),
+            daily_nav=getattr(order_series, "daily_series", None),
+            history_availability=(
+                order_series.history_availability.value
+                if order_series is not None else ctx.get("history_availability", "AVAILABLE")
+            ),
+        )
 
         # Also compute full (non-inception) performance for Performance tab
         ph_full = ctx.get("portfolio_history_full", pd.Series(dtype=float))
@@ -2755,6 +2773,7 @@ class MetricsEngine:
             inception_date=ctx.get("inception_date"),
             allocation_timeline=ctx.get("allocation_timeline"),
             degraded_computers=ctx.get("_degraded", []),
+            session_move_evidence=ctx.get("session_move_evidence"),
         )
 
 

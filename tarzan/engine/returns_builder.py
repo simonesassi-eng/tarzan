@@ -194,6 +194,9 @@ class OrderDerivedSeries:
     # Consistent with the hero's snapshot (total_value − cost_basis), but as a
     # full daily series for charting.
     unrealized_series: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    # Original valid chaining steps, not reconstructed from accounting P&L or
+    # the current strategic allocation denominator. Private analytical facts.
+    daily_return_steps: tuple = ()
 
 
 # ---------------------------------------------------------------------------
@@ -1071,11 +1074,13 @@ def build_order_derived_series(
     # annualized risk; the daily series fixes that at the root. The same
     # pass also yields the raw actual-value series (jumps kept in) for the
     # newsletter mountain chart.
+    daily_return_steps = []
     daily_series, actual_value_series = _build_daily_series(
         timeline, resolver, external_flows, history_dates, today,
         identity_by_isin=identity_by_isin,
         closed_identity_groups=closed_identity_groups,
         record_source=record_history_source,
+        step_evidence=daily_return_steps,
     )
 
     # Trim the trailing carried-forward tail. The daily calendar runs to
@@ -1298,6 +1303,7 @@ def build_order_derived_series(
         actual_value_series=actual_value_series,
         pnl_series=pnl_series,
         unrealized_series=unrealized_series,
+        daily_return_steps=tuple(daily_return_steps),
     )
 
 
@@ -1399,6 +1405,7 @@ def _build_daily_series(
     identity_by_isin: Optional[dict[str, _IdentityKey]] = None,
     closed_identity_groups=None,
     record_source=None,
+    step_evidence=None,
 ) -> tuple[pd.Series, pd.Series]:
     """Dense daily NAV index + raw actual-value series, first trade → today.
 
@@ -1490,8 +1497,13 @@ def _build_daily_series(
     actual_vals.append(raw[anchor_i][1])
 
     prev_v = raw[anchor_i][1]
+    prev_date = raw[anchor_i][0]
+    if step_evidence is not None:
+        from tarzan.contracts.session_move import DailyReturnStep
     for d, v, held, priced in raw[anchor_i + 1:]:
         flow = external_flows.get(d, 0.0)
+        factor = profit = None
+        state = "UNPRICED"
         # Chain the sub-period return on the capital that was already in the book
         # at the START of the day: V_before = V_after − that day's external flow.
         # Same convention ``stats.twr`` applies to the sparse valuations, where a
@@ -1522,11 +1534,28 @@ def _build_daily_series(
         # matching real drawdown, no NaN, no crash and nothing in the ledger.
         if priced or not held:
             v_before = v - flow
+            state = "SUSPENDED"
             # ``v_before > 0`` is byte-for-byte the guard stats.twr uses, so the
             # dense and sparse paths cannot disagree about a wipeout.
             if prev_v > 0 and v_before > 0:
-                nav *= v_before / prev_v
+                factor = v_before / prev_v
+                nav *= factor
+                profit = v_before - prev_v
+                state = "MEASURED"
+            if step_evidence is not None:
+                step_evidence.append(DailyReturnStep(
+                    end_date=d, start_date=prev_date, starting_value_eur=prev_v,
+                    ending_value_eur=v, external_flow_eur=flow,
+                    factor=factor, profit_eur=profit, state=state,
+                ))
             prev_v = v
+            prev_date = d
+        elif step_evidence is not None:
+            step_evidence.append(DailyReturnStep(
+                end_date=d, start_date=prev_date, starting_value_eur=prev_v,
+                ending_value_eur=v, external_flow_eur=flow,
+                factor=None, profit_eur=None, state=state,
+            ))
         index_dates.append(pd.Timestamp(d))
         index_vals.append(nav)
         actual_vals.append(v)

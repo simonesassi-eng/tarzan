@@ -14,6 +14,7 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from tarzan.contracts.reference import ReportReference
+    from tarzan.contracts.session_move import SessionMoveEvidence
 
 
 def _round_or_none(value, ndigits: int):
@@ -262,6 +263,9 @@ class PortfolioMetrics:
     #                  "geo":   [{region: pct_of_equity}, ...]}.
     # None on the holdings-only path (sparklines are then omitted).
     allocation_timeline: Optional[dict] = None
+    # Paired source evidence for the hero's 1D euro caption. Additive internal
+    # fact; stable to_summary_dict/schema-3 external keys stay unchanged.
+    session_move_evidence: Optional["SessionMoveEvidence"] = None
 
     @property
     def unrealized_pnl_eur(self) -> float:
