@@ -106,7 +106,19 @@ def test_prepared_regression_is_bitwise_equivalent(
     elif case == "short":
         port = port.iloc[:8]
     prepared = stats.PreparedWeeklyBenchmark(benchmark)
-    expected = _reference_beta_alpha(port, benchmark, risk_free)
+    if case == "flat":
+        # A constant explanatory return has no OLS slope. The old scalar
+        # subtraction could manufacture tiny positive variance by roundoff;
+        # keep the historical bitwise oracle unchanged for every nonflat case.
+        raw_weekly = (
+            stats.normalize_index(benchmark)
+            .resample("W-FRI").last().dropna().pct_change().dropna()
+        )
+        assert raw_weekly.nunique(dropna=True) <= 1
+        assert raw_weekly.var() == 0.0
+        expected = float("nan"), float("nan")
+    else:
+        expected = _reference_beta_alpha(port, benchmark, risk_free)
     actual = stats._compute_beta_alpha(
         port, prepared.history, risk_free=risk_free,
         prepared_benchmark=prepared,

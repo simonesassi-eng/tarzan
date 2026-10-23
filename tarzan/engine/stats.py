@@ -531,10 +531,12 @@ def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
 
 
 def rf_annual_pct(rf_daily) -> float | None:
-    """Collapse a time-varying daily risk-free path to a single annualised
-    percent — the form Jensen's alpha needs (rf enters the CAPM regression as
-    a level, so a per-day path would only perturb beta; the window mean is the
-    right scalar and matches ``proxy_data.risk_free_annual``).
+    """Collapse the supplied daily RF evidence to one annualised percent.
+
+    Without a consumer window this averages ALL supplied observations, not
+    necessarily the dates of a regression. Window-aware alpha callers should
+    pass the original RF path to ``_compute_beta_alpha`` instead; it aligns
+    rates causally and weights the actual native return dates of that OLS span.
 
     Returns ``None`` when no series is supplied or it is empty, so ``_compute_beta_alpha``
     keeps its documented scalar ``RISK_FREE_RATE`` fallback — the same behaviour
@@ -891,6 +893,7 @@ def _compute_beta_alpha(
     risk_free: float | None = None,
     *,
     input_kind: str = "auto",
+    rf_daily=None,
     prepared_benchmark: Optional[PreparedWeeklyBenchmark] = None,
 ) -> tuple[float, float]:
     """Compute beta and Jensen's alpha via OLS on weekly returns.
@@ -909,7 +912,15 @@ def _compute_beta_alpha(
     approach used by Morningstar, Bloomberg, and most institutional risk
     systems for β/α.
 
-    Alpha is the OLS intercept annualized (× 52 weeks).
+    Alpha is the OLS intercept annualized (× 52 weeks). An explicit annual
+    ``risk_free`` always wins. Otherwise an optional daily-fraction RF series
+    is averaged on the consumer's original return dates inside the overlapping
+    weekly span, excluding its first price anchor and clipping the final Friday
+    label to the last actual native observation. Rates are aligned causally
+    before selecting that window, so a previously known left anchor survives.
+    No extra calendar is introduced. Unknown RF makes alpha unavailable, but
+    does not erase beta measurable from prices. Legacy absent/empty RF keeps
+    the scalar default; a scalar ``rf_daily`` is an annual percent.
     """
     if not isinstance(input_kind, str) or input_kind not in ("auto", "prices", "returns"):
         raise ValueError("input_kind must be 'auto', 'prices' or 'returns'")
@@ -929,11 +940,14 @@ def _compute_beta_alpha(
         if prepared_benchmark is None else None
     )
 
+    port_contains_returns = False
     if input_kind == "returns":
+        port_contains_returns = True
         # Keep the entire compounded path. Overwriting only its first point
         # creates a false jump in the next week when the first close is Friday.
         port_prices = (1 + port_raw).cumprod()
     elif input_kind == "auto" and port_raw.abs().median() < 0.5:
+        port_contains_returns = True
         # Preserve the legacy heuristic/normalization only for legacy callers.
         port_prices = (1 + port_raw).cumprod()
         port_prices.iloc[0] = 1.0  # normalize start
@@ -955,9 +969,53 @@ def _compute_beta_alpha(
     rets = aligned.pct_change().dropna()
     if len(rets) < 4:
         return float("nan"), float("nan")
+    # Subtracting a constant RF can leave a tiny positive floating variance
+    # for exactly constant benchmark returns, fabricating a beta. Reject only
+    # that exact degeneracy, with no epsilon or near-flat variance threshold.
+    if rets["bench"].nunique(dropna=True) <= 1:
+        return float("nan"), float("nan")
 
-    # Weekly risk-free
+    # Keep annual manual overrides and the legacy scalar-only expression.
+    # A path opt-in instead uses the existing consumer's dates, not all source
+    # events or a newly manufactured business-day calendar.
+    if risk_free is None:
+        rf_daily = _risk_free_or_none(rf_daily)
+        if isinstance(rf_daily, pd.Series):
+            native_returns = (
+                port_raw.dropna() if port_contains_returns
+                else port_prices.pct_change().dropna()
+            )
+            end = min(aligned.index[-1], port_prices.dropna().index.max())
+            native_window = native_returns.loc[
+                (native_returns.index > aligned.index[0])
+                & (native_returns.index <= end)
+            ]
+            # Do not slice the RF source: an empty in-window event slice can
+            # still have a known earlier anchor, or be unknown rather than
+            # absent evidence eligible for the configured scalar fallback.
+            if native_window.empty:
+                risk_free = float("nan")
+            else:
+                rf_aligned = _align_rf_daily(native_window, rf_daily)
+                risk_free = (
+                    float("nan") if rf_aligned.isna().any()
+                    else rf_annual_pct(rf_aligned)
+                )
+        elif rf_daily is not None:
+            risk_free = rf_annual_pct(rf_daily)
+
     rf_weekly = (RISK_FREE_RATE if risk_free is None else risk_free) / 100.0 / 52.0
+
+    if pd.isna(rf_weekly) or not np.isfinite(rf_weekly):
+        # With this constant-RF weekly OLS, covariance/variance and therefore
+        # beta are defined from prices alone. Use the raw expressions only
+        # when RF is unknown; healthy scalar callers retain their exact
+        # original excess-return reductions below.
+        var_bench = rets["bench"].var()
+        if var_bench <= 0:
+            return float("nan"), float("nan")
+        beta = rets["port"].cov(rets["bench"]) / var_bench
+        return float(beta), float("nan")
 
     port_excess = rets["port"] - rf_weekly
     bench_excess = rets["bench"] - rf_weekly

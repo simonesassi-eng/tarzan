@@ -62,11 +62,10 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     CAGR is frequency-independent. MAX DRAWDOWN stays on the DAILY path on
     purpose: it is a statement about the worst peak-to-trough actually traversed,
     and a month-end version would erase real intra-month crashes (March 2020).
-    BETA and ALPHA also stay daily: portfolio and benchmark are built from the
-    same proxies, so their timing noise is common and cancels in the ratio
-    (measured beta moves 0.71 to 0.70 monthly), while daily gives 20x the
-    observations. VaR/CVaR remain daily-horizon by definition and so keep the
-    daily noise — read them as an upper bound.
+    BETA and ALPHA use the shared weekly OLS on aligned NAV closes, independent
+    of the daily/monthly frequency chosen here for volatility and excess-return
+    ratios. VaR/CVaR remain daily-horizon by definition and so keep the daily
+    reconstruction noise — read them as an upper bound.
 
     When ``rf_daily`` (a daily risk-free path) is supplied, Sharpe and Sortino
     use the TIME-VARYING excess-return form (r_t − rf_t) with the risk-free
@@ -80,6 +79,13 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     window. This does not change the existing missing-price month policy:
     zero daily returns in a bucket mean a zero-duration product, not an
     observed zero-rate provider fact.
+
+    An explicit annual ``risk_free`` always overrides alpha's rate level.
+    Without that override, a present RF SERIES opts alpha into its causal
+    native-return-date mean inside the shared weekly span. None/empty and scalar
+    ``rf_daily`` preserve alpha's legacy manual/default annual contract. The
+    returned ``risk_free`` field still echoes that annual parameter/default;
+    it is not observed-rate or window-coverage metadata.
     """
     if nav is None or len(nav) < 30:
         return {}
@@ -141,6 +147,7 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
         try:
             beta, alpha = _compute_beta_alpha(
                 nav, bench_nav, ann_ret, risk_free=risk_free, input_kind="prices",
+                rf_daily=rf_daily if isinstance(rf_daily, pd.Series) else None,
             )
             m["beta"], m["alpha"] = beta, alpha
         except Exception:  # noqa: BLE001

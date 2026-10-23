@@ -370,9 +370,10 @@ def _compute_single_benchmark_metrics(
             CAPM logic used for the portfolio (OLS on aligned weekly
             returns). Pass the same series as ``bench`` to get the trivial
             β=1.00 / α=0 (vs itself).
-        rf_daily: Optional time-varying daily risk-free path forwarded to
-            ``risk_metric_row`` for the Sharpe/Sortino excess-return form;
-            ``None`` falls back to the scalar ``RISK_FREE_RATE``.
+        rf_daily: Optional time-varying daily risk-free path for Sharpe/Sortino
+            and for alpha's native-return-date mean inside the shared OLS
+            window. ``None`` falls back to the scalar ``RISK_FREE_RATE``;
+            a scalar preserves the explicit annual-percent alpha contract.
     """
     # Numerical consumers do not need the full provider-evidence payload.
     # Keep it on the source catalog; retain the listing/calendar on each copy.
@@ -396,8 +397,11 @@ def _compute_single_benchmark_metrics(
     if ab_benchmark is not None and not ab_benchmark.empty and len(ab_benchmark) > 1:
         beta, alpha = _compute_beta_alpha(
             bench, ab_benchmark, metrics["cagr"],
-            risk_free=rf_annual_pct(rf_daily),
+            risk_free=(
+                None if isinstance(rf_daily, pd.Series) else rf_annual_pct(rf_daily)
+            ),
             input_kind="prices",
+            rf_daily=rf_daily,
             prepared_benchmark=weekly_reference,
         )
         metrics["alpha"] = alpha
@@ -448,8 +452,10 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     All risk metrics (CAGR, Vol, Sharpe, Sortino, Max DD, Alpha, Beta) use the full series `s`
     (already capped to max 5 years). Period Used reflects the actual window covered.
 
-    ``rf_daily`` is the optional time-varying daily risk-free path used for the
-    Sharpe/Sortino excess-return form; ``None`` falls back to the scalar rate.
+    ``rf_daily`` is the optional daily risk-free path used for Sharpe/Sortino
+    and alpha's native-return-date mean in the overlapping weekly OLS window;
+    ``None`` falls back to the scalar rate, and scalar annual overrides retain
+    their original authority.
     """
     prepared = PreparedStatistics(s, rf_daily)
     s = prepared.series
@@ -488,8 +494,12 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
             bench_win = weekly_reference.history
         if len(bench_win) > 1:
             beta, alpha = _compute_beta_alpha(
-                s, bench_win, cagr_val, risk_free=rf_annual_pct(rf_daily),
+                s, bench_win, cagr_val,
+                risk_free=(
+                    None if isinstance(rf_daily, pd.Series) else rf_annual_pct(rf_daily)
+                ),
                 input_kind="prices",
+                rf_daily=rf_daily,
                 prepared_benchmark=weekly_reference,
             )
             row["beta"] = beta

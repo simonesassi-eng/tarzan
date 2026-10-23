@@ -368,7 +368,18 @@ def test_legacy_auto_ols_is_bit_identical(case, timezone, risk_free):
         benchmark[:] = 100.0
     elif case == "short":
         portfolio = portfolio.iloc[:8]
-    expected = _ols_oracle(portfolio, benchmark, risk_free, role="auto")
+    if case == "flat_benchmark":
+        # Correct only the exact degeneracy: the old excess-return variance
+        # could round above zero and fabricate beta for raw constant returns.
+        # Nonflat cases retain the original bitwise oracle below.
+        raw_weekly = (
+            _normalize(benchmark).resample("W-FRI").last().dropna().pct_change().dropna()
+        )
+        assert raw_weekly.nunique(dropna=True) <= 1
+        assert raw_weekly.var() == 0.0
+        expected = float("nan"), float("nan")
+    else:
+        expected = _ols_oracle(portfolio, benchmark, risk_free, role="auto")
     _assert_exact_pair(
         stats._compute_beta_alpha(portfolio, benchmark, risk_free=risk_free), expected,
     )
