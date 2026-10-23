@@ -490,11 +490,24 @@ def compute_sharpe(annual_return: float, annual_volatility: float,
     return (annual_return - rf) / annual_volatility
 
 
+def _risk_free_or_none(rf_daily):
+    """Empty RF evidence is absent; nonempty missing evidence is unavailable.
+
+    Normalize before choosing a scalar-CAGR versus time-varying formula.
+    A nonempty all-NaN/nullable all-NA path must never become a fallback
+    assumption or an invented observed zero-rate path.
+    """
+    return None if isinstance(rf_daily, pd.Series) and rf_daily.empty else rf_daily
+
+
 def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
     """Align a risk-free input to ``daily_returns``' index, returning a daily
     fraction per row. ``rf_daily`` may be a daily-fraction ``pd.Series`` (a
     time-varying path, aligned by date with forward-fill), a scalar annual
-    percent, or ``None`` (falls back to ``RISK_FREE_RATE``)."""
+    percent, or ``None``/an empty series (falls back to ``RISK_FREE_RATE``).
+    A nonempty unavailable path stays unavailable. Existing date-fill policy
+    is unchanged; this helper does not establish observed-rate provenance."""
+    rf_daily = _risk_free_or_none(rf_daily)
     idx = daily_returns.index
     if isinstance(rf_daily, pd.Series) and not rf_daily.empty:
         def _norm(ix):
@@ -515,12 +528,16 @@ def rf_annual_pct(rf_daily) -> float | None:
     a level, so a per-day path would only perturb beta; the window mean is the
     right scalar and matches ``proxy_data.risk_free_annual``).
 
-    Returns ``None`` when no real series is available, so ``_compute_beta_alpha``
+    Returns ``None`` when no series is supplied or it is empty, so ``_compute_beta_alpha``
     keeps its documented scalar ``RISK_FREE_RATE`` fallback — the same behaviour
     Sharpe/Sortino use in a pinned run with no cached rate rows.
+    A nonempty path with no valid rate returns NaN, not the scalar fallback.
     """
     if isinstance(rf_daily, pd.Series):
-        return float(rf_daily.mean()) * TRADING_DAYS * 100.0 if not rf_daily.empty else None
+        if rf_daily.empty:
+            return None
+        mean = rf_daily.mean()
+        return float("nan") if pd.isna(mean) else float(mean) * TRADING_DAYS * 100.0
     if rf_daily is None:
         return None
     return float(rf_daily)
@@ -548,8 +565,13 @@ def compute_sharpe_tv(daily_returns: pd.Series, rf_daily, *,
 
 def _sharpe_from_excess(excess: pd.Series, periods: int) -> float:
     """The scalar Sharpe expression, shared with row-owned preparation."""
-    sd = float(excess.std())
-    if excess.empty or sd <= 0:
+    if excess.empty:
+        return float("nan")
+    sample_sd = excess.std()
+    if pd.isna(sample_sd):
+        return float("nan")
+    sd = float(sample_sd)
+    if sd <= 0:
         return float("nan")
     return float(excess.mean()) / sd * np.sqrt(periods)
 
@@ -675,6 +697,7 @@ class PreparedStatistics:
 
     def __init__(self, series: pd.Series, rf_daily=None):
         self.series = statistical_series(series)
+        rf_daily = _risk_free_or_none(rf_daily)
         self.rf_daily = (
             statistical_series(rf_daily)
             if isinstance(rf_daily, pd.Series) else rf_daily
@@ -758,6 +781,8 @@ def risk_metric_row(series: pd.Series, rf_daily=None) -> dict:
     charged its own prevailing short rate); otherwise they fall back to the
     scalar ``RISK_FREE_RATE``. The single source of truth for the risk block, so
     time-varying vs scalar is decided once, here, for every table that shows it.
+    An empty path means absence and selects the same formula as ``None``;
+    a nonempty all-missing path instead makes RF-dependent metrics unavailable.
     """
     return PreparedStatistics(series, rf_daily).risk_metrics()
 
@@ -841,12 +866,18 @@ def _compute_beta_alpha(
     annual_return: float = 0.0,
     risk_free: float | None = None,
     *,
+    input_kind: str = "auto",
     prepared_benchmark: Optional[PreparedWeeklyBenchmark] = None,
 ) -> tuple[float, float]:
     """Compute beta and Jensen's alpha via OLS on weekly returns.
 
-    Both inputs should be **price** series (the function detects returns vs
-    prices via a median heuristic). We resample to weekly (Friday close)
+    The benchmark is a price series. ``input_kind="prices"`` declares portfolio
+    price levels without a magnitude heuristic; ``"returns"`` declares daily
+    fractions and reconstructs their complete cumulative price path. Default
+    ``"auto"`` preserves the historical median heuristic and its normalization
+    for compatibility. Known price-producing callers should opt into prices:
+    a bond's EUR-per-unit price below 0.5 is not a return.
+    We resample to weekly (Friday close)
     before computing returns and running the regression. Weekly returns
     eliminate the exchange-calendar misalignment that plagues daily cross-
     exchange comparisons (e.g. MSCI index publication dates don't match LSE
@@ -856,6 +887,8 @@ def _compute_beta_alpha(
 
     Alpha is the OLS intercept annualized (× 52 weeks).
     """
+    if not isinstance(input_kind, str) or input_kind not in ("auto", "prices", "returns"):
+        raise ValueError("input_kind must be 'auto', 'prices' or 'returns'")
     if (
         prepared_benchmark is not None
         and prepared_benchmark.history is not benchmark_history
@@ -872,9 +905,12 @@ def _compute_beta_alpha(
         if prepared_benchmark is None else None
     )
 
-    # If port is already returns (median abs < 0.5), reconstruct a price
-    # index so we can resample to weekly cleanly.
-    if port_raw.abs().median() < 0.5:
+    if input_kind == "returns":
+        # Keep the entire compounded path. Overwriting only its first point
+        # creates a false jump in the next week when the first close is Friday.
+        port_prices = (1 + port_raw).cumprod()
+    elif input_kind == "auto" and port_raw.abs().median() < 0.5:
+        # Preserve the legacy heuristic/normalization only for legacy callers.
         port_prices = (1 + port_raw).cumprod()
         port_prices.iloc[0] = 1.0  # normalize start
     else:

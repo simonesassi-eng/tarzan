@@ -397,6 +397,7 @@ def _compute_single_benchmark_metrics(
         beta, alpha = _compute_beta_alpha(
             bench, ab_benchmark, metrics["cagr"],
             risk_free=rf_annual_pct(rf_daily),
+            input_kind="prices",
             prepared_benchmark=weekly_reference,
         )
         metrics["alpha"] = alpha
@@ -488,6 +489,7 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
         if len(bench_win) > 1:
             beta, alpha = _compute_beta_alpha(
                 s, bench_win, cagr_val, risk_free=rf_annual_pct(rf_daily),
+                input_kind="prices",
                 prepared_benchmark=weekly_reference,
             )
             row["beta"] = beta

@@ -17,6 +17,7 @@ from tarzan.engine.stats import (
     TRADING_DAYS,
     _align_rf_daily,
     _compute_beta_alpha,
+    _risk_free_or_none,
     compute_cagr,
     compute_cvar,
     compute_max_drawdown,
@@ -73,6 +74,8 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     scalar ``risk_free`` (window-average) form. Windows with fewer than
     ``_MIN_MONTHS_FOR_MONTHLY`` monthly observations keep the daily estimate: a
     standard deviation from 8 points is worse than a noisy one from 170.
+    An empty RF series is absence and uses the explicit scalar ``risk_free``
+    fallback, while a nonempty all-missing path keeps Sharpe/Sortino unavailable.
     """
     if nav is None or len(nav) < 30:
         return {}
@@ -91,12 +94,16 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     rets = monthly if use_monthly else daily
     per = 12 if use_monthly else TRADING_DAYS
     ann_vol = float(rets.std()) * np.sqrt(per) * 100.0            # percent
+    rf_daily = _risk_free_or_none(rf_daily)
     if rf_daily is not None:
         rf_path = rf_daily
         if use_monthly:
             # Charge each month the rate that actually prevailed inside it.
             rf_aligned = _align_rf_daily(daily, rf_daily)
-            rf_path = ((1.0 + rf_aligned).resample("ME").prod() - 1.0).dropna()
+            # An all-missing monthly product must remain missing, not become
+            # an observed zero rate. Retain those buckets rather than turning
+            # an unavailable path into empty evidence and a scalar fallback.
+            rf_path = (1.0 + rf_aligned).resample("ME").prod(min_count=1) - 1.0
         sharpe = compute_sharpe_tv(rets, rf_path, periods=per)
         sortino = compute_sortino_tv(rets, rf_path, periods=per)
     else:
@@ -116,7 +123,9 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     }
     if bench_nav is not None and not bench_nav.empty and len(bench_nav) > 1:
         try:
-            beta, alpha = _compute_beta_alpha(nav, bench_nav, ann_ret, risk_free=risk_free)
+            beta, alpha = _compute_beta_alpha(
+                nav, bench_nav, ann_ret, risk_free=risk_free, input_kind="prices",
+            )
             m["beta"], m["alpha"] = beta, alpha
         except Exception:  # noqa: BLE001
             pass
