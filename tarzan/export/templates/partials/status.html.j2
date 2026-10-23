@@ -66,6 +66,10 @@
                 </tr>
               </table>
 
+              {% if hero.return_basis_note %}
+              <div style="margin-top:10px;{{ type.prose }}color:{{ palette.subtle }};">{{ hero.return_basis_note }}</div>
+              {% endif %}
+
               {# Data-quality note: current snapshot provenance is kept
                  separate from historical order-price reconstruction. #}
               {% if performance.returns %}

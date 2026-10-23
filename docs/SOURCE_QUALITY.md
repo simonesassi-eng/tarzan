@@ -102,6 +102,14 @@ This is a correction of the historical measurement, not a current cash loss.
 The existing clean-price-plus-booked-coupon convention is unchanged; importing
 these closes does not introduce a dirty-price/accrued-interest valuation model.
 
+For an order-derived report, the newsletter's State section explicitly states
+that Total P&L, TWR and MWR cover the tracked period. Security transfers enter
+at market value on the operation date, or the disclosed order-price fallback
+when market evidence is unavailable. Recorded carrying prices remain the
+cost-basis reference; they are not overwritten by the market contribution.
+The disclosure changes no financial calculation and is absent on the
+holdings-only path, which cannot establish a tracked-period transfer return.
+
 ## Intraday evidence versus drawable charts
 
 One positive, finite observation in the correct session is valid evidence,

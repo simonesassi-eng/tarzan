@@ -303,10 +303,10 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     #   * Unrealized PnL — the snapshot gain on the positions held *today*
     #     vs their cost basis (= the Excel "RTD"). Numerator/denominator
     #     are current-holdings only; realized gains and income are excluded.
-    #   * Total PnL — the lifetime, all-in gain (realized + unrealized +
-    #     coupons/dividends) from the order list, expressed over the *net*
-    #     capital contributed (current_value − Total PnL). It answers "how
-    #     much have I actually made on the money I put in".
+    #   * Total PnL — the tracked-period gain (realized + unrealized +
+    #     coupons/dividends), over net contributed capital. Incoming securities
+    #     enter at dated market value when available, not their carrying price:
+    #     gains before that contribution are outside the tracked period.
     unrealized_eur = m.unrealized_pnl_eur
     # NOT ``or 0.0``. ``unrealized_pnl_pct`` returns None precisely when there is
     # no cost basis to divide by, and 0.00% reads as "break-even" rather than "not
@@ -655,9 +655,15 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "unrealized_eur": _eur_smart(unrealized_eur, signed=True),
         "unrealized_pct": _pct(unrealized_pct, signed=True),
         "unrealized_is_positive": unrealized_eur >= 0,
-        # Whether the lifetime Total PnL is a real (order-derived) figure
+        # Whether tracked-period Total PnL is a real (order-derived) figure
         # distinct from Unrealized; False on the holdings-only path.
         "has_total_pnl": has_total_pnl,
+        "return_basis_note": _escaped_text(
+            "Total P&L, TWR and MWR cover the tracked period. "
+            "Securities transfers are contributions at market value on their "
+            "operation date (order-price fallback if unavailable). "
+            "Carrying prices remain the cost-basis reference."
+        ) if has_total_pnl else "",
         # "Since inception · Mon YYYY" caption (empty when inception unknown).
         "inception_label": inception_label,
         # The nine state tiles, in display order. Optional ones are absent
