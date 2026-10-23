@@ -75,7 +75,11 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     ``_MIN_MONTHS_FOR_MONTHLY`` monthly observations keep the daily estimate: a
     standard deviation from 8 points is worse than a noisy one from 170.
     An empty RF series is absence and uses the explicit scalar ``risk_free``
-    fallback, while a nonempty all-missing path keeps Sharpe/Sortino unavailable.
+    fallback. A present path must cover every expected daily return, even for
+    monthly metrics; otherwise Sharpe/Sortino remain unavailable for this
+    window. This does not change the existing missing-price month policy:
+    zero daily returns in a bucket mean a zero-duration product, not an
+    observed zero-rate provider fact.
     """
     if nav is None or len(nav) < 30:
         return {}
@@ -97,15 +101,27 @@ def full_metrics(nav: pd.Series, bench_nav: pd.Series | None = None,
     rf_daily = _risk_free_or_none(rf_daily)
     if rf_daily is not None:
         rf_path = rf_daily
+        rf_complete = True
         if use_monthly:
             # Charge each month the rate that actually prevailed inside it.
             rf_aligned = _align_rf_daily(daily, rf_daily)
-            # An all-missing monthly product must remain missing, not become
-            # an observed zero rate. Retain those buckets rather than turning
-            # an unavailable path into empty evidence and a scalar fallback.
-            rf_path = (1.0 + rf_aligned).resample("ME").prod(min_count=1) - 1.0
-        sharpe = compute_sharpe_tv(rets, rf_path, periods=per)
-        sortino = compute_sortino_tv(rets, rf_path, periods=per)
+            # A monthly product cannot prove whether all its daily charges
+            # were known: skip-NA aggregation would hide an unknown prefix.
+            # Check coverage before aggregation, over every expected return
+            # day, without promoting the covered suffix to the whole window.
+            rf_complete = not rf_aligned.isna().any()
+            if rf_complete:
+                factors = (1.0 + rf_aligned).resample("ME")
+                rf_path = factors.prod(min_count=1) - 1.0
+                # The pre-existing price policy keeps zero-return-day months.
+                # The factor identity for zero days is 1 (return 0), not a
+                # missing rate eligible to inherit another month's charge.
+                rf_path = rf_path.mask(factors.size().eq(0), 0.0)
+        if rf_complete:
+            sharpe = compute_sharpe_tv(rets, rf_path, periods=per)
+            sortino = compute_sortino_tv(rets, rf_path, periods=per)
+        else:
+            sharpe = sortino = float("nan")
     else:
         sharpe = compute_sharpe(ann_ret, ann_vol, risk_free=risk_free)
         sortino = compute_sortino(rets, ann_ret, risk_free=risk_free, periods=per)

@@ -505,8 +505,11 @@ def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
     fraction per row. ``rf_daily`` may be a daily-fraction ``pd.Series`` (a
     time-varying path, aligned by date with forward-fill), a scalar annual
     percent, or ``None``/an empty series (falls back to ``RISK_FREE_RATE``).
-    A nonempty unavailable path stays unavailable. Existing date-fill policy
-    is unchanged; this helper does not establish observed-rate provenance."""
+    Only the last known rate ON OR BEFORE each target session is carried.
+    Missing source rows preserve a previously known rate; dates before the
+    first known rate stay missing. Neither source order nor consumer order can
+    introduce a future rate. This session-date rule does not establish a
+    provider's publication time or observed-rate provenance."""
     rf_daily = _risk_free_or_none(rf_daily)
     idx = daily_returns.index
     if isinstance(rf_daily, pd.Series) and not rf_daily.empty:
@@ -515,7 +518,12 @@ def _align_rf_daily(daily_returns: pd.Series, rf_daily) -> pd.Series:
         r = rf_daily.copy()
         r.index = _norm(r.index)
         r = r[~r.index.duplicated(keep="last")]
-        aligned = r.reindex(_norm(idx), method="ffill").ffill().bfill()
+        # Last input row wins within a session before sorting. Carry known
+        # values on the source timeline, not the consumer's possibly shuffled
+        # row order: otherwise a missing left anchor can be replaced by a
+        # future observation, or an earlier target by the previous target row.
+        r = r.sort_index(kind="stable").ffill()
+        aligned = r.reindex(_norm(idx), method="ffill")
         aligned.index = idx
         return aligned
     scalar = (RISK_FREE_RATE if rf_daily is None else float(rf_daily))
@@ -555,10 +563,16 @@ def compute_sharpe_tv(daily_returns: pd.Series, rf_daily, *,
     ``periods`` is the number of observations per year: 252 for daily returns,
     12 for monthly. Callers working on a reconstructed series should prefer
     monthly (see :func:`tarzan.engine.robustness.full_metrics`).
+    An unknown RF for any requested period makes the ratio unavailable, not a
+    ratio over the covered suffix promoted to this full window.
     """
     if daily_returns is None or daily_returns.empty:
         return float("nan")
     rf = _align_rf_daily(daily_returns, rf_daily)
+    if rf.isna().any():
+        # Dropping unknown excess days would silently report a shorter window
+        # next to the return/volatility calculated over the requested window.
+        return float("nan")
     excess = (daily_returns - rf).dropna()
     return _sharpe_from_excess(excess, periods)
 
@@ -582,10 +596,13 @@ def compute_sortino_tv(daily_returns: pd.Series, rf_daily, *,
     RMS shortfall of per-period excess returns below zero (i.e. below the
     prevailing risk-free), annualised — the target-semideviation form,
     consistent with ``compute_sortino`` but with a per-period target.
-    ``periods`` = observations per year (252 daily, 12 monthly)."""
+    ``periods`` = observations per year (252 daily, 12 monthly). An unknown RF
+    for any requested period makes the ratio unavailable for this window."""
     if daily_returns is None or daily_returns.empty:
         return float("nan")
     rf = _align_rf_daily(daily_returns, rf_daily)
+    if rf.isna().any():
+        return float("nan")
     excess = (daily_returns - rf).dropna()
     return _sortino_from_excess(excess, periods)
 
@@ -714,9 +731,12 @@ class PreparedStatistics:
         return self.series.pct_change().dropna()
 
     @cached_property
+    def aligned_risk_free(self) -> pd.Series:
+        return _align_rf_daily(self.daily_returns, self.rf_daily)
+
+    @cached_property
     def excess_returns(self) -> pd.Series:
-        rf = _align_rf_daily(self.daily_returns, self.rf_daily)
-        return (self.daily_returns - rf).dropna()
+        return (self.daily_returns - self.aligned_risk_free).dropna()
 
     @cached_property
     def drawdowns(self) -> Optional[pd.Series]:
@@ -735,9 +755,12 @@ class PreparedStatistics:
             if len(daily_ret) > 0 else 0.0
         )
         if self.rf_daily is not None and len(daily_ret) > 0:
-            excess = self.excess_returns
-            sharpe = _sharpe_from_excess(excess, TRADING_DAYS)
-            sortino = _sortino_from_excess(excess, TRADING_DAYS)
+            if self.aligned_risk_free.isna().any():
+                sharpe = sortino = float("nan")
+            else:
+                excess = self.excess_returns
+                sharpe = _sharpe_from_excess(excess, TRADING_DAYS)
+                sortino = _sortino_from_excess(excess, TRADING_DAYS)
         else:
             sharpe = compute_sharpe(cagr, vol)
             sortino = (
@@ -782,7 +805,8 @@ def risk_metric_row(series: pd.Series, rf_daily=None) -> dict:
     scalar ``RISK_FREE_RATE``. The single source of truth for the risk block, so
     time-varying vs scalar is decided once, here, for every table that shows it.
     An empty path means absence and selects the same formula as ``None``;
-    a nonempty all-missing path instead makes RF-dependent metrics unavailable.
+    a nonempty path missing any requested return day's rate instead makes
+    RF-dependent metrics unavailable, without shortening the other metrics.
     """
     return PreparedStatistics(series, rf_daily).risk_metrics()
 
