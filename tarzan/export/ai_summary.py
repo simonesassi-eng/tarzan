@@ -1,24 +1,16 @@
-"""AI-generated portfolio summary (free, best-effort, never fatal).
+"""Best-effort general financial news and separate benchmark commentary.
 
-Replaces the rule-based "Signals" block with a short 3-4 sentence narrative
-written by an LLM from the *entire* metrics dataset Tarzan computes. The
-model only paraphrases figures it is given — it never invents numbers and
-never produces personalized financial advice.
+The newsletter's optional market-context summary uses public-news prompts;
+it never sends portfolio metrics or investor configuration to the provider.
+If no publishable text is available, the caller omits that section. There is
+no substitute "Signals" section. Evidence describes the sanitized text that
+can actually be published, not merely a successful HTTP response.
 
-Design constraints (in priority order):
-  * **Free.** Uses Google Gemini's genuinely-free tier (Flash model, no
-    credit card, 1M-token context so the whole dataset fits). Anthropic /
-    OpenAI are paid, so they are not the default.
-  * **Never fatal.** Any problem (no API key, network error, rate limit,
-    bad response) returns None, and the caller falls back to the rule-based
-    Signals section. The newsletter send must never fail because of this.
-  * **No tokens spent in tests.** The network call only fires when
-    ``GEMINI_API_KEY`` is set and ``TARZAN_DISABLE_AI`` is not. Tests leave
-    the key unset (and a fixture disables it), so they exercise only the
-    deterministic digest builder and the fallback path.
+Network calls require both an enabled feature and a live run. Tests stub
+the provider explicitly; pinned/offline runs never call it.
 
 Configuration (environment):
-  * ``GEMINI_API_KEY``       — enables the feature (a free key from
+  * ``GEMINI_API_KEY``       — enables the feature (a key from
     https://aistudio.google.com/apikey). Absent → feature off.
   * Gemini model — immutably pinned by the release manifest; runtime model
     overrides are intentionally unsupported.
@@ -34,6 +26,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,6 +46,10 @@ _MAX_CHARS = 1600  # generous safety cap for a ~150-word, 6-7 sentence note;
 # the trim always ends on a full sentence, never mid-thought or mid-number.
 _MAX_NEWS_LINES = 7  # the digest's own line budget (see _sanitize_lines)
 _MAX_LINE_CHARS = 220  # per-line safety net if the model ignores the word budget
+_BLOCKED_FINISH_REASONS = frozenset({
+    "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII",
+    "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
+})
 
 
 @dataclass(frozen=True)
@@ -126,26 +123,36 @@ def _store_provider_result(result: GeminiProviderResult) -> None:
                     analytical_impact=attempt.analytical_impact or "Gemini summary attempt unavailable",
                     publication_impact=attempt.publication_impact,
                 )
-                if attempt.selected_fallback:
-                    availability = (
-                        Availability.DEGRADED
-                        if result.summary_availability != "UNAVAILABLE"
-                        else Availability.UNAVAILABLE
+                # A declared next attempt is not a successful remedy. Close
+                # the original failure only when that fallback really produced
+                # the selected, publishable summary.
+                fallback = attempt.selected_fallback
+                if (
+                    fallback
+                    and fallback == result.selected_mode
+                    and result.summary_availability in ("AVAILABLE", "DEGRADED")
+                    and any(
+                        item.mode == fallback
+                        and item.outcome == "SUCCEEDED"
+                        and item.summary_availability in ("AVAILABLE", "DEGRADED")
+                        for item in result.attempts
                     )
+                ):
+                    availability = Availability(result.summary_availability)
                     session.ledger.remedy(
                         failure_id,
-                        remedy_id=f"select-{attempt.selected_fallback.casefold()}",
+                        remedy_id=f"select-{fallback.casefold()}",
                         action="select declared summary fallback",
                         outcome="SUCCEEDED",
                         availability=availability,
-                        provenance=[attempt.selected_fallback],
+                        provenance=[fallback],
                     )
                     session.ledger.close_failure(
                         failure_id,
                         automatically_corrected=True,
-                        selected_resolution=f"select-{attempt.selected_fallback.casefold()}",
+                        selected_resolution=f"select-{fallback.casefold()}",
                         availability=availability,
-                        provenance=[attempt.selected_fallback],
+                        provenance=[fallback],
                     )
     except Exception:  # noqa: BLE001 - diagnostic mirroring is best effort
         pass
@@ -166,12 +173,12 @@ def generate_summary(metrics, config) -> Optional[str]:
     """Return an AI summary and retain only non-secret structured evidence."""
     _last_provider_result.set(None)
     if not is_enabled():
-        _store_provider_result(GeminiProviderResult((), "SIGNALS", "UNAVAILABLE"))
+        _store_provider_result(GeminiProviderResult((), None, "UNAVAILABLE"))
         return None
     from tarzan import runtime
     if not runtime.allows_live_transport():
         logger.info("Pinned run: skipping the live AI summary.")
-        _store_provider_result(GeminiProviderResult((), "SIGNALS", "UNAVAILABLE"))
+        _store_provider_result(GeminiProviderResult((), None, "UNAVAILABLE"))
         return None
 
     model = _PINNED_MODEL
@@ -184,71 +191,78 @@ def generate_summary(metrics, config) -> Optional[str]:
         language = os.environ.get("AI_SUMMARY_LANGUAGE", "English").strip() or "English"
         today_str = runtime.today().strftime("%A, %B %d, %Y")
         system, user = _system_prompt(language, today_str), _user_prompt()
-        grounded_started = time.perf_counter()
-        try:
-            text = _call_gemini(system, user, use_search=True)
-            attempts.append(GeminiAttemptEvidence(
-                provider="gemini", model=model, mode="GROUNDED", ordinal=1,
-                outcome="SUCCEEDED",
-                latency_ms=round((time.perf_counter() - grounded_started) * 1000.0, 3),
-                summary_availability="AVAILABLE",
-            ))
-            selected_mode = "GROUNDED"
-        except Exception as error:  # noqa: BLE001
-            attempts.append(GeminiAttemptEvidence(
-                provider="gemini", model=model, mode="GROUNDED", ordinal=1,
-                outcome="FAILED", selected_fallback="NON_GROUNDED",
-                latency_ms=round((time.perf_counter() - grounded_started) * 1000.0, 3),
-                analytical_impact="grounded context unavailable",
-                publication_impact="DEGRADE",
-            ))
-            logger.warning(
-                "Grounded AI summary failed (%s); retrying without search.",
-                type(error).__name__,
-            )
-            fallback_started = time.perf_counter()
+        for ordinal, (mode, use_search) in enumerate(
+            (("GROUNDED", True), ("NON_GROUNDED", False)), start=1,
+        ):
+            started = time.perf_counter()
             try:
-                text = _call_gemini(system, user, use_search=False)
-            except Exception as fallback_error:  # noqa: BLE001
+                text = _call_gemini(system, user, use_search=use_search)
+            except Exception as error:  # noqa: BLE001
                 attempts.append(GeminiAttemptEvidence(
-                    provider="gemini", model=model, mode="NON_GROUNDED", ordinal=2,
-                    outcome="FAILED", selected_fallback="SIGNALS",
-                    latency_ms=round((time.perf_counter() - fallback_started) * 1000.0, 3),
-                    analytical_impact="AI narrative unavailable; Signals selected",
+                    provider="gemini", model=model, mode=mode, ordinal=ordinal,
+                    outcome="FAILED",
+                    selected_fallback="NON_GROUNDED" if use_search else None,
+                    latency_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    analytical_impact=(
+                        "grounded context unavailable" if use_search
+                        else "AI market context unavailable; section omitted"
+                    ),
+                    publication_impact="DEGRADE",
+                ))
+                if use_search:
+                    logger.warning(
+                        "Grounded AI summary failed (%s); retrying without search.",
+                        type(error).__name__,
+                    )
+                    continue
+                _store_provider_result(GeminiProviderResult(
+                    tuple(attempts), None, "UNAVAILABLE",
+                ))
+                logger.warning(
+                    "AI summary unavailable (%s); market context omitted.",
+                    type(error).__name__,
+                )
+                return None
+
+            # A safety block, empty response, or markdown-only response is not
+            # a transport failure and must not provoke a bypass attempt.
+            published = _sanitize_lines(text) if isinstance(text, str) else None
+            if not published:
+                attempts.append(GeminiAttemptEvidence(
+                    provider="gemini", model=model, mode=mode, ordinal=ordinal,
+                    outcome="FAILED",
+                    latency_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                    analytical_impact="AI text unpublishable; market context omitted",
                     publication_impact="DEGRADE",
                 ))
                 _store_provider_result(GeminiProviderResult(
-                    tuple(attempts), "SIGNALS", "UNAVAILABLE"
+                    tuple(attempts), None, "UNAVAILABLE",
                 ))
-                logger.warning(
-                    "AI summary unavailable (%s); falling back to Signals.",
-                    type(fallback_error).__name__,
-                )
                 return None
+
+            availability = "AVAILABLE" if use_search else "DEGRADED"
             attempts.append(GeminiAttemptEvidence(
-                provider="gemini", model=model, mode="NON_GROUNDED", ordinal=2,
+                provider="gemini", model=model, mode=mode, ordinal=ordinal,
                 outcome="SUCCEEDED",
-                latency_ms=round((time.perf_counter() - fallback_started) * 1000.0, 3),
-                summary_availability="DEGRADED",
-                analytical_impact="summary lacks live grounding",
-                publication_impact="DEGRADE",
+                latency_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                summary_availability=availability,
+                analytical_impact="" if use_search else "summary lacks live grounding",
+                publication_impact="NONE" if use_search else "DEGRADE",
             ))
-            selected_mode = "NON_GROUNDED"
-        availability = "AVAILABLE" if selected_mode == "GROUNDED" else "DEGRADED"
-        _store_provider_result(GeminiProviderResult(
-            tuple(attempts), selected_mode, availability
-        ))
-        return _sanitize_lines(text) if text else None
+            _store_provider_result(GeminiProviderResult(
+                tuple(attempts), mode, availability,
+            ))
+            return published
     except Exception as error:  # noqa: BLE001
         attempts.append(GeminiAttemptEvidence(
             provider="gemini", model=model, mode="BUILD_OR_RENDER", ordinal=len(attempts) + 1,
-            outcome="FAILED", selected_fallback="SIGNALS",
-            analytical_impact="AI narrative unavailable; Signals selected",
+            outcome="FAILED",
+            analytical_impact="AI market context unavailable; section omitted",
             publication_impact="DEGRADE",
         ))
-        _store_provider_result(GeminiProviderResult(tuple(attempts), "SIGNALS", "UNAVAILABLE"))
+        _store_provider_result(GeminiProviderResult(tuple(attempts), None, "UNAVAILABLE"))
         logger.warning(
-            "AI summary unavailable (%s); falling back to Signals.", type(error).__name__
+            "AI summary unavailable (%s); market context omitted.", type(error).__name__
         )
         return None
 
@@ -1000,27 +1014,80 @@ def _call_gemini(system_prompt: str, user_prompt: str, use_search: bool = True) 
             " [grounded]" if use_search else "",
         )
         raise RuntimeError(f"Gemini request failed with HTTP {error.code}") from None
+    if _response_is_blocked(data):
+        # Do not retry without grounding to bypass a native safety/privacy
+        # block. Neither provider text nor free-form reasons belong in logs.
+        logger.warning("Gemini response blocked; market context omitted.")
+        return None
     text = _extract_text(data)
     if not text:
-        # No text despite a 200: log the finish reason so a truncation or
-        # safety block is visible rather than silently becoming Signals.
-        try:
-            fr = data["candidates"][0].get("finishReason")
-        except (KeyError, IndexError, TypeError):
-            fr = None
-        logger.warning("Gemini returned no text%s (finishReason=%s).",
-                       " [grounded]" if use_search else "", fr)
+        logger.warning(
+            "Gemini returned no publishable text%s.",
+            " [grounded]" if use_search else "",
+        )
     return text
 
 
-def _extract_text(data: dict) -> Optional[str]:
+def _response_is_blocked(data: Any) -> bool:
+    """Honor native safety/privacy signals, including blocked partial text."""
+    if not isinstance(data, Mapping):
+        return False
+    feedback = data.get("promptFeedback")
+    if isinstance(feedback, Mapping):
+        reason = feedback.get("blockReason")
+        if reason and reason != "BLOCK_REASON_UNSPECIFIED":
+            return True
+        ratings = feedback.get("safetyRatings")
+        if isinstance(ratings, list) and any(
+            isinstance(item, Mapping) and item.get("blocked") is True
+            for item in ratings
+        ):
+            return True
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return False
+    candidate = candidates[0]
+    if not isinstance(candidate, Mapping):
+        return False
+    reason = candidate.get("finishReason")
+    if isinstance(reason, str) and reason in _BLOCKED_FINISH_REASONS:
+        return True
+    ratings = candidate.get("safetyRatings")
+    return isinstance(ratings, list) and any(
+        isinstance(item, Mapping) and item.get("blocked") is True
+        for item in ratings
+    )
+
+
+def _extract_text(data: Any) -> Optional[str]:
     """Pull the generated text out of a Gemini generateContent response."""
-    try:
-        parts = data["candidates"][0]["content"]["parts"]
-        text = "".join(p.get("text", "") for p in parts)
-        return text or None
-    except (KeyError, IndexError, TypeError):
+    if not isinstance(data, Mapping):
         return None
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    candidate = candidates[0]
+    if not isinstance(candidate, Mapping):
+        return None
+    content = candidate.get("content")
+    if not isinstance(content, Mapping):
+        return None
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return None
+    chunks = []
+    for part in parts:
+        if not isinstance(part, Mapping):
+            return None
+        if part.get("thought") is True:
+            continue
+        if "text" not in part:
+            continue
+        text = part["text"]
+        if not isinstance(text, str):
+            return None
+        chunks.append(text)
+    return "".join(chunks) or None
 
 
 # ---------------------------------------------------------------------------
