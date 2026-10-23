@@ -1267,7 +1267,8 @@ class MetricsEngine:
         # per-holding rows): compute cagr/vol/sharpe/sortino/maxdd/var/cvar once
         # via risk_metric_row, with the time-varying risk-free path so Sharpe and
         # Sortino use per-day rates. Keep only the keys this dashboard block emits.
-        block = risk_metric_row(ph, self._rf_daily(ctx))
+        rf_daily = self._rf_daily(ctx)
+        block = risk_metric_row(ph, rf_daily)
         result["volatility"] = block["volatility"]
         result["sharpe"] = block["sharpe"]
         result["max_drawdown"] = block["max_drawdown"]
@@ -1284,8 +1285,12 @@ class MetricsEngine:
         if not bench_history.empty and len(bench_history) > 1:
             beta, alpha = _compute_beta_alpha(
                 ph, bench_history, block["cagr"],
-                risk_free=rf_annual_pct(self._rf_daily(ctx)),
+                # Preserve scalar/absent inputs, but let the regression scope
+                # a native RF path to its own actual return dates. Averaging
+                # every cached rate would include unrelated historical years.
+                risk_free=None if isinstance(rf_daily, pd.Series) else rf_annual_pct(rf_daily),
                 input_kind="prices",
+                rf_daily=rf_daily,
             )
             result["beta"] = beta
             result["alpha"] = alpha
