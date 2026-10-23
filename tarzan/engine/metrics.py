@@ -1977,7 +1977,24 @@ class MetricsEngine:
                 if isin:
                     subjects[(str(record.ticker), "Benchmark index")] = (
                         isin, record.history, record.history_native, record.currency)
-            justetf.prefetch(v[0] for v in subjects.values())
+            # Buy only facts this consumer can actually use. The referee serves
+            # EUR series; native USD/unknown rows still retain their own figures
+            # but are not compared here. Use the same row identity and tape
+            # predicate as below, not the fund's base currency or a guessed EUR.
+            eligible_isins = {}
+            for _index, eligible_row in hp.iterrows():
+                eligible_subject = subjects.get((
+                    str(eligible_row.get("ticker") or ""),
+                    str(eligible_row.get("type") or ""),
+                ))
+                if eligible_subject is None:
+                    continue
+                eligible_isin, eur_tape, native_tape, listing_ccy = eligible_subject
+                eligible_tape, eligible_ccy = self._own_tape(eur_tape, native_tape, listing_ccy)
+                if eligible_tape is None or str(eligible_ccy or "").upper() != "EUR":
+                    continue
+                eligible_isins.setdefault(eligible_isin, None)
+            justetf.prefetch(eligible_isins)
             checked = diverged = 0
             for i, row in hp.iterrows():
                 subject = subjects.get((str(row.get("ticker") or ""), str(row.get("type") or "")))
