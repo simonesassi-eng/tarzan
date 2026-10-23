@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import math
@@ -38,6 +38,11 @@ _FIELDS = frozenset({
 _RUN_TIMING_NAMES = frozenset({
     "imports_seconds", "imports_and_entrypoint_seconds",
 })
+_RUN_CLOCK_NAMES = frozenset({
+    "analysis_date", "mode", "basis", "captured_host_utc_offset_seconds",
+})
+_CLOCK_PROJECTION_ERROR = "CLOCK_PROJECTION_UNAVAILABLE"
+_CAPTURE_BOUNDARY_NOT_PROVIDED = object()
 _CREDENTIAL_ENV = (
     sealed.KEY_ENV, "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL", "GEMINI_API_KEY", "GOOGLE_DRIVE_CREDENTIALS_JSON",
     "DELIVERY_CLAIM_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
@@ -160,6 +165,66 @@ def _run_timings(values):
     return timings
 
 
+def _run_clock(values, *, captured_at=_CAPTURE_BOUNDARY_NOT_PROVIDED):
+    """Only a closed optional native clock projection, never inferred dates."""
+    if type(values) is not dict or set(values) != _RUN_CLOCK_NAMES:
+        raise ValueError("invalid private diagnostic clock names")
+    day = values["analysis_date"]
+    if type(day) is not str or date.fromisoformat(day).isoformat() != day:
+        raise ValueError("invalid private diagnostic analysis date")
+    if type(values["mode"]) is not str or values["mode"] not in {
+        "LIVE", "POINT_IN_TIME", "REPRODUCIBLE",
+    } or (
+        type(values["basis"]) is not str or values["basis"] not in {"HOST_LOCAL", "EFFECTIVE_DATE"}
+    ):
+        raise ValueError("invalid private diagnostic clock authority")
+    if values["mode"] != "LIVE" and values["basis"] != "EFFECTIVE_DATE":
+        raise ValueError("invalid private diagnostic effective clock")
+    offset = values["captured_host_utc_offset_seconds"]
+    if offset is not None and (type(offset) is not int or not -86400 < offset < 86400):
+        raise ValueError("invalid private diagnostic host offset")
+    if captured_at is not _CAPTURE_BOUNDARY_NOT_PROVIDED and values["basis"] == "HOST_LOCAL":
+        if type(captured_at) is not str:
+            raise ValueError("invalid private diagnostic capture boundary")
+        captured = datetime.fromisoformat(captured_at)
+        if offset is None:
+            if captured.utcoffset() is not None:
+                raise ValueError("invalid private diagnostic unknown host offset")
+            expected_day = captured.date()
+        else:
+            if captured.utcoffset() is None:
+                raise ValueError("invalid private diagnostic naive host offset")
+            expected_day = captured.astimezone(timezone(timedelta(seconds=offset))).date()
+        if expected_day.isoformat() != day:
+            raise ValueError("invalid private diagnostic host analysis date")
+    return dict(values)
+
+
+def _native_run_clock(context):
+    """Read the actual native context only; generic records keep legacy getters."""
+    from tarzan.runtime.session import RunContext
+
+    if type(context) is not RunContext:
+        return None
+    captured = context.captured_at
+    if type(captured) is not datetime:
+        raise ValueError("invalid private diagnostic capture clock")
+    offset = None
+    if captured.tzinfo is not None:
+        delta = captured.astimezone().utcoffset()
+        if delta is not None:
+            seconds = delta.total_seconds()
+            if not math.isfinite(seconds) or not seconds.is_integer():
+                raise ValueError("invalid private diagnostic host offset")
+            offset = int(seconds)
+    return _run_clock({
+        "analysis_date": context.analysis_date.isoformat(),
+        "mode": context.mode.value,
+        "basis": "EFFECTIVE_DATE" if context.effective_date is not None else "HOST_LOCAL",
+        "captured_host_utc_offset_seconds": offset,
+    })
+
+
 def _diagnostic_metrics(result):
     """Own exact selected facts, retaining genuine legacy-view compatibility."""
     view = result.report_view
@@ -197,14 +262,15 @@ def build_report(
                 counts[str(entry.payload.get("source", "UNKNOWN"))][
                     str(entry.payload.get("outcome", "UNKNOWN"))
                 ] += 1
+    context = result.session.context if result is not None and result.session is not None else None
     report = {
         "schema_version": SCHEMA_VERSION,
         "operation": operation,
         "exit_code": exit_code,
         "duration_seconds": duration_seconds,
         "captured_at": (
-            result.session.context.captured_at.isoformat()
-            if result is not None and result.session is not None
+            context.captured_at.isoformat()
+            if context is not None
             else datetime.now(timezone.utc).isoformat()
         ),
         "run": {
@@ -225,6 +291,15 @@ def build_report(
     }
     if operational_timings is not None:
         report["run"]["timings"] = _run_timings(operational_timings)
+    if context is not None:
+        try:
+            clock = _native_run_clock(context)
+            if clock is not None:
+                # Validate even an injected observer's answer before retaining
+                # it. A broken optional projection cannot discard the ledger.
+                report["run"]["clock"] = _run_clock(clock, captured_at=report["captured_at"])
+        except BaseException:
+            report["run"]["clock_projection_error_type"] = _CLOCK_PROJECTION_ERROR
     if result is not None:
         try:
             from tarzan.runtime.summary import SummaryProjector
@@ -286,6 +361,15 @@ def _validate(report):
         timings = _run_timings(report["run"]["timings"])
         if timings["imports_and_entrypoint_seconds"] < duration:
             raise ValueError("invalid private diagnostic timing boundary")
+    if "clock" in report["run"]:
+        _run_clock(report["run"]["clock"], captured_at=report["captured_at"])
+    if "clock_projection_error_type" in report["run"]:
+        if type(report["run"]["clock_projection_error_type"]) is not str or (
+            report["run"]["clock_projection_error_type"] != _CLOCK_PROJECTION_ERROR
+        ):
+            raise ValueError("invalid private diagnostic clock projection status")
+        if "clock" in report["run"]:
+            raise ValueError("ambiguous private diagnostic clock projection")
     if report["summary"] is not None and not isinstance(report["summary"], dict):
         raise ValueError("invalid private diagnostic summary")
     return report

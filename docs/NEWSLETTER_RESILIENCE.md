@@ -90,6 +90,26 @@ The ledger's failure payload gives the exact critical/source/semantic cause.
 attempts and log messages. Repeated “404” log records are not automatically that
 many network requests. SMTP acknowledgment is server acceptance, not inbox receipt.
 
+Yahoo native attempts may additionally contain a fixed `native_request_class`:
+`CHART`, `QUOTE`, `QUOTE_SUMMARY`, `FUNDAMENTALS`, `COOKIE`, `CRUMB`, `CONSENT` or
+`OTHER`. Only an allowlisted HTTPS host/path shape determines the category; no
+address, query, ticker, cookie or token is retained by this observer or its URL
+parser. Unknown shapes remain `OTHER` and still follow the same native request,
+timeout and retry policy. These labels distinguish price endpoints from cookie
+and authentication endpoints; they do not establish quote quality or imply that
+each HTTP 404 is a missing instrument. The category is operational, not a new
+financial fact or analysis-identity input: it is retained only in native-attempt
+ledger entries, leaving the financial material-field contract unchanged.
+
+An optional `run.clock` in the encrypted version-1 report records the native
+context's actual `analysis_date`, mode and date basis (`HOST_LOCAL` or
+`EFFECTIVE_DATE`), with the host UTC offset at capture when known. It does not
+invent an exchange timezone or change the analysis clock. Legacy reports and
+generic contexts need no new clock fields. If this optional projection fails,
+`run.clock_projection_error_type` is the fixed `CLOCK_PROJECTION_UNAVAILABLE`;
+the primary ledger, financial projection and outcome remain exportable. Keep
+this operational failure distinct from `projection_error_type`.
+
 ## Measure useful performance
 
 For cold/warm comparisons, use separate fresh SDK caches/processes, identical

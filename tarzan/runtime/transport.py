@@ -103,6 +103,43 @@ def _transient(error):
     )
 
 
+@contextmanager
+def _yahoo_request_observation(owner, url):
+    """Optional observation cannot enter, suppress or replace a native error."""
+    boundary = None
+    observation = None
+    try:
+        from tarzan.runtime.request_classes import yahoo_request_boundary
+        boundary = yahoo_request_boundary()
+        boundary.__enter__()
+    except BaseException:
+        pass
+    try:
+        from tarzan.runtime.request_classes import yahoo_request_scope
+        observation = yahoo_request_scope(owner, url)
+        observation.__enter__()
+    except BaseException:
+        # Still attempt cleanup when an injected observer failed during enter.
+        # Its optional failure must not prevent the real request from running.
+        pass
+    url = None
+    try:
+        yield
+    finally:
+        if observation is not None:
+            try:
+                # The observer needs no primary exception or response details.
+                # Ignore suppression requests and errors, including cancellation.
+                observation.__exit__(None, None, None)
+            except BaseException:
+                pass
+        if boundary is not None:
+            try:
+                boundary.__exit__(None, None, None)
+            except BaseException:
+                pass
+
+
 class ProviderBudget:
     def __init__(
         self, settings, ledger=None, *, clock=time.monotonic, sleep=time.sleep,
@@ -295,12 +332,22 @@ class ProviderBudget:
                             raise
                     finally:
                         if self.ledger is not None:
-                            self.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, {
+                            payload = {
                                 "source": provider, "operation": "native_http",
                                 "ordinal": ordinal, "outcome": outcome,
                                 "timeout_seconds": cap, "retry_budget": policy.retry_budget,
                                 "latency_ms": max(0.0, self.clock() - started) * 1000.0,
-                            })
+                            }
+                            try:
+                                from tarzan.runtime.request_classes import REQUEST_CLASSES, request_class_for
+                                category = request_class_for(self, provider)
+                                if type(category) is str and category in REQUEST_CLASSES:
+                                    payload["native_request_class"] = category
+                            except BaseException:
+                                # Optional observations must not replace the
+                                # original native outcome or cancellation.
+                                pass
+                            self.ledger.append(LedgerEntryType.PROVIDER_ATTEMPT, payload)
                 if ordinal <= policy.retry_budget:
                     self.wait(0.25 * 2 ** (ordinal - 1), provider)
             self._failure(provider, "PROVIDER_RETRY_BUDGET_EXHAUSTED")
@@ -317,18 +364,19 @@ class ProviderBudget:
                     def request(self, method, url, **kwargs):
                         requested = kwargs.pop("timeout", None)
                         native_request = super().request
-                        try:
-                            return owner.call(
-                                "yahoo",
-                                lambda timeout: native_request(method, url, timeout=timeout, **kwargs),
-                                requested_timeout=requested,
-                            )
-                        except ProviderBudgetExceeded:
-                            raise
-                        except Exception:
-                            # Prevent the SDK's own transient-error retry loop
-                            # from multiplying already-budgeted native attempts.
-                            raise ProviderRequestFailure("yahoo native request unavailable") from None
+                        with _yahoo_request_observation(owner, url):
+                            try:
+                                return owner.call(
+                                    "yahoo",
+                                    lambda timeout: native_request(method, url, timeout=timeout, **kwargs),
+                                    requested_timeout=requested,
+                                )
+                            except ProviderBudgetExceeded:
+                                raise
+                            except Exception:
+                                # Prevent the SDK's own transient-error retry loop
+                                # from multiplying already-budgeted native attempts.
+                                raise ProviderRequestFailure("yahoo native request unavailable") from None
 
                 self._yahoo_client = BudgetedSession(impersonate="chrome")
             return self._yahoo_client
