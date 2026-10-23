@@ -2021,7 +2021,9 @@ class MetricsEngine:
                 # PREVIOUS session's move: on 9 Oct at 10:25 a thin fund's -3.45%
                 # (Thursday, correct) was flagged against justETF's +0.56% for Friday.
                 verdicts["1d"] = (
-                    xc.check_one_day(row.get("1d"), justetf.quote(h.isin), today, tape)
+                    xc.check_one_day(
+                        row.get("1d"), justetf.quote(h.isin), today, tape, ticker=h.ticker
+                    )
                     if _tape_ends_today(tape, today)
                     else {"status": xc.UNAVAILABLE, "alt": None})
                 verdicts["1d"].update(ours=row.get("1d"), at=today)

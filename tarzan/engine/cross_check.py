@@ -27,7 +27,12 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+
+from tarzan.data.referee import (
+    CURRENT_SESSION_BASELINE_ATTR, finite_number, observation_date, quote_pair,
+)
 
 #: The long windows checked against the second source's daily series.
 LONG_WINDOWS = ("5d", "1m", "3m", "ytd", "1y", "3y", "5y")
@@ -48,11 +53,34 @@ CORRECTED = "corrected"
 
 
 def _naive_days(s: pd.Series) -> pd.Series:
-    s = s.dropna()
-    idx = pd.DatetimeIndex(s.index)
+    """Valid positive closes on their native dates, preserving listing metadata."""
+    empty = pd.Series(dtype=float)
+    if not isinstance(s, pd.Series) or pd.api.types.is_bool_dtype(s.dtype):
+        return empty
+    if pd.api.types.is_complex_dtype(s.dtype):
+        return empty
+    try:
+        if not isinstance(s.index, pd.DatetimeIndex) and pd.api.types.is_numeric_dtype(s.index):
+            return empty  # an integer row number is not a dated market observation
+        idx = (
+            s.index if isinstance(s.index, pd.DatetimeIndex)
+            else pd.DatetimeIndex([observation_date(value) for value in s.index])
+        )
+        values = s
+        if pd.api.types.is_object_dtype(s.dtype):
+            invalid_scalars = s.map(
+                lambda value: pd.api.types.is_bool(value)
+                or isinstance(value, (complex, np.complexfloating))
+            )
+            values = s.mask(invalid_scalars)
+        numbers = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    except (TypeError, ValueError, OverflowError):
+        return empty
     if idx.tz is not None:
         idx = idx.tz_localize(None)
-    out = pd.Series(s.values.astype(float), index=idx.normalize())
+    valid = np.isfinite(numbers) & (numbers > 0) & ~idx.isna()
+    out = pd.Series(numbers[valid], index=idx[valid].normalize(), name=s.name)
+    out.attrs = dict(s.attrs)
     return out[~out.index.duplicated(keep="last")].sort_index()
 
 
@@ -83,7 +111,8 @@ def check_windows(tape: pd.Series, ref: Optional[pd.Series],
     """
     out = {w: {"status": UNAVAILABLE, "alt": None, "ours": None, "at": None}
            for w in LONG_WINDOWS}
-    if tape is None or ref is None:
+    allowance = finite_number(extra_pp)
+    if tape is None or ref is None or allowance is None or allowance < 0:
         return out
     t, r = _naive_days(tape), _naive_days(ref)
     common = t.index.intersection(r.index)
@@ -98,9 +127,11 @@ def check_windows(tape: pd.Series, ref: Optional[pd.Series],
         ref_at = r[r.index <= a]
         if not len(ref_at) or r.index[0] > a + pd.Timedelta(days=7):
             continue
-        ours = (t.iloc[-1] / t.loc[a] - 1.0) * 100.0
-        alt = (r.iloc[-1] / ref_at.iloc[-1] - 1.0) * 100.0
-        limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0) + extra_pp
+        ours = finite_number((float(t.iloc[-1]) / float(t.loc[a]) - 1.0) * 100.0)
+        alt = finite_number((float(r.iloc[-1]) / float(ref_at.iloc[-1]) - 1.0) * 100.0)
+        if ours is None or alt is None:
+            continue
+        limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0) + allowance
         out[w] = {"status": DIVERGED if abs(ours - alt) > limit else OK,
                   "alt": alt, "ours": ours, "at": end.date(), "anchor": a}
     return out
@@ -108,15 +139,16 @@ def check_windows(tape: pd.Series, ref: Optional[pd.Series],
 
 def _return_between(series: pd.Series, anchor, end) -> Optional[float]:
     s = _naive_days(series)
-    a, e = pd.Timestamp(anchor).normalize(), pd.Timestamp(end).normalize()
-    if a.tzinfo is not None:
-        a = a.tz_localize(None)
+    anchor_date, end_date = observation_date(anchor), observation_date(end)
+    if anchor_date is None or end_date is None or anchor_date >= end_date:
+        return None
+    a, e = pd.Timestamp(anchor_date), pd.Timestamp(end_date)
     at_a, at_e = s[s.index <= a], s[s.index <= e]
     if not len(at_a) or not len(at_e) or s.index[0] > a + pd.Timedelta(days=7):
         return None
     if at_e.index[-1] < e - pd.Timedelta(days=4):
         return None          # this source stops well before the shared close
-    return (at_e.iloc[-1] / at_a.iloc[-1] - 1.0) * 100.0
+    return finite_number((float(at_e.iloc[-1]) / float(at_a.iloc[-1]) - 1.0) * 100.0)
 
 
 def settle(verdict: dict, tape: pd.Series, third_sources) -> dict:
@@ -133,7 +165,9 @@ def settle(verdict: dict, tape: pd.Series, third_sources) -> dict:
     if verdict.get("status") != DIVERGED:
         return verdict
     ours, alt, anchor, at = (verdict.get(k) for k in ("ours", "alt", "anchor", "at"))
-    if None in (ours, alt, anchor, at):
+    ours, alt = finite_number(ours), finite_number(alt)
+    at_date = observation_date(at)
+    if ours is None or alt is None or observation_date(anchor) is None or at_date is None:
         return verdict
     limit = _RELATIVE_TOLERANCE_PP * (1.0 + abs(ours) / 100.0)
     votes = [v for v in (_return_between(src, anchor, at) for src in third_sources or ())
@@ -145,31 +179,80 @@ def settle(verdict: dict, tape: pd.Series, third_sources) -> dict:
     agreeing = [v for v in votes if abs(v - alt) <= limit]
     if not agreeing:
         return out
-    agreed = (alt + sum(agreeing)) / (1 + len(agreeing))
+    count = 1 + len(agreeing)
+    # Keep the exact existing arithmetic for ordinary prices. Only an overflowing
+    # sum needs the numerically safe alternative; normal financial rounding is not
+    # a reason to change a previously computed return.
+    agreed = finite_number((alt + sum(agreeing)) / count)
+    if agreed is None:
+        agreed = finite_number(alt / count + sum(v / count for v in agreeing))
+    if agreed is None:
+        return out
     t = _naive_days(tape)
-    shared = t[t.index <= pd.Timestamp(at)]
+    shared = t[t.index <= pd.Timestamp(at_date)]
     if not len(shared):
         return out
     tail = float(t.iloc[-1]) / float(shared.iloc[-1])
+    corrected = finite_number(((1.0 + agreed / 100.0) * tail - 1.0) * 100.0)
+    if corrected is None:
+        return out
     out.update(status=CORRECTED,
-               corrected_value=((1.0 + agreed / 100.0) * tail - 1.0) * 100.0,
+               corrected_value=corrected,
                agreed=agreed)
     return out
 
 
 def check_one_day(ours_1d, quote: Optional[dict], today: _dt.date,
-                  tape: Optional[pd.Series] = None) -> dict:
-    """The live 1D against the second source's quote for the same session."""
-    if ours_1d is None or ours_1d != ours_1d or not quote:
-        return {"status": UNAVAILABLE, "alt": None}
-    if quote.get("date") != today or not quote.get("prev_close"):
-        return {"status": UNAVAILABLE, "alt": None}
-    alt = (float(quote["price"]) / float(quote["prev_close"]) - 1.0) * 100.0
+                  tape: Optional[pd.Series] = None,
+                  ticker: Optional[str] = None) -> dict:
+    """The live 1D against an independently dated pair over the SAME interval."""
+    unavailable = {"status": UNAVAILABLE, "alt": None}
+    ours = finite_number(ours_1d)
+    day = observation_date(today)
+    if ours is None or not quote or day is None:
+        return unavailable
+    clean = _naive_days(tape) if tape is not None else None
+    if clean is not None:
+        if clean.empty or clean.index[-1].date() != day:
+            return unavailable
+        from tarzan.engine.stats import window_anchor
+
+        anchor = window_anchor(clean, "1d", ticker)
+        if anchor is None:
+            return unavailable
+        prior = observation_date(anchor)
+        # A sibling's native previous close may have been written on the canonical
+        # venue's row. An equal row date alone must not make unequal intervals agree.
+        provenance = clean.attrs.get(CURRENT_SESSION_BASELINE_ATTR)
+        if isinstance(provenance, dict) and observation_date(provenance.get("at")) == day:
+            if (
+                observation_date(provenance.get("anchor")) != prior
+                or observation_date(provenance.get("observation_date")) != prior
+            ):
+                return unavailable
+    else:
+        # Compatibility callers without a tape must still name a known venue. A
+        # missing previous observation is never licensed by the run's current time.
+        from tarzan.data.exchange_calendar import covers, previous_session
+
+        source_ticker = ticker or {"XETRA": "REFEREE.DE", "XETR": "REFEREE.DE"}.get(
+            str(quote.get("venue") or "").strip().upper()
+        )
+        if not source_ticker or not covers(source_ticker, day):
+            return unavailable
+        prior = previous_session(source_ticker, day)
+    pair = quote_pair(quote, session=day, anchor=prior)
+    if pair is None:
+        return unavailable
+    alt = finite_number((pair[0] / pair[1] - 1.0) * 100.0)
+    if alt is None:
+        return unavailable
     sigma_pp = None
-    if tape is not None:
-        r = _naive_days(tape).pct_change().dropna().tail(252)
+    if clean is not None:
+        r = clean.pct_change().dropna().tail(252)
+        r = r[np.isfinite(r)]
         if len(r) >= 20:
-            sigma_pp = float(r.std()) * 100.0
+            sigma_pp = finite_number(float(r.std()) * 100.0)
     allowance = max(_ONE_DAY_FLOOR_PP, _ONE_DAY_SIGMAS * sigma_pp if sigma_pp else 0.0)
-    return {"status": DIVERGED if abs(float(ours_1d) - alt) > allowance else OK,
+    return {"status": DIVERGED if abs(ours - alt) > allowance else OK,
             "alt": alt}

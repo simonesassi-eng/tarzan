@@ -58,6 +58,9 @@ from typing import Optional
 
 import pandas as pd
 
+from tarzan.data.referee import (
+    CURRENT_SESSION_BASELINE_ATTR, finite_number, observation_date, quote_pair,
+)
 from tarzan.models.currency import major_code, to_major
 
 logger = logging.getLogger(__name__)
@@ -113,14 +116,15 @@ def _daily_sigma(history) -> Optional[float]:
     if len(r) < 20:
         return None
     sigma = float(r.std())
-    return sigma if sigma > 0 else None
+    return sigma if math.isfinite(sigma) and sigma > 0 else None
 
 
 def _move(quote: dict) -> Optional[float]:
-    price, prev = quote.get("price"), quote.get("prev_close")
-    if not price or not prev:
+    price = finite_number(quote.get("price"), positive=True)
+    prev = finite_number(quote.get("prev_close"), positive=True)
+    if price is None or prev is None:
         return None
-    return float(price) / float(prev) - 1.0
+    return finite_number(price / prev - 1.0)
 
 
 #: How far a venue's published previous close may sit from an INDEPENDENT previous close
@@ -168,14 +172,16 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
     """
     from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
 
-    ref = float(reference_price)
+    ref = finite_number(reference_price, positive=True)
+    if ref is None:
+        return {}
     eligible: list[tuple[str, dict]] = []
     for symbol in dict.fromkeys(symbols):
         quote = quotes.get(symbol) or {}
-        native = quote.get("price")
-        if not native or quote_is_stale(quote):
+        native = finite_number(quote.get("price"), positive=True)
+        if native is None or quote_is_stale(quote):
             continue
-        if abs(float(native) / ref - 1.0) <= _SIBLING_PRICE_TOLERANCE:
+        if abs(native / ref - 1.0) <= _SIBLING_PRICE_TOLERANCE:
             eligible.append((symbol, quote))
     if not eligible:
         return {}
@@ -205,11 +211,18 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
     # whose last trade was 28.995 (the independent one: 28.94), the 1D stayed within
     # 1.1pp of the other venue's, and the issue measured from a number nobody dealt at.
     # A NAV is not a market price, so a referee that is one does not judge baselines.
-    baseline = _independent_baseline(referee, newest_day)
+    baselines = {
+        sym: _independent_baseline(
+            referee, newest_day, _native_previous_date(q, sym, newest_day)
+        )
+        for sym, q in ranked
+    }
+    baseline = next((value for value in baselines.values() if value is not None), None)
     if baseline is not None:
         sound = [(s, q) for s, q in ranked
-                 if not q.get("prev_close")
-                 or abs(float(q["prev_close"]) / baseline - 1.0) <= _BASELINE_TOLERANCE]
+                 if baselines[s] is None
+                 or finite_number(q.get("prev_close"), positive=True) is None
+                 or abs(float(q["prev_close"]) / baselines[s] - 1.0) <= _BASELINE_TOLERANCE]
         if sound and len(sound) < len(ranked):
             logger.warning(
                 "Baseline of %s rejected: its previous close disagrees with the "
@@ -251,7 +264,26 @@ def pick_quote(symbols: list[str], quotes: dict, reference_price: float,
     return chosen
 
 
-def _independent_baseline(referee: Optional[dict], session) -> Optional[float]:
+def _native_previous_date(quote: dict, symbol: str, session):
+    """The previous close's native observation, never the run's receipt time."""
+    day = observation_date(session)
+    if day is None:
+        return None
+    if "prev_date" in quote:
+        previous = observation_date(quote["prev_date"])
+        return previous if previous is not None and previous < day else None
+    # Yahoo's published previous close names the previous trading session. Use its
+    # own calendar only for a dated quote on a venue the bundled calendar knows.
+    if quote_observed_at(quote) is None:
+        return None
+    from tarzan.data.exchange_calendar import covers, is_session, previous_session
+
+    if not covers(symbol, day) or not is_session(symbol, day):
+        return None
+    return previous_session(symbol, day)
+
+
+def _independent_baseline(referee: Optional[dict], session, anchor=None) -> Optional[float]:
     """The referee's previous close, when it can judge this session's baselines.
 
     Only a MARKET quote for the same session can: justETF serves the issuer's NAV for a
@@ -259,23 +291,23 @@ def _independent_baseline(referee: Optional[dict], session) -> Optional[float]:
     different measure from any venue's close.
     """
     r = referee or {}
-    if not r.get("prev_close") or r.get("date") != session:
+    if str(r.get("venue") or "").strip().upper() == "NAV":
         return None
-    if str(r.get("venue") or "").upper() == "NAV":
-        return None
-    return float(r["prev_close"])
+    pair = quote_pair(r, session=session, anchor=anchor)
+    return None if pair is None else pair[1]
 
 
 def _better_evidenced(voting, moves: dict, referee: Optional[dict] = None,
                       session=None):
     """The better-evidenced of two venues that dispute an instrument's 1D.
 
-    First, with an independent ``referee`` (justETF's quote for the same session), the
-    venue whose PREVIOUS CLOSE disagrees with the referee's beyond
-    ``_BASELINE_TOLERANCE`` is not a valid baseline and loses. That is the failure today's
-    volume cannot see: later on 8 Oct 2026 the venue with the fictitious 29.355 close had
-    out-traded the other, so "busier" picked the broken baseline (-1.23% against a real
-    -0.28%) — while the referee's traded close was 29.01, exactly the other venue's.
+    ``pick_quote`` has already filtered a previous close against a comparable
+    independently dated baseline. This helper chooses among the remaining venues;
+    ``referee`` and ``session`` remain in its signature for caller compatibility.
+    The filter must precede volume: later on 8 Oct 2026 the venue with the fictitious
+    29.355 close had out-traded the other, so "busier" picked the broken baseline
+    (-1.23% against a real -0.28%) — while the referee's traded close was 29.01,
+    exactly the other venue's.
 
     The one that traded more TODAY. Either end of a venue's 1D can be wrong on a thin
     line, and the three disputes measured on 8 Oct 2026 had their error at different
@@ -463,6 +495,7 @@ def stamp_today(series: pd.Series, today, today_value: float,
     out = series.copy()
     stamp = day.tz_localize(series.index.tz) if series.index.tz else day
     prev_eur = prev_close_eur(quote, today_value)
+    previous_row = None
     # Once today's session has opened, Yahoo ROLLS ``regularMarketPreviousClose`` onto
     # the last session that traded — even for an instrument that has not printed today.
     # Its quote is then the previous session's (observed yesterday), with price and
@@ -487,10 +520,26 @@ def stamp_today(series: pd.Series, today, today_value: float,
             prev = prev.tz_localize(stamp.tz)
         if len(out.index) and prev >= out.index[0].normalize():
             out.loc[prev] = prev_eur
+            previous_row = prev
     out.loc[stamp] = float(today_value)
     out = out.sort_index()
     out.name = series.name
     out.attrs = dict(getattr(series, "attrs", {}) or {})
+    if previous_row is not None:
+        source_symbol = str(quote.get("symbol") or ticker or series.name or "")
+        native_previous = _native_previous_date(quote, source_symbol, day.date())
+        out.attrs[CURRENT_SESSION_BASELINE_ATTR] = {
+            "at": day.date().isoformat(),
+            "anchor": previous_row.date().isoformat(),
+            "observation_date": (
+                native_previous.isoformat() if native_previous is not None else None
+            ),
+            "symbol": source_symbol,
+        }
+    else:
+        # A rolled pair or an unavailable previous close supplies no new baseline.
+        # Do not retain metadata that appears to authorise this newer point.
+        out.attrs.pop(CURRENT_SESSION_BASELINE_ATTR, None)
     return out
 
 

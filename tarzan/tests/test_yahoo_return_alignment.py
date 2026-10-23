@@ -857,7 +857,8 @@ class TestVenueConsensus:
         }
 
     def test_an_independent_previous_close_rejects_the_fictitious_baseline(self):
-        referee = {"price": 28.93, "prev_close": 29.01, "date": self._TODAY}
+        referee = {"price": 28.93, "prev_close": 29.01, "date": self._TODAY,
+                   "prev_date": dt.date(2026, 10, 7), "venue": "XETRA"}
         import tarzan.runtime as runtime
         from tarzan.data.current_session import pick_quote
 
@@ -1047,13 +1048,15 @@ class TestTheIndependentBaselineAlwaysApplies:
             "ABC.DE": {"price": 29.065, "prev_close": 29.28, "volume": 9, "time": self._ts(9, 5)},
             "ABC.PA": {"price": 28.995, "prev_close": 29.08, "volume": 2756, "time": self._ts(9, 4)},
         }
-        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY, "venue": "XETRA"}
+        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY,
+                   "prev_date": dt.date(2026, 10, 8), "venue": "XETRA"}
         q = self._pick(["ABC.DE", "ABC.PA"], quotes, 29.28, referee)
         assert q.get("price") == 28.995
 
     def test_a_single_venue_keeps_its_price_and_takes_the_independent_baseline(self):
         quotes = {"ABC.DE": {"price": 29.065, "prev_close": 29.28, "time": self._ts(9, 5)}}
-        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY, "venue": "XETRA"}
+        referee = {"price": 28.99, "prev_close": 28.94, "date": self._TODAY,
+                   "prev_date": dt.date(2026, 10, 8), "venue": "XETRA"}
         q = self._pick(["ABC.DE"], quotes, 29.28, referee)
         assert q.get("price") == 29.065
         assert q.get("prev_close") == 28.94
@@ -1061,11 +1064,13 @@ class TestTheIndependentBaselineAlwaysApplies:
     def test_a_nav_referee_does_not_judge_market_baselines(self):
         """justETF serves the issuer's NAV, dated days back, for a fund not on Xetra."""
         quotes = {"ABC.PA": {"price": 137.5, "prev_close": 135.57, "time": self._ts(9, 22)}}
-        referee = {"price": 133.91, "prev_close": 132.9, "date": self._TODAY, "venue": "NAV"}
+        referee = {"price": 133.91, "prev_close": 132.9, "date": self._TODAY,
+                   "prev_date": dt.date(2026, 10, 8), "venue": "NAV"}
         q = self._pick(["ABC.PA"], quotes, 135.57, referee)
         assert q.get("prev_close") == 135.57
 
     def test_a_sound_baseline_is_left_alone(self):
         quotes = {"ABC.MI": {"price": 74.41, "prev_close": 74.34, "time": self._ts(9, 33)}}
-        referee = {"price": 74.38, "prev_close": 74.35, "date": self._TODAY, "venue": "XETRA"}
+        referee = {"price": 74.38, "prev_close": 74.35, "date": self._TODAY,
+                   "prev_date": dt.date(2026, 10, 8), "venue": "XETRA"}
         assert self._pick(["ABC.MI"], quotes, 74.34, referee).get("prev_close") == 74.34

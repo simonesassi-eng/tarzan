@@ -88,13 +88,15 @@ class TestTheOneDay:
     TODAY = dt.date(2026, 10, 8)
 
     def test_agreeing_quotes(self):
-        q = {"price": 99.4, "prev_close": 100.0, "date": self.TODAY}
+        q = {"price": 99.4, "prev_close": 100.0, "date": self.TODAY,
+             "prev_date": dt.date(2026, 10, 7), "venue": "XETRA"}
         assert xc.check_one_day(-0.55, q, self.TODAY)["status"] == xc.OK
 
     def test_the_8_oct_figure_against_the_second_source(self):
         """-4.38% printed; the second source's Xetra pair for the session said -0.72%."""
-        q = {"price": 74.37, "prev_close": 74.91, "date": self.TODAY}
-        v = xc.check_one_day(-4.38, q, self.TODAY, _tape())
+        q = {"price": 74.37, "prev_close": 74.91, "date": self.TODAY,
+             "prev_date": dt.date(2026, 10, 7), "venue": "XETRA"}
+        v = xc.check_one_day(-4.38, q, self.TODAY, _tape(end="2026-10-08"))
         assert v["status"] == xc.DIVERGED
 
     def test_yesterdays_quote_cannot_referee_today(self):

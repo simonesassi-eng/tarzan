@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from contextvars import copy_context
 from typing import Optional
 
 import pandas as pd
+from tarzan.data.referee import finite_number, observation_date
 from tarzan.runtime.memo import memoized, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
@@ -64,12 +66,18 @@ def _get_json(url: str) -> Optional[dict]:
     except Exception as e:  # noqa: BLE001 — a referee must never break a run
         logger.info("justETF unreachable (%s): %s", type(e).__name__, url.split("?")[0])
         return None
-    if not r.ok or "json" not in (r.headers.get("content-type") or ""):
-        return None
     try:
-        return r.json()
+        if not r.ok or "json" not in str(r.headers.get("content-type") or "").lower():
+            return None
+        body = r.json()
+        return body if isinstance(body, dict) else None
     except ValueError:
         return None
+    finally:
+        # requests.get creates a short-lived session. Release a received response on
+        # every exit, including an HTML fallback or malformed JSON answer.
+        with suppress(Exception):
+            r.close()
 
 
 def _fetch_series(isin: str) -> Optional[pd.Series]:
@@ -78,34 +86,68 @@ def _fetch_series(isin: str) -> Optional[pd.Series]:
     body = _get_json(
         _BASE.format(isin=isin) + "/performance-chart?locale=en&currency=EUR"
         "&valuesType=MARKET_VALUE&reduceData=false&includeDividends=true")
-    points = (body or {}).get("series") or []
+    if not isinstance(body, dict):
+        return None
+    points = body.get("series")
+    if not isinstance(points, (list, tuple)):
+        return None
+    from tarzan import runtime
+
+    today = runtime.today()
     data = {}
     for p in points:
         try:
-            data[pd.Timestamp(p["date"])] = float(p["value"]["raw"])
+            day = observation_date(p["date"])
+            value = finite_number(p["value"]["raw"], positive=True)
         except (KeyError, TypeError, ValueError):
             continue
+        if day is not None and day <= today and value is not None:
+            data[pd.Timestamp(day)] = value
     if not data:
         return None
-    s = pd.Series(data).sort_index()
-    return s[s > 0]
+    return pd.Series(data, dtype=float).sort_index()
 
 
 def _fetch_quote(isin: str) -> Optional[dict]:
-    """``{price, prev_close, date, prev_date, venue}`` for today's quote, or None."""
+    """A finite, dated EUR market pair, or None; freshness is never invented."""
     body = _get_json(_BASE.format(isin=isin) + f"/quote?locale=en&currency=EUR&isin={isin}")
-    if not body:
+    if not isinstance(body, dict) or not _response_matches_quote_request(body, isin):
         return None
     try:
-        return {
-            "price": float(body["latestQuote"]["raw"]),
-            "prev_close": float(body["previousQuote"]["raw"]),
-            "date": pd.Timestamp(body["latestQuoteDate"]).date(),
-            "prev_date": pd.Timestamp(body["previousQuoteDate"]).date(),
-            "venue": body.get("quoteTradingVenue"),
-        }
+        price = finite_number(body["latestQuote"]["raw"], positive=True)
+        previous = finite_number(body["previousQuote"]["raw"], positive=True)
+        day = observation_date(body["latestQuoteDate"])
+        previous_day = observation_date(body["previousQuoteDate"])
     except (KeyError, TypeError, ValueError):
         return None
+    from tarzan import runtime
+
+    if (
+        price is None or previous is None or day is None or previous_day is None
+        or previous_day >= day or day > runtime.today()
+    ):
+        return None
+    return {
+        "price": price, "prev_close": previous, "date": day, "prev_date": previous_day,
+        "venue": body.get("quoteTradingVenue"), "currency": "EUR",
+    }
+
+
+def _response_matches_quote_request(body: dict, isin: str) -> bool:
+    """Reject an explicit identity/response-currency contradiction.
+
+    The observed quote schema supplies neither field; ISIN and EUR are the request's
+    contract. Check exact optional scalar declarations if a response supplies them,
+    never the fund's base currency or a venue's trading currency: those can legitimately
+    differ from the requested EUR quote.
+    """
+    for field, expected in (("isin", str(isin).strip().upper()), ("currency", "EUR")):
+        supplied = body.get(field)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str) or supplied.strip().upper() not in ("", expected):
+            return False
+    return True
 
 
 def prefetch(isins) -> None:
