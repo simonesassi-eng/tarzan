@@ -10,6 +10,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import pandas as pd
@@ -86,6 +87,19 @@ def _tape_ends_today(series, today) -> bool:
     return pd.Timestamp(clean.index[-1]).date() == today
 
 
+@dataclass
+class _MetricPhase:
+    """One owned preparation result, adopted only after all workers exit."""
+
+    name: str
+    context: dict = field(default_factory=dict)
+    diagnostics: list = field(default_factory=list)
+    outcome: str = "INTERRUPTED"
+    timing: dict = field(default_factory=dict)
+    error: BaseException | None = None
+    missing_benchmarks: tuple[str, ...] = ()
+
+
 class MetricsEngine:
     """Computes all portfolio metrics."""
 
@@ -108,8 +122,9 @@ class MetricsEngine:
         self.rebalance_seeds = rebalance_seeds or []
         self._computers: list[Callable] = [
             self._valuation,
-            # Closed order positions are portfolio evidence, not an optional
-            # watchlist. Fetch them before reference discovery spends any time.
+            # Closed positions are essential portfolio evidence. The LIVE
+            # owner may overlap independent reference preparation under its
+            # shared native cap; deterministic adoption retains this order.
             self._portfolio_history,
             # Every later benchmark consumer receives only the resolved listing
             # and matching series, including the benchmark current-point stamp.
@@ -194,7 +209,35 @@ class MetricsEngine:
         from tarzan.runtime.workload import StageClock
         ctx: dict = {}
         degraded: list[str] = []
-        for computer in self._computers:
+        index = 0
+        while index < len(self._computers):
+            if self._can_prepare_sources_together(index):
+                phases, preparation_error = self._prepare_sources_together()
+                interruption = preparation_error
+                if interruption is None or isinstance(interruption, Exception):
+                    source_interruption = next((
+                        phase.error for phase in phases
+                        if phase.error is not None and not isinstance(phase.error, Exception)
+                    ), None)
+                    if source_interruption is not None:
+                        # A normal submission/canceled-future defect must not
+                        # mask cancellation from an accepted, joined source.
+                        # The owner's own BaseException retains precedence.
+                        interruption = source_interruption
+                for phase in phases:
+                    try:
+                        self._adopt_source_phase(ctx, phase, degraded)
+                    except Exception:
+                        if interruption is not None:
+                            # Evidence/observation failure must not replace a
+                            # source's primary cancellation after both joins.
+                            raise interruption from None
+                        raise
+                if interruption is not None:
+                    raise interruption
+                index += 2
+                continue
+            computer = self._computers[index]
             name = getattr(computer, "__name__", str(computer))
             started = StageClock.capture()
             outcome = "INTERRUPTED"
@@ -223,6 +266,7 @@ class MetricsEngine:
                         and name in ctx.get("_degraded", []) else outcome,
                         **started.fields(),
                     })
+            index += 1
         degraded = list(dict.fromkeys(
             degraded + list(ctx.get("_degraded", []))
         ))
@@ -235,11 +279,185 @@ class MetricsEngine:
         ctx["_degraded"] = degraded
         return self._build_result(ctx)
 
+    def _can_prepare_sources_together(self, index: int) -> bool:
+        """Only the known independent LIVE pair may use the native owner."""
+        from tarzan import runtime
+        from tarzan.runtime.session import current_session
+        from tarzan.runtime.transport import ProviderBudget
+
+        if index + 1 >= len(self._computers):
+            return False
+        if type(self) is not MetricsEngine:
+            return False
+        first, second = self._computers[index:index + 2]
+        if not (
+            getattr(first, "__self__", None) is self
+            and getattr(first, "__func__", None) is MetricsEngine._portfolio_history_from_orders
+            and getattr(second, "__self__", None) is self
+            and getattr(second, "__func__", None) is MetricsEngine._preprocess_benchmarks
+            and getattr(self._prepare_benchmark_context, "__func__", None)
+            is MetricsEngine._prepare_benchmark_context
+        ):
+            return False
+        session = current_session()
+        if session is None or not runtime.allows_live_transport():
+            return False
+        budget = session.transport
+        workers = cfg.max_workers()
+        return (
+            isinstance(budget, ProviderBudget)
+            and type(workers) is int and workers >= 2
+            and budget.coordinator.capacity >= 2
+            and budget.optional_work_token() is None
+            and runtime.context().attempt_id == session.context.attempt_id
+        )
+
+    def _prepare_source_phase(self, phase: _MetricPhase) -> _MetricPhase:
+        from tarzan.runtime import data_quality as dq
+        from tarzan.runtime.workload import StageClock
+
+        started = StageClock.capture()
+        dq.defer_into(phase.diagnostics)
+        try:
+            if phase.name == "_portfolio_history_from_orders":
+                self._portfolio_history_from_orders(phase.context)
+            else:
+                phase.missing_benchmarks = self._prepare_benchmark_context(phase.context)
+            phase.outcome = "SUCCEEDED"
+        except BaseException as error:
+            # Joining must not abandon the other branch, including when a
+            # worker reports cancellation/SystemExit. The owner raises the
+            # canonical primary interruption only after every accepted task.
+            phase.error = error
+            phase.outcome = "FAILED" if isinstance(error, Exception) else "INTERRUPTED"
+        finally:
+            try:
+                phase.timing = started.fields()
+            except Exception:
+                # Timing is an observer, not financial authority. Unknown
+                # timing stays absent; do not publish a fabricated zero or
+                # mask the source's primary interruption.
+                try:
+                    logger.warning(
+                        "Metric phase timing unavailable; source outcome retained.",
+                        extra={"public_code": "METRIC_PHASE_TIMING_UNAVAILABLE"},
+                    )
+                except Exception:
+                    # A failing log handler is not source/financial authority.
+                    pass
+        return phase
+
+    def _prepare_sources_together(self) -> tuple[list[_MetricPhase], BaseException | None]:
+        from tarzan.runtime.session import current_session
+
+        phases = [
+            _MetricPhase("_portfolio_history_from_orders"),
+            _MetricPhase("_preprocess_benchmarks"),
+        ]
+        pending = []
+        error = None
+        # Declaration precedes submission and lasts through both joins. It
+        # holds no native permit: SDK parents, cache waits and child executors
+        # remain free to coordinate under the SAME aggregate admission cap.
+        with current_session().transport.essential_work():
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="tarzan-sources") as pool:
+                try:
+                    for phase in phases:
+                        pending.append(pool.submit(
+                            copy_context().run, self._prepare_source_phase, phase,
+                        ))
+                except BaseException as failure:
+                    error = failure
+                for phase, future in zip(phases, pending):
+                    try:
+                        future.result()
+                    except BaseException as failure:
+                        # A canceled future or setup failure still must not
+                        # release the owner's clients before the other joins.
+                        if phase.error is None:
+                            phase.error = failure
+                            phase.outcome = (
+                                "FAILED" if isinstance(failure, Exception) else "INTERRUPTED"
+                            )
+                        elif isinstance(phase.error, Exception) and not isinstance(failure, Exception):
+                            # Escalate cancellation, but never replace an
+                            # already-captured source cancellation with a
+                            # secondary timing/logging exception.
+                            phase.error = failure
+                            phase.outcome = "INTERRUPTED"
+                        if isinstance(failure, Exception):
+                            if phase.error is failure:
+                                error = error or failure
+                        elif not (
+                            future.done() and not future.cancelled()
+                            and future.exception() is failure
+                        ):
+                            # A completed callback's cancellation belongs to
+                            # its phase and follows canonical phase order.
+                            # An interruption of the owner's wait is instead
+                            # the owner's primary error, even if a worker also
+                            # reports cancellation while the executor drains.
+                            error = error or failure
+            # Executor exit drains accepted callbacks even if submission or
+            # a future failed. An unsubmitted branch is not a successful stage.
+        return phases[:len(pending)], error
+
+    def _adopt_source_phase(self, ctx: dict, phase: _MetricPhase, degraded: list[str]) -> None:
+        from tarzan.runtime import data_quality as dq
+        from tarzan.runtime.ledger import LedgerEntryType
+        from tarzan.runtime.session import current_session
+
+        session = current_session()
+        conflicts = (set(phase.context) & set(ctx)) - {"_degraded"}
+        if conflicts:
+            # This is a port-contract defect, not permission for last-writer
+            # wins or source-priority inversion. Retain the owner's original
+            # facts and block normal portfolio/planning publication.
+            phase.error = RuntimeError("independent metric phases wrote overlapping context")
+            phase.outcome = "FAILED"
+            session.ledger.open_failure(
+                stage="metric_source_preparation", stable_code="METRIC_PHASE_CONTEXT_CONFLICT",
+                severity="CRITICAL", error={"fields": sorted(conflicts)},
+                affected_outputs=["portfolio", "planning"],
+                analytical_impact="Independent preparation fields overlap; no coherent merge is proven.",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+            )
+        for name, value in phase.context.items():
+            if name == "_degraded":
+                ctx.setdefault(name, []).extend(value)
+            elif name not in conflicts:
+                ctx[name] = value
+        dq.replay(phase.diagnostics)
+        if phase.missing_benchmarks:
+            self._report_essential_benchmark_failure(phase.missing_benchmarks)
+        if phase.error is not None and isinstance(phase.error, Exception):
+            degraded.append(phase.name)
+            logger.error("Metric computer '%s' failed: %s", phase.name, phase.error)
+            dq.error(
+                "metrics",
+                f"computer '{phase.name}' failed ({phase.error}); its section fell back to "
+                "defaults (blank/zero) and should NOT be read as a real result",
+                context=phase.name,
+            )
+        session.ledger.append(LedgerEntryType.STAGE, {
+            "stage": f"metrics:{phase.name}",
+            "outcome": "DEGRADED" if phase.outcome == "SUCCEEDED"
+            and phase.name in ctx.get("_degraded", []) else phase.outcome,
+            "parallel_group": "essential_source_preparation",
+            **phase.timing,
+        })
+
     # ------------------------------------------------------------------
     # Run-scoped instrument preprocessing
     # ------------------------------------------------------------------
     def _preprocess_benchmarks(self, ctx: dict) -> None:
         """Resolve all benchmark tickers once before analytical consumers."""
+        missing = self._prepare_benchmark_context(ctx)
+        if missing:
+            self._report_essential_benchmark_failure(missing)
+
+    def _prepare_benchmark_context(self, ctx: dict) -> tuple[str, ...]:
+        """Prepare owned reference facts; the caller publishes any failure."""
         required_names = tuple(dict.fromkeys((
             cfg.benchmark_beta_name(), cfg.benchmark_geo_allocation(),
         )))
@@ -263,21 +481,25 @@ class MetricsEngine:
         missing = [name for name in required_names if name not in catalog]
         if missing:
             ctx.setdefault("_degraded", []).append("_preprocess_benchmarks")
-            from tarzan.runtime.session import current_session
+        return tuple(missing)
 
-            session = current_session()
-            if session is not None:
-                session.ledger.open_failure(
-                    stage="benchmark_preprocessing", stable_code="ESSENTIAL_BENCHMARK_UNAVAILABLE",
-                    severity="CRITICAL", error={"missing_references": missing},
-                    affected_outputs=["benchmark_metrics", "benchmark_charts"],
-                    analytical_impact="Required analytical references have no usable source history.",
-                    publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
-                )
-            logger.error(
-                "Required benchmark source history is unavailable.",
-                extra={"public_code": "ESSENTIAL_BENCHMARK_UNAVAILABLE"},
+    @staticmethod
+    def _report_essential_benchmark_failure(missing) -> None:
+        from tarzan.runtime.session import current_session
+
+        session = current_session()
+        if session is not None:
+            session.ledger.open_failure(
+                stage="benchmark_preprocessing", stable_code="ESSENTIAL_BENCHMARK_UNAVAILABLE",
+                severity="CRITICAL", error={"missing_references": missing},
+                affected_outputs=["benchmark_metrics", "benchmark_charts"],
+                analytical_impact="Required analytical references have no usable source history.",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
             )
+        logger.error(
+            "Required benchmark source history is unavailable.",
+            extra={"public_code": "ESSENTIAL_BENCHMARK_UNAVAILABLE"},
+        )
 
     def _prefetch_priority_quotes(self, required_catalog) -> None:
         """Acquire primary bars/history before optional discovery spends quota.

@@ -41,7 +41,7 @@ def owned(*, total=30, optional=2, reserve=5):
             budget.close()
 
 
-def test_closed_order_history_is_ready_before_optional_benchmark_discovery():
+def test_closed_order_history_has_canonical_adoption_precedence_over_reference_preparation():
     engine = metrics.MetricsEngine([], InvestorConfig(), orders=[SimpleNamespace()])
     stages = [computer.__name__ for computer in engine._computers]
     assert stages.index("_portfolio_history_from_orders") < stages.index("_preprocess_benchmarks")
