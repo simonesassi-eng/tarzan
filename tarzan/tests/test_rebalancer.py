@@ -385,6 +385,7 @@ def test_c3_deployable_cash_is_a_funding_source_and_protected_cash_remains(
         isin="CASH", ticker="CASH", quantity=cash_total,
         cost_basis_eur=cash_total, market_value_eur=cash_total, currency="EUR",
         current_price=1.0, current_value=cash_total,
+        security_type="CASH",
         asset_class=AssetClass.CASH_EQUIVALENTS,
     )
     config = InvestorConfig()

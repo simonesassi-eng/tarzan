@@ -131,6 +131,9 @@ def sample_holdings() -> list[Holding]:
             isin="CASH00000001", ticker="CASH_ETF", quantity=10.0,
             cost_basis_eur=1000.0, market_value_eur=1000.0, currency="EUR",
             name="Cash ETF", current_price=100.0, current_value=1000.0,
+            # This shared solver fixture intends an account-cash balance.
+            # Names/tickers are deliberately not mechanics evidence.
+            security_type="CASH",
             asset_class=AssetClass.CASH_EQUIVALENTS,
         ),
     ]
