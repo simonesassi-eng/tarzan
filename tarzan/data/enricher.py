@@ -1630,7 +1630,7 @@ def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
     return come from the sibling, so the venue basis cancels in the division;
     the result is then applied to THIS venue's last real close::
 
-        synthetic = own_last_close * (1 + sibling_today / sibling_prev)
+        synthetic = own_last_close * (sibling_today / sibling_prev)
 
     Splicing the sibling's raw price instead would inject the venue basis as
     a fake return. Measured on NTSG (125 overlapping days) that basis has a
