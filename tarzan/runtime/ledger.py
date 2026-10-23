@@ -15,6 +15,12 @@ from tarzan.contracts.immutable import freeze_json, thaw_json
 
 
 LEDGER_SCHEMA_VERSION = "1.0"
+# Only fixed, public provider identities are eligible. URLs, instrument keys
+# and arbitrary caller labels must never become failure identity/telemetry.
+_FAILURE_IDENTITY_SCOPES = frozenset(
+    f"provider:{provider}"
+    for provider in ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini")
+)
 
 
 class Availability(str, Enum):
@@ -153,7 +159,7 @@ class RunLedger:
         self.attempt_id = attempt_id
         self._lock = threading.RLock()
         self._entries: list[LedgerEntry] = []
-        self._failure_ordinals: dict[tuple[str, str], int] = {}
+        self._failure_ordinals: dict[tuple[str, ...], int] = {}
         self._remedy_ordinals: dict[str, int] = {}
         self._failure_revision = 0
         self._failure_cache_revision = -1
@@ -199,17 +205,41 @@ class RunLedger:
         analytical_impact: str,
         publication_impact: str,
         context: Optional[Mapping[str, Any]] = None,
+        identity_scope: Optional[str] = None,
     ) -> str:
+        """Open a failure without letting unrelated providers exchange IDs.
+
+        Unscoped calls retain their exact v1 counter/hash and payload. A fixed
+        provider scope owns an independent ordinal and uses structured v2
+        identity bytes, so native completion order cannot change its identity.
+        Caller-controlled URLs, credentials or instrument labels are not scopes.
+        """
+        if identity_scope is not None and (
+            type(identity_scope) is not str
+            or identity_scope not in _FAILURE_IDENTITY_SCOPES
+        ):
+            raise ValueError("unsupported failure identity scope")
         with self._lock:
-            key = (stage, stable_code)
+            key = (
+                (stage, stable_code) if identity_scope is None
+                else (stage, stable_code, identity_scope)
+            )
             ordinal = self._failure_ordinals.get(key, 0) + 1
             self._failure_ordinals[key] = ordinal
         normalized_error = ErrorNormalizer.normalize(error)
         if not isinstance(normalized_error, Mapping):
             normalized_error = {"message": normalized_error}
-        raw = f"failure-v1|{stage}|{stable_code}|{ordinal}"
-        failure_id = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
-        self.append(LedgerEntryType.FAILURE_OPEN, {
+        identity = (
+            f"failure-v1|{stage}|{stable_code}|{ordinal}".encode("utf-8")
+            if identity_scope is None
+            else canonical_json_bytes({
+                "version": "failure-v2", "stage": stage,
+                "stable_code": stable_code, "identity_scope": identity_scope,
+                "ordinal": ordinal,
+            }, ascii_only=True)
+        )
+        failure_id = hashlib.sha256(identity).hexdigest()[:24]
+        payload = {
             "failure_id": failure_id,
             "stage": stage,
             "stable_code": stable_code,
@@ -219,7 +249,10 @@ class RunLedger:
             "affected_outputs": list(affected_outputs),
             "analytical_impact": analytical_impact,
             "publication_impact": publication_impact,
-        })
+        }
+        if identity_scope is not None:
+            payload["identity_scope"] = identity_scope
+        self.append(LedgerEntryType.FAILURE_OPEN, payload)
         return failure_id
 
     def remedy(

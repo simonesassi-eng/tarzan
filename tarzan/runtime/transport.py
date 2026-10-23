@@ -165,6 +165,8 @@ class ProviderBudget:
         return remaining
 
     def _failure(self, provider, code):
+        if type(provider) is not str or provider not in _PROVIDERS:
+            raise ValueError("unknown provider transport")
         with self._lock:
             key = (provider, code)
             if key in self._reported:
@@ -179,6 +181,7 @@ class ProviderBudget:
             affected_outputs=["market_data"], publication_impact="DEGRADE",
             analytical_impact="provider evidence unavailable; only explicit data-quality fallbacks remain",
             context={"provider": provider},
+            identity_scope=f"provider:{provider}",
         )
 
     @contextmanager
