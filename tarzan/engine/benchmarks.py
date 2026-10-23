@@ -28,6 +28,7 @@ from tarzan.engine.stats import (
     normalize_index,
     rf_annual_pct,
     risk_metric_row,
+    statistical_series,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,8 @@ class ResolvedBenchmark:
     # portfolio-level consumer reads ``history`` (EUR); the per-instrument return
     # columns read ``history_native``, because a return is a ratio and FX does not
     # divide out of one. 24 of the 62 tracked instruments trade in USD.
+    # Preprocessing moves the legacy native-series attr into this field; the
+    # canonical EUR series must not carry a second, independently stale copy.
     history_native: Optional[pd.Series] = None
     currency: Optional[str] = None
 
@@ -236,9 +239,11 @@ def preprocess_benchmarks(
             "resolved_ticker": resolved_ticker,
             "requested_ticker": input_ticker,
         })
-        native = canonical_history.attrs.get(_NATIVE_ATTR)
+        # Pandas' copy above already deep-copied attrs, including the native
+        # tape. Give that independent tape one owner instead of retaining an
+        # unused duplicate on every downstream EUR-series transformation.
+        native = canonical_history.attrs.pop(_NATIVE_ATTR, None)
         if native is not None and len(native):
-            native = native.copy()
             native.name = resolved_ticker
         return ResolvedBenchmark(
             name=name,
@@ -314,6 +319,13 @@ def _compute_single_benchmark_metrics(
             ``risk_metric_row`` for the Sharpe/Sortino excess-return form;
             ``None`` falls back to the scalar ``RISK_FREE_RATE``.
     """
+    # Numerical consumers do not need the full provider-evidence payload.
+    # Keep it on the source catalog; retain the listing/calendar on each copy.
+    bench = statistical_series(bench)
+    if ab_benchmark is not None:
+        ab_benchmark = statistical_series(ab_benchmark)
+    if isinstance(rf_daily, pd.Series):
+        rf_daily = statistical_series(rf_daily)
     metrics = {
         **risk_metric_row(bench, rf_daily),
         **{k: compute_period_return(bench, k) for k in PERIOD_WINDOWS},
@@ -375,6 +387,11 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     ``rf_daily`` is the optional time-varying daily risk-free path used for the
     Sharpe/Sortino excess-return form; ``None`` falls back to the scalar rate.
     """
+    s = statistical_series(s)
+    if bench_history is not None:
+        bench_history = statistical_series(bench_history)
+    if isinstance(rf_daily, pd.Series):
+        rf_daily = statistical_series(rf_daily)
     # Period returns — single shared bucket→window mapping (stats.PERIOD_WINDOWS)
     # so every table in Tarzan measures the same windows.
     for key in PERIOD_WINDOWS:

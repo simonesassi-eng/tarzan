@@ -83,6 +83,33 @@ def _series_ticker(series) -> str:
     return str(attrs.get("resolved_ticker") or getattr(series, "name", "") or "")
 
 
+def statistical_series(series: pd.Series) -> pd.Series:
+    """An independent numerical copy for statistics, not for source evidence.
+
+    Provider series may carry full native histories and per-row provenance in
+    ``attrs``. Pandas deep-copies those attributes during ordinary arithmetic,
+    slicing and resampling, multiplying their cost across every risk metric.
+    Constructing from the array avoids copying that payload at this boundary.
+
+    Values, dtype, index, name and duplicate-label policy remain unchanged.
+    The resolved listing is retained because return windows use its exchange
+    calendar, even when the series is named ``Close``. Original provider
+    evidence is neither modified nor replaced: quote selection, FX, coverage
+    and publication gates must continue to consume the source series.
+    """
+    result = pd.Series(
+        series.array,
+        index=series.index.copy(deep=True),
+        name=series.name,
+        copy=True,
+    )
+    result.flags.allows_duplicate_labels = series.flags.allows_duplicate_labels
+    ticker = _series_ticker(series)
+    if ticker:
+        result.attrs["resolved_ticker"] = ticker
+    return result
+
+
 def _roll_to_session(timestamp, ticker: str):
     """Roll a timestamp back to the last SESSION on-or-before it, on
     ``ticker``'s exchange calendar. Falls back to the Mon-Fri rule."""
