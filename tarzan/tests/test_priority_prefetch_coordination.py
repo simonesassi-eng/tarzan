@@ -193,9 +193,11 @@ def test_expired_authority_starts_no_requests_in_either_branch(monkeypatch):
 @pytest.mark.parametrize("maximum", [0, -1, True, "4"])
 def test_invalid_worker_allowance_fails_before_any_provider_acquisition(monkeypatch, maximum):
     configure(monkeypatch)
-    monkeypatch.setattr(config, "max_workers", lambda: maximum)
     monkeypatch.setattr(_yf_net, "fetch_download", lambda *a, **kw: pytest.fail("invalid bar worker limit"))
     monkeypatch.setattr(enricher, "_fetch_history", lambda *a: pytest.fail("invalid macro worker limit"))
     with owned() as (session, _):
+        # The native owner independently validates its cap at construction.
+        # Exercise this phase's guard after establishing that valid owner.
+        monkeypatch.setattr(config, "max_workers", lambda: maximum)
         engine()._prefetch_priority_quotes(required_catalog())
         assert stage(session)["outcome"] == "DEGRADED"

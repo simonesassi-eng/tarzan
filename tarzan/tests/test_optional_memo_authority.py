@@ -1,6 +1,7 @@
 """Optional discoveries cannot poison or lead essential provider work."""
 
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from contextlib import nullcontext
 from contextvars import copy_context
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -210,6 +211,89 @@ def test_legacy_transport_without_optional_scope_keeps_ordinary_memo_contract(ow
         ) == 106.0
     finally:
         session.transport = original
+
+
+@pytest.mark.parametrize("module,reset,namespace", [
+    ("bond_fetcher", "reset_memo", "bond.price"),
+    ("justetf", "reset_memo", "justetf.series"),
+    ("justetf", "reset_memo", "justetf.quote"),
+    ("market_quotes", "reset_quote_memo", "market.official"),
+    ("enricher", "reset_run_caches", "enricher.history"),
+    ("enricher", "reset_run_caches", "enricher.price_download"),
+    ("enricher", "reset_run_caches", "enricher.fx"),
+])
+def test_public_provider_reset_clears_misses_inside_the_same_optional_deadline(
+    owner, module, reset, namespace,
+):
+    from importlib import import_module
+
+    session, _ = owner
+    reset_provider = getattr(import_module("tarzan.data." + module), reset)
+    with session.transport.optional_work("same-deadline"):
+        assert memoized(namespace, "key", lambda: None, legacy={}) is None
+        assert memoized(
+            namespace, "key", lambda: pytest.fail("lost same-scope miss"), legacy={},
+        ) is None
+        reset_provider()
+        assert memoized(namespace, "key", lambda: 106.0, legacy={}) == 106.0
+
+
+@pytest.mark.parametrize("optional", [False, True])
+@pytest.mark.parametrize("old_payload", [None, {"price": 106.0}])
+def test_reset_does_not_follow_or_republish_a_pre_reset_pending_leader(
+    owner, optional, old_payload,
+):
+    session, _ = owner
+    started, release = Event(), Event()
+
+    def old_loader():
+        started.set()
+        assert release.wait(timeout=2.0)
+        return old_payload
+
+    scope = session.transport.optional_work("same-deadline") if optional else nullcontext()
+    with scope, ThreadPoolExecutor(max_workers=2) as pool:
+        old = pool.submit(
+            copy_context().run, memoized, "fixture", "key", old_loader, legacy={},
+        )
+        assert started.wait(timeout=1.0)
+        clear_provider_stores("fixture")
+        new = pool.submit(
+            copy_context().run, memoized, "fixture", "key",
+            lambda: {"price": 207.0}, legacy={},
+        )
+        try:
+            assert new.result(timeout=1.0) == {"price": 207.0}
+        finally:
+            release.set()
+        assert old.result(timeout=3.0) == old_payload
+    assert memoized(
+        "fixture", "key", lambda: pytest.fail("lost post-reset fact"), legacy={},
+    ) == {"price": 207.0}
+    assert session.providers.flight._pending == {}
+
+
+def test_reset_during_a_partial_batch_keeps_pre_reset_reads_without_cache_republication(owner):
+    session, _ = owner
+    assert memoized("fixture", "cached", lambda: 106.0, legacy={}) == 106.0
+    started, release = Event(), Event()
+
+    def loader(keys):
+        assert keys == ["pending"]
+        started.set()
+        assert release.wait(timeout=2.0)
+        return {"pending": 107.0}
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        before = pool.submit(
+            copy_context().run, memoized_many, "fixture", ["cached", "pending"],
+            loader, legacy={},
+        )
+        assert started.wait(timeout=1.0)
+        clear_provider_stores("fixture")
+        release.set()
+        assert before.result(timeout=3.0) == {"cached": 106.0, "pending": 107.0}
+    assert session.providers.store("fixture") == {}
 
 
 @pytest.mark.parametrize("payload", [

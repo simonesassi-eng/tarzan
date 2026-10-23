@@ -1247,10 +1247,11 @@ _quote_memo: dict[str, dict] = {}
 def reset_quote_memo() -> None:
     """Drop the run-scoped quote pairs (mirrors ``enricher.reset_run_caches``)."""
     from tarzan.data.listing_identity import reset_quote_identities
-    from tarzan.runtime.memo import provider_memo, provider_store
+    from tarzan.runtime.memo import clear_provider_stores, provider_memo, provider_store
 
     with provider_memo().lock:
         provider_store("market.official", _quote_memo).clear()
+        clear_provider_stores("market.official")
         reset_quote_identities()
 
 

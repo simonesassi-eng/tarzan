@@ -26,7 +26,7 @@ from typing import Optional
 
 import pandas as pd
 from tarzan.data.referee import finite_number, observation_date
-from tarzan.runtime.memo import memoized, provider_memo, provider_store
+from tarzan.runtime.memo import clear_provider_stores, memoized, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ def reset_memo() -> None:
     with provider_memo().lock:
         provider_store("justetf.series", _series_memo).clear()
         provider_store("justetf.quote", _quote_memo).clear()
+        clear_provider_stores("justetf.series", "justetf.quote")
 
 
 def _get_json(url: str) -> Optional[dict]:

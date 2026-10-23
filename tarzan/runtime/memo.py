@@ -69,6 +69,7 @@ class ProviderMemo:
     lock: RLock = field(default_factory=RLock)
     stores: dict[str, dict] = field(default_factory=dict)
     optional_stores: dict[Hashable, dict] = field(default_factory=dict)
+    generations: dict[str, int] = field(default_factory=dict)
 
     def store(self, namespace: str) -> dict:
         with self.lock:
@@ -142,8 +143,6 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
     optional_token = getattr(budget, "optional_work_token", None)
     work = optional_token() if callable(optional_token) else None
     authority = (budget, work[2]) if work is not None else None
-    store = owner.optional_store(namespace, authority) if authority is not None else common
-
     def cached(key):
         # A completed essential fact needs no fresh transport authority.
         return key in common or key in store
@@ -152,16 +151,25 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
         return common[key] if key in common else store[key]
 
     def flight_key(key):
-        return namespace, key, authority
+        return namespace, key, authority, generation
 
     ordered = list(dict.fromkeys(keys))
     with owner.lock:
-        missing = [key for key in ordered if not cached(key)]
+        generation = owner.generations.get(namespace, 0)
+        store = owner.optional_store(namespace, authority) if authority is not None else common
+        # Preserve facts already read by this call even if a later explicit
+        # reset clears their dictionary while another batch key is loading.
+        initial = {key: fact(key) for key in ordered if cached(key)}
+        missing = [key for key in ordered if key not in initial]
 
     def load_reserved(reserved):
         actual = [key[1] for key in reserved]
         with owner.lock:
-            still_missing = [key for key in actual if not cached(key)]
+            current_generation = owner.generations.get(namespace, 0) == generation
+            established = {
+                key: fact(key) for key in actual if current_generation and cached(key)
+            }
+            still_missing = [key for key in actual if key not in established]
         fetched = loader(still_missing) if still_missing else {}
         if any(key not in fetched for key in still_missing):
             raise ValueError("provider loader omitted a requested key")
@@ -170,7 +178,11 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
             if cache_if is None or cache_if(fetched[key])
         ]
         with owner.lock:
-            for key in admitted:
+            current_generation = owner.generations.get(namespace, 0) == generation
+            # Reset does not pretend to kill native I/O. An older caller may
+            # receive its response, but its leader cannot republish facts into
+            # the refreshed namespace or lead a post-reset single flight.
+            for key in admitted if current_generation else ():
                 value = deepcopy(fetched[key])
                 if authority is None:
                     # An independently completed optional payload can arrive
@@ -186,7 +198,10 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
                 else:
                     store[key] = value
             return {
-                flight_key(key): fact(key) if cached(key) else fetched[key]
+                flight_key(key): (
+                    fact(key) if current_generation and cached(key)
+                    else fetched[key] if key in fetched else established[key]
+                )
                 for key in actual
             }
 
@@ -196,7 +211,7 @@ def memoized_many(namespace: str, keys, loader, *, legacy: dict, cache_if=None) 
     with owner.lock:
         return {
             key: deepcopy(
-                resolved[flight_key(key)] if flight_key(key) in resolved else fact(key)
+                resolved[flight_key(key)] if flight_key(key) in resolved else initial[key]
             )
             for key in ordered
         }
@@ -209,9 +224,11 @@ def memoized(namespace: str, key, loader, *, legacy: dict, cache_if=None):
 
 
 def clear_provider_stores(*namespaces: str) -> None:
+    """Refresh named namespaces without admitting an older pending leader."""
     owner = provider_memo()
     with owner.lock:
-        for namespace in namespaces:
+        for namespace in dict.fromkeys(namespaces):
+            owner.generations[namespace] = owner.generations.get(namespace, 0) + 1
             owner.store(namespace).clear()
         for key in tuple(owner.optional_stores):
             if key[0] in namespaces:

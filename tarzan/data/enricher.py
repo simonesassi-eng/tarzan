@@ -43,7 +43,9 @@ from tarzan.data import price_cache
 from tarzan.data import _yf_net
 from tarzan import config as cfg
 from tarzan.runtime import data_quality as dq
-from tarzan.runtime.memo import memoized, memoized_many, provider_memo, provider_store
+from tarzan.runtime.memo import (
+    clear_provider_stores, memoized, memoized_many, provider_memo, provider_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,10 @@ def reset_run_caches() -> None:
         for namespace, legacy in namespaces:
             provider_store("enricher." + namespace, legacy).clear()
         provider_memo().store("enricher.price_download").clear()
+        clear_provider_stores(
+            *("enricher." + namespace for namespace, _legacy in namespaces),
+            "enricher.price_download",
+        )
     from tarzan.data import market_quotes as _mq
     _mq.reset_quote_memo()
     from tarzan.data import justetf as _je

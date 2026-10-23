@@ -14,7 +14,7 @@ from typing import Optional
 from urllib.request import Request, urlopen
 
 from tarzan.instruments.registry import InstrumentKind
-from tarzan.runtime.memo import memoized, provider_memo, provider_store
+from tarzan.runtime.memo import clear_provider_stores, memoized, provider_memo, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ _price_memo: dict[str, Optional[dict]] = {}
 def reset_memo() -> None:
     with provider_memo().lock:
         provider_store("bond.price", _price_memo).clear()
+        clear_provider_stores("bond.price")
 
 
 def fetch_bond_price(isin: str) -> Optional[dict]:
