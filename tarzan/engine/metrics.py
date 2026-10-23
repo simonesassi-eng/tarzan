@@ -1267,6 +1267,7 @@ class MetricsEngine:
             beta, alpha = _compute_beta_alpha(
                 ph, bench_history, block["cagr"],
                 risk_free=rf_annual_pct(self._rf_daily(ctx)),
+                input_kind="prices",
             )
             result["beta"] = beta
             result["alpha"] = alpha
