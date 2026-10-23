@@ -98,16 +98,42 @@ step and individual metric stages; a fast intraday batch is not a fast newslette
 Check required references, history/valuation availability, value-weighted return
 coverage, intraday bars and macro availability alongside elapsed time.
 
+Keep the measurement boundaries explicit. The private diagnostic's
+`duration_seconds` measures the entrypoint, excluding dependency imports and
+diagnostic projection/encryption. `run.timings.imports_seconds` measures module
+initialization after the shim's standard-library imports; the additive
+`imports_and_entrypoint_seconds` still excludes interpreter startup, GitHub
+bootstrap and cleanup. Workflow creation-to-completion includes runner/setup
+and artifact/cache work. Creation-to-SMTP-ACK measures server acceptance, not
+inbox receipt. Verification deliberately omits AI, claims and SMTP, so it is
+not a full-send benchmark.
+
+Stage wall times can overlap or contain nested stages. Process CPU measures all
+threads active in that interval, not exclusive CPU attributable to one stage;
+thread CPU measures only that stage's caller. Do not sum overlapping or nested
+wall/process-CPU observations. Frozen provider-tape calls include SDK
+constructors and consumer boundaries, not just physical HTTP requests; use the
+native transport ledger for native-request counts.
+
 The configured limits are 540 seconds of shared provider budget, 120 seconds for
 optional reference discovery and 90 seconds reserved for final evidence and
 publication. Native timeout/retry/pacing budgets apply in copied worker contexts;
 these limits do not terminate arbitrary Python CPU work.
 
-After closed-position history and required reference resolution, the owned run
-prefetches canonical holding/target/reference bars and the fixed macro histories
-before optional listing discovery. Optional probes can consume a provider's
-rate quota even without exhausting the time budget. Existing quote, baseline,
-currency, identity and freshness selection still happens on the ordinary paths.
+The native owned LIVE engine can prepare closed-position history and reference
+resolution in two joined branches. Required reference resolution precedes
+canonical holding/target/reference and fixed-macro prefetch, which precedes
+optional listing discovery; the independent closed-position history branch can
+overlap that work. Injected, pinned and ineligible callers keep sequential
+preparation. Both branches drain before publishing their context and share the
+same aggregate native-request cap. Executor worker counts are not separate
+native-request allowances; the aggregate cap is stricter than the former
+independent pools. A declared essential workload reserves one slot from
+optional requests while those branches are owned and joined.
+
+Optional probes can consume a provider's rate quota even without exhausting
+the time budget. Existing quote, baseline, currency, identity and freshness
+selection still happens on the ordinary paths.
 Per-symbol batch histories are memoized only within that run, with every native
 history parameter in the key and defensive copies. Previously acquired facts
 remain readable after I/O authority expires; missing symbols cannot start new
