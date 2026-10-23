@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Optional
 
 import numpy as np
@@ -541,6 +542,11 @@ def compute_sharpe_tv(daily_returns: pd.Series, rf_daily, *,
         return float("nan")
     rf = _align_rf_daily(daily_returns, rf_daily)
     excess = (daily_returns - rf).dropna()
+    return _sharpe_from_excess(excess, periods)
+
+
+def _sharpe_from_excess(excess: pd.Series, periods: int) -> float:
+    """The scalar Sharpe expression, shared with row-owned preparation."""
     sd = float(excess.std())
     if excess.empty or sd <= 0:
         return float("nan")
@@ -558,6 +564,11 @@ def compute_sortino_tv(daily_returns: pd.Series, rf_daily, *,
         return float("nan")
     rf = _align_rf_daily(daily_returns, rf_daily)
     excess = (daily_returns - rf).dropna()
+    return _sortino_from_excess(excess, periods)
+
+
+def _sortino_from_excess(excess: pd.Series, periods: int) -> float:
+    """The scalar Sortino expression, without repeating RF alignment."""
     if excess.empty:
         return float("nan")
     downside = excess.clip(upper=0.0)
@@ -593,16 +604,21 @@ def compute_sortino(daily_returns: pd.Series, annual_return: float,
 def compute_max_drawdown(series: pd.Series) -> float:
     if series.empty or len(series) < 2:
         return 0.0
+    drawdown = _positive_drawdowns(series)
+    return 0.0 if drawdown is None else float(drawdown.min())
+
+
+def _positive_drawdowns(series: pd.Series) -> Optional[pd.Series]:
+    """Fractional drawdowns on the same positive-price tail as both metrics."""
     # Guard the running-peak division: a leading zero/non-positive value makes
     # cummax==0 and (series-cummax)/cummax a 0/0 NaN (or ±inf against a zero
     # peak). Restrict to the strictly-positive tail so a synthetic/carry-flat
     # NAV that starts at 0 still yields a real drawdown instead of NaN.
     s = series[series > 0]
     if len(s) < 2:
-        return 0.0
+        return None
     cummax = s.cummax()
-    drawdown = (s - cummax) / cummax
-    return float(drawdown.min())
+    return (s - cummax) / cummax
 
 
 def compute_ulcer_index(series: pd.Series) -> float:
@@ -619,13 +635,12 @@ def compute_ulcer_index(series: pd.Series) -> float:
         return 0.0
     # Same cummax==0 guard as compute_max_drawdown: a leading zero peak makes
     # the percentage drawdown NaN/inf and poisons the RMS.
-    series = series[series > 0]
-    if len(series) < 2:
+    drawdown = _positive_drawdowns(series)
+    if drawdown is None:
         return 0.0
-    cummax = series.cummax()
     # Percentage drawdown at each point (≤ 0); square removes the sign so
     # depth and time-underwater both accumulate.
-    drawdown_pct = (series - cummax) / cummax * 100.0
+    drawdown_pct = drawdown * 100.0
     return float(np.sqrt((drawdown_pct ** 2).mean()))
 
 
@@ -639,8 +654,93 @@ def compute_cvar(daily_returns: pd.Series, confidence: float = 0.95) -> float:
     if daily_returns.empty or len(daily_returns) < 5:
         return float("nan")
     var = compute_var(daily_returns, confidence)
+    return _cvar_from_var(daily_returns, var)
+
+
+def _cvar_from_var(daily_returns: pd.Series, var: float) -> float:
+    """Preserve the original inclusive tail and empty-tail fallback."""
     tail = daily_returns[daily_returns <= var]
     return float(tail.mean()) if not tail.empty else var
+
+
+class PreparedStatistics:
+    """Row-owned numerical facts, never a source or a cross-run price cache.
+
+    Prices and a series-valued risk-free input are independent numerical
+    copies. A caller must not mutate this preparation while consuming it.
+    Each window/native-or-EUR tape gets its own preparation; provider evidence
+    stays on the source. Lazy facts are shared only by metrics of that row.
+    """
+
+    def __init__(self, series: pd.Series, rf_daily=None):
+        self.series = statistical_series(series)
+        self.rf_daily = (
+            statistical_series(rf_daily)
+            if isinstance(rf_daily, pd.Series) else rf_daily
+        )
+
+    @cached_property
+    def cagr(self) -> float:
+        return compute_cagr(self.series)
+
+    @cached_property
+    def daily_returns(self) -> pd.Series:
+        # Deliberately use the original, not dropna-cleaned prices. Changing
+        # that order would change pct_change's missing-observation semantics.
+        return self.series.pct_change().dropna()
+
+    @cached_property
+    def excess_returns(self) -> pd.Series:
+        rf = _align_rf_daily(self.daily_returns, self.rf_daily)
+        return (self.daily_returns - rf).dropna()
+
+    @cached_property
+    def drawdowns(self) -> Optional[pd.Series]:
+        return _positive_drawdowns(self.series)
+
+    @cached_property
+    def var_95(self) -> float:
+        return compute_var(self.daily_returns, 0.95)
+
+    def risk_metrics(self) -> dict:
+        """Same formulas/reduction order as the original risk_metric_row."""
+        cagr = self.cagr
+        daily_ret = self.daily_returns
+        vol = (
+            float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100
+            if len(daily_ret) > 0 else 0.0
+        )
+        if self.rf_daily is not None and len(daily_ret) > 0:
+            excess = self.excess_returns
+            sharpe = _sharpe_from_excess(excess, TRADING_DAYS)
+            sortino = _sortino_from_excess(excess, TRADING_DAYS)
+        else:
+            sharpe = compute_sharpe(cagr, vol)
+            sortino = (
+                compute_sortino(daily_ret, cagr)
+                if len(daily_ret) > 0 else float("nan")
+            )
+        drawdowns = self.drawdowns
+        max_drawdown = 0.0 if drawdowns is None else float(drawdowns.min())
+        ulcer = (
+            0.0 if drawdowns is None
+            else float(np.sqrt(((drawdowns * 100.0) ** 2).mean()))
+        )
+        var = self.var_95
+        cvar = (
+            float("nan") if daily_ret.empty or len(daily_ret) < 5
+            else _cvar_from_var(daily_ret, var)
+        )
+        return {
+            "cagr": cagr,
+            "volatility": vol,
+            "sharpe": sharpe,
+            "sortino": sortino,
+            "max_drawdown": max_drawdown * 100,
+            "ulcer_index": ulcer,
+            "var_95": _scale_or_nan(var, 100),
+            "cvar_95": _scale_or_nan(cvar, 100),
+        }
 
 
 def risk_metric_row(series: pd.Series, rf_daily=None) -> dict:
@@ -658,25 +758,7 @@ def risk_metric_row(series: pd.Series, rf_daily=None) -> dict:
     scalar ``RISK_FREE_RATE``. The single source of truth for the risk block, so
     time-varying vs scalar is decided once, here, for every table that shows it.
     """
-    cagr = compute_cagr(series)
-    daily_ret = series.pct_change().dropna()
-    vol = float(daily_ret.std()) * np.sqrt(TRADING_DAYS) * 100 if len(daily_ret) > 0 else 0.0
-    if rf_daily is not None and len(daily_ret) > 0:
-        sharpe = compute_sharpe_tv(daily_ret, rf_daily)
-        sortino = compute_sortino_tv(daily_ret, rf_daily)
-    else:
-        sharpe = compute_sharpe(cagr, vol)
-        sortino = compute_sortino(daily_ret, cagr) if len(daily_ret) > 0 else float("nan")
-    return {
-        "cagr": cagr,
-        "volatility": vol,
-        "sharpe": sharpe,
-        "sortino": sortino,
-        "max_drawdown": compute_max_drawdown(series) * 100,
-        "ulcer_index": compute_ulcer_index(series),
-        "var_95": _scale_or_nan(compute_var(daily_ret, 0.95), 100),
-        "cvar_95": _scale_or_nan(compute_cvar(daily_ret, 0.95), 100),
-    }
+    return PreparedStatistics(series, rf_daily).risk_metrics()
 
 
 def normalize_index(series: pd.Series, *, drop_duplicates: bool = False) -> pd.Series:

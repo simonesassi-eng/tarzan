@@ -22,12 +22,13 @@ from tarzan import config as cfg
 from tarzan.engine.stats import (
     DAYS_PER_YEAR,
     PERIOD_WINDOWS,
+    PreparedStatistics,
     compute_period_return,
     compute_ytd_return,
     _compute_beta_alpha,
     normalize_index,
     rf_annual_pct,
-    risk_metric_row,
+    risk_metric_row,  # noqa: F401 -- preserve the historical module re-export
     statistical_series,
 )
 
@@ -321,13 +322,13 @@ def _compute_single_benchmark_metrics(
     """
     # Numerical consumers do not need the full provider-evidence payload.
     # Keep it on the source catalog; retain the listing/calendar on each copy.
-    bench = statistical_series(bench)
+    prepared = PreparedStatistics(bench, rf_daily)
+    bench = prepared.series
     if ab_benchmark is not None:
         ab_benchmark = statistical_series(ab_benchmark)
-    if isinstance(rf_daily, pd.Series):
-        rf_daily = statistical_series(rf_daily)
+    rf_daily = prepared.rf_daily
     metrics = {
-        **risk_metric_row(bench, rf_daily),
+        **prepared.risk_metrics(),
         **{k: compute_period_return(bench, k) for k in PERIOD_WINDOWS},
         "ytd": compute_ytd_return(bench),
         "alpha": float("nan"),
@@ -387,11 +388,11 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     ``rf_daily`` is the optional time-varying daily risk-free path used for the
     Sharpe/Sortino excess-return form; ``None`` falls back to the scalar rate.
     """
-    s = statistical_series(s)
+    prepared = PreparedStatistics(s, rf_daily)
+    s = prepared.series
     if bench_history is not None:
         bench_history = statistical_series(bench_history)
-    if isinstance(rf_daily, pd.Series):
-        rf_daily = statistical_series(rf_daily)
+    rf_daily = prepared.rf_daily
     # Period returns — single shared bucket→window mapping (stats.PERIOD_WINDOWS)
     # so every table in Tarzan measures the same windows.
     for key in PERIOD_WINDOWS:
@@ -399,8 +400,8 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     row["ytd"] = compute_ytd_return(s)
 
     # Risk metrics on full series (same shared block as the benchmark rows).
-    row.update(risk_metric_row(s, rf_daily))
-    daily_ret = s.pct_change().dropna()
+    row.update(prepared.risk_metrics())
+    daily_ret = prepared.daily_returns
     cagr_val = row["cagr"] if isinstance(row["cagr"], (int, float)) else 0.0
     # Alpha/Beta vs the reference benchmark, on the *overlapping* window so
     # the figures are apples-to-apples with `s`: a 6-month track record is
