@@ -279,6 +279,20 @@ class ReportView:
     def project(self):
         return _project(self._metrics), _project(self._config)
 
+    @property
+    def is_native_portfolio_metrics(self) -> bool:
+        """Immutable authority metadata, with no copy or property evaluation.
+
+        A subclass/custom record may need other constructor inputs or override
+        a getter. Its legacy full projection must retain that exact contract.
+        """
+        from tarzan.models.portfolio import PortfolioMetrics
+
+        return (
+            isinstance(self._metrics, _RecordFact)
+            and self._metrics.record_type is PortfolioMetrics
+        )
+
     def project_summary_facts(self):
         """Return only immutable financial facts; publication remains dynamic."""
         if self._summary_facts is not None:

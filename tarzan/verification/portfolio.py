@@ -26,6 +26,40 @@ from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
 from tarzan.verification.tape import ProviderTape, decode
 
 
+# Names only: the exact raw KPI projection below remains the numerical
+# authority. Diagnostic consumers can request these fields without building
+# a second cube with dataclass defaults or using rounded summary values.
+PORTFOLIO_KPI_SCALAR_NAMES = (
+    "total_value", "trustworthy_total_value_eur", "known_valuation_subtotal_eur",
+    "invested_value", "cash_value", "cash_target_eur",
+    "pnl_eur", "pnl_pct", "invested_capital_eur",
+    "estimated_cgt_eur", "pnl_eur_net_tax", "pnl_pct_net_tax",
+    "xirr_pct", "xirr_net_tax_pct", "twr_pct", "twr_annualized_pct",
+    "returns_coverage_pct", "weighted_yield", "avg_ter",
+    "valuation_availability", "history_availability",
+    "unrealized_pnl_eur", "unrealized_pnl_pct",
+)
+PORTFOLIO_KPI_STRUCTURED_NAMES = (
+    "performance", "performance_full", "risk", "historical_risk",
+    "allocation_by_class", "allocation_by_geo", "allocation_by_sector",
+    "holding_performance", "goal_deltas", "target_weights",
+    "rebalancing_plans", "degraded_computers", "benchmark_comparison",
+    "portfolio_history", "actual_value_series", "pnl_series", "unrealized_series",
+    "target_history", "holding_histories", "benchmark_histories",
+    "allocation_timeline", "external_flows", "xirr_cashflows",
+)
+PORTFOLIO_KPI_PROPERTY_NAMES = ("unrealized_pnl_eur", "unrealized_pnl_pct")
+PORTFOLIO_KPI_FIELD_NAMES = (
+    tuple(name for name in PORTFOLIO_KPI_SCALAR_NAMES if name not in PORTFOLIO_KPI_PROPERTY_NAMES)
+    + PORTFOLIO_KPI_STRUCTURED_NAMES + ("holdings_df",)
+)
+PORTFOLIO_KPI_HOLDING_COLUMNS = (
+    "isin", "ticker", "quantity", "current_price", "current_value",
+    "cost_basis_eur", "weight_pct", "gain_eur", "gain_pct",
+    "value_eur", "portfolio_weight_pct",
+)
+
+
 def _private_json(path: Path, value) -> None:
     atomic_write_bytes(path, canonical_json_bytes(value, default=str), fsync_dir=True)
 
@@ -75,34 +109,16 @@ def _financial_value(value):
 
 def portfolio_kpis(metrics):
     """Financial outputs, separated from operation IDs, wall time and AI prose."""
-    scalar_names = (
-        "total_value", "trustworthy_total_value_eur", "known_valuation_subtotal_eur",
-        "invested_value", "cash_value", "cash_target_eur",
-        "pnl_eur", "pnl_pct", "invested_capital_eur",
-        "estimated_cgt_eur", "pnl_eur_net_tax", "pnl_pct_net_tax",
-        "xirr_pct", "xirr_net_tax_pct", "twr_pct", "twr_annualized_pct",
-        "returns_coverage_pct", "weighted_yield", "avg_ter",
-        "valuation_availability", "history_availability",
-        "unrealized_pnl_eur", "unrealized_pnl_pct",
-    )
-    result = {name: _financial_value(getattr(metrics, name, None)) for name in scalar_names}
-    for name in (
-        "performance", "performance_full", "risk", "historical_risk",
-        "allocation_by_class", "allocation_by_geo", "allocation_by_sector",
-        "holding_performance", "goal_deltas", "target_weights",
-        "rebalancing_plans", "degraded_computers", "benchmark_comparison",
-        "portfolio_history", "actual_value_series", "pnl_series", "unrealized_series",
-        "target_history", "holding_histories", "benchmark_histories",
-        "allocation_timeline", "external_flows", "xirr_cashflows",
-    ):
+    result = {
+        name: _financial_value(getattr(metrics, name, None))
+        for name in PORTFOLIO_KPI_SCALAR_NAMES
+    }
+    for name in PORTFOLIO_KPI_STRUCTURED_NAMES:
         result[name] = _financial_value(getattr(metrics, name, None))
-    columns = (
-        "isin", "ticker", "quantity", "current_price", "current_value",
-        "cost_basis_eur", "weight_pct", "gain_eur", "gain_pct",
-        "value_eur", "portfolio_weight_pct",
-    )
     holdings = metrics.holdings_df
-    result["holdings"] = _financial_value(holdings[[name for name in columns if name in holdings]])
+    result["holdings"] = _financial_value(
+        holdings[[name for name in PORTFOLIO_KPI_HOLDING_COLUMNS if name in holdings]],
+    )
     return result
 
 

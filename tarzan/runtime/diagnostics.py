@@ -17,6 +17,7 @@ import math
 import os
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 from tarzan.runtime import sealed
 from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
@@ -40,6 +41,13 @@ _RUN_TIMING_NAMES = frozenset({
 _CREDENTIAL_ENV = (
     sealed.KEY_ENV, "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL", "GEMINI_API_KEY", "GOOGLE_DRIVE_CREDENTIALS_JSON",
     "DELIVERY_CLAIM_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+)
+_QUALITY_FIELD_NAMES = (
+    "report_reference", "holdings_df", "intraday_requested_tickers",
+    "valuation_availability", "history_availability",
+    "history_unavailable_instruments", "returns_coverage_pct",
+    "benchmark_tickers", "benchmark_resolution_errors", "intraday_quotes",
+    "intraday_evidence", "market_quotes", "degraded_computers",
 )
 logger = logging.getLogger(__name__)
 
@@ -152,6 +160,29 @@ def _run_timings(values):
     return timings
 
 
+def _diagnostic_metrics(result):
+    """Own exact selected facts, retaining genuine legacy-view compatibility."""
+    view = result.report_view
+    if view is None:
+        return result.metrics, None
+    from tarzan.verification.portfolio import PORTFOLIO_KPI_FIELD_NAMES
+
+    absent = object()
+    native = getattr(view, "is_native_portfolio_metrics", absent)
+    if native is absent or native is False:
+        # A legacy/generic record keeps its original constructor and getters.
+        return view.project()[0], None
+    if native is not True:
+        raise ValueError("incompatible diagnostic record metadata")
+    names = tuple(dict.fromkeys(_QUALITY_FIELD_NAMES + PORTFOLIO_KPI_FIELD_NAMES))
+    # A native API defect is an explicit projection error, never permission
+    # to hide drift by taking the full-view path or inventing default fields.
+    facts = view.project_metrics_fields(names)
+    if not isinstance(facts, dict) or set(facts) != set(names):
+        raise ValueError("incompatible diagnostic field projection")
+    return SimpleNamespace(**facts), view
+
+
 def build_report(
     result, *, operation, exit_code, duration_seconds, input_sha256=None,
     entrypoint_error_type=None, operational_timings=None,
@@ -197,14 +228,28 @@ def build_report(
     if result is not None:
         try:
             from tarzan.runtime.summary import SummaryProjector
-            from tarzan.verification.portfolio import portfolio_kpis
+            from tarzan.verification.portfolio import (
+                PORTFOLIO_KPI_PROPERTY_NAMES, portfolio_kpis,
+            )
 
-            metrics = result.report_view.project()[0] if result.report_view is not None else result.metrics
+            metrics, narrow_view = _diagnostic_metrics(result)
             report["quality"] = _quality(metrics)
             report["summary"] = SummaryProjector.project(
                 result, PublicationEvaluator.evaluate(result.ledger.failure_records()),
             ).to_dict()
             if metrics is not None:
+                if narrow_view is not None:
+                    # Original getters remain the raw financial authority.
+                    # Evaluate here, not before quality/summary: a failed KPI
+                    # property must retain those already-projected sections.
+                    properties = narrow_view.project_metric_properties(
+                        PORTFOLIO_KPI_PROPERTY_NAMES,
+                    )
+                    if not isinstance(properties, dict) or set(properties) != set(
+                        PORTFOLIO_KPI_PROPERTY_NAMES,
+                    ):
+                        raise ValueError("incompatible diagnostic property projection")
+                    metrics.__dict__.update(properties)
                 report["kpis"] = portfolio_kpis(metrics)
         except Exception as error:
             # A projection defect must not discard the primary failure ledger.
