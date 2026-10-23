@@ -12,11 +12,17 @@ import pandas as pd
 from tarzan.models.portfolio import PortfolioMetrics
 
 
-MATERIAL_FACTS_VERSION = "2"
+MATERIAL_FACTS_VERSION = "3"
 _OPERATIONAL_FIELDS = {
     "attempt_id", "recorded_at", "fetch_time", "fetch_timestamp",
     "latency_ms", "age_seconds", "freshness_age_seconds",
 }
+
+
+def _operational_field(name) -> bool:
+    """Only declared operational field names, not dates or financial values."""
+    name = getattr(name, "value", name)
+    return isinstance(name, str) and name in _OPERATIONAL_FIELDS
 
 
 def material_value(value):
@@ -27,10 +33,23 @@ def material_value(value):
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if isinstance(value, pd.DataFrame):
+        positions = [
+            position for position, name in enumerate(value.columns)
+            if not _operational_field(name)
+        ]
+        # Column selection must not coerce mixed integer/float columns through
+        # DataFrame.values: that can round exact integers above 2**53 before
+        # hashing. Positional tuples also retain duplicate financial labels.
+        rows = (
+            [[material_value(row[position]) for position in positions]
+             for row in value.itertuples(index=False, name=None)]
+            if positions else [[] for _ in range(len(value.index))]
+        )
         return {
-            "kind": "table", "columns": material_value(value.columns.tolist()),
+            "kind": "table",
+            "columns": material_value([value.columns[position] for position in positions]),
             "index": material_value(value.index.tolist()),
-            "rows": material_value(value.values.tolist()),
+            "rows": rows,
         }
     if isinstance(value, pd.Series):
         return {
@@ -43,11 +62,11 @@ def material_value(value):
     if is_dataclass(value):
         return {
             item.name: material_value(getattr(value, item.name))
-            for item in fields(value) if item.name not in _OPERATIONAL_FIELDS
+            for item in fields(value) if not _operational_field(item.name)
         }
     if isinstance(value, Mapping):
         return {str(getattr(key, "value", key)): material_value(item)
-                for key, item in value.items()}
+                for key, item in value.items() if not _operational_field(key)}
     if isinstance(value, (list, tuple)):
         return [material_value(item) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
