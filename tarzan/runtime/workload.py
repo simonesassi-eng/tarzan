@@ -8,6 +8,7 @@ throughput, memory, or availability thresholds.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -20,6 +21,33 @@ WORKLOAD_TELEMETRY_SCHEMA_VERSION = "1.0"
 MAX_RECORDED_INTEGER = (1 << 53) - 1
 MAX_STAGE_OBSERVATIONS = 64
 MAX_LABEL_CHARACTERS = 96
+_CPU_CLOCK_NAMES = ("thread_cpu_ms", "process_cpu_ms")
+
+
+@dataclass(frozen=True)
+class StageClock:
+    """Explicit clocks, without a process-global/thread profiling hook.
+
+    Thread CPU covers only the caller. Process CPU includes all worker threads
+    active inside the wall interval, even overlapping stages. It is inclusive,
+    not exclusive attribution, so overlapping measurements must not be summed.
+    """
+
+    wall: float
+    thread_cpu: float
+    process_cpu: float
+
+    @classmethod
+    def capture(cls) -> "StageClock":
+        return cls(time.perf_counter(), time.thread_time(), time.process_time())
+
+    def fields(self) -> dict[str, float]:
+        end = type(self).capture()
+        return {
+            "duration_ms": max(0.0, end.wall - self.wall) * 1000,
+            "thread_cpu_ms": max(0.0, end.thread_cpu - self.thread_cpu) * 1000,
+            "process_cpu_ms": max(0.0, end.process_cpu - self.process_cpu) * 1000,
+        }
 
 
 @dataclass(frozen=True)
@@ -165,14 +193,19 @@ def build_workload_observation(
         stage_outcome, outcome_cut = _bounded_label(entry.payload.get("outcome"))
         label_truncated = label_truncated or stage_cut or outcome_cut
         raw_duration = entry.payload.get("duration_ms")
-        stage_observations.append({
+        observation = {
             "stage": stage,
             "outcome": stage_outcome,
             "duration_ms": (
                 _bounded(raw_duration, "milliseconds", integral=False).to_dict()
                 if raw_duration is not None else None
             ),
-        })
+        }
+        for clock in _CPU_CLOCK_NAMES:
+            value = entry.payload.get(clock)
+            if value is not None:
+                observation[clock] = _bounded(value, "milliseconds", integral=False).to_dict()
+        stage_observations.append(observation)
     terminal_stage, terminal_stage_cut = _bounded_label("orchestration")
     terminal_outcome, terminal_outcome_cut = _bounded_label(outcome)
     label_truncated = label_truncated or terminal_stage_cut or terminal_outcome_cut
@@ -189,11 +222,12 @@ def build_workload_observation(
         or scenario_cut
         or any(item["truncated"] for item in bounded_counts.values())
         or any(
-            stage["duration_ms"] is not None and stage["duration_ms"]["truncated"]
+            stage.get(clock) is not None and stage[clock]["truncated"]
             for stage in stage_observations
+            for clock in ("duration_ms", *_CPU_CLOCK_NAMES)
         )
     )
-    return {
+    result = {
         "schema_version": WORKLOAD_TELEMETRY_SCHEMA_VERSION,
         "event": "DESCRIPTIVE_WORKLOAD_OBSERVATION",
         "scenario": scenario_label,
@@ -211,6 +245,14 @@ def build_workload_observation(
         "affects_analysis_id": False,
         "affects_financial_decisions": False,
     }
+    if any(clock in stage for stage in stage_observations for clock in _CPU_CLOCK_NAMES):
+        result["cpu_clock_semantics"] = {
+            "thread_cpu_ms": "stage_owner_thread",
+            "process_cpu_ms": "all_process_threads_in_stage_wall_interval",
+            "overlapping_measurements_are_inclusive": True,
+            "exclusive_attribution": False,
+        }
+    return result
 
 
 def run_network_free_workload_harness() -> dict[str, Any]:

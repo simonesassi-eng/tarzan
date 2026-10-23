@@ -8,6 +8,7 @@ does not choose prices, relax publication gates or authorize delivery.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
@@ -32,6 +33,9 @@ _FIELDS = frozenset({
     "schema_version", "operation", "exit_code", "duration_seconds", "captured_at",
     "run", "input_sha256", "entrypoint_error_type", "provider_counts", "quality",
     "summary", "kpis", "ledger", "projection_error_type",
+})
+_RUN_TIMING_NAMES = frozenset({
+    "imports_seconds", "imports_and_entrypoint_seconds",
 })
 _CREDENTIAL_ENV = (
     sealed.KEY_ENV, "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL", "GEMINI_API_KEY", "GOOGLE_DRIVE_CREDENTIALS_JSON",
@@ -122,9 +126,35 @@ def _quality(metrics):
     }
 
 
+def _run_timings(values):
+    """Fixed, descriptive timing fields; never accept arbitrary/private labels.
+
+    ``imports_seconds`` measures dependency imports/module initialization
+    after the shim's stdlib imports, not interpreter or GitHub startup.
+    The existing ``duration_seconds`` boundary is deliberately unchanged:
+    dependency imports and diagnostic projection/encryption are outside it.
+    The additive import-inclusive field still excludes diagnostic capture and
+    GitHub bootstrap/cleanup. Older version-1 reports need no timing fields.
+    """
+    if not isinstance(values, Mapping) or set(values) != _RUN_TIMING_NAMES:
+        raise ValueError("invalid private diagnostic timing names")
+    timings = dict(values)
+    try:
+        valid = all(
+            not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value) and value >= 0
+            for value in timings.values()
+        )
+    except OverflowError:
+        valid = False
+    if not valid or timings["imports_and_entrypoint_seconds"] < timings["imports_seconds"]:
+        raise ValueError("invalid private diagnostic timing duration")
+    return timings
+
+
 def build_report(
     result, *, operation, exit_code, duration_seconds, input_sha256=None,
-    entrypoint_error_type=None,
+    entrypoint_error_type=None, operational_timings=None,
 ):
     """Project exact owned evidence, including source/semantic failures."""
     entries = [entry.to_dict() for entry in result.ledger.entries] if result is not None else []
@@ -162,6 +192,8 @@ def build_report(
         "ledger": entries,
         "projection_error_type": None,
     }
+    if operational_timings is not None:
+        report["run"]["timings"] = _run_timings(operational_timings)
     if result is not None:
         try:
             from tarzan.runtime.summary import SummaryProjector
@@ -205,6 +237,10 @@ def _validate(report):
     for name in ("run", "provider_counts", "quality", "kpis"):
         if not isinstance(report[name], dict):
             raise ValueError("invalid private diagnostic projection")
+    if "timings" in report["run"]:
+        timings = _run_timings(report["run"]["timings"])
+        if timings["imports_and_entrypoint_seconds"] < duration:
+            raise ValueError("invalid private diagnostic timing boundary")
     if report["summary"] is not None and not isinstance(report["summary"], dict):
         raise ValueError("invalid private diagnostic summary")
     return report

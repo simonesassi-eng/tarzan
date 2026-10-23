@@ -15,6 +15,8 @@ from pathlib import Path
 import sys
 import time
 
+_IMPORTS_STARTED = time.monotonic()
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tarzan import log_redaction, orchestrator  # noqa: E402
@@ -166,10 +168,15 @@ def main(argv=None):
         finally:
             if inputs is not None:
                 _close_delivery_inputs(inputs, result=result)
+            duration_seconds = time.monotonic() - started
             values = {
                 "operation": "verify", "exit_code": exit_code,
-                "duration_seconds": time.monotonic() - started,
+                "duration_seconds": duration_seconds,
                 "input_sha256": fingerprints, "entrypoint_error_type": error_type,
+                "operational_timings": {
+                    "imports_seconds": _IMPORTS_SECONDS,
+                    "imports_and_entrypoint_seconds": _IMPORTS_SECONDS + duration_seconds,
+                },
             }
             if args.private_output is not None:
                 try:
@@ -193,6 +200,9 @@ def main(argv=None):
         extra={"public_code": "VERIFICATION_COMPLETE" if exit_code == 0 else "VERIFICATION_FAILED"},
     )
     return exit_code
+
+
+_IMPORTS_SECONDS = time.monotonic() - _IMPORTS_STARTED
 
 
 if __name__ == "__main__":

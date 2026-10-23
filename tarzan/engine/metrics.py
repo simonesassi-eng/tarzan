@@ -190,11 +190,12 @@ class MetricsEngine:
         presenting it as a real low-risk / zero result.
         """
         from tarzan.runtime import data_quality as dq
+        from tarzan.runtime.workload import StageClock
         ctx: dict = {}
         degraded: list[str] = []
         for computer in self._computers:
             name = getattr(computer, "__name__", str(computer))
-            started = time.perf_counter()
+            started = StageClock.capture()
             outcome = "INTERRUPTED"
             try:
                 computer(ctx)
@@ -219,7 +220,7 @@ class MetricsEngine:
                         "stage": f"metrics:{name}",
                         "outcome": "DEGRADED" if outcome == "SUCCEEDED"
                         and name in ctx.get("_degraded", []) else outcome,
-                        "duration_ms": max(0.0, time.perf_counter() - started) * 1000,
+                        **started.fields(),
                     })
         degraded = list(dict.fromkeys(
             degraded + list(ctx.get("_degraded", []))

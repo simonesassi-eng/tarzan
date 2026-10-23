@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+_IMPORTS_STARTED = time.monotonic()
+
 # Make the tarzan package importable when invoked as a bare script from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -47,13 +49,21 @@ def main():
         )
     finally:
         result = last_run_result()
+        duration_seconds = time.monotonic() - started
         capture_configured(
             result if result is not previous_result else None,
             operation="send", exit_code=exit_code,
-            duration_seconds=time.monotonic() - started,
+            duration_seconds=duration_seconds,
             entrypoint_error_type=error_type,
+            operational_timings={
+                "imports_seconds": _IMPORTS_SECONDS,
+                "imports_and_entrypoint_seconds": _IMPORTS_SECONDS + duration_seconds,
+            },
         )
     return exit_code
+
+
+_IMPORTS_SECONDS = time.monotonic() - _IMPORTS_STARTED
 
 
 if __name__ == "__main__":
