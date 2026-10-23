@@ -31,6 +31,10 @@ ground and out-of-tolerance ones never get worse.
 
 Constraints respected (identical to the former optimizer):
     * ``no_buy_no_sell`` holdings are frozen (trade fixed at 0).
+      For proved account CASH this also freezes its individual balance:
+      neither purchases nor contributions/proceeds debit or credit that row.
+      Its existing value still counts toward wealth and the strategic reserve;
+      any new free settlement balance uses unlocked CASH rows or a plan ledger.
     * ``rebalancing_no_sell`` forbids every sell.
     * a holding cannot be sold for more than its current value.
     * cash-flow conservation: purchases are funded by proved account cash,
@@ -76,6 +80,7 @@ class _CashMechanics:
 
     kinds: tuple[Optional[InstrumentKind], ...]
     settlement_mask: np.ndarray
+    locked_settlement_mask: np.ndarray
     security_mask: np.ndarray
     unresolved_indices: tuple[int, ...]
 
@@ -89,6 +94,10 @@ class _CashMechanics:
         settlement_mask = np.array(
             [kind is InstrumentKind.CASH for kind in kinds], dtype=float,
         )
+        locked_settlement_mask = np.array([
+            kind is InstrumentKind.CASH and h.no_buy_no_sell
+            for h, kind in zip(holdings, kinds)
+        ], dtype=float)
         security_mask = np.array([
             h.asset_class == AssetClass.CASH_EQUIVALENTS
             and kind in (InstrumentKind.ETF, InstrumentKind.BOND, InstrumentKind.STOCK)
@@ -103,7 +112,10 @@ class _CashMechanics:
                 and holding.asset_class != AssetClass.CASH_EQUIVALENTS
             )
         )
-        return cls(kinds, settlement_mask, security_mask, unresolved_indices)
+        return cls(
+            kinds, settlement_mask, locked_settlement_mask, security_mask,
+            unresolved_indices,
+        )
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,7 @@ class _CashFunding:
     initial_cash: float
     external_contribution: float
     strategic_target: float
+    locked_cash: float = 0.0
 
     @property
     def available_cash(self) -> float:
@@ -124,7 +137,11 @@ class _CashFunding:
         return float(self.security_mask @ (self.values + trades))
 
     def protected_settlement_cash(self, trades: np.ndarray) -> float:
-        return max(self.strategic_target - self.security_value(trades), 0.0)
+        return max(
+            self.strategic_target - self.security_value(trades),
+            self.locked_cash,
+            0.0,
+        )
 
     def budget(self, trades: np.ndarray) -> float:
         # A negative budget requires explicit net sales to fill a reserve
@@ -717,7 +734,10 @@ class _Cost:
             # Below the strategic target, converting cash to a cash-equivalent
             # security leaves the combined bucket unchanged. The independent
             # bank constraint still forbids paying for it with negative cash.
-            bank_deficit = max(net_cost - self.cash_funding.available_cash, 0.0)
+            bank_deficit = max(
+                net_cost - (self.cash_funding.available_cash - self.cash_funding.locked_cash),
+                0.0,
+            )
             j += p.residual_weight * (bank_deficit / max(self.tv, 1e-9) * 100.0) ** 2
         return j
 
@@ -915,13 +935,14 @@ def optimize_local_search(
 
     model = _ObjectiveModel(holdings, config, values)
     initial_cash = float(model.settlement_cash_mask @ values)
+    locked_cash = float(model.cash_mechanics.locked_settlement_mask @ values)
     protected_cash = max(float(config.target_cash_buffer_eur or 0.0), 0.0)
     external_contribution = max(float(lump_sum or 0.0), 0.0)
     # Reserve the protected buffer against all cash sources before making any
     # amount available to purchases. When current cash starts below target,
     # the external contribution first closes that deficit.
     funding_budget = max(
-        initial_cash + external_contribution - protected_cash,
+        initial_cash + external_contribution - max(protected_cash, locked_cash),
         0.0,
     )
     # Preserve the scalar account-only search. The additional mechanics is
@@ -929,7 +950,7 @@ def optimize_local_search(
     cash_funding = (
         _CashFunding(
             values, model.cash_security_mask, initial_cash,
-            external_contribution, protected_cash,
+            external_contribution, protected_cash, locked_cash=locked_cash,
         )
         if np.any(model.cash_security_mask > 0) else None
     )
@@ -1004,7 +1025,10 @@ def optimize_local_search(
                 break
             if model.settlement_cash_mask[i] > 0:
                 continue
-            bank_shortfall = max(-float(funding["ending_settlement_cash_eur"]), 0.0)
+            bank_shortfall = max(-float(funding.get(
+                "ending_free_settlement_cash_eur",
+                funding["ending_settlement_cash_eur"],
+            )), 0.0)
             strategic_shortfall = max(
                 protected_cash - float(funding["strategic_cash_equivalents_eur"]),
                 0.0,
@@ -1098,11 +1122,14 @@ def _unit_trade_facts(holding: Holding, signed_amount: float, value: float):
     ):
         return None
     delta = signed_amount / price
+    after_quantity = quantity + delta
+    if not math.isfinite(delta) or not math.isfinite(after_quantity):
+        return None
     return {
         "price_eur_per_unit": price,
         "current_quantity": quantity,
         "quantity_delta": delta,
-        "after_quantity": quantity + delta,
+        "after_quantity": after_quantity,
     }
 
 
@@ -1180,6 +1207,11 @@ def _finalize_action_proof(
     Security positions change ONLY through their own actions. The resulting
     settlement account may be represented by real CASH rows or by a separate
     plan ledger, but is never written into a money-market ETF's units/value.
+    ``no_buy_no_sell`` on proved account CASH excludes its individual balance
+    from all debit/credit redistribution. Only unlocked account balances fund
+    buys or receive a balance change; absent such rows, free cash (including
+    contributions and explicit sales) remains in the separate plan ledger.
+    Frozen account value still belongs to wealth and the strategic reserve.
     ``EXECUTABLE`` is the legacy name for funding/position/policy validity;
     it does not prove broker lot/tick/fractional-order or execution-price rules.
     """
@@ -1295,7 +1327,17 @@ def _finalize_action_proof(
         i for i, holding in enumerate(holdings)
         if cash_mechanics.settlement_mask[i] > 0
     ]
+    locked_cash_indices = [
+        i for i in cash_indices if cash_mechanics.locked_settlement_mask[i] > 0
+    ]
+    unlocked_cash_indices = [
+        i for i in cash_indices if cash_mechanics.locked_settlement_mask[i] == 0
+    ]
     initial_cash = float(values[cash_indices].sum()) if cash_indices else 0.0
+    locked_cash = float(values[locked_cash_indices].sum()) if locked_cash_indices else 0.0
+    initial_unlocked_cash = (
+        float(values[unlocked_cash_indices].sum()) if unlocked_cash_indices else 0.0
+    )
     ending_cash = (
         initial_cash
         + external_contribution
@@ -1304,16 +1346,37 @@ def _finalize_action_proof(
         - fees
         - gross_purchases
     )
+    # Reconstruct free funding from its own sources, not by subtracting a
+    # possibly much larger locked balance from the total. This also prevents
+    # cancellation from hiding a raw sub-cent overdraft. With no locked rows
+    # the original arithmetic and serialized proof remain unchanged.
+    ending_free_cash = (
+        initial_unlocked_cash
+        + external_contribution
+        + gross_sales
+        - taxes
+        - fees
+        - gross_purchases
+    ) if locked_cash_indices else ending_cash
 
     reconstructed = values + trades
-    if cash_indices:
-        if initial_cash > 0:
-            for idx in cash_indices:
-                reconstructed[idx] = ending_cash * float(values[idx]) / initial_cash
+    if unlocked_cash_indices:
+        if initial_unlocked_cash > 0:
+            for idx in unlocked_cash_indices:
+                reconstructed[idx] = (
+                    ending_free_cash * float(values[idx]) / initial_unlocked_cash
+                )
         else:
-            reconstructed[cash_indices[0]] = ending_cash
-            for idx in cash_indices[1:]:
+            reconstructed[unlocked_cash_indices[0]] = ending_free_cash
+            for idx in unlocked_cash_indices[1:]:
                 reconstructed[idx] = 0.0
+    locked_cash_ok = all(
+        math.isfinite(float(reconstructed[idx]))
+        and reconstructed[idx] >= -_CASH_PROOF_EPSILON_EUR
+        and reconstructed[idx] == values[idx]
+        for idx in locked_cash_indices
+    )
+    frozen_ok = frozen_ok and locked_cash_ok
 
     position_ok = all(
         math.isfinite(float(reconstructed[i]))
@@ -1321,7 +1384,7 @@ def _finalize_action_proof(
         for i in range(len(holdings))
         if cash_mechanics.settlement_mask[i] == 0
     )
-    unallocated_cash = ending_cash if not cash_indices else 0.0
+    unallocated_cash = ending_free_cash if not unlocked_cash_indices else 0.0
     security_value_before = float(cash_mechanics.security_mask @ values)
     security_value_after = float(cash_mechanics.security_mask @ reconstructed)
     cash_category_mask = np.array([
@@ -1329,9 +1392,13 @@ def _finalize_action_proof(
     ], dtype=float)
     strategic_cash_before = float(cash_category_mask @ values)
     strategic_cash_after = float(cash_category_mask @ reconstructed) + unallocated_cash
-    protected_settlement_cash = max(protected_cash - security_value_after, 0.0)
+    protected_settlement_cash = max(
+        protected_cash - security_value_after, locked_cash, 0.0,
+    )
     settlement_ok = (
         math.isfinite(ending_cash) and ending_cash >= -_CASH_PROOF_EPSILON_EUR
+        and math.isfinite(ending_free_cash)
+        and ending_free_cash >= -_CASH_PROOF_EPSILON_EUR
     )
     protected_ok = (
         settlement_ok
@@ -1392,6 +1459,8 @@ def _finalize_action_proof(
         max(initial_cash - protected_settlement_cash, 0.0),
         max(gross_purchases + taxes + fees - gross_sales - external_contribution, 0.0),
     )
+    if locked_cash_indices:
+        authorized_release = min(authorized_release, max(initial_unlocked_cash, 0.0))
     funding = {
         "check": "Final Serialized-Action Funding",
         "kind": "funding",
@@ -1436,6 +1505,13 @@ def _finalize_action_proof(
         "non_cost_only_progress_satisfied": non_cost_only_progress_ok,
         "items": [],
     }
+    if locked_cash_indices:
+        funding.update({
+            "locked_settlement_cash_eur": locked_cash,
+            "initial_free_settlement_cash_eur": initial_unlocked_cash,
+            "ending_free_settlement_cash_eur": ending_free_cash,
+            "locked_cash_balances_satisfied": locked_cash_ok,
+        })
     return reconstructed, funding
 
 
