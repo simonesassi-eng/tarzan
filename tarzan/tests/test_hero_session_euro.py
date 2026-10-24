@@ -59,6 +59,7 @@ def order_nav(start=1000.0, end=1600.0, flow=500.0):
     factor = (end - flow) / start
     m = basket(start, start * factor)
     m.actual_value_series = pd.Series([start, end], index=m.portfolio_history.index)
+    m.return_nav_series = m.portfolio_history.copy(deep=True)
     m.external_flows = {FRIDAY: flow}
     m.history_source_basis = "ORDER_FLOW_ADJUSTED_NAV"
     step = DailyReturnStep(FRIDAY, THURSDAY, start, end, flow, factor, end - flow - start, "MEASURED")

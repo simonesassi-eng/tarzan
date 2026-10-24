@@ -110,6 +110,32 @@ generic contexts need no new clock fields. If this optional projection fails,
 the primary ledger, financial projection and outcome remain exportable. Keep
 this operational failure distinct from `projection_error_type`.
 
+## Verify session dates against their actual return source
+
+The order-derived return uses the original flow-adjusted daily NAV. Its short
+carried tail can end before the analysis date; raw euro accounting and capital
+flows must still reach the analysis date. They are different source calendars.
+For example, Saturday accounting can retain Friday's value or a weekend
+deposit without becoming a new measured NAV observation.
+
+The internal `return_nav_series` preserves the exact NAV consumed by performance
+before its business-day resample. The immutable report keeps this source
+independent of the display's attribution packet. The semantic guard verifies
+its native dates, observed business endpoint and endpoint values against the
+return history, then checks euro steps against the complete original values
+and flows. Missing/corrupt NAV authority blocks delivery. Genuine weekend
+observations keep their native dates; no packet-selected clipping, forced
+Friday endpoint, accounting truncation or new return formula is permitted.
+This provenance is deliberately financial material and changes the Analysis ID
+when added; it does not change the external schema-3 summary or financial math.
+
+A same-SHA verification on Friday does not verify Saturday's source supports.
+Inspect `run.clock`, native observation dates and the accounting/NAV tails.
+The regression suite exercises the original builder, immutable report, renderer,
+semantic validator, verification entrypoint and dry-run publisher on Friday,
+Saturday, Sunday and Monday pre-open. Network, delivery claims and SMTP are
+prohibited in these tests; date and source tampering must remain blocked.
+
 ## Measure useful performance
 
 For cold/warm comparisons, use separate fresh SDK caches/processes, identical

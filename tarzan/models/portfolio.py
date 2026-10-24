@@ -270,6 +270,12 @@ class PortfolioMetrics:
     # NAV index must never become a euro basket through a display packet.
     # Internal additive fact; the external schema-3 summary stays unchanged.
     history_source_basis: str = "UNPREPARED"
+    # Original flow-adjusted daily NAV consumed by performance, before its
+    # business-day resample. Its carried tail may be trimmed while raw euro
+    # accounting must still reach today. Independent source authority for
+    # session dates; never infer this axis from a display proof packet.
+    # Append the field to preserve the existing positional constructor.
+    return_nav_series: Optional[pd.Series] = None
 
     @property
     def unrealized_pnl_eur(self) -> float:

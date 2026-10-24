@@ -1197,11 +1197,12 @@ class MetricsEngine:
             ctx["performance"] = result
         from tarzan.contracts.session_move import paired_session_move
         order_series = ctx.get("_order_series")
+        ctx["return_nav_series"] = getattr(order_series, "daily_series", None)
         ctx["session_move_evidence"] = paired_session_move(
             ph, ctx["performance"].get("1d"),
             source_basis=ctx.get("_portfolio_history_basis"),
             steps=getattr(order_series, "daily_return_steps", ()),
-            daily_nav=getattr(order_series, "daily_series", None),
+            daily_nav=ctx["return_nav_series"],
             history_availability=(
                 order_series.history_availability.value
                 if order_series is not None else ctx.get("history_availability", "AVAILABLE")
@@ -2890,6 +2891,7 @@ class MetricsEngine:
             pnl_pct_net_tax=ctx.get("pnl_pct_net_tax"),
             xirr_net_tax_pct=ctx.get("xirr_net_tax_pct"),
             actual_value_series=ctx.get("actual_value_series"),
+            return_nav_series=ctx.get("return_nav_series"),
             pnl_series=ctx.get("pnl_series"),
             unrealized_series=ctx.get("unrealized_series"),
             external_flows=ctx.get("external_flows"),

@@ -573,14 +573,40 @@ def _validate_session_markup(metrics, document):
     actual.index = normalize_session_index(actual.index)
     if not actual.index.is_unique:
         return errors + ["session original values contain duplicate native sessions"]
+    source_nav = getattr(metrics, "return_nav_series", None)
+    if not (
+        isinstance(source_nav, pd.Series)
+        and isinstance(source_nav.index, pd.DatetimeIndex)
+        and source_nav.index.is_unique and source_nav.index.is_monotonic_increasing
+    ):
+        return errors + ["session attribution lacks original NAV observations"]
+    source_nav = source_nav.copy(deep=False)
+    source_nav.index = normalize_session_index(source_nav.index)
+    if not source_nav.index.is_unique:
+        return errors + ["session original NAV observations contain duplicate native sessions"]
     try:
-        native = pd.Series(list(actual.index.date), index=actual.index, dtype=object)
-        native = native.where(actual.notna()).resample("B").last()
+        # Raw euro accounting retains carried days and weekend capital flows.
+        # Only the original NAV actually consumed by performance determines
+        # which native observation B.last assigned to a session label. Neither
+        # a display-packet endpoint nor the calendar tail may choose this axis.
+        native = pd.Series(list(source_nav.index.date), index=source_nav.index, dtype=object)
+        native = native.where(source_nav.notna()).resample("B").last()
         if (
             native.loc[pd.Timestamp(proof.anchor_date)] != proof.source_anchor_date
             or native.loc[pd.Timestamp(proof.end_date)] != proof.source_end_date
         ):
             errors.append("session attribution changes its native observation dates")
+        source_values = source_nav.resample("B").last().dropna()
+        if (
+            source_values.empty
+            or source_values.index[-1].date() != observed.index[-1].date()
+        ):
+            errors.append("session original NAV observations do not end at return history")
+        if not (
+            equal(source_values.loc[pd.Timestamp(proof.anchor_date)], start)
+            and equal(source_values.loc[pd.Timestamp(proof.end_date)], end)
+        ):
+            errors.append("session original NAV observations differ from return history")
         cursor, factor, total_profit, total_flow = proof.source_anchor_date, 1.0, 0.0, 0.0
         previous_value = None
         for step in proof.steps:

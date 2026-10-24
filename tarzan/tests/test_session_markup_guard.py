@@ -26,6 +26,7 @@ def weekend_nav():
     nav = pd.Series([1000.0, 1000.0, 1000.0 * 1520 / 1500, 1000.0 * 1540 / 1500], index=dates)
     m = PortfolioMetrics()
     m.portfolio_history = to_business_day_series(nav)
+    m.return_nav_series = nav.copy(deep=True)
     m.actual_value_series = pd.Series(values, index=dates)
     m.external_flows = flows
     m.history_source_basis = "ORDER_FLOW_ADJUSTED_NAV"
@@ -169,6 +170,7 @@ def test_packet_cannot_upgrade_the_original_degraded_history():
 def test_nav_index_units_cannot_be_relabelled_as_euro_basket_values():
     m = order_nav()
     m.portfolio_history *= 10.0
+    m.return_nav_series *= 10.0
     m.session_move_evidence = paired_session_move(
         m.portfolio_history, m.performance["1d"], source_basis="ORDER_FLOW_ADJUSTED_NAV",
         steps=m.session_move_evidence.steps, daily_nav=m.portfolio_history,
