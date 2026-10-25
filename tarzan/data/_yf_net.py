@@ -170,7 +170,10 @@ def _owned_download(symbols, **kwargs):
             for symbol in ordered
         }
         frames = {symbol: future.result() for symbol, future in pending.items()}
-    # Match yfinance.download's public dataframe/index/column contract.
+    # Preserve Tarzan's established batch shape and timezone contract.
+    # Native SDK batches may now retain a shared listing timezone, but our
+    # intraday consumers continue to receive the same instants in UTC.
+    # ignore_tz=True retains venue-local labels, as before.
     frame = pd.concat(frames, axis=1, sort=True, names=["Ticker", "Price"])
     frame.index = pd.to_datetime(frame.index, utc=not ignore_tz)
     if group_by == "column":

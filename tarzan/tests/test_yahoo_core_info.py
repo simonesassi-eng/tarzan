@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -11,7 +12,7 @@ import sys
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
-from curl_cffi.requests import Response
+from curl_cffi.requests import Response, Session
 import pytest
 import yfinance as yf
 from yfinance.config import YfConfig
@@ -125,6 +126,20 @@ def test_summary_404_still_recovers_from_the_native_quote_endpoint(raw_metadata)
     assert core["currency"] == "EUR"
 
 
+@pytest.mark.parametrize("status", [401, 404, 429, 500])
+def test_quote_failure_preserves_valid_summary_without_inventing_a_live_quote(raw_metadata, status):
+    calls, state = raw_metadata
+    state["quote_status"] = status
+    with owned():
+        core = enricher._fetch_ticker_info("SUMMARYAVAILABLE.MI")
+    assert calls == ["summary", "quote"]
+    assert core["currency"] == "EUR"
+    assert core["currentPrice"] == 100.5
+    assert core["yield"] == .03
+    assert "regularMarketPrice" not in core
+    assert "regularMarketTime" not in core
+
+
 def test_unused_peg_failure_does_not_erase_valid_core_metadata(raw_metadata):
     calls, state = raw_metadata
     state["peg_status"] = 503
@@ -143,7 +158,78 @@ def test_failed_core_sources_do_not_invent_available_prices(raw_metadata, status
     assert calls == ["summary", "quote"]
 
 
-@pytest.mark.parametrize("version", ["0.2.99", "1.1.1", "1.7.0", None])
+@pytest.mark.parametrize(
+    "summary_status,quote_status,has_currency,has_live_price,has_previous_close,expected",
+    [
+        (200, 200, True, True, True, ["summary", "quote"]),
+        (404, 200, True, True, False, ["summary", "summary", "quote"]),
+        (200, 404, True, False, True, ["summary", "quote", "quote"]),
+        (404, 404, False, False, False, ["summary", "summary", "quote", "quote"]),
+        (200, 429, False, False, False, ["summary", "quote"]),
+        (200, 503, False, False, False, ["summary", "quote"]),
+    ],
+)
+def test_actual_sdk_and_native_budget_keep_auth_recovery_and_exhaustion_policy(
+    monkeypatch, summary_status, quote_status, has_currency, has_live_price,
+    has_previous_close, expected,
+):
+    """Keep SDK parsing/auth retries; inject only the primitive HTTP response."""
+    calls = []
+    monkeypatch.setattr(YfConfig.debug, "hide_exceptions", True)
+    monkeypatch.setattr(enricher, "_space_yf_call", lambda: None)
+    monkeypatch.setattr(YfData, "_get_cookie_and_crumb", lambda *a, **k: ("synthetic", "basic"))
+    monkeypatch.setattr(YfData, "_set_cookie_strategy", lambda *a, **k: None)
+
+    def request(self, method, url, **kwargs):
+        assert method == "GET"
+        assert kwargs["timeout"] > 0
+        if "/quoteSummary/" in url:
+            operation, status = "summary", summary_status
+            document = {"quoteSummary": {"result": [{
+                "quoteType": {"currency": "EUR", "quoteType": "ETF"},
+                "summaryDetail": {"previousClose": 100.0},
+            }], "error": None}}
+        elif "/v7/finance/quote?" in url:
+            operation, status = "quote", quote_status
+            document = {"quoteResponse": {"result": [{
+                "symbol": kwargs["params"]["symbols"], "currency": "EUR",
+                "regularMarketPrice": 101.0, "regularMarketTime": 1792749600,
+            }], "error": None}}
+        else:
+            pytest.fail("unexpected native request, including unused PEG")
+        calls.append(operation)
+        response = Response()
+        response.content = json.dumps(document if status < 400 else {
+            "finance": {"result": None, "error": {"description": "synthetic failure"}},
+        }).encode()
+        response.status_code = status
+        response.ok = 200 <= status < 400
+        response.url = url
+        response.reason = ""
+        return response
+
+    monkeypatch.setattr(Session, "request", request)
+    with owned() as owner:
+        owner.transport.policies["yahoo"] = replace(
+            owner.transport.policies["yahoo"], retry_budget=0,
+        )
+        core = enricher._fetch_ticker_info("NATIVEFAULT.MI")
+        assert owner.transport.coordinator.snapshot()["active"] == 0
+    assert calls == expected
+    assert ("currency" in core) is has_currency
+    assert ("regularMarketPrice" in core) is has_live_price
+    assert ("previousClose" in core) is has_previous_close
+    if has_live_price:
+        assert core["regularMarketPrice"] == 101.0
+    if has_previous_close:
+        assert core["previousClose"] == 100.0
+    # Raw-parser 429/503 schedules and the full budgeted path are distinct:
+    # exhausted native transport remains unavailable, with no invented quote.
+    if not has_currency:
+        assert core == {}
+
+
+@pytest.mark.parametrize("version", ["0.2.99", "1.1.0", "1.7.1", None])
 def test_uninspected_sdk_version_keeps_the_full_info_contract(monkeypatch, raw_metadata, version):
     calls, _state = raw_metadata
     monkeypatch.setattr(yf, "__version__", version)
@@ -212,6 +298,19 @@ def test_injected_quote_constructor_alias_preserves_required_complementary_field
         assert yi._native_owned_core(_yf_net.ticker("CONSTRUCTORALIAS")) is False
         info = yi.info_for_enrichment("CONSTRUCTORALIAS")
     assert info["caller_required_field"] == "preserved"
+    assert info["trailingPegRatio"] == 2.25
+    assert calls == ["summary", "quote", "peg"]
+
+
+def test_uninspected_http_error_backend_retains_the_full_info_contract(monkeypatch, raw_metadata):
+    from requests.exceptions import HTTPError
+
+    calls, _state = raw_metadata
+    monkeypatch.setitem(yi._SDK_QUOTE._fetch.__globals__, "HTTPError", HTTPError)
+    with owned():
+        assert yi._native_owned_core(_yf_net.ticker("ALTERNATEBACKEND")) is False
+        info = yi.info_for_enrichment("ALTERNATEBACKEND")
+    assert info["regularMarketPrice"] == 101.
     assert info["trailingPegRatio"] == 2.25
     assert calls == ["summary", "quote", "peg"]
 

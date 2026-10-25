@@ -8,6 +8,7 @@ keep the full info contract. No SDK class, global flag or transport is patched.
 
 from pathlib import Path
 
+from curl_cffi.requests.exceptions import HTTPError as _NATIVE_HTTP_ERROR
 import yfinance as yf
 from yfinance.base import TickerBase as _SDK_BASE
 from yfinance.scrapers.quote import Quote as _SDK_QUOTE
@@ -42,7 +43,7 @@ def _native_owned_core(client) -> bool:
         session is None
         or type(session.transport) is not ProviderBudget
         or not runtime.allows_live_transport()
-        or getattr(yf, "__version__", None) != "1.1.0"
+        or getattr(yf, "__version__", None) != "1.7.0"
         or yf.Ticker is not _SDK_TICKER
         or type(client) is not _SDK_TICKER
         or _yf_net.ticker is not _NATIVE_FACTORY
@@ -62,6 +63,8 @@ def _native_owned_core(client) -> bool:
                 return False
         if _SDK_BASE.__init__.__globals__.get("Quote") is not _SDK_QUOTE:
             return False  # a factory alias can inject per-instance behavior
+        if _SDK_QUOTE._fetch.__globals__.get("HTTPError") is not _NATIVE_HTTP_ERROR:
+            return False  # an alternate backend/exception contract is uninspected
         return type(vars(client).get("_quote")) is _SDK_QUOTE
     except (AttributeError, OSError, TypeError, ValueError):
         return False

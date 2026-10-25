@@ -5,7 +5,8 @@
 # review the diff, and run the complete positive-scope validation workflow.
 pandas==2.2.2
 numpy==1.26.4
-yfinance==1.1.0
+yfinance==1.7.0
+curl-cffi==0.15.0
 openpyxl==3.1.5
 python-dateutil==2.9.0.post0
 requests==2.34.2

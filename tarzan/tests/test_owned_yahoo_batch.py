@@ -83,13 +83,18 @@ def test_batch_preserves_successful_symbols_when_one_provider_answer_fails(monke
 
 @pytest.mark.parametrize("interval,ignore_tz", [("15m", False), ("1h", False), ("1d", True)])
 @pytest.mark.parametrize("group_by", ["ticker", "column"])
-def test_batch_dataframe_contract_matches_native_sdk(monkeypatch, owner, interval, ignore_tz, group_by):
+def test_batch_shape_and_instants_match_native_sdk_with_stable_utc_contract(
+    monkeypatch, owner, interval, ignore_tz, group_by,
+):
     import yfinance
     import yfinance.multi as multi
 
     class Ticker:
         def __init__(self, symbol, *args, **kwargs):
             self.symbol = symbol
+            # The native SDK batch inspects the outcome of the completed
+            # per-symbol history call, including successful calls.
+            self._price_history = SimpleNamespace(_last_error=None)
 
         def history(self, **kwargs):
             return history(self.symbol)
@@ -98,9 +103,40 @@ def test_batch_dataframe_contract_matches_native_sdk(monkeypatch, owner, interva
     monkeypatch.setattr(multi, "Ticker", Ticker)
     expected = _NATIVE_DOWNLOAD(["A.MI", "B.MI"], interval=interval, threads=False,
                                group_by=group_by, progress=False)
+    # The newer native SDK retains a shared listing timezone. Tarzan's
+    # established intraday contract is UTC; convert instants, never strip tz.
+    if not ignore_tz:
+        expected.index = expected.index.tz_convert("UTC")
     actual = _yf_net.download(["A.MI", "B.MI"], interval=interval, group_by=group_by)
     pd.testing.assert_frame_equal(actual, expected, check_like=True)
     assert (actual.index.tz is None) is ignore_tz
+    if not ignore_tz:
+        assert str(actual.index.tz) == "UTC"
+
+
+@pytest.mark.parametrize("group_by", ["ticker", "column"])
+def test_batch_preserves_native_instants_across_different_exchange_timezones(
+    monkeypatch, owner, group_by,
+):
+    import yfinance.multi as multi
+
+    class Ticker:
+        def __init__(self, symbol, *args, **kwargs):
+            self.symbol = symbol
+            self._price_history = SimpleNamespace(_last_error=None)
+
+        def history(self, **kwargs):
+            zone = "America/New_York" if self.symbol == "US" else "Europe/Rome"
+            return history(self.symbol, zone=zone)
+
+    monkeypatch.setattr(yfinance, "Ticker", Ticker)
+    monkeypatch.setattr(multi, "Ticker", Ticker)
+    expected = _NATIVE_DOWNLOAD(["EU", "US"], interval="15m", threads=False,
+                               group_by=group_by, progress=False)
+    expected.index = expected.index.tz_convert("UTC")
+    actual = _yf_net.download(["EU", "US"], interval="15m", group_by=group_by)
+    pd.testing.assert_frame_equal(actual, expected, check_like=True)
+    assert str(actual.index.tz) == "UTC"
 
 
 @pytest.mark.parametrize("group_by", ["ticker", "column"])
