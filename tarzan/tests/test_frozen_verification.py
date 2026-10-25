@@ -11,7 +11,9 @@ from pandas.testing import assert_frame_equal, assert_series_equal
 from tarzan.runtime.io_utils import canonical_json_bytes
 from tarzan.verification.portfolio import compare_checkpoints, differences, portfolio_kpis
 from tarzan.verification.portfolio import _snapshot_cache_clock
-from tarzan.verification.tape import HTTPAnswer, ProviderTape, UnrecordedInput, decode, encode
+from tarzan.verification.tape import (
+    HTTPAnswer, ProviderTape, UnrecordedInput, decode, encode, yahoo_http_answer,
+)
 
 
 def test_frame_tape_preserves_provider_columns_timezone_and_metadata():
@@ -107,6 +109,84 @@ def test_http_answers_support_all_used_provider_response_interfaces():
     import requests
     with pytest.raises(requests.HTTPError):
         HTTPAnswer(body=b"", status=503).raise_for_status()
+
+
+@pytest.mark.parametrize("status", [200, 204, 302, 401, 404, 429, 500])
+def test_yahoo_answers_keep_the_installed_curl_status_and_error_contract(status):
+    from curl_cffi.requests import Response
+    from curl_cffi.requests.exceptions import HTTPError
+
+    body = b'{"synthetic":true}'
+    answer = yahoo_http_answer(
+        body=body, status=status, url="https://query2.finance.yahoo.com/synthetic",
+        headers={"content-type": "application/json"},
+    )
+    assert type(answer) is Response
+    assert answer.json() == {"synthetic": True}
+    assert answer.headers["content-type"] == "application/json"
+    assert answer.reason == ""  # unavailable server metadata is not invented
+    if 200 <= status < 400:
+        answer.raise_for_status()
+        assert answer.ok is True
+    else:
+        with pytest.raises(HTTPError) as failure:
+            answer.raise_for_status()
+        assert failure.value.response is answer
+        assert failure.value.response.status_code == status
+        assert failure.value.response.text == body.decode()
+
+
+def test_installed_sdk_recovers_quote_fields_after_a_recorded_summary_404(monkeypatch):
+    from types import SimpleNamespace
+    from yfinance.config import YfConfig
+    from yfinance.scrapers.quote import Quote
+
+    calls = []
+    monkeypatch.setattr(YfConfig.debug, "hide_exceptions", True)
+
+    def get_raw_json(url, **kwargs):
+        calls.append(url)
+        if "/quoteSummary/" in url:
+            yahoo_http_answer(body=b'{"synthetic":"missing"}', status=404).raise_for_status()
+        return {"quoteResponse": {"result": [{
+            "symbol": "SYNTHETIC", "currency": "EUR", "quoteType": "ETF",
+            "regularMarketPrice": 101., "exchangeTimezoneName": "Europe/Berlin",
+        }]}}
+
+    quote = Quote(SimpleNamespace(get_raw_json=get_raw_json), "SYNTHETIC")
+    quote._fetch_info()
+    assert len(calls) == 2
+    assert quote._info["regularMarketPrice"] == 101.
+    assert quote._info["currency"] == "EUR"
+    assert quote._info["exchangeTimezoneName"] == "Europe/Berlin"
+
+
+def test_yahoo_response_keeps_the_real_get_port_on_capture_and_replay(monkeypatch):
+    from yfinance.data import YfData
+    from curl_cffi.requests.exceptions import HTTPError
+
+    calls = []
+    url = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/SYNTHETIC"
+
+    def real_response(self, requested, *args, **kwargs):
+        calls.append(requested)
+        return yahoo_http_answer(
+            body=b'{"synthetic":"missing"}', status=404, url=requested,
+            headers={"content-type": "application/json"},
+        )
+
+    monkeypatch.setattr(YfData, "get", real_response)
+    captured = ProviderTape()
+    with captured:
+        response = YfData().get(url)
+        with pytest.raises(HTTPError):
+            response.raise_for_status()
+    with ProviderTape(records=captured.records, replay=True):
+        response = YfData().get(url)
+        with pytest.raises(HTTPError):
+            response.raise_for_status()
+        assert response.url == url
+    assert calls == [url]
 
 
 def test_kpi_difference_ignores_only_numerical_roundoff_not_unavailability():

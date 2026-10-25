@@ -44,3 +44,17 @@ When completing a preliminary capture with `--seed-tape`, existing price
 observations are retained and missing protocol observations are fetched before
 the baseline is sealed. Do not compare code changes using different tapes.
 Replay wall-clock timings are not live network-performance measurements.
+
+Yahoo HTTP replay uses the installed `curl_cffi` response and error classes.
+A recorded 404 must reach the same SDK fallback as a live 404; a generic
+`requests.HTTPError` is not an interchangeable substitute. Other provider
+ports retain their own response contracts. Missing server reason phrases,
+cookies and authentication metadata are not invented or restored.
+
+The default tape also records public SDK-level answers such as `Ticker.info`
+and `Ticker.history`. That is useful for code-only portfolio comparisons,
+but does not verify a replacement SDK's parsing. An SDK migration additionally
+requires replaying recorded raw HTTP through the actual candidate SDK, with
+the same input, observations and SDK wall clock, and with live network and
+email delivery denied. Neither kind of replay alone establishes live
+newsletter latency.

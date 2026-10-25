@@ -102,7 +102,7 @@ def decode(value):
 
 
 class HTTPAnswer:
-    """Minimal response shared by urllib, requests and Yahoo's quote endpoint."""
+    """Minimal response for the requests and urllib provider ports."""
 
     def __init__(self, *, body: bytes, status: int = 200, url: str = "", encoding: str = "utf-8",
                  headers: Mapping | None = None):
@@ -139,6 +139,28 @@ class HTTPAnswer:
 
     def __exit__(self, *args):
         self.close()
+
+
+def yahoo_http_answer(*, body: bytes, status: int = 200, url: str = "",
+                      encoding: str = "utf-8", headers: Mapping | None = None):
+    """Restore Yahoo's native curl response/error contract without any I/O.
+
+    SDK quote recovery catches curl's HTTPError, not requests.HTTPError.
+    Sharing HTTPAnswer across those ports silently changes the SDK's fallback
+    graph on 401/404 responses. Retain the requests/urllib response separately.
+    No cookie or authenticated response metadata is restored.
+    """
+    from curl_cffi.requests import Headers, Response
+
+    answer = Response()
+    answer.content = body
+    answer.status_code = status
+    answer.ok = 200 <= status < 400
+    answer.url = url
+    answer.encoding = encoding or "utf-8"
+    answer.headers = Headers(headers or {})
+    answer.reason = ""  # Not recorded: do not manufacture a server reason phrase.
+    return answer
 
 
 def _http_value(response, url):
@@ -332,7 +354,7 @@ class ProviderTape:
         def yahoo_get(instance, url, *args, **kwargs):
             value = tape.call("yf.http", {"url": url, "args": args, **kwargs},
                               lambda: _http_value(original_get(instance, url, *args, **kwargs), url))
-            return HTTPAnswer(**value)
+            return yahoo_http_answer(**value)
 
         original_request = requests.Session.request
 
