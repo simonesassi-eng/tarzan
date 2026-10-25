@@ -31,11 +31,14 @@ from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from datetime import datetime as dt, timezone
 from functools import partial
+from pathlib import Path
 from typing import Optional
 from urllib.request import Request, urlopen
 
 import pandas as pd
 import yfinance as yf
+from yfinance.scrapers.history import PriceHistory as _SDK_PRICE_HISTORY
+from yfinance.ticker import Ticker as _SDK_CANONICAL_TICKER
 
 from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
@@ -1614,6 +1617,75 @@ def _sibling_close_series(symbol: str):
 
 
 _NATIVE_SIBLING_CLOSE_SERIES = _sibling_close_series
+_NATIVE_DAILY_SIBLING_PORTS = (
+    _sibling_close_series, _download_price_history, _retry, _space_yf_call,
+    _yf_net.ticker,
+)
+_SDK_NATIVE_DAILY_HISTORY = _SDK_CANONICAL_TICKER.history
+_SDK_NATIVE_PRICE_HISTORY = _SDK_PRICE_HISTORY.history
+
+
+def _daily_sibling_entry_sources_are_native() -> bool:
+    """A pre-import wrapper must not become its own native certificate."""
+    try:
+        sdk_root = Path(yf.__file__).resolve().parent
+        return (
+            Path(_yf_net.ticker.__code__.co_filename).resolve()
+            == Path(_yf_net.__file__).resolve()
+            and all(
+                Path(function.__code__.co_filename).resolve().is_relative_to(sdk_root)
+                for function in (_SDK_NATIVE_DAILY_HISTORY, _SDK_NATIVE_PRICE_HISTORY)
+            )
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _owns_native_daily_sibling_fill() -> bool:
+    """Restrict calendar planning to the owned, unchanged Yahoo entry path."""
+    from tarzan import runtime
+    from tarzan.runtime.session import current_session
+    from tarzan.runtime.transport import ProviderBudget
+
+    session = current_session()
+    return (
+        session is not None
+        and type(session.transport) is ProviderBudget
+        and session.transport.optional_work_token() is None
+        and runtime.allows_live_transport()
+        and type(_NATIVE_DAILY_SIBLING_PORTS) is tuple
+        and len(_NATIVE_DAILY_SIBLING_PORTS) == 5
+        and all(
+            active is original
+            for active, original in zip(
+                (_sibling_close_series, _download_price_history, _retry,
+                 _space_yf_call, _yf_net.ticker),
+                _NATIVE_DAILY_SIBLING_PORTS,
+            )
+        )
+        and yf.Ticker is _SDK_CANONICAL_TICKER
+        and _SDK_CANONICAL_TICKER.history is _SDK_NATIVE_DAILY_HISTORY
+        and _SDK_PRICE_HISTORY.history is _SDK_NATIVE_PRICE_HISTORY
+        and getattr(_SDK_NATIVE_DAILY_HISTORY, "__module__", "") == "yfinance.base"
+        and getattr(_SDK_NATIVE_PRICE_HISTORY, "__module__", "") == "yfinance.scrapers.history"
+        and getattr(_yf_net.ticker, "__module__", "") == "tarzan.data._yf_net"
+        and _daily_sibling_entry_sources_are_native()
+    )
+
+
+def _closed_sibling_has_observed_today(symbol: str, today) -> bool:
+    """Do not use a calendar to discard already available daily evidence."""
+    try:
+        cached = price_cache.load_history(symbol)
+        if cached is None or cached.empty:
+            return False
+        if "Close" not in cached:
+            return True  # retain the existing path for uncertain cache content
+        closes = cached["Close"].dropna()
+        closes = closes[closes > 0]
+        return any(pd.Timestamp(index).date() == today for index in closes.index)
+    except Exception:
+        return True  # a cache failure must not authorize suppressing a response
 
 
 def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
@@ -1656,6 +1728,7 @@ def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
       point-in-time run reflects only what its own venue actually printed.
     """
     from tarzan.data.market_quotes import _sibling_symbols, _SIBLING_PRICE_TOLERANCE
+    from tarzan.data.exchange_calendar import daily_session_known_closed
 
     try:
         closes = result["Close"].dropna()
@@ -1674,7 +1747,14 @@ def _fill_today_from_sibling(symbol: str, result: pd.DataFrame) -> pd.DataFrame:
             return result
 
         own_last_close = float(closes.iloc[-1])
+        plan_closed_sessions = _owns_native_daily_sibling_fill()
         for candidate in _sibling_symbols(symbol):
+            if (
+                plan_closed_sessions
+                and daily_session_known_closed(candidate, today)
+                and not _closed_sibling_has_observed_today(candidate, today)
+            ):
+                continue
             sib = _sibling_close_series(candidate)
             if sib is None or len(sib) < 2:
                 continue

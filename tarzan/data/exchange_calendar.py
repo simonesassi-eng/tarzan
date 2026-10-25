@@ -227,6 +227,31 @@ def is_session(ticker: str, day: datetime.date) -> bool:
     return _is_session_mic(venue_mic(ticker), day)
 
 
+def daily_session_known_closed(ticker: str, day: datetime.date) -> bool:
+    """Positive closure evidence, never the negation of a fallback calendar.
+
+    A daily-bar acquisition planner may omit a *current-day* probe only for
+    an explicit listing suffix with a covered calendar. Unknown suffixes,
+    exchange-group guesses, unavailable tables and dates beyond the horizon
+    are not closure evidence: their existing provider work must continue.
+    This says nothing about historical requests or other provider products.
+    """
+    try:
+        text = str(ticker or "").strip().upper()
+        if "." not in text or text.startswith("^") or "=" in text:
+            return False
+        mic = _SUFFIX_MIC.get(text.rsplit(".", 1)[1])
+        if mic is None or _covers_mic(mic, day) is not True:
+            return False
+        if day.weekday() >= 5:
+            return True
+        closed, _spans, _early = _table()
+        return day in closed.get(mic, frozenset())
+    except Exception:
+        # A calendar failure cannot suppress a potentially useful response.
+        return False
+
+
 def last_session_on_or_before(ticker: str, day: datetime.date) -> datetime.date:
     """``day`` itself when it is a session, else the most recent one before it.
 
