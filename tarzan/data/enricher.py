@@ -1432,11 +1432,16 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
 
 
 def _fetch_ticker_info(symbol: str) -> dict:
-    """yfinance ``info`` for a symbol, retried on throttle and memoized
-    for the duration of the run."""
+    """Required quote/profile fields, with run-owned retry and memoization.
+
+    The inspected native SDK path omits only the unused complementary PEG;
+    direct, injected and uninspected SDK callers retain full ``info``.
+    """
     def _call():
+        from tarzan.data.yahoo_info import info_for_enrichment
+
         _space_yf_call()
-        return _yf_net.ticker(symbol).info
+        return info_for_enrichment(symbol)
 
     def _load():
         observed = _retry(_call, what=f"info {symbol}")
