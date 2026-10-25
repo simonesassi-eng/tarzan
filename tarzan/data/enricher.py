@@ -545,6 +545,7 @@ def _resolve_bare_ticker(
     *,
     expected_name: str,
     expected_currency: str,
+    _benchmark_history_only: bool = False,
 ) -> Optional[dict]:
     """Promote a bare ticker to one full listing with usable daily history.
 
@@ -562,7 +563,11 @@ def _resolve_bare_ticker(
         include_expired=not allows_live_transport,
     )
     if cached:
-        info = _fetch_ticker_info(cached)
+        info = (
+            {}
+            if _benchmark_history_only is True and _owns_history_only_benchmark(cached)
+            else _fetch_ticker_info(cached)
+        )
         history = _fetch_history(cached)
         if _history_visible_at_boundary(history):
             return _annotate_ticker_data(
@@ -619,6 +624,7 @@ def _fetch_ticker_data(
     *,
     expected_name: str = "",
     expected_currency: str = "",
+    _benchmark_history_only: bool = False,
 ) -> dict:
     """Fetch market data and retain the exact provider symbol consumed.
 
@@ -630,10 +636,14 @@ def _fetch_ticker_data(
     """
     logger.info("Fetching data for %s", ticker)
     if _is_expandable_bare_ticker(ticker) and expected_name:
+        resolution_options = {}
+        if _benchmark_history_only is True:
+            resolution_options["_benchmark_history_only"] = True
         promoted = _resolve_bare_ticker(
             ticker,
             expected_name=expected_name,
             expected_currency=expected_currency,
+            **resolution_options,
         )
         if promoted is not None:
             return promoted
@@ -651,7 +661,11 @@ def _fetch_ticker_data(
     # yfinance raises ValueError("Invalid ISIN number: ...") from the
     # Ticker constructor when the symbol looks like an ISIN but fails
     # its check-digit validation. The helpers degrade to empty evidence.
-    info = _fetch_ticker_info(ticker)
+    info = (
+        {}
+        if _benchmark_history_only is True and _owns_history_only_benchmark(ticker)
+        else _fetch_ticker_info(ticker)
+    )
     history = _fetch_history(ticker)
     if _ticker_data_has_market_evidence({"info": info, "history": history}):
         method = "DIRECT_TICKER"
@@ -1952,6 +1966,80 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
             result = _fill_today_from_sibling(symbol, result)
 
     return result
+
+
+_NATIVE_BENCHMARK_DATA_PORTS = (
+    _fetch_ticker_data, _fetch_ticker_info, _fetch_history, venue_currency,
+    _is_expandable_bare_ticker, _annotate_ticker_data, _retry, _space_yf_call,
+    _load_bare_resolution, _history_visible_at_boundary,
+    _resolve_bare_ticker,
+)
+
+
+def _owns_native_benchmark_data_path(ticker: str) -> bool:
+    """Certify the unchanged run-owned benchmark acquisition entry path.
+
+    This is a consumer-specific capability boundary, not a different resolver.
+    Unowned/pinned callers and injected entry ports keep the existing complete
+    ticker-data contract, including all resolution/cache side effects.
+    """
+    if (
+        type(ticker) is not str
+        or not ticker
+        or ticker != ticker.strip()
+        or type(_NATIVE_BENCHMARK_DATA_PORTS) is not tuple
+        or len(_NATIVE_BENCHMARK_DATA_PORTS) != 11
+    ):
+        return False
+    active = (
+        _fetch_ticker_data, _fetch_ticker_info, _fetch_history, venue_currency,
+        _is_expandable_bare_ticker, _annotate_ticker_data, _retry, _space_yf_call,
+        _load_bare_resolution, _history_visible_at_boundary,
+        _resolve_bare_ticker,
+    )
+    try:
+        if not all(
+            current is original
+            and Path(original.__code__.co_filename).resolve() == Path(__file__).resolve()
+            for current, original in zip(active, _NATIVE_BENCHMARK_DATA_PORTS)
+        ):
+            return False
+        from tarzan.data.yahoo_info import _native_owned_core
+
+        return _native_owned_core(_yf_net.ticker(ticker))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _owns_history_only_benchmark(ticker: str) -> bool:
+    """A native listing whose existing venue-currency policy needs no info."""
+    return (
+        type(ticker) is str
+        and "." in ticker
+        and _owns_native_benchmark_data_path(ticker)
+        and bool(venue_currency(ticker))
+    )
+
+
+def _fetch_benchmark_data(ticker: str, *, expected_name: str = "") -> dict:
+    """Acquire exactly the facts consumed by benchmark series construction.
+
+    A qualified listing never changes identity in the native ticker-data path.
+    When the existing venue-currency policy already determines the currency,
+    the benchmark ignores all ``info`` fields. This preserves that policy;
+    it does not introduce a new currency inference rule. Reuse the unchanged
+    history path, including cache, corporate-action
+    coherence, sibling recovery and native SDK timezone fallback. Do not memoize
+    empty metadata that could suppress another consumer's required quote.
+    """
+    if _owns_native_benchmark_data_path(ticker):
+        # The same resolver performs the same one cache read, TTL/root checks,
+        # history admission and discovery walk. Do not pre-read a mapping here:
+        # a concurrent cache update between two reads could change the identity.
+        return _fetch_ticker_data(
+            ticker, expected_name=expected_name, _benchmark_history_only=True,
+        )
+    return _fetch_ticker_data(ticker, expected_name=expected_name)
 
 
 # ---------------------------------------------------------------------------

@@ -191,7 +191,7 @@ def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
     from tarzan.data import enricher as _enr
 
     expected_name = cfg.name_for(None, ticker) or ""
-    data = _enr._fetch_ticker_data(ticker, expected_name=expected_name)
+    data = _enr._fetch_benchmark_data(ticker, expected_name=expected_name)
     selected_ticker = str(
         data.get(_enr._TICKER_SYMBOL_KEY) or ticker
     ).strip()
