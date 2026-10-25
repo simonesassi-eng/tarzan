@@ -7,6 +7,7 @@ results. The final context is used to build a PortfolioMetrics DTO.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -1398,8 +1399,27 @@ class MetricsEngine:
             ctx["weighted_yield"] = 0.0
             ctx["avg_ter"] = 0.0
             return
-        ctx["weighted_yield"] = float((pd.to_numeric(df["yield_pct"], errors="coerce").fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
-        ctx["avg_ter"] = float((pd.to_numeric(df["ter"], errors="coerce").fillna(0.0) * df["weight_pct"]).sum() / total_weight) * 100
+
+        def admitted_rates(values):
+            # These are already fractions: never apply metadata's percent
+            # normalization again. Bad optional fields retain the existing
+            # absent-as-zero policy and full portfolio-weight denominator.
+            def admit(value):
+                if (pd.api.types.is_bool(value) or pd.api.types.is_complex(value)
+                        or not pd.api.types.is_scalar(value)):
+                    return 0.0
+                try:
+                    number = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    return 0.0
+                return number if math.isfinite(number) else 0.0
+
+            # Construct an ordinary float Series rather than preserving an
+            # extension/categorical dtype that cannot necessarily store zero.
+            return pd.Series((admit(value) for value in values), index=values.index, dtype=float)
+
+        ctx["weighted_yield"] = float((admitted_rates(df["yield_pct"]) * df["weight_pct"]).sum() / total_weight) * 100
+        ctx["avg_ter"] = float((admitted_rates(df["ter"]) * df["weight_pct"]).sum() / total_weight) * 100
 
     # ------------------------------------------------------------------
     # Goal deltas

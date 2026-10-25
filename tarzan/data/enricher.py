@@ -327,18 +327,29 @@ def _as_fraction(value) -> Optional[float]:
     A genuine dividend yield or expense ratio expressed as a fraction is
     always well below 1.0 (1.0 would be 100%). Any value >= 1.0 therefore
     came from a percent-scaled field (e.g. dividendYield=2.4) and is divided
-    by 100. None/NaN/non-positive inputs return None so downstream .fillna(0)
-    treats them as absent. A value in (0, 1) is assumed already a fraction.
+    by 100. Non-scalar, boolean, nonfinite and non-positive inputs return None
+    so downstream .fillna(0) treats them as absent. A value in (0, 1) is
+    assumed already a fraction.
     """
-    if value is None:
+    if (value is None or pd.api.types.is_bool(value)
+            or pd.api.types.is_complex(value) or not pd.api.types.is_scalar(value)):
         return None
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not (v == v) or v <= 0.0:  # NaN or non-positive
+    if not math.isfinite(v) or v <= 0.0:
         return None
     return v / 100.0 if v >= 1.0 else v
+
+
+def _first_fraction(*values) -> Optional[float]:
+    """Use the first admitted rate, not the first truthy malformed field."""
+    for value in values:
+        normalized = _as_fraction(value)
+        if normalized is not None:
+            return normalized
+    return None
 
 
 # Exchanges that quote exclusively in EUR. A listing on one of these is EUR by
@@ -3567,8 +3578,8 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         # so a raw fallback chain mixes units and inflates weighted_yield ~100x.
         # _as_fraction normalizes any percent-scaled value (>= 1.0, impossible
         # for a real fraction yield/TER) back to a fraction.
-        holding.ter = _as_fraction(
-            info.get("annualReportExpenseRatio") or info.get("expenseRatio")
+        holding.ter = _first_fraction(
+            info.get("annualReportExpenseRatio"), info.get("expenseRatio"),
         )
         # Curated TER from instrument_taxonomy.csv (a FRACTION) overrides the
         # yfinance value when present — yfinance rarely carries a correct TER
@@ -3576,9 +3587,9 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         _tax_ter = cfg.ter_for(holding.isin, holding.ticker)
         if _tax_ter is not None:
             holding.ter = _tax_ter
-        holding.yield_pct = _as_fraction(
-            info.get("yield") or info.get("dividendYield")
-            or info.get("trailingAnnualDividendYield") or info.get("fiveYearAvgDividendYield")
+        holding.yield_pct = _first_fraction(
+            info.get("yield"), info.get("dividendYield"),
+            info.get("trailingAnnualDividendYield"), info.get("fiveYearAvgDividendYield"),
         )
         if holding.sector is None:
             holding.sector = info.get("sector") or info.get("category")
