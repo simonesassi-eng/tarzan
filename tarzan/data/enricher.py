@@ -1898,6 +1898,24 @@ def _fetch_history(symbol: str) -> pd.DataFrame:
     )
 
 
+_NATIVE_CACHE_COVERAGE = price_cache.covers_period
+
+
+def _cached_period_covered(cached, symbol: str) -> bool:
+    predicate = price_cache.covers_period
+    try:
+        native = (
+            predicate is _NATIVE_CACHE_COVERAGE
+            and Path(predicate.__code__.co_filename).resolve() == Path(price_cache.__file__).resolve()
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        native = False
+    if native:
+        return predicate(cached, _backtest_period(), symbol=symbol)
+    # Existing injected ports retain their exact two-argument contract.
+    return predicate(cached, _backtest_period())
+
+
 def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
 
     cached = price_cache.load_history(symbol)
@@ -1906,7 +1924,7 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
     # full backtest window its HEAD may be missing (an instrument cached after
     # its inception), so pull the whole period to backfill it. merge_history
     # then keeps the union. Guards the young-fund YTD/since-inception anchor.
-    if start is not None and not price_cache.covers_period(cached, _backtest_period()):
+    if start is not None and not _cached_period_covered(cached, symbol):
         start = None
     if cached is not None and "Price Close" not in cached:
         start = None  # upgrade adjusted-only caches without an incomplete raw head

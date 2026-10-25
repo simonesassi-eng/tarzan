@@ -467,7 +467,7 @@ def _period_to_days(period: str) -> int:
 
 
 def covers_period(cached: Optional[pd.DataFrame], period: str,
-                  slack_days: int = 10) -> bool:
+                  slack_days: int = 10, *, symbol: Optional[str] = None) -> bool:
     """Whether ``cached`` already spans the full backtest ``period``.
 
     A False here tells the fetcher to pull the whole period rather than just a
@@ -481,10 +481,54 @@ def covers_period(cached: Optional[pd.DataFrame], period: str,
     re-pulled every run — cheap (its whole life is a few hundred rows) and
     self-correcting. Mature, fully-cached series span it and take the tail path.
     """
-    if cached is None or cached.empty or len(cached) < 2:
+    if (not isinstance(cached, pd.DataFrame) or cached.empty or len(cached) < 2
+            or "Close" not in cached or not isinstance(cached.index, pd.DatetimeIndex)
+            or cached.index.hasnans or not cached.index.is_unique
+            or not cached.index.is_monotonic_increasing):
         return False
-    span_days = (cached.index.max() - cached.index.min()).days
-    return span_days + slack_days >= _period_to_days(period)
+    try:
+        if (type(slack_days) not in (int, float) or not math.isfinite(float(slack_days))
+                or slack_days < 0):
+            return False
+        from tarzan import runtime
+
+        last = pd.Timestamp(cached.index[-1])
+        last_utc = last.tz_localize("UTC") if last.tzinfo is None else last.tz_convert("UTC")
+        if last_utc > pd.Timestamp(runtime.context().captured_at):
+            return False
+        span_days = (cached.index[-1] - cached.index[0]).days
+        if span_days + slack_days < _period_to_days(period):
+            return False
+        days = [stamp.date() for stamp in cached.index]
+        if len(set(days)) != len(days):
+            return False
+        for column in ("Close", "Price Close"):
+            if column in cached:
+                values = cached[column]
+                if values.map(
+                    lambda value: pd.api.types.is_bool(value) or pd.api.types.is_complex(value)
+                    or not pd.api.types.is_scalar(value)
+                ).any():
+                    return False
+                values = pd.to_numeric(values, errors="coerce")
+                if not values.map(lambda value: math.isfinite(value) and value > 0).all():
+                    return False
+        first_day, last_day = days[0], days[-1]
+        if symbol is None:
+            expected = {stamp.date() for stamp in pd.bdate_range(first_day, last_day)}
+        else:
+            from tarzan.data import exchange_calendar
+
+            if (not exchange_calendar.covers(symbol, first_day)
+                    or not exchange_calendar.covers(symbol, last_day)):
+                return False
+            expected = {
+                stamp.date() for stamp in pd.date_range(first_day, last_day, freq="D")
+                if exchange_calendar.is_session(symbol, stamp.date())
+            }
+        return bool(expected) and expected <= set(days)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 # ---------------------------------------------------------------------------
