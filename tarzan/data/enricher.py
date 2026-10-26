@@ -2167,7 +2167,11 @@ def _owns_native_benchmark_data_path(ticker: str) -> bool:
         from tarzan.data.yahoo_info import _native_owned_core
 
         return _native_owned_core(_yf_net.ticker(ticker))
-    except (AttributeError, OSError, TypeError, ValueError):
+    except Exception:
+        # An ISIN constructor can perform native search before certification.
+        # An ordinary SDK/provider failure must decline this optimization,
+        # not prevent the full path's independently bounded info/history work.
+        # Fatal interruption and missing frozen authority still escape.
         return False
 
 
