@@ -37,12 +37,58 @@ def reset() -> None:
 
 def space_yf_call() -> None:
     """Enforce a minimum interval between yfinance calls across threads/modules."""
-    with _lock:
-        wait = _YF_MIN_INTERVAL - (_time.monotonic() - _last_call[0])
-        if wait > 0:
-            from tarzan.runtime.transport import provider_wait
-            provider_wait(wait, "yahoo")
-        _last_call[0] = _time.monotonic()
+    try:
+        started = _time.monotonic()
+    except BaseException:
+        started = None
+    locked = sleep_started = sleep_finished = None
+    requested_sleep = 0.0
+    completed = False
+    try:
+        with _lock:
+            locked = _time.monotonic()
+            wait = _YF_MIN_INTERVAL - (locked - _last_call[0])
+            if wait > 0:
+                from tarzan.runtime.transport import provider_wait
+                requested_sleep = wait
+                sleep_started = locked
+                provider_wait(wait, "yahoo")
+            _last_call[0] = _time.monotonic()
+            if sleep_started is not None:
+                sleep_finished = _last_call[0]
+            completed = True
+    finally:
+        # This is outside the global pacing lock, holds no native permit and
+        # never creates a budget. An optional observer cannot replace success,
+        # the provider's deadline error or the caller's cancellation.
+        try:
+            from tarzan.runtime.workload import record_yahoo_spacing
+            if started is None:
+                raise ValueError("optional pacing observation clock unavailable")
+            if locked is None or sleep_started is not None and sleep_finished is None:
+                observed_end = _time.monotonic()
+                if sleep_started is not None:
+                    sleep_finished = observed_end
+            else:
+                observed_end = locked
+            record_yahoo_spacing(
+                lock_wait=max(
+                    0.0, (locked if locked is not None else observed_end) - started,
+                ),
+                sleep_wait=(
+                    max(0.0, sleep_finished - sleep_started)
+                    if sleep_started is not None and sleep_finished is not None
+                    else 0.0
+                ),
+                requested_sleep=requested_sleep,
+                completed=completed,
+            )
+        except BaseException:
+            try:
+                from tarzan.runtime.workload import mark_yahoo_spacing_incomplete
+                mark_yahoo_spacing_incomplete()
+            except BaseException:
+                pass
 
 
 def is_transient_error(exc: Exception) -> bool:

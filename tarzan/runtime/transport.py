@@ -222,6 +222,8 @@ class ProviderBudget:
         self.coordinator = RequestCoordinator(
             config.max_workers() if capacity is None else capacity,
         )
+        from tarzan.runtime.workload import YahooSpacingObservation
+        self.yahoo_spacing = YahooSpacingObservation()
 
     def optional_work_token(self):
         """Pending-work authority, not a key for successfully observed facts.

@@ -8,6 +8,7 @@ throughput, memory, or availability thresholds.
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -22,6 +23,94 @@ MAX_RECORDED_INTEGER = (1 << 53) - 1
 MAX_STAGE_OBSERVATIONS = 64
 MAX_LABEL_CHARACTERS = 96
 _CPU_CLOCK_NAMES = ("thread_cpu_ms", "process_cpu_ms")
+
+
+class YahooSpacingObservation:
+    """Run-owned, nonblocking observation of the unchanged shared pacer.
+
+    Contention drops a sample and marks the evidence incomplete. Optional
+    observation never queues a financial/provider caller behind telemetry.
+    No symbols, requests, errors or financial values are accepted here.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._incomplete = False
+        self._truncated = False
+        self._counts = {"calls": 0, "completed": 0, "interrupted": 0}
+        self._seconds = {
+            "lock_wait_seconds": 0.0,
+            "sleep_wait_seconds": 0.0,
+            "requested_sleep_seconds": 0.0,
+        }
+
+    def record(self, *, lock_wait, sleep_wait, requested_sleep, completed):
+        values = (lock_wait, sleep_wait, requested_sleep)
+        try:
+            valid = type(completed) is bool and all(
+                type(value) in (float, int) and math.isfinite(value) and value >= 0
+                for value in values
+            )
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            self._incomplete = True
+            return
+        if not self._lock.acquire(blocking=False):
+            self._incomplete = True
+            return
+        try:
+            for key in ("calls", "completed" if completed else "interrupted"):
+                if self._counts[key] == MAX_RECORDED_INTEGER:
+                    self._truncated = True
+                else:
+                    self._counts[key] += 1
+            for key, value in zip(self._seconds, values):
+                maximum = MAX_RECORDED_INTEGER / 1000.0
+                if value > maximum - self._seconds[key]:
+                    self._seconds[key] = maximum
+                    self._truncated = True
+                else:
+                    self._seconds[key] += value
+        finally:
+            self._lock.release()
+
+    def snapshot(self):
+        if not self._lock.acquire(blocking=False):
+            return {"incomplete": True, "available": False, "truncated": False}
+        try:
+            return {
+                **self._counts, **self._seconds,
+                "incomplete": self._incomplete, "available": True,
+                "truncated": self._truncated,
+            }
+        finally:
+            self._lock.release()
+
+
+def record_yahoo_spacing(*, lock_wait, sleep_wait, requested_sleep, completed):
+    """Observe only an existing native owner; never create transport authority."""
+    from tarzan.runtime.session import current_session
+    from tarzan.runtime.transport import ProviderBudget
+
+    session = current_session()
+    budget = getattr(session, "transport", None)
+    if type(budget) is ProviderBudget:
+        budget.yahoo_spacing.record(
+            lock_wait=lock_wait, sleep_wait=sleep_wait,
+            requested_sleep=requested_sleep, completed=completed,
+        )
+
+
+def mark_yahoo_spacing_incomplete():
+    """Keep an observer fault visible without invoking its failed record port."""
+    from tarzan.runtime.session import current_session
+    from tarzan.runtime.transport import ProviderBudget
+
+    session = current_session()
+    budget = getattr(session, "transport", None)
+    if type(budget) is ProviderBudget and type(budget.yahoo_spacing) is YahooSpacingObservation:
+        budget.yahoo_spacing._incomplete = True
 
 
 @dataclass(frozen=True)
@@ -253,6 +342,36 @@ def build_workload_observation(
             "exclusive_attribution": False,
         }
     from tarzan.runtime.acquisition import RequestCoordinator
+    from tarzan.runtime.transport import ProviderBudget
+
+    budget = getattr(session, "transport", None)
+    if type(budget) is ProviderBudget:
+        spacing = budget.yahoo_spacing.snapshot()
+        measurements = {
+            name: _bounded_count(spacing[name]).to_dict()
+            for name in ("calls", "completed", "interrupted")
+            if name in spacing
+        }
+        measurements.update({
+            name.removesuffix("_seconds") + "_ms": _bounded(
+                value * 1000.0, "milliseconds", integral=False,
+            ).to_dict()
+            for name, value in spacing.items() if name.endswith("_seconds")
+        })
+        result["yahoo_spacing"] = {
+            "measurements": measurements,
+            "available": spacing["available"],
+            "incomplete": spacing["incomplete"],
+            "truncated": spacing["truncated"],
+            "semantics": "sum_of_caller_intervals_not_stage_critical_path",
+            "overlapping_lock_waiters_must_not_be_summed_into_delivery_latency": True,
+            "configured_spacing_policy_unchanged": True,
+            "observer_never_blocks_provider_callers": True,
+        }
+        result["truncated"] = (
+            result["truncated"] or spacing["truncated"]
+            or any(measure["truncated"] for measure in measurements.values())
+        )
 
     coordinator = getattr(getattr(session, "transport", None), "coordinator", None)
     if isinstance(coordinator, RequestCoordinator):
