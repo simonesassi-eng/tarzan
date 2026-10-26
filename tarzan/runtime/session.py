@@ -18,6 +18,7 @@ from typing import Any, Mapping, Optional
 
 from tarzan.runtime.io_utils import canonical_json_bytes
 from tarzan.runtime.memo import ProviderMemo
+from tarzan.runtime.input_receipts import immutable_fingerprints
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,11 @@ class RunSession:
     log_records: list[dict] = field(default_factory=list, repr=False)
     gate: Optional["SerialExecutionGate"] = field(default=None, repr=False)
     analysis_id: Optional[str] = None
+    _input_fingerprints: Mapping[str, str] = field(
+        default_factory=lambda: immutable_fingerprints({}),
+        init=False, repr=False, compare=False,
+    )
+    _input_fingerprints_bound: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.config_snapshot = MappingProxyType(dict(self.config_snapshot))
@@ -101,6 +107,19 @@ class RunSession:
         if self.config_snapshot:
             raise RuntimeError("run session configuration is already bound")
         self.config_snapshot = MappingProxyType(dict(config))
+
+    @property
+    def input_fingerprints(self) -> Mapping[str, str]:
+        """Descriptive receipts only; excluded from canonical financial facts."""
+        return self._input_fingerprints
+
+    def bind_input_fingerprints(self, values) -> None:
+        """Retain one immutable receipt on this fresh, completed input attempt."""
+        if self._input_fingerprints_bound:
+            raise RuntimeError("input fingerprints are already bound")
+        receipt = immutable_fingerprints(values)
+        self._input_fingerprints = receipt
+        self._input_fingerprints_bound = True
 
     def close_transport(self) -> None:
         """Close owned clients, not the retained deadline/policy authority.
@@ -130,6 +149,24 @@ class RunResult:
 
     def compatibility_tuple(self) -> tuple[Any, Any]:
         return self.metrics, self.config
+
+
+def matching_native_session(result) -> Optional[RunSession]:
+    """Read an exact attempt's diagnostic owner, never an ambient/prior run."""
+    from tarzan.runtime.ledger import RunLedger
+
+    if type(result) is not RunResult or type(result.session) is not RunSession:
+        return None
+    session = result.session
+    if (
+        type(session.context) is not RunContext
+        or session.context.attempt_id != result.attempt_id
+        or session.ledger is not result.ledger
+        or type(session.ledger) is not RunLedger
+        or session.ledger.attempt_id != result.attempt_id
+    ):
+        return None
+    return session
 
 
 _current_session: ContextVar[Optional[RunSession]] = ContextVar(

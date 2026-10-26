@@ -23,13 +23,14 @@ from tarzan.runtime import sealed
 from tarzan.runtime.io_utils import atomic_write_bytes, canonical_json_bytes
 from tarzan.runtime.ledger import ErrorNormalizer, LedgerEntryType
 from tarzan.runtime.publication import PublicationEvaluator
+from tarzan.runtime.input_receipts import INPUT_FILENAMES
 
 
 SCHEMA_VERSION = "1"
 PURPOSE = "tarzan-diagnostics-v1"
 FILENAME = "report.sealed"
 DIRECTORY_ENV = "TARZAN_DIAGNOSTIC_DIR"
-_INPUT_NAMES = frozenset({"order_list.csv", "targets.csv", "targets_per_holding.csv"})
+_INPUT_NAMES = INPUT_FILENAMES
 _FIELDS = frozenset({
     "schema_version", "operation", "exit_code", "duration_seconds", "captured_at",
     "run", "input_sha256", "entrypoint_error_type", "provider_counts", "quality",
@@ -263,6 +264,11 @@ def build_report(
                     str(entry.payload.get("outcome", "UNKNOWN"))
                 ] += 1
     context = result.session.context if result is not None and result.session is not None else None
+    if input_sha256 is None:
+        from tarzan.runtime.session import matching_native_session
+
+        session = matching_native_session(result)
+        input_sha256 = session.input_fingerprints if session is not None else {}
     report = {
         "schema_version": SCHEMA_VERSION,
         "operation": operation,
@@ -291,6 +297,16 @@ def build_report(
     }
     if operational_timings is not None:
         report["run"]["timings"] = _run_timings(operational_timings)
+    try:
+        from tarzan.runtime.acquisition_receipts import native_final_acquisition
+
+        final_acquisition = native_final_acquisition(result)
+        if final_acquisition is not None:
+            report["run"]["final_acquisition"] = final_acquisition
+    except BaseException:
+        from tarzan.runtime.acquisition_receipts import FINAL_ACQUISITION_ERROR
+
+        report["run"]["final_acquisition_error_type"] = FINAL_ACQUISITION_ERROR
     if context is not None:
         try:
             clock = _native_run_clock(context)
@@ -363,6 +379,19 @@ def _validate(report):
             raise ValueError("invalid private diagnostic timing boundary")
     if "clock" in report["run"]:
         _run_clock(report["run"]["clock"], captured_at=report["captured_at"])
+    if "final_acquisition" in report["run"]:
+        from tarzan.runtime.acquisition_receipts import validate_final_acquisition
+
+        validate_final_acquisition(report["run"]["final_acquisition"])
+    if "final_acquisition_error_type" in report["run"]:
+        from tarzan.runtime.acquisition_receipts import FINAL_ACQUISITION_ERROR
+
+        if (
+            type(report["run"]["final_acquisition_error_type"]) is not str
+            or report["run"]["final_acquisition_error_type"] != FINAL_ACQUISITION_ERROR
+            or "final_acquisition" in report["run"]
+        ):
+            raise ValueError("invalid final acquisition projection status")
     if "clock_projection_error_type" in report["run"]:
         if type(report["run"]["clock_projection_error_type"]) is not str or (
             report["run"]["clock_projection_error_type"] != _CLOCK_PROJECTION_ERROR

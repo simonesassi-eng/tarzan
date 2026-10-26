@@ -352,34 +352,57 @@ class RequestCoordinator:
     def snapshot(self) -> dict[str, int | float | bool]:
         """Fresh descriptive counts only; no request identities or payloads."""
         with self._condition:
-            return {
-                "capacity": self.capacity,
-                "active": self._active,
-                "active_optional": self._active_optional,
-                "essential_demand": self._essential_demand,
-                "queued_essential": len(self._essential) + len(self._protected),
-                "queued_optional": len(self._optional),
-                "requested": self._requested,
-                "acquired": self._acquired,
-                "released": self._released,
-                "rejected": self._rejected,
-                "peak": self._peak,
-                "queue_wait_seconds": self._queue_wait_seconds,
-                "closed": self._closed,
-            }
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self):
+        return {
+            "capacity": self.capacity,
+            "active": self._active,
+            "active_optional": self._active_optional,
+            "essential_demand": self._essential_demand,
+            "queued_essential": len(self._essential) + len(self._protected),
+            "queued_optional": len(self._optional),
+            "requested": self._requested,
+            "acquired": self._acquired,
+            "released": self._released,
+            "rejected": self._rejected,
+            "peak": self._peak,
+            "queue_wait_seconds": self._queue_wait_seconds,
+            "closed": self._closed,
+        }
 
     def protection_snapshot(self):
         """Additional fixed numeric observations; keep the existing snapshot ABI."""
         with self._condition:
+            return self._protection_snapshot_locked()
+
+    def _protection_snapshot_locked(self):
+        return {
+            "groups_created": self._protected_groups_created,
+            "activations": self._protected_activations,
+            "active": self._active_protected,
+            "pending": sum(self._protections.values()),
+            "reserved_pending": sum(
+                self._protections[protection] for protection in self._activated_protections
+            ),
+            "queued": len(self._protected),
+            "acquired": self._protected_acquired,
+            "released": self._protected_released,
+        }
+
+    def try_observation(self):
+        """Atomic, nonblocking optional observation of the existing owner.
+
+        Contention is unavailable evidence, not zeros or a reason to queue an
+        observer. No request, permit, budget, wait or lifecycle transition occurs.
+        The existing blocking snapshot/protection_snapshot ABI is unchanged.
+        """
+        if not self._condition.acquire(blocking=False):
+            return None
+        try:
             return {
-                "groups_created": self._protected_groups_created,
-                "activations": self._protected_activations,
-                "active": self._active_protected,
-                "pending": sum(self._protections.values()),
-                "reserved_pending": sum(
-                    self._protections[protection] for protection in self._activated_protections
-                ),
-                "queued": len(self._protected),
-                "acquired": self._protected_acquired,
-                "released": self._protected_released,
+                "native_acquisition": self._snapshot_locked(),
+                "protected_acquisition": self._protection_snapshot_locked(),
             }
+        finally:
+            self._condition.release()

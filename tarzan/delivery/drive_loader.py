@@ -34,6 +34,7 @@ from types import MappingProxyType
 from typing import Optional
 
 from tarzan.runtime.io_utils import atomic_write_bytes
+from tarzan.runtime.input_receipts import INPUT_FILENAMES, immutable_fingerprints
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,18 @@ _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,199}$")
 class DownloadedInputSet(Mapping[str, Path]):
     """Own only its private staging directory; never own caller files."""
 
-    def __init__(self, directory: tempfile.TemporaryDirectory, paths):
+    def __init__(self, directory: tempfile.TemporaryDirectory, paths, *, fingerprints=None):
         self._directory = directory
         self.directory = Path(directory.name)
         self._paths = MappingProxyType(dict(paths))
+        self._fingerprints = immutable_fingerprints(
+            {} if fingerprints is None else fingerprints,
+        )
         self._closed = False
+
+    @property
+    def fingerprints(self):
+        return self._fingerprints
 
     def __getitem__(self, key):
         if self._closed:
@@ -258,6 +266,7 @@ def _download_selected_inputs(service, by_name, filenames, dest_dir):
     directory = tempfile.TemporaryDirectory(prefix="tarzan-drive-", dir=dest_dir)
     staging = Path(directory.name)
     paths: dict[str, Path] = {}
+    fingerprints = {}
     try:
         for name in filenames:
             if name not in by_name:
@@ -295,9 +304,24 @@ def _download_selected_inputs(service, by_name, filenames, dest_dir):
                 raise RuntimeError(f"Drive input changed after listing (checksum): {name}")
             local = staging / name
             atomic_write_bytes(local, data)
+            if name in INPUT_FILENAMES:
+                # These are the same bounded, size/checksum-validated bytes
+                # written to owned staging, not a later re-read of a path.
+                try:
+                    fingerprints.update(immutable_fingerprints({
+                        name: hashlib.sha256(data).hexdigest(),
+                    }))
+                except Exception:
+                    try:
+                        logger.warning(
+                            "Input fingerprint receipt unavailable; downloaded bytes retained.",
+                            extra={"public_code": "INPUT_FINGERPRINTS_UNAVAILABLE"},
+                        )
+                    except Exception:
+                        pass  # Optional logging cannot invalidate downloaded input.
             logger.info("Drive: downloaded required input %s", name)
             paths[name] = local
-        return DownloadedInputSet(directory, paths)
+        return DownloadedInputSet(directory, paths, fingerprints=fingerprints)
     except BaseException:
         try:
             directory.cleanup()

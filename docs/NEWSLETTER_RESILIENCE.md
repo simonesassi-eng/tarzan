@@ -66,6 +66,24 @@ An explicit verification fails if its requested encrypted capture is unavailable
 Repository/organization limits may shorten requested artifact retention:
 check the upload warning and artifact expiration rather than assuming 14 days.
 
+Normal Drive sends retain SHA-256 receipts for the known input filenames in
+`input_sha256`, using the same downloaded buffers that passed size/checksum
+validation. These immutable receipts survive staging cleanup and belong only
+to that exact native attempt. They describe downloaded bytes, not a later
+caller-modified file. Local, injected or unavailable input observations do not
+invent hashes; explicit verification fingerprints keep their existing contract.
+Receipt collection is optional and cannot change prices, Analysis ID or delivery.
+
+`run.final_acquisition` independently observes the retained native coordinator
+at diagnostic capture, including work after analysis such as rendering requests.
+It does not rewrite the earlier analysis-scoped `TELEMETRY` ledger event.
+Native and protected counts are observed atomically without waiting or acquiring
+a provider permit; unavailable/contended observations are omitted or marked
+`FINAL_ACQUISITION_UNAVAILABLE`, never replaced with zeros. Bounded measurements
+retain truncation. `admission_closed` describes the actual coordinator state:
+client cleanup does not itself close the shared admission authority. These
+optional version-1 fields are descriptive, not financial or publication gates.
+
 ## Recover an exact failure privately
 
 Download the run's `tarzan-diagnostics-<run-id>-<attempt>` artifact into a private

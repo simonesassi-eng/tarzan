@@ -50,6 +50,7 @@ from zoneinfo import ZoneInfo
 
 from tarzan.export.newsletter import render_newsletter
 from tarzan.orchestrator import run
+from tarzan.runtime.input_receipts import immutable_fingerprints
 from tarzan.delivery.claims import (
     AppsScriptPropertiesDeliveryClaimStore,
     DeliveryClaimStore,
@@ -229,9 +230,18 @@ def send_email(
 class ResolvedInputSet(dict):
     """Mapping-compatible paths with ownership only for Drive staging."""
 
-    def __init__(self, paths, *, downloaded=None):
+    def __init__(self, paths, *, downloaded=None, fingerprints=None):
         super().__init__(paths)
         self._downloaded = downloaded
+        # Retain only already-observed bytes' hashes after owned staging closes.
+        # Local and injected sources supply no invented/later-file fingerprint.
+        self._fingerprints = immutable_fingerprints(
+            {} if fingerprints is None else fingerprints,
+        )
+
+    @property
+    def fingerprints(self):
+        return self._fingerprints
 
     def close(self):
         if self._downloaded is not None:
@@ -311,7 +321,9 @@ def resolve_inputs() -> ResolvedInputSet:
     if bool(drive_folder) != bool(drive_creds):
         raise RuntimeError("Drive input configuration requires both folder ID and credentials")
     if drive_folder and drive_creds:
-        from tarzan.delivery.drive_loader import KNOWN_INPUT_FILES, download_files
+        from tarzan.delivery.drive_loader import (
+            KNOWN_INPUT_FILES, DownloadedInputSet, download_files,
+        )
         logger.info("Loading inputs from Google Drive folder %s", drive_folder)
         files = download_files(
             folder_id=drive_folder,
@@ -326,7 +338,9 @@ def resolve_inputs() -> ResolvedInputSet:
                 str(files["targets_per_holding.csv"])
                 if "targets_per_holding.csv" in files else None
             ),
-        }, downloaded=files)
+        }, downloaded=files, fingerprints=(
+            files.fingerprints if type(files) is DownloadedInputSet else {}
+        ))
 
     # Local mode.
     targets_path = _env("TARGETS_PATH", ".private/targets.csv")
@@ -645,6 +659,22 @@ def _run_and_send_owned(input_owner) -> int:
             analysis_id=canonical_analysis_id({"summary": metrics.to_summary_dict()}),
             ledger=RunLedger(envelope.attempt_id),
         )
+
+    from tarzan.runtime.session import matching_native_session
+    session = matching_native_session(result)
+    if session is not None and type(inputs) is ResolvedInputSet:
+        try:
+            session.bind_input_fingerprints(inputs.fingerprints)
+        except Exception:
+            # Optional receipt collection cannot change analysis or delivery,
+            # nor disclose private input/exception contents in public logs.
+            try:
+                logger.warning(
+                    "Input fingerprint receipt unavailable; primary outcome retained.",
+                    extra={"public_code": "INPUT_FINGERPRINTS_UNAVAILABLE"},
+                )
+            except Exception:
+                pass  # An optional receipt/log failure is not a send failure.
 
     from tarzan.runtime.session import completed_run_scope
     with completed_run_scope(result):
