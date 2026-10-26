@@ -40,14 +40,18 @@ class ValuationResult:
     source: Optional[str]
 
     def __post_init__(self) -> None:
+        from tarzan.data.referee import finite_number
+
         if self.value_eur is not None and (
-            not math.isfinite(self.value_eur) or self.value_eur < 0
+            finite_number(self.value_eur) is None
+            or not math.isfinite(self.value_eur) or self.value_eur < 0
         ):
             raise ValueError("valuation must be finite and nonnegative")
         if self.origin in (ValuationOrigin.MARKET, ValuationOrigin.FALLBACK):
             if (
                 self.resolution.kind is None or self.value_eur is None
                 or self.price_eur_per_unit is None
+                or finite_number(self.price_eur_per_unit, positive=True) is None
                 or not math.isfinite(self.price_eur_per_unit)
                 or self.price_eur_per_unit <= 0
             ):
@@ -58,19 +62,14 @@ class ValuationResult:
 
 def select_holding_valuation(holding: object) -> ValuationResult:
     """Freeze the selected origin after the one-time clean-price/FX conversion."""
+    from tarzan.data.referee import finite_number
+
     resolution = holding_kind_resolution(holding)
     source = getattr(holding, "data_source", None)
 
-    def finite(value):
-        try:
-            number = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return number if math.isfinite(number) else None
-
-    price = finite(getattr(holding, "current_price", None))
-    value = finite(getattr(holding, "current_value", None))
-    quantity = finite(getattr(holding, "quantity", None))
+    price = finite_number(getattr(holding, "current_price", None))
+    value = finite_number(getattr(holding, "current_value", None))
+    quantity = finite_number(getattr(holding, "quantity", None))
     anchor_source = str(source or "").startswith(("input_csv", "last-known", "historical-only"))
     if (
         resolution.kind is not None and price is not None and price > 0
@@ -84,7 +83,7 @@ def select_holding_valuation(holding: object) -> ValuationResult:
             else ValuationOrigin.MARKET,
             price, value, source,
         )
-    anchor = finite(getattr(holding, "market_value_eur", None))
+    anchor = finite_number(getattr(holding, "market_value_eur", None))
     if anchor is not None and anchor >= 0:
         return ValuationResult(resolution, ValuationOrigin.ANCHOR, None, anchor, source)
     return ValuationResult(resolution, ValuationOrigin.UNAVAILABLE, None, None, source)

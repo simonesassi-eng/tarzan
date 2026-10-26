@@ -1,5 +1,16 @@
 # Market-source quality
 
+## Numerical evidence
+
+Quotes, FX and historical close observations must be finite positive real
+scalars. Booleans, complex values and containers must be rejected before
+coercion can turn them into apparent prices. An invalid history row does not
+invalidate another genuine row; price-only evidence never overrides a valid
+total-return series with malformed values. The valuation selector validates
+price, quantity, value and EUR anchor; direct facts validate price and value.
+This preserves valid numeric conversions, source priority and unit mechanics.
+It cannot recover original type evidence already erased by an external parser.
+
 ## Current-session prices
 
 The selector prioritizes coherent observations from the newest observed

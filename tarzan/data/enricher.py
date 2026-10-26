@@ -204,11 +204,16 @@ def _get_fx_series(currency: str) -> pd.Series:
 
 def _usable_fx_series(series: Optional[pd.Series]) -> pd.Series:
     """Return finite positive FX rows while preserving transient provenance."""
+    return _usable_positive_real_series(series)
+
+
+def _usable_positive_real_series(series: Optional[pd.Series]) -> pd.Series:
+    """Admit positive real observations before coercion erases type evidence."""
     if not isinstance(series, pd.Series) or series.empty:
         return pd.Series(dtype=float)
     attrs = dict(series.attrs)
     # Coercion can turn JSON booleans into 1.0 and propagate complex values;
-    # an oversized object integer can even abort otherwise valid FX rows.
+    # an oversized object integer can even abort otherwise valid rows.
     # Preserve the existing numeric path/dtype for real native tapes. Inspect
     # object/extension declarations before coercion loses their type evidence.
     if (
@@ -502,8 +507,7 @@ def _history_has_market_evidence(history: object) -> bool:
         return False
     if "Close" not in getattr(history, "columns", ()):
         return False
-    closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
-    closes = closes[closes.map(math.isfinite) & (closes > 0)]
+    closes = _usable_positive_real_series(history["Close"])
     try:
         closes = _clip_to_as_of(closes)
     except Exception:  # noqa: BLE001 — evidence checks must degrade closed
@@ -512,13 +516,8 @@ def _history_has_market_evidence(history: object) -> bool:
 
 
 def _positive_market_quote(value: object) -> bool:
-    if pd.api.types.is_bool(value):
-        return False
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return False
-    return math.isfinite(numeric) and numeric > 0
+    from tarzan.data.referee import finite_number
+    return finite_number(value, positive=True) is not None
 
 
 def _ticker_data_has_market_evidence(data: dict) -> bool:
@@ -3732,21 +3731,21 @@ def _set_price_data(
     holding.price_history_price_only = None
 
     if history is not None and not history.empty and "Close" in history:
-        native = pd.to_numeric(history["Close"], errors="coerce").copy()
+        native = _usable_positive_real_series(history["Close"]).copy()
         native, history_currency = _normalize_minor_currency(native, currency)
         # Clean FIRST, convert LAST, so the native and EUR series are the same
         # series in two currencies rather than two independently cleaned ones.
         # Every step here is either pointwise (dropna, >0) or date-based
         # (_clip_to_as_of), so none of them depends on the unit.
         native = native.dropna()
-        native = native[native.map(lambda value: math.isfinite(value) and value > 0)]
+        native = native[native.map(lambda value: math.isfinite(value) and value > 0).astype(bool)]
         native = _clip_to_as_of(native)
         fx_evidence: dict[str, dict[str, object]] = {}
         if history_currency != "EUR":
             prices = convert_to_eur(native, history_currency)
             fx_evidence = prices.attrs.get(_FX_EVIDENCE_ATTR, {})
             prices = prices.dropna()
-            prices = prices[prices.map(lambda value: math.isfinite(value) and value > 0)]
+            prices = prices[prices.map(lambda value: math.isfinite(value) and value > 0).astype(bool)]
         else:
             prices = native
         if len(prices) > 0:
@@ -3768,10 +3767,10 @@ def _set_price_data(
             holding.price_currency = history_currency
             valuation_prices = prices
             if "Price Close" in history:
-                raw = pd.to_numeric(history["Price Close"], errors="coerce").copy()
+                raw = _usable_positive_real_series(history["Price Close"]).copy()
                 raw, raw_currency = _normalize_minor_currency(raw, currency)
                 raw = raw.dropna()
-                raw = raw[raw.map(lambda value: math.isfinite(value) and value > 0)]
+                raw = raw[raw.map(lambda value: math.isfinite(value) and value > 0).astype(bool)]
                 raw = _clip_to_as_of(raw)
                 raw_prices = (
                     convert_to_eur(raw, raw_currency)
@@ -3779,7 +3778,7 @@ def _set_price_data(
                 )
                 raw_prices = raw_prices.dropna()
                 raw_prices = raw_prices[
-                    raw_prices.map(lambda value: math.isfinite(value) and value > 0)
+                    raw_prices.map(lambda value: math.isfinite(value) and value > 0).astype(bool)
                 ]
                 if not raw_prices.empty:
                     raw_prices.name = prices.name
@@ -3818,13 +3817,8 @@ def _set_price_data(
                     )
 
     def _valid_quote(value: object) -> Optional[float]:
-        try:
-            numeric = float(value) if value is not None else None
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if numeric is None or not math.isfinite(numeric) or numeric <= 0:
-            return None
-        return numeric
+        from tarzan.data.referee import finite_number
+        return finite_number(value, positive=True)
 
     def _quote_to_eur(
         value: float,
