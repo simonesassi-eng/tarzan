@@ -1050,7 +1050,7 @@ class TestSetPriceDataRobustness:
             hist,
             {
                 "regularMarketPrice": 99.5,
-                "regularMarketTime": float("nan"),
+                "regularMarketTime": None,
             },
             "EUR",
         )
@@ -1058,6 +1058,24 @@ class TestSetPriceDataRobustness:
         assert h.price_observation_timestamp is None
         assert h.price_is_fallback is True
         assert h.data_source == "yfinance:regularMarketPrice (undated)"
+
+    def test_all_nan_history_cannot_undate_a_malformed_present_info_clock(self):
+        # Preserve the old NaN-clock fixture as a separate admission negative:
+        # malformed evidence is not the genuinely missing-clock fallback above.
+        h = self._holding()
+        hist = pd.DataFrame({"Close": [float("nan"), float("nan")]})
+        enricher._set_price_data(
+            h,
+            hist,
+            {
+                "regularMarketPrice": 99.5,
+                "regularMarketTime": float("nan"),
+            },
+            "EUR",
+        )
+        assert h.current_price is None
+        assert h.price_observation_timestamp is None
+        assert h.data_source != "yfinance:regularMarketPrice (undated)"
 
     def test_previous_close_is_explicit_fallback(self):
         h = self._holding()

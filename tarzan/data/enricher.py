@@ -520,6 +520,27 @@ def _positive_market_quote(value: object) -> bool:
     return finite_number(value, positive=True) is not None
 
 
+def _admissible_market_quote(info: dict, field: str) -> Optional[float]:
+    """A finite positive price whose attached quote instant is not future.
+
+    A rejected future regular quote is absent, not an undated fallback. The
+    provider's separate ``previousClose`` retains its existing fallback rule.
+    Share this admission between resolution, provenance and final valuation.
+    """
+    from tarzan.data.current_session import quote_observation_is_future
+    from tarzan.data.referee import finite_number
+
+    price = finite_number(info.get(field), positive=True)
+    if price is not None and field == "regularMarketPrice":
+        raw_time = info.get("regularMarketTime")
+        observed = _info_observation_time(raw_time)
+        if (
+            raw_time is not None and observed is None
+        ) or quote_observation_is_future(observed):
+            return None
+    return price
+
+
 def _ticker_data_has_market_evidence(data: dict) -> bool:
     """Whether a selected symbol supplied a price accepted by valuation."""
     if _history_has_market_evidence(data.get("history")):
@@ -532,7 +553,7 @@ def _ticker_data_has_market_evidence(data: dict) -> bool:
         return False
     info = data.get("info") or {}
     return any(
-        _positive_market_quote(info.get(field))
+        _admissible_market_quote(info, field) is not None
         for field in ("regularMarketPrice", "previousClose")
     )
 
@@ -1453,8 +1474,8 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
     if _owns_native_isin_data_request(symbol):
         symbol = completed_constructor_source(symbol)
     price = next(
-        (float(info[field]) for field in ("regularMarketPrice", "previousClose")
-         if _positive_market_quote(info.get(field))),
+        (value for field in ("regularMarketPrice", "previousClose")
+         if (value := _admissible_market_quote(info, field)) is not None),
         None,
     )
     if price is None:
@@ -3754,18 +3775,9 @@ def _history_observation_time(
 
 def _info_observation_time(value: object) -> Optional[dt]:
     """Parse a provider quote timestamp when one accompanies a live quote."""
-    if value is None:
-        return None
-    try:
-        if isinstance(value, (int, float)):
-            timestamp = pd.to_datetime(value, unit="s", utc=True)
-        else:
-            timestamp = pd.Timestamp(value)
-        if pd.isna(timestamp):
-            return None
-        return timestamp.to_pydatetime()
-    except (TypeError, ValueError, OverflowError):
-        return None
+    from tarzan.data.current_session import quote_observed_at
+
+    return quote_observed_at({"time": value})
 
 
 def _composite_observation_time(
@@ -3790,10 +3802,10 @@ def _set_price_data(
     """Select the best valid EUR price and retain observation provenance.
 
     In live mode, a timestamped ``regularMarketPrice`` may supersede history
-    when it is at least as recent as the selected close. A history close keeps
-    the origin of its exact row, so cached evidence remains fallback. Undated
-    quotes and ``previousClose`` are fallback-only. Pinned as-of runs use only
-    history clipped to the reporting date and never consume a current quote.
+    when it is not future and is at least as recent as the selected close. A
+    history close keeps the origin of its exact row, so cached evidence remains
+    fallback. Undated quotes and ``previousClose`` are fallback-only. Pinned
+    as-of runs use only history clipped to the date and never consume a current quote.
     """
     quote_currency = currency
     holding.price_quote_currency = currency
@@ -3955,7 +3967,7 @@ def _set_price_data(
         pinned_as_of = False
 
     if not pinned_as_of:
-        regular = _valid_quote(info.get("regularMarketPrice"))
+        regular = _admissible_market_quote(info, "regularMarketPrice")
         regular_time = _info_observation_time(info.get("regularMarketTime"))
         if regular is not None:
             regular_eur, regular_fx = _quote_to_eur(regular)

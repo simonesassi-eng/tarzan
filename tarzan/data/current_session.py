@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional
 
 import pandas as pd
@@ -355,10 +355,11 @@ def _move_is_plausible(quote: dict, symbol: str, voting, moves: dict,
 
 
 def quote_is_stale(quote: dict) -> bool:
-    """Whether this quote's own observation is too old to read as current.
+    """Whether a dated quote is too old or not yet observable as current.
 
     False when the quote carries no timestamp — unknown age is not evidence of age,
-    and the caller's own checks still have to pass. Dated against ``runtime.today()``
+    and the caller's own checks still have to pass. A malformed present timestamp
+    is rejected, not stripped to create unknown-age evidence. Dated against ``runtime.today()``
     rather than the wall clock so a pinned run stays reproducible.
 
     Public because two layers need the SAME rule: this module's level gate, which
@@ -367,13 +368,39 @@ def quote_is_stale(quote: dict) -> bool:
     """
     observed = quote_observed_at(quote)
     if observed is None:
-        return False
+        return quote.get("time") is not None
+    if quote_observation_is_future(observed):
+        return True
     try:
         from tarzan import runtime
 
         return (runtime.today() - observed.date()).days > _MAX_QUOTE_AGE_DAYS
     except Exception:  # noqa: BLE001 — a clock must never break the gate
         return False
+
+
+def quote_observation_is_future(observed: Optional[datetime]) -> bool:
+    """Reject a price observed after the instant it can actually be received.
+
+    LIVE providers can publish a genuine trade after the run's capture instant,
+    while acquisition is in progress. Use the receipt-time wall clock for this
+    upper bound, not ``captured_at``; the captured calendar still governs the
+    existing age rule. Pinned runs use the end of their effective UTC date.
+    Missing timestamps retain the caller's explicit undated-fallback contract.
+    """
+    if observed is None:
+        return False
+    from tarzan import runtime
+
+    effective_date = runtime.as_of()
+    limit = (
+        datetime.combine(effective_date, time.max, tzinfo=timezone.utc)
+        if effective_date is not None
+        else datetime.now(timezone.utc)
+    )
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    return observed > limit
 
 
 def prev_close_eur(quote: dict, price_eur: float) -> Optional[float]:
@@ -409,8 +436,27 @@ def quote_observed_at(quote: dict) -> Optional[datetime]:
     observed = quote.get("time")
     if observed is None:
         return None
+    epoch = finite_number(observed)
+    if epoch is not None:
+        try:
+            return datetime.fromtimestamp(epoch, tz=timezone.utc)
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+    # Info metadata also admits ISO/datetime observations. Keep their actual
+    # instants on the same UTC ruler rather than ranking them as undated.
+    if not isinstance(observed, (str, date, pd.Timestamp)):
+        return None
+    if isinstance(observed, str) and observation_date(observed) is None:
+        return None  # Relative "now"/"today" is receipt time, not source evidence.
     try:
-        return datetime.fromtimestamp(int(observed), tz=timezone.utc)
+        parsed = pd.Timestamp(observed)
+        if pd.isna(parsed):
+            return None
+        parsed = (
+            parsed.tz_localize("UTC")
+            if parsed.tzinfo is None else parsed.tz_convert("UTC")
+        )
+        return parsed.to_pydatetime()
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 
@@ -437,6 +483,10 @@ def stamp_date(quote: dict, today, ticker: str = "") -> Optional[pd.Timestamp]:
     out — and covers exchange holidays, which the weekday rule never did.
     """
     observed = quote_observed_at(quote)
+    if (
+        observed is None and quote.get("time") is not None
+    ) or quote_observation_is_future(observed):
+        return None
     day = pd.Timestamp(today)
     if observed is not None:
         venue_day = observed
