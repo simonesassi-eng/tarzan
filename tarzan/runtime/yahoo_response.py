@@ -288,8 +288,12 @@ def _admit_chart_prices(document):
 
 
 class YahooChartResponse(Response):
-    """Keep curl's native JSON/errors and independently admit raw price cells."""
+    """Keep native JSON/errors and admit raw chart cells and metadata identity."""
 
     def json(self, **kwargs):
-        document = _admit_chart_prices(super().json(**kwargs))
+        from tarzan.runtime.yahoo_metadata import admit_metadata_identity
+
+        document = _admit_chart_prices(
+            admit_metadata_identity(super().json(**kwargs), self),
+        )
         return _admit_chart_auxiliary(document) if _completed_chart_source(self) else document
