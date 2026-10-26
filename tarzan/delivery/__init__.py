@@ -192,11 +192,34 @@ def send_email(
     msg.add_alternative(html, subtype="html")
 
     logger.info("Connecting to %s:%d (SSL)...", smtp_host, smtp_port)
-    with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as smtp:
-        smtp.login(sender, smtp_pass)
-        if before_invoke is not None:
-            before_invoke()
-        smtp.send_message(msg)
+    primary_error = None
+    smtp_acknowledged = False
+    try:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as smtp:
+            try:
+                smtp.login(sender, smtp_pass)
+                if before_invoke is not None:
+                    before_invoke()
+                smtp.send_message(msg)
+            except BaseException as error:
+                primary_error = error
+                raise
+            smtp_acknowledged = True
+    except BaseException as error:
+        # Native SMTP teardown sends QUIT even when the body raised. Never
+        # replace the actual login/claim/wire error (or cancellation) with a
+        # secondary teardown failure.
+        if primary_error is not None and error is not primary_error:
+            raise primary_error from error
+        if not smtp_acknowledged or not isinstance(error, Exception):
+            raise
+        # DATA was accepted before QUIT failed. Retrying or marking that ACK
+        # as unknown would misrepresent delivery and could duplicate a send.
+        logger.warning(
+            "SMTP connection cleanup failed after message acknowledgement (%s).",
+            type(error).__name__,
+            extra={"public_code": "SMTP_CLEANUP_AFTER_ACK"},
+        )
     logger.info(
         "Sent newsletter to %s with subject: %s", recipient, subject,
         extra={"public_code": "SMTP_ACKNOWLEDGED"},

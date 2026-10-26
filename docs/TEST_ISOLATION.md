@@ -26,3 +26,12 @@ isolation, not a failed newsletter or a measured delivery-time regression.
 The guard and explicit fixtures correct that defect without modifying
 portfolio formulas or the delivery workflow. CI latency must be measured
 separately; test-suite time is not newsletter-send time.
+
+Native MIME tests retain the real `EmailMessage`, `SMTP.send_message`,
+`BytesGenerator` and SMTP context-manager teardown. Only the physical
+connection/login/wire/QUIT boundary is synthetic. They cover Unicode,
+mixed line endings, large inline SVG, header injection and decoded
+HTML/envelope preservation without sending email. Native QUIT faults must
+not hide the primary login/claim/wire error or cancellation; an ordinary
+cleanup failure after DATA acceptance must retain the acknowledged result
+and duplicate-send suppression. SMTP acceptance is not proof of inbox receipt.
