@@ -79,7 +79,7 @@ class TestProperty1Identity:
 
 
 class TestProperty6SingleSeries:
-    def test_order_computers_share_one_history_series(self, sample_config):
+    def test_order_computers_share_one_history_series(self, sample_config, unavailable_risk_free):
         # Two enriched holdings with real history; orders that open them.
         h1 = _enriched_holding("US0000000001", 100.0, [60.0, 61.0, 62.0])
         h2 = _enriched_holding("EU0000000001", 50.0, [40.0, 40.0, 41.0])

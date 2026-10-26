@@ -274,6 +274,7 @@ class TestEveryReturnsRowCarriesItsMarker:
         assert "+1.00%" in html
 
 
+@pytest.mark.usefixtures("unavailable_justetf")
 class TestHoldingsStampBothTapesToo:
     """The regression this shipped, and how it got past the benchmark tests.
 

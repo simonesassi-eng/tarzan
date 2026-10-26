@@ -144,7 +144,7 @@ def test_a_target_is_not_ranked_among_the_holdings_movers(monkeypatch):
     assert out["worst"]["ticker"] == "NTSG.MI", out["worst"]
 
 
-def test_a_seeded_target_gets_its_returns_row_from_the_engine():
+def test_a_seeded_target_gets_its_returns_row_from_the_engine(unavailable_risk_free):
     """The engine measures every seeded target, whatever else it is or is not.
 
     Two things the row must not depend on, because both were how it was first

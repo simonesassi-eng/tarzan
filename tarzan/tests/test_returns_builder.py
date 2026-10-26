@@ -414,6 +414,7 @@ class TestFallbackLadder:
         from tarzan.models.investor_config import InvestorConfig
 
         analysis_date = datetime.date(2025, 1, 1)
+        monkeypatch.setattr("tarzan.data.enricher.enrich_holdings", lambda holdings: holdings)
         monkeypatch.setattr("tarzan.runtime.today", lambda: analysis_date)
         orders = [
             _o(
@@ -1730,7 +1731,7 @@ class TestUnavailableOrderHistory:
         assert len(result.rebalancing_plans) == 2
 
     def test_compute_all_preserves_valid_rows_without_recreating_portfolio_history(
-        self, monkeypatch
+        self, monkeypatch, unavailable_risk_free
     ):
         from tarzan import runtime
         import tarzan.engine.metrics as metrics_module

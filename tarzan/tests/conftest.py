@@ -10,6 +10,42 @@ from tarzan.models.investor_config import InvestorConfig
 
 
 @pytest.fixture(autouse=True)
+def _no_live_credentials(monkeypatch):
+    """Tests explicitly inject synthetic credentials when testing auth."""
+    for name in (
+        "GEMINI_API_KEY", "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
+        "DRIVE_FOLDER_ID", "GOOGLE_DRIVE_CREDENTIALS_JSON",
+        "GOOGLE_APPLICATION_CREDENTIALS", "TARZAN_CACHE_KEY_B64",
+        "DELIVERY_CLAIM_ENDPOINT", "DELIVERY_CLAIM_TOKEN",
+        "AUTHORIZED_RESEND_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_yahoo_identity_cache(tmp_path_factory):
+    """Never use or populate the developer's SDK identity/cookie cache."""
+    import yfinance
+
+    yfinance.set_tz_cache_location(str(tmp_path_factory.mktemp("yahoo-cache")))
+
+
+@pytest.fixture(autouse=True)
+def _reject_unstubbed_transport(monkeypatch):
+    """Fail even if an ordinary provider fallback catches the blocked call.
+
+    Tests may replace a transport with a synthetic response explicitly.
+    Original acquisition, parser, memo and ownership code stays exercised.
+    """
+    from tarzan.tests.network_guard import NetworkGuard
+
+    guard = NetworkGuard()
+    guard.install(monkeypatch)
+    yield
+    guard.assert_unused()
+
+
+@pytest.fixture(autouse=True)
 def _disable_market_cache(monkeypatch):
     """Disable the on-disk market-data cache for the whole suite by
     default, so tests never read from or write to the real
@@ -69,6 +105,35 @@ def _disable_ai_summary(monkeypatch):
     monkeypatch.setattr("tarzan.data.market_quotes.fetch_market_quotes",
                         lambda *a, **k: [], raising=True)
     yield
+
+
+@pytest.fixture
+def unavailable_justetf(monkeypatch):
+    """Explicit absent referee for valuation tests that inject primary quotes.
+
+    Keep native prefetch, requests.Response and source handling. Other URLs
+    still reach the rejection gate rather than receiving an invented response.
+    """
+    import requests
+
+    blocked = requests.Session.request
+
+    def request(session, method, url, **kwargs):
+        if str(url).startswith("https://www.justetf.com/api/etfs/"):
+            response = requests.Response()
+            response.status_code = 404
+            response.headers["content-type"] = "application/json"
+            response._content = b"{}"
+            return response
+        return blocked(session, method, url, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", request)
+
+
+@pytest.fixture
+def unavailable_risk_free(monkeypatch):
+    """Explicit missing optional RF tape; preserve the ordinary scalar fallback."""
+    monkeypatch.setattr("tarzan.data.proxy_data.risk_free_daily", lambda: None)
 
 
 @pytest.fixture

@@ -89,6 +89,12 @@ def _stub_benchmarks(monkeypatch):
     empty = pd.Series(dtype=float)
     monkeypatch.setattr("tarzan.engine.metrics._fetch_benchmark_history",
                         lambda *a, **k: empty)
+    # Input rows already declare mechanics; no provider identity mapping is
+    # supplied in these wiring fixtures.
+    monkeypatch.setattr(
+        "tarzan.data.enricher._openfigi_raw_many",
+        lambda isins: {isin: [] for isin in isins},
+    )
 
 
 def test_order_only_derives_snapshot(tmp_path, monkeypatch):

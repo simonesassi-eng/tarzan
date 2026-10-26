@@ -38,7 +38,7 @@ def _holding(ticker: str, closes: list[float], quantity: float,
 
 
 @pytest.fixture(autouse=True)
-def _live_wednesday(monkeypatch):
+def _live_wednesday(monkeypatch, unavailable_justetf):
     """A live run on Wed 19 Aug 2026, so stamping is allowed."""
     monkeypatch.setattr("tarzan.runtime.allows_live_transport", lambda: True)
     monkeypatch.setattr("tarzan.runtime.today",

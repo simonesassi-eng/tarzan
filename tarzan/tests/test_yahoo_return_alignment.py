@@ -943,6 +943,7 @@ class TestVenueConsensus:
         assert q.get("price") == 28.07
 
 
+@pytest.mark.usefixtures("unavailable_justetf")
 class TestTheEighthOfOctoberEndToEnd:
     """Through ``apply_to_holdings`` — the stamp the valuation, the tape and the 1D all
     read — rather than through ``pick_quote`` alone."""

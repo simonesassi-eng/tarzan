@@ -174,6 +174,7 @@ def test_one_macro_exception_does_not_hide_other_facts_or_cancellation(monkeypat
 
 def test_cancellation_of_prefetch_is_not_recorded_as_success(monkeypatch):
     configure(monkeypatch)
+    monkeypatch.setattr(enricher, "_fetch_history", lambda symbol: pd.DataFrame())
     monkeypatch.setattr(_yf_net, "fetch_download", lambda *a, **k: (_ for _ in ()).throw(
         KeyboardInterrupt(),
     ))

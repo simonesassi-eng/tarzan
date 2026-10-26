@@ -77,6 +77,7 @@ def test_mutating_legacy_fields_cannot_reuse_a_selected_valuation():
 
 
 @pytest.mark.parametrize("dated", [False, True])
+@pytest.mark.usefixtures("unavailable_justetf")
 def test_a_new_verified_quote_can_replace_an_anchor_with_its_own_provenance(monkeypatch, dated):
     h = holding(current_value=73.0, data_source="input_csv (no market data)")
     h.valuation_result = select_holding_valuation(h)

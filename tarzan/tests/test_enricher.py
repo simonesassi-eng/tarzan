@@ -1180,6 +1180,7 @@ class TestEnrichSingleSafetyNet:
         # and no bond quote either (kept fully offline).
         import tarzan.data.bond_fetcher as bf
         monkeypatch.setattr(enricher, "_resolve_isin", lambda *a, **k: None)
+        monkeypatch.setattr(enricher, "_openfigi_bond_signals", lambda isin: (None, None))
         monkeypatch.setattr(enricher, "_fetch_ticker_data",
                             lambda t: {"info": {}, "history": pd.DataFrame()})
         monkeypatch.setattr(bf, "fetch_bond_price", lambda isin: None)
@@ -1198,6 +1199,8 @@ class TestExactKindEvidenceConflicts:
             {"Close": [105.25]},
             index=pd.to_datetime(["2025-06-29"]),
         )
+        monkeypatch.setattr(enricher, "_resolve_isin", lambda *a, **k: None)
+        monkeypatch.setattr(enricher, "_openfigi_bond_signals", lambda isin: (None, None))
         monkeypatch.setattr(
             enricher,
             "_fetch_ticker_data",
