@@ -14,6 +14,7 @@ import math
 import re
 import statistics
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -338,19 +339,45 @@ def raw_history(isin: str, since: date, until: date):
     """Reuse positive history and exact run-owned packets, never old absences.
 
     The native port always returns the same full five-year packet, regardless
-    of the caller's window. Coalesce that packet per ISIN/captured run, so a
-    completed absence can be shared within one run without suppressing recovery
-    in the next. Transport errors and malformed packets remain retryable.
+    of the caller's window. Coalesce inconclusive packets within the exact
+    optional phase only. A complete positive observation may cross phases;
+    an absence or a useful but incomplete tape cannot suppress later recovery.
+    Transport errors and malformed packets remain retryable.
     """
     from tarzan import runtime
     from tarzan.data import price_cache
-    from tarzan.runtime.memo import memoized
+    from tarzan.runtime.memo import memoized, provider_memo
     from tarzan.runtime.session import current_session
     from tarzan.runtime.transport import current_budget
 
     context = runtime.context()
     if context.captured_at.tzinfo is None or not _ISIN.fullmatch(str(isin)):
         return None
+    session = current_session()
+    window_key = (isin, since, until, context.captured_at)
+    if session is not None:
+        owner = provider_memo()
+        with owner.lock:
+            complete = owner.store("bond_history.complete").get(window_key)
+        if complete is not None:
+            return deepcopy(complete)
+    # Completed cache facts do not need a new transport/deadline. Observe the
+    # already-owned authority only; actual acquisitions retain current_budget.
+    budget = getattr(session, "transport", None)
+    optional_token = getattr(budget, "optional_work_token", None)
+    optional = optional_token() if callable(optional_token) else None
+    # A nonempty UNAVAILABLE/partial dictionary is not a complete source fact.
+    # Its presence must not let the generic memo promote tentative evidence
+    # into another optional deadline or an independent essential caller.
+    phase = (budget, optional[2]) if optional is not None else None
+
+    def covers_window(value):
+        return bool(
+            isinstance(value, dict) and value.get("state") == "AVAILABLE"
+            and value.get("prices")
+            and date.fromisoformat(value["prices"][0]["date"]) <= since
+            and date.fromisoformat(value["prices"][-1]["date"]) >= until
+        )
 
     def load():
         try:
@@ -408,7 +435,7 @@ def raw_history(isin: str, since: date, until: date):
             markets.sort(key=lambda market: _MARKETS[market] != cached["exchange"])
         for market in markets:
             fresh = memoized(
-                "bond_history.packet", (isin, context.captured_at, market),
+                "bond_history.packet", (isin, context.captured_at, market, phase),
                 lambda market=market: fetch_packet(market),
                 legacy={}, cache_if=lambda value: value is not None,
             )
@@ -441,12 +468,16 @@ def raw_history(isin: str, since: date, until: date):
             price_cache.store_timed(NAMESPACE, isin, best)
         return best
 
-    if current_session() is None:
+    if session is None:
         return load()
-    return memoized(
-        "bond_history.raw", (isin, since, until, context.captured_at), load, legacy={},
+    result = memoized(
+        "bond_history.raw", (*window_key, phase), load, legacy={},
         cache_if=lambda value: value is not None,
     )
+    if covers_window(result):
+        with owner.lock:
+            owner.store("bond_history.complete").setdefault(window_key, deepcopy(result))
+    return result
 
 
 def eur_per_nominal(entry, *, as_of: date, fx=None) -> pd.Series:
