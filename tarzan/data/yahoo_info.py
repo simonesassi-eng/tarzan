@@ -6,7 +6,9 @@ Tarzan's enrichment does not consume. Unknown SDKs and injected/public callers
 keep the full info contract. No SDK class, global flag or transport is patched.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from curl_cffi.requests.exceptions import HTTPError as _NATIVE_HTTP_ERROR
 import yfinance as yf
@@ -30,9 +32,73 @@ _NATIVE_SDK_PORTS = (
     (_SDK_QUOTE, "_fetch", _SDK_QUOTE._fetch),
     (_SDK_QUOTE, "_fetch_additional_info", _SDK_QUOTE._fetch_additional_info),
 )
+_ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+_LISTING_FACTS = "yahoo.native_constructor_listing"
 
 
-def _native_owned_core(client) -> bool:
+@dataclass(frozen=True)
+class _NativeListingIdentity:
+    requested: str
+    selected: str
+
+
+class _NativeListingInfo(dict):
+    """Dictionary-compatible metadata plus transient constructor evidence.
+
+    The marker is not a provider field or a persisted resolution. Run memo
+    defensive copies preserve it; JSON and ordinary dictionary copies do not
+    publish it. An arbitrary metadata ``symbol`` never creates this evidence.
+    """
+
+    __slots__ = ("_source_identity",)
+
+    def __init__(self, payload, identity):
+        super().__init__(payload)
+        self._source_identity = identity
+
+
+def source_symbol_for_info(requested: str, info: dict) -> str:
+    """Recover only an inspected native ISIN constructor's actual listing."""
+    if type(requested) is not str or type(info) is not _NativeListingInfo:
+        return requested
+    identity = getattr(info, "_source_identity", None)
+    return _identity_source(requested, identity)
+
+
+def _identity_source(requested, identity):
+    if (
+        type(requested) is str
+        and type(identity) is _NativeListingIdentity
+        and identity.requested == requested
+        and _ISIN_SHAPE.fullmatch(requested.upper()) is not None
+        and type(identity.selected) is str
+        and identity.selected
+        and identity.selected == identity.selected.strip()
+        and identity.selected != requested
+        and _ISIN_SHAPE.fullmatch(identity.selected.upper()) is None
+    ):
+        return identity.selected
+    return requested
+
+
+def _constructor_listing(client, symbol):
+    """Observe the already-created native client; do not search a second time."""
+    if type(symbol) is not str or _ISIN_SHAPE.fullmatch(symbol.upper()) is None:
+        return None
+    selected = vars(client).get("ticker")
+    quote_symbol = vars(client._quote).get("_symbol")
+    if (
+        type(selected) is str and selected
+        and selected == selected.strip()
+        and selected != symbol
+        and selected == quote_symbol
+        and _ISIN_SHAPE.fullmatch(selected) is None
+    ):
+        return _NativeListingIdentity(symbol, selected)
+    return None
+
+
+def _native_owned_contract() -> bool:
     """A bounded adapter for the inspected SDK, not a generic private API."""
     from tarzan import runtime
     from tarzan.runtime.session import current_session
@@ -45,7 +111,6 @@ def _native_owned_core(client) -> bool:
         or not runtime.allows_live_transport()
         or getattr(yf, "__version__", None) != "1.7.0"
         or yf.Ticker is not _SDK_TICKER
-        or type(client) is not _SDK_TICKER
         or _yf_net.ticker is not _NATIVE_FACTORY
         or type(_NATIVE_SDK_PORTS) is not tuple
         or len(_NATIVE_SDK_PORTS) != 10
@@ -65,9 +130,61 @@ def _native_owned_core(client) -> bool:
             return False  # a factory alias can inject per-instance behavior
         if _SDK_QUOTE._fetch.__globals__.get("HTTPError") is not _NATIVE_HTTP_ERROR:
             return False  # an alternate backend/exception contract is uninspected
-        return type(vars(client).get("_quote")) is _SDK_QUOTE
+        return True
     except (AttributeError, OSError, TypeError, ValueError):
         return False
+
+
+def _native_owned_core(client) -> bool:
+    return (
+        type(client) is _SDK_TICKER
+        and type(vars(client).get("_quote")) is _SDK_QUOTE
+        and _native_owned_contract()
+    )
+
+
+def is_native_isin_request(symbol) -> bool:
+    """Distinguish an inspected ISIN constructor path without creating a client."""
+    return (
+        type(symbol) is str
+        and _ISIN_SHAPE.fullmatch(symbol.upper()) is not None
+        and _native_owned_contract()
+    )
+
+
+def record_constructor_listing(client, symbol):
+    """Retain only a completed positive identity in the existing run owner.
+
+    This is the constructor already needed by info/history, not a speculative
+    client, search, cached miss or authority for additional transport.
+    """
+    if (
+        type(symbol) is not str
+        or _ISIN_SHAPE.fullmatch(symbol.upper()) is None
+        or not _native_owned_core(client)
+    ):
+        return None
+    identity = _constructor_listing(client, symbol)
+    if identity is None:
+        return None
+    from tarzan.runtime.session import current_session
+
+    owner = current_session().providers
+    with owner.lock:
+        owner.stores.setdefault(_LISTING_FACTS, {})[symbol] = identity
+    return identity
+
+
+def completed_constructor_source(symbol):
+    """Read an existing positive identity without I/O, lookup or flight joins."""
+    if not is_native_isin_request(symbol):
+        return symbol
+    from tarzan.runtime.session import current_session
+
+    owner = current_session().providers
+    with owner.lock:
+        identity = owner.stores.get(_LISTING_FACTS, {}).get(symbol)
+    return _identity_source(symbol, identity)
 
 
 def info_for_enrichment(symbol):
@@ -80,6 +197,9 @@ def info_for_enrichment(symbol):
     client = _yf_net.ticker(symbol)
     if not _native_owned_core(client):
         return client.info
+    identity = record_constructor_listing(client, symbol)
     quote = client._quote
     quote._fetch_info()
+    if identity is not None and isinstance(quote._info, dict):
+        return _NativeListingInfo(quote._info, identity)
     return quote._info

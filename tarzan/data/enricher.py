@@ -662,6 +662,8 @@ def _fetch_ticker_data(
     never replaced with a bare or sibling listing when data is unavailable.
     """
     logger.info("Fetching data for %s", ticker)
+    from tarzan.data.yahoo_info import completed_constructor_source, source_symbol_for_info
+
     if _is_expandable_bare_ticker(ticker) and expected_name:
         resolution_options = {}
         if _benchmark_history_only is True:
@@ -684,16 +686,20 @@ def _fetch_ticker_data(
             ),
         )
 
-    selected_ticker = ticker
     # yfinance raises ValueError("Invalid ISIN number: ...") from the
-    # Ticker constructor when the symbol looks like an ISIN but fails
-    # its check-digit validation. The helpers degrade to empty evidence.
+    # Ticker constructor when an ISIN-shaped request has no search mapping.
+    # This is not check-digit validation. Helpers degrade to empty evidence.
     info = (
         {}
         if _benchmark_history_only is True and _owns_history_only_benchmark(ticker)
         else _fetch_ticker_info(ticker)
     )
-    history = _fetch_history(ticker)
+    selected_ticker = source_symbol_for_info(ticker, info)
+    if selected_ticker == ticker and _owns_native_isin_data_request(ticker):
+        selected_ticker = completed_constructor_source(ticker)
+    history = _fetch_history(selected_ticker)
+    if selected_ticker == ticker and _owns_native_isin_data_request(ticker):
+        selected_ticker = completed_constructor_source(ticker)
     if _ticker_data_has_market_evidence({"info": info, "history": history}):
         method = "DIRECT_TICKER"
         reason = "The supplied ticker directly supplied usable market data."
@@ -1441,6 +1447,11 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
     quote-only design avoids for the common case.
     """
     info = _fetch_ticker_info(symbol)
+    from tarzan.data.yahoo_info import completed_constructor_source, source_symbol_for_info
+
+    symbol = source_symbol_for_info(symbol, info)
+    if _owns_native_isin_data_request(symbol):
+        symbol = completed_constructor_source(symbol)
     price = next(
         (float(info[field]) for field in ("regularMarketPrice", "previousClose")
          if _positive_market_quote(info.get(field))),
@@ -1450,6 +1461,8 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
         if not cfg.instrument_taxonomy_has(symbol):
             return None
         history = _fetch_history(symbol)
+        if _owns_native_isin_data_request(symbol):
+            symbol = completed_constructor_source(symbol)
         if not _history_supports_a_return(history):
             return None
         closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
@@ -1570,8 +1583,12 @@ def _download_price_history(
         arguments["start"] = start
 
     def _call():
+        from tarzan.data.yahoo_info import record_constructor_listing
+
         _space_yf_call()
-        return _yf_net.ticker(symbol).history(**arguments)
+        client = _yf_net.ticker(symbol)
+        record_constructor_listing(client, symbol)
+        return client.history(**arguments)
 
     from tarzan.runtime.session import current_session
 
@@ -1933,8 +1950,17 @@ def _cached_period_covered(cached, symbol: str) -> bool:
 
 
 def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
+    from tarzan.data.yahoo_info import completed_constructor_source
 
-    cached = price_cache.load_history(symbol)
+    native_isin = _owns_native_isin_data_request(symbol)
+    if native_isin:
+        completed = completed_constructor_source(symbol)
+        if completed != symbol:
+            return _fetch_history(completed)
+    # Legacy raw-ISIN cache rows lack the listing/ruler used by the SDK. Never
+    # merge them with a newly observed venue or label them as that venue.
+    # A constructor's actual listing selects its own ordinary cache below.
+    cached = None if native_isin else price_cache.load_history(symbol)
     start = price_cache.refresh_start(cached)
     # A tail refresh can only extend the END; if the cache does not yet span the
     # full backtest window its HEAD may be missing (an instrument cached after
@@ -1951,6 +1977,12 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
     )
     if fresh is None:
         fresh = pd.DataFrame()
+
+    selected = completed_constructor_source(symbol) if native_isin else symbol
+    if native_isin and selected != symbol:
+        symbol = selected
+        cached = price_cache.load_history(symbol)
+        start = None  # the actual full-period request, not an inferred tail
 
     cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
     merged = price_cache.merge_history(cached, fresh)
@@ -2011,6 +2043,36 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
             result = _fill_today_from_sibling(symbol, result)
 
     return result
+
+
+_NATIVE_ISIN_DATA_PORTS = (
+    _fetch_ticker_data, _fetch_ticker_info, _fetch_history,
+    _fetch_history_uncached, _download_price_history, _space_yf_call, _retry,
+)
+
+
+def _owns_native_isin_data_request(symbol) -> bool:
+    """No-constructor capability check; injected/pinned paths retain their contract."""
+    from tarzan.data.yahoo_info import is_native_isin_request
+
+    if (
+        not is_native_isin_request(symbol)
+        or type(_NATIVE_ISIN_DATA_PORTS) is not tuple
+        or len(_NATIVE_ISIN_DATA_PORTS) != 7
+    ):
+        return False
+    active = (
+        _fetch_ticker_data, _fetch_ticker_info, _fetch_history,
+        _fetch_history_uncached, _download_price_history, _space_yf_call, _retry,
+    )
+    try:
+        return all(
+            current is original
+            and Path(original.__code__.co_filename).resolve() == Path(__file__).resolve()
+            for current, original in zip(active, _NATIVE_ISIN_DATA_PORTS)
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
 
 
 _NATIVE_BENCHMARK_DATA_PORTS = (
