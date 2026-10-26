@@ -117,6 +117,8 @@ class MetricsEngine:
         self.planning_eligible = planning_eligible
         self.valuation_assessment = valuation_assessment
         self.target_plan = target_plan
+        self._prepared_plans = None
+        self._planning_inputs = None
         # Not-held target instruments (quantity 0) used ONLY by the rebalancer
         # so it can open new positions. They are deliberately excluded from
         # the portfolio snapshot (holdings, returns, allocations).
@@ -210,9 +212,17 @@ class MetricsEngine:
         from tarzan.runtime.workload import StageClock
         ctx: dict = {}
         degraded: list[str] = []
+        self._prepared_plans = None
+        self._planning_inputs = None
         index = 0
         while index < len(self._computers):
             if self._can_prepare_sources_together(index):
+                try:
+                    self._planning_inputs = self._snapshot_planning_inputs(ctx)
+                except Exception:
+                    # Optional admission cannot abort the established source
+                    # pair or replace the ordinary owner-stage computation.
+                    self._planning_inputs = None
                 phases, preparation_error = self._prepare_sources_together()
                 interruption = preparation_error
                 if interruption is None or isinstance(interruption, Exception):
@@ -234,6 +244,7 @@ class MetricsEngine:
                             # source's primary cancellation after both joins.
                             raise interruption from None
                         raise
+                self._record_prepared_plan_timing()
                 if interruption is not None:
                     raise interruption
                 index += 2
@@ -357,11 +368,15 @@ class MetricsEngine:
         ]
         pending = []
         error = None
+        planning_future = None
         # Declaration precedes submission and lasts through both joins. It
         # holds no native permit: SDK parents, cache waits and child executors
         # remain free to coordinate under the SAME aggregate admission cap.
         with current_session().transport.essential_work():
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="tarzan-sources") as pool:
+            with ThreadPoolExecutor(
+                max_workers=3 if self._planning_inputs is not None else 2,
+                thread_name_prefix="tarzan-sources",
+            ) as pool:
                 try:
                     for phase in phases:
                         pending.append(pool.submit(
@@ -369,6 +384,18 @@ class MetricsEngine:
                         ))
                 except BaseException as failure:
                     error = failure
+                if error is None and self._planning_inputs is not None:
+                    try:
+                        from tarzan.engine.owned_planning import prepare_plans_owned
+                        planning_future = pool.submit(
+                            copy_context().run, prepare_plans_owned, self._planning_inputs,
+                        )
+                    except Exception:
+                        # Optional preparation setup is not a source failure.
+                        # Both sources are joined and the owner computes later.
+                        planning_future = None
+                    except BaseException as failure:
+                        error = failure
                 for phase, future in zip(phases, pending):
                     try:
                         future.result()
@@ -399,9 +426,85 @@ class MetricsEngine:
                             # the owner's primary error, even if a worker also
                             # reports cancellation while the executor drains.
                             error = error or failure
+                if planning_future is not None:
+                    try:
+                        self._prepared_plans = planning_future.result()
+                    except Exception:
+                        # A speculative CPU failure cannot replace the native
+                        # owner-stage computation or publish partial plans.
+                        self._prepared_plans = None
+                    except BaseException as failure:
+                        if error is None or isinstance(error, Exception):
+                            worker_failure = (
+                                planning_future.done() and not planning_future.cancelled()
+                                and planning_future.exception() is failure
+                            )
+                            if worker_failure:
+                                # Source cancellations retain their established
+                                # order before a speculative worker interruption.
+                                error = next((
+                                    phase.error for phase in phases
+                                    if phase.error is not None
+                                    and not isinstance(phase.error, Exception)
+                                ), failure)
+                            else:
+                                # An interruption of the owner wait is primary,
+                                # irrespective of child completion order.
+                                error = failure
             # Executor exit drains accepted callbacks even if submission or
             # a future failed. An unsubmitted branch is not a successful stage.
         return phases[:len(pending)], error
+
+    def _record_prepared_plan_timing(self):
+        if self._prepared_plans is None:
+            return
+        from tarzan.engine.owned_planning import PreparedPlans
+        from tarzan.runtime.ledger import LedgerEntryType
+        from tarzan.runtime.session import current_session
+
+        prepared = self._prepared_plans
+        session = current_session()
+        if type(prepared) is PreparedPlans and prepared.timing and session is not None:
+            try:
+                session.ledger.append(LedgerEntryType.STAGE, {
+                    "stage": "metrics:_prepare_rebalancing",
+                    "outcome": "SUCCEEDED",
+                    "parallel_group": "native_planning_preparation",
+                    **prepared.worker_evidence,
+                    **prepared.timing,
+                })
+            except Exception:
+                # Telemetry is not source/cancellation/planning authority.
+                pass
+
+    def _snapshot_planning_inputs(self, ctx):
+        """Speculate only on inspected native current facts, not history gates."""
+        methods = (
+            "_current_valuation_holdings", "_rebalancing",
+            "_portfolio_history_from_orders", "_prepare_benchmark_context",
+            "_snapshot_planning_inputs",
+        )
+        if (
+            type(self) is not MetricsEngine or not self.planning_eligible
+            or type(self.config) is not InvestorConfig or "total_value" not in ctx
+            or type(_NATIVE_PLANNING_METHODS) is not tuple
+            or len(_NATIVE_PLANNING_METHODS) != len(methods)
+            or any(
+                getattr(getattr(self, name, None), "__func__", None) is not original
+                for name, original in zip(methods, _NATIVE_PLANNING_METHODS)
+            )
+        ):
+            return None
+        from tarzan.engine.owned_planning import snapshot_inputs
+        current = self._current_valuation_holdings()
+        if not current:
+            return None
+        holdings = current + list(self.rebalance_seeds)
+        lump = (
+            self.config.rebalancing_lump_sum_amount_eur
+            if self.config.rebalancing_lump_sum_amount_eur > 0 else None
+        )
+        return snapshot_inputs(holdings, self.config, ctx["total_value"], lump)
 
     def _adopt_source_phase(self, ctx: dict, phase: _MetricPhase, degraded: list[str]) -> None:
         from tarzan.runtime import data_quality as dq
@@ -1575,6 +1678,11 @@ class MetricsEngine:
 
         def _plan(no_sell: bool):
             cfg2 = dataclasses.replace(self.config, rebalancing_no_sell=no_sell)
+            prepared = getattr(self, "_prepared_plans", None)
+            if prepared is not None:
+                result = prepared.take(rebal_holdings, cfg2, ctx["total_value"], lump)
+                if result is not None:
+                    return result
             return compute_unified_rebalancing(
                 rebal_holdings, cfg2, ctx["total_value"], lump_sum=lump)
 
@@ -2997,3 +3105,10 @@ def _compute_geo_allocation(df: pd.DataFrame, holdings: Optional[list[Holding]] 
 
 
 _NATIVE_REFEREE_OWN_TAPE = MetricsEngine._own_tape
+_NATIVE_PLANNING_METHODS = (
+    MetricsEngine._current_valuation_holdings,
+    MetricsEngine._rebalancing,
+    MetricsEngine._portfolio_history_from_orders,
+    MetricsEngine._prepare_benchmark_context,
+    MetricsEngine._snapshot_planning_inputs,
+)
