@@ -84,6 +84,14 @@ retain truncation. `admission_closed` describes the actual coordinator state:
 client cleanup does not itself close the shared admission authority. These
 optional version-1 fields are descriptive, not financial or publication gates.
 
+New native final observations also contain a UTC `observation_window` bracketing
+the nonblocking coordinator read. This is the observer's receipt-time clock,
+not the report's `captured_at`, which remains the immutable analysis-start
+clock (including point-in-time runs). A backwards, unavailable or invalid
+observer clock marks only this optional observation unavailable; it cannot
+retry delivery or change portfolio facts. Older final observations without
+the window remain readable, but do not acquire a fabricated final timestamp.
+
 ## Recover an exact failure privately
 
 Download the run's `tarzan-diagnostics-<run-id>-<attempt>` artifact into a private
