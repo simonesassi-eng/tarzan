@@ -14,6 +14,7 @@ from tarzan.runtime.input_receipts import immutable_fingerprints
 from tarzan.runtime.ledger import RunLedger
 from tarzan.runtime.session import (
     RunContext, RunMode, RunResult, RunSession, record_last_run_result,
+    last_run_result,
 )
 from tarzan.tests.test_review_drive_inputs import fake_drive, meta
 from tarzan.tests.test_send_diagnostic_lifecycle import shim as send_shim
@@ -26,6 +27,21 @@ def native_result():
     ledger = RunLedger(context.attempt_id)
     session = RunSession(context, {}, ledger)
     return RunResult(None, None, context.attempt_id, "unchanged-analysis", ledger, session)
+
+
+@pytest.fixture(params=["local", "github-native"])
+def fresh_invocation(monkeypatch, request):
+    """Declare the invocation; never inherit incomplete ambient CI timestamps."""
+    automated = request.param == "github-native"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true" if automated else "false")
+    for name in ("TARZAN_REQUESTED_AT", "TARZAN_WORKFLOW_CREATED_AT"):
+        monkeypatch.delenv(name, raising=False)
+    if automated:
+        now = datetime.now(timezone.utc).isoformat()
+        monkeypatch.setenv("TARZAN_REQUESTED_AT", now)
+        monkeypatch.setenv("TARZAN_WORKFLOW_CREATED_AT", now)
+    assert delivery._freshness_assessment().eligible
+    return request.param
 
 
 def test_validated_drive_bytes_receipt_survives_staging_release(monkeypatch, tmp_path):
@@ -209,7 +225,7 @@ def test_same_object_with_foreign_ledger_attempt_never_attests_to_native_receipt
 
 @pytest.mark.parametrize("ordinary_publish_failure", [False, True])
 def test_actual_send_binding_survives_input_release_and_publication_failure(
-    monkeypatch, ordinary_publish_failure,
+    monkeypatch, ordinary_publish_failure, fresh_invocation,
 ):
     result = native_result()
     inputs = delivery.ResolvedInputSet({
@@ -246,7 +262,9 @@ def test_input_receipt_copy_rejects_private_arbitrary_labels():
         immutable_fingerprints({"synthetic@example.invalid": "a" * 64})
 
 
-def test_binding_failure_and_optional_log_failure_do_not_abort_publication(monkeypatch):
+def test_binding_failure_and_optional_log_failure_do_not_abort_publication(
+    monkeypatch, fresh_invocation,
+):
     result = native_result()
     inputs = delivery.ResolvedInputSet({
         "config": "unread-config", "orders": "unread-orders", "targets_per_holding": None,
@@ -276,7 +294,7 @@ def test_binding_failure_and_optional_log_failure_do_not_abort_publication(monke
 
 @pytest.mark.parametrize("primary", [0, 1, "ordinary-error"])
 def test_native_drive_to_send_shim_preserves_receipts_after_cleanup(
-    monkeypatch, tmp_path, send_shim, primary,
+    monkeypatch, tmp_path, send_shim, primary, fresh_invocation,
 ):
     result = budgeted_result()
     content = {
@@ -335,3 +353,19 @@ def test_native_drive_to_send_shim_preserves_receipts_after_cleanup(
     assert publications == [1] and len(directories) == 1
     assert not directories[0].exists()
     assert (restored["entrypoint_error_type"] == "RuntimeError") is (primary == "ordinary-error")
+
+
+def test_missing_native_timestamp_still_denies_before_input_or_receipt_collection(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for name in ("TARZAN_REQUESTED_AT", "TARZAN_WORKFLOW_CREATED_AT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(delivery, "resolve_inputs",
+                        lambda: pytest.fail("denied invocation resolved inputs"))
+    monkeypatch.setattr(delivery, "_publish_and_deliver",
+                        lambda *args, **kwargs: pytest.fail("denied invocation published"))
+    assert delivery.run_and_send() == 1
+    result = last_run_result()
+    report = diagnostics.build_report(result, operation="send", exit_code=1, duration_seconds=1)
+    assert report["input_sha256"] == {}
+    assert "final_acquisition" not in report["run"]
+    assert report["ledger"][-1]["payload"]["reason"] == "NATIVE_RUN_TIMESTAMP_REQUIRED"
