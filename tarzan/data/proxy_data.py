@@ -199,9 +199,12 @@ def _fetch_max(symbol: str) -> pd.Series:
         def _history():
             client = _yf_net.ticker(symbol)
             frame = client.history(period="max", auto_adjust=True)
-            return history_time.admit_history(
+            frame = history_time.admit_history(
                 history_time.attach_native_session_evidence(frame, client), symbol,
             )
+            from tarzan.data.chart_actions import attach_rejected_splits
+
+            return attach_rejected_splits(frame, client)
 
         h = _yf_net.fetch_yf(_history, what=f"proxy {symbol}", log=logger)
     except Exception as e:  # noqa: BLE001
@@ -239,7 +242,10 @@ def _returns(symbol: str) -> pd.Series:
         return _returns_memo[memo_key]
     px = _fetch_max(symbol)
     r = px.pct_change().dropna() if not px.empty else pd.Series(dtype=float)
-    _returns_memo[memo_key] = r
+    from tarzan.data.chart_actions import has_rejected_splits
+
+    if not has_rejected_splits(px):
+        _returns_memo[memo_key] = r
     return r
 
 

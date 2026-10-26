@@ -246,9 +246,12 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     Memoized per currency for the run (cleared by :func:`reset_run_caches`):
     every holding in a given currency shares one series instead of re-reading
     the disk cache and re-attempting the refresh."""
+    from tarzan.data.chart_actions import has_rejected_splits
+
     return memoized(
         "enricher.fx", currency, lambda: _fetch_fx_pair_uncached(currency),
         legacy=_fx_memo,
+        cache_if=lambda series: not has_rejected_splits(series),
     )
 
 
@@ -269,9 +272,12 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
             else:
                 frame = ticker.history(period=_backtest_period(), interval="1d",
                                        auto_adjust=True)
-            return history_time.admit_history(
+            frame = history_time.admit_history(
                 history_time.attach_native_session_evidence(frame, ticker), p,
             )
+            from tarzan.data.chart_actions import attach_rejected_splits
+
+            return attach_rejected_splits(frame, ticker)
 
         history = _retry(_call, what=f"FX {pair}")
         if history is not None and not history.empty:
@@ -1581,6 +1587,10 @@ def _reusable_price_observation(frame: Optional[pd.DataFrame]) -> bool:
     """Do not retain unusable SDK answers that may hide transient failure."""
     if frame is None or frame.empty or "Close" not in frame:
         return False
+    from tarzan.data.chart_actions import has_rejected_splits
+
+    if has_rejected_splits(frame):
+        return False
     close = pd.to_numeric(frame["Close"], errors="coerce")
     usable = close.replace([float("inf"), float("-inf")], float("nan")).gt(0)
     for column in ("Adj Close", "Price Close"):
@@ -1619,9 +1629,12 @@ def _download_price_history(
         client = _yf_net.ticker(symbol)
         record_constructor_listing(client, symbol)
         frame = client.history(**arguments)
-        return history_time.admit_history(
+        frame = history_time.admit_history(
             history_time.attach_native_session_evidence(frame, client), symbol,
         )
+        from tarzan.data.chart_actions import attach_rejected_splits
+
+        return attach_rejected_splits(frame, client)
 
     from tarzan.runtime.session import current_session
 

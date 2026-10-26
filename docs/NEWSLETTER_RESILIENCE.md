@@ -138,6 +138,21 @@ negative cache. It cannot reconstruct original types already erased in an
 older cached observation, and is not evidence that real portfolio data contained
 such a malformed price.
 
+Split numerator/denominator fields have a separate raw JSON admission.
+Only positive finite numeric factors with a representable positive ratio can
+declare a split; Booleans and malformed cells cannot rescale older prices.
+An unusable event is excluded from the newly decoded native SDK input, not
+replaced with a synthetic zero/one factor. Original bytes, independent valid
+events and prices remain intact. Completed native metadata retains a bounded
+rejection receipt and exposes an explicit requires-review warning beside the
+affected history. That uncertain observation is not positively memoized or
+persisted over a valid cache; later valid source recovery remains possible.
+Merges and batches retain the uncertainty. Known events wholly outside the
+retained price window do not degrade it, including more than 64 rejected
+future events; overlapping truncated scopes and unknown dates remain uncertain.
+This does not certify dividends, capital gains, timestamp or volume quality,
+or reconstruct split types already erased in an older cached observation.
+
 An optional `run.clock` in the encrypted version-1 report records the native
 context's actual `analysis_date`, mode and date basis (`HOST_LOCAL` or
 `EFFECTIVE_DATE`), with the host UTC offset at capture when known. It does not

@@ -205,14 +205,19 @@ def _owned_download(symbols, **kwargs):
                 frame = history_time.admit_history(
                     history_time.attach_native_session_evidence(frame, client), symbol,
                 )
-            return frame
+            from tarzan.data.chart_actions import attach_rejected_splits
+
+            return attach_rejected_splits(frame, client)
 
         # Each history operation, including its cookie/crumb requests/retries,
         # owns its timeout. A large catalog is NOT one 20-second operation.
+        from tarzan.data.chart_actions import has_rejected_splits
+
         frame = memoized(
             "yahoo.batch_history", (symbol, tuple(arguments.items())),
             lambda: retry(history, what="batch history"),
             legacy={},
+            cache_if=lambda frame: not has_rejected_splits(frame),
         )
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             return empty_df()
@@ -232,6 +237,9 @@ def _owned_download(symbols, **kwargs):
     # intraday consumers continue to receive the same instants in UTC.
     # ignore_tz=True retains venue-local labels, as before.
     frame = pd.concat(frames, axis=1, sort=True, names=["Ticker", "Price"])
+    from tarzan.data.chart_actions import attach_batch_rejections
+
+    frame = attach_batch_rejections(frame, frames)
     frame.index = pd.to_datetime(frame.index, utc=not ignore_tz)
     if group_by == "column":
         frame.columns = frame.columns.swaplevel(0, 1)

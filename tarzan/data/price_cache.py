@@ -277,6 +277,10 @@ def store_history(symbol: str, df: pd.DataFrame) -> None:
     """Transactionally persist daily history using pandas table JSON."""
     if not is_enabled() or df is None or df.empty:
         return
+    from tarzan.data.chart_actions import has_rejected_splits
+
+    if has_rejected_splits(df):
+        return  # Never erase an uncertain-action receipt by persisting prices alone.
     try:
         is_series = isinstance(df, pd.Series)
         frame = df.to_frame(name="__value__") if is_series else df
@@ -337,7 +341,9 @@ def merge_history(cached: Optional[pd.DataFrame], fresh: pd.DataFrame) -> pd.Dat
         return cached
     combined = pd.concat([cached, fresh])
     combined = combined[~combined.index.duplicated(keep="last")].sort_index()
-    return combined
+    from tarzan.data.chart_actions import merge_rejected_splits
+
+    return merge_rejected_splits(cached, fresh, combined)
 
 
 def price_adjustments_changed(
