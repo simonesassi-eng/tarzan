@@ -196,11 +196,22 @@ def _owned_download(symbols, **kwargs):
         raise ValueError("Yahoo batch threads must be boolean or a positive integer")
 
     def fetch(symbol):
+        def history():
+            client = ticker(symbol)
+            frame = client.history(**arguments)
+            if arguments["interval"] == "1d":
+                from tarzan.data import history_time
+
+                frame = history_time.admit_history(
+                    history_time.attach_native_session_evidence(frame, client), symbol,
+                )
+            return frame
+
         # Each history operation, including its cookie/crumb requests/retries,
         # owns its timeout. A large catalog is NOT one 20-second operation.
         frame = memoized(
             "yahoo.batch_history", (symbol, tuple(arguments.items())),
-            lambda: retry(lambda: ticker(symbol).history(**arguments), what="batch history"),
+            lambda: retry(history, what="batch history"),
             legacy={},
         )
         if not isinstance(frame, pd.DataFrame) or frame.empty:

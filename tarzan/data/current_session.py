@@ -379,6 +379,18 @@ def quote_is_stale(quote: dict) -> bool:
         return False
 
 
+def observation_time_limit() -> datetime:
+    """One receipt/as-of upper bound for quotes and native daily histories."""
+    from tarzan import runtime
+
+    effective_date = runtime.as_of()
+    return (
+        datetime.combine(effective_date, time.max, tzinfo=timezone.utc)
+        if effective_date is not None
+        else datetime.now(timezone.utc)
+    )
+
+
 def quote_observation_is_future(observed: Optional[datetime]) -> bool:
     """Reject a price observed after the instant it can actually be received.
 
@@ -390,14 +402,7 @@ def quote_observation_is_future(observed: Optional[datetime]) -> bool:
     """
     if observed is None:
         return False
-    from tarzan import runtime
-
-    effective_date = runtime.as_of()
-    limit = (
-        datetime.combine(effective_date, time.max, tzinfo=timezone.utc)
-        if effective_date is not None
-        else datetime.now(timezone.utc)
-    )
+    limit = observation_time_limit()
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     return observed > limit

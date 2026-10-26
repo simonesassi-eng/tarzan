@@ -22,7 +22,7 @@ from typing import Optional
 
 import pandas as pd
 
-from tarzan.data import manual_proxies, price_cache
+from tarzan.data import history_time, manual_proxies, price_cache
 from tarzan.engine.stats import TRADING_DAYS, normalize_session_index
 
 # Approx all-in fee drag (%/yr) for the commodity-carry ETFs (UEQC ~0.34 TER,
@@ -178,7 +178,7 @@ def _fetch_max(symbol: str) -> pd.Series:
     # rows unreferenced, which is safer than deleting rows out from under a
     # concurrent reader.
     key = f"PROXYMAX2_{symbol}"
-    cached = price_cache.load_history(key)
+    cached = history_time.admit_history(price_cache.load_history(key), symbol)
     from tarzan import runtime
 
     if not runtime.allows_live_transport():
@@ -196,14 +196,20 @@ def _fetch_max(symbol: str) -> pd.Series:
         # regression to price-only closes for the income-paying proxies.
         # Go through the shared spacing+retry so a proxy fetch survives a 429
         # burst the same way the enricher does (was raw before → flaky).
-        h = _yf_net.fetch_yf(
-            lambda: _yf_net.ticker(symbol).history(period="max", auto_adjust=True),
-            what=f"proxy {symbol}", log=logger)
+        def _history():
+            client = _yf_net.ticker(symbol)
+            frame = client.history(period="max", auto_adjust=True)
+            return history_time.admit_history(
+                history_time.attach_native_session_evidence(frame, client), symbol,
+            )
+
+        h = _yf_net.fetch_yf(_history, what=f"proxy {symbol}", log=logger)
     except Exception as e:  # noqa: BLE001
         logger.warning("Proxy fetch failed for %s: %s", symbol, e)
         return cached if cached is not None else pd.Series(dtype=float)
     if h is None or h.empty or "Close" not in h:
         return cached if cached is not None else pd.Series(dtype=float)
+    h = history_time.admit_history(h, symbol)
     s = h["Close"].dropna()
     idx = s.index
     # A daily bar's date is its VENUE's session date, so the tz is dropped at

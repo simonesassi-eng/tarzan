@@ -229,7 +229,11 @@ def _history_path(symbol: str) -> Path:
 
 
 def load_history(symbol: str) -> Optional[pd.DataFrame]:
-    """Return validated non-executable cached DataFrame/Series data."""
+    """Return non-executable data and bounded original overnight observations.
+
+    Consumers admit dates before choosing a refresh window or a price. Ordinary
+    origin/fetch attrs are never restored as freshness authority.
+    """
     if not is_enabled():
         return None
     path = _history_path(symbol)
@@ -251,6 +255,14 @@ def load_history(symbol: str) -> Optional[pd.DataFrame]:
                 pass
         if frame.empty:
             return None
+        from tarzan.data import history_time
+
+        evidence = payload.get("daily_session_evidence")
+        if isinstance(evidence, dict):
+            frame.attrs[history_time.SESSION_EVIDENCE_ATTR] = evidence
+            frame.attrs[history_time.SESSION_EVIDENCE_ATTR] = (
+                history_time.session_evidence(frame)
+            )
         if payload["kind"] == "series":
             series = frame.iloc[:, 0]
             series.name = payload.get("name")
@@ -279,6 +291,11 @@ def store_history(symbol: str, df: pd.DataFrame) -> None:
             "symbol": str(symbol),
             "table": table,
         }
+        from tarzan.data import history_time
+
+        evidence = history_time.session_evidence(df)
+        if evidence:
+            payload["daily_session_evidence"] = evidence
         path = _history_path(symbol)
         with _file_lock(path):
             _atomic_write_json(path, "history", payload)

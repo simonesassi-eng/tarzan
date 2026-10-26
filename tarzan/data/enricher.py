@@ -44,6 +44,7 @@ from tarzan.models.holding import AssetClass, Geography, Holding
 from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.data import price_cache
 from tarzan.data import _yf_net
+from tarzan.data import history_time
 from tarzan import config as cfg
 from tarzan.runtime import data_quality as dq
 from tarzan.runtime.memo import (
@@ -118,9 +119,11 @@ _fx_memo: dict[str, pd.Series] = {}
 _openfigi_last_call: list[float] = [0.0]  # mutable single-cell timestamp
 _openfigi_spacing_lock = threading.Lock()
 
-# DataFrame attrs carry per-run provenance without entering the immutable disk
-# cache. Origin is assigned per row so an invalid fresh tail cannot relabel an
-# older selected cache close as primary evidence.
+# These DataFrame attrs carry per-run origin without entering the disk cache.
+# A separately validated, bounded overnight-session observation in history_time
+# can persist; it is not an origin or a fetch-time freshness certificate.
+# Origin is assigned per row so an invalid fresh tail cannot relabel an older
+# selected cache close as primary evidence.
 _HISTORY_ORIGINS_ATTR = "tarzan_price_origins"
 _HISTORY_SYMBOL_ATTR = "tarzan_price_symbol"
 _HISTORY_ORIGIN_PRIMARY = "primary"
@@ -204,7 +207,7 @@ def _get_fx_series(currency: str) -> pd.Series:
 
 def _usable_fx_series(series: Optional[pd.Series]) -> pd.Series:
     """Return finite positive FX rows while preserving transient provenance."""
-    return _usable_positive_real_series(series)
+    return history_time.admit_history(_usable_positive_real_series(series))
 
 
 def _usable_positive_real_series(series: Optional[pd.Series]) -> pd.Series:
@@ -262,9 +265,13 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
             # versions (FX pairs pay no dividends, so the value is unaffected;
             # this only guards the column set the reader below depends on).
             if s is not None:
-                return ticker.history(start=s, interval="1d", auto_adjust=True)
-            return ticker.history(period=_backtest_period(), interval="1d",
-                                  auto_adjust=True)
+                frame = ticker.history(start=s, interval="1d", auto_adjust=True)
+            else:
+                frame = ticker.history(period=_backtest_period(), interval="1d",
+                                       auto_adjust=True)
+            return history_time.admit_history(
+                history_time.attach_native_session_evidence(frame, ticker), p,
+            )
 
         history = _retry(_call, what=f"FX {pair}")
         if history is not None and not history.empty:
@@ -276,6 +283,7 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
                 continue
             merged = price_cache.merge_history(cached, fresh)
             result = merged if merged is not None and not merged.empty else fresh
+            result = history_time.merge_session_evidence(cached, fresh, result)
             result.attrs[_HISTORY_ORIGINS_ATTR] = _history_origins(
                 cached,
                 fresh,
@@ -430,9 +438,9 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
     ).reindex(combined.index).ffill()
     observation_markers = pd.Series(
         [
-            pd.Timestamp(index).isoformat()
-            if isinstance(fx.index, pd.DatetimeIndex)
-            else None
+            observed.isoformat() if (
+                observed := history_time.observation_time(fx, index)
+            ) is not None else None
             for index in fx.index
         ],
         index=fx.index,
@@ -1486,6 +1494,7 @@ def _fetch_candidate_meta(symbol: str) -> Optional[_Candidate]:
             symbol = completed_constructor_source(symbol)
         if not _history_supports_a_return(history):
             return None
+        history = history_time.admit_history(history, symbol)
         closes = pd.to_numeric(history["Close"], errors="coerce").dropna()
         closes = closes[closes.map(math.isfinite) & (closes > 0)]
         if closes.empty:
@@ -1609,7 +1618,10 @@ def _download_price_history(
         _space_yf_call()
         client = _yf_net.ticker(symbol)
         record_constructor_listing(client, symbol)
-        return client.history(**arguments)
+        frame = client.history(**arguments)
+        return history_time.admit_history(
+            history_time.attach_native_session_evidence(frame, client), symbol,
+        )
 
     from tarzan.runtime.session import current_session
 
@@ -1653,6 +1665,7 @@ def _coherent_price_inputs(
         lambda: _download_price_history(symbol, force_refresh=True),
         what=f"full adjusted history {symbol}",
     )
+    full = history_time.admit_history(full, symbol)
     if _reusable_price_observation(full):
         return None, full
     dq.warning(
@@ -1674,7 +1687,7 @@ def _sibling_close_series(symbol: str):
     on any failure — the fill is best-effort by design.
     """
     try:
-        cached = price_cache.load_history(symbol)
+        cached = history_time.admit_history(price_cache.load_history(symbol), symbol)
         start = price_cache.refresh_start(cached)
         if cached is not None and "Price Close" not in cached:
             start = None
@@ -1684,6 +1697,7 @@ def _sibling_close_series(symbol: str):
         )
         if fresh is None:
             fresh = pd.DataFrame()
+        fresh = history_time.admit_history(fresh, symbol)
         cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
         merged = price_cache.merge_history(cached, fresh)
         frame = merged if merged is not None and not merged.empty else fresh
@@ -1981,7 +1995,9 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
     # Legacy raw-ISIN cache rows lack the listing/ruler used by the SDK. Never
     # merge them with a newly observed venue or label them as that venue.
     # A constructor's actual listing selects its own ordinary cache below.
-    cached = None if native_isin else price_cache.load_history(symbol)
+    cached = None if native_isin else history_time.admit_history(
+        price_cache.load_history(symbol), symbol,
+    )
     start = price_cache.refresh_start(cached)
     # A tail refresh can only extend the END; if the cache does not yet span the
     # full backtest window its HEAD may be missing (an instrument cached after
@@ -1998,16 +2014,19 @@ def _fetch_history_uncached(symbol: str) -> pd.DataFrame:
     )
     if fresh is None:
         fresh = pd.DataFrame()
+    fresh = history_time.admit_history(fresh, symbol)
 
     selected = completed_constructor_source(symbol) if native_isin else symbol
     if native_isin and selected != symbol:
         symbol = selected
-        cached = price_cache.load_history(symbol)
+        cached = history_time.admit_history(price_cache.load_history(symbol), symbol)
         start = None  # the actual full-period request, not an inferred tail
 
     cached, fresh = _coherent_price_inputs(symbol, cached, fresh, start)
     merged = price_cache.merge_history(cached, fresh)
     result = merged if merged is not None and not merged.empty else fresh
+    result = history_time.merge_session_evidence(cached, fresh, result)
+    result = history_time.admit_history(result, symbol)
     if fresh.empty and result is not None and not result.empty:
         try:
             last_timestamp = pd.Timestamp(result.index.max())
@@ -3735,14 +3754,14 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
     return holding, info
 
 
-def _clip_to_as_of(prices: pd.Series) -> pd.Series:
+def _clip_to_as_of(prices: pd.Series, symbol: str = "") -> pd.Series:
     """Drop price observations strictly AFTER the pinned ``as_of`` date, so an
     as-of / deterministic run values the snapshot at the as-of price rather than
     the latest fetched close. Point-in-time correctness: without this, the
     holdings snapshot (current_price → current_value → total_value) would peek at
-    prices after the reporting date. No-op in live mode (as_of is None).
-
-    Guarded so a normal live run is completely unaffected."""
+    prices after the reporting date. LIVE additionally rejects future dated
+    evidence, preserving explicitly observed overnight daily session labels."""
+    prices = history_time.admit_history(prices, symbol)
     try:
         from tarzan import runtime
         as_of = runtime.as_of()
@@ -3765,12 +3784,7 @@ def _history_observation_time(
     index_value: object,
 ) -> Optional[dt]:
     """Convert a genuine datetime history index value to a Python datetime."""
-    if not isinstance(history.index, pd.DatetimeIndex):
-        return None
-    try:
-        return pd.Timestamp(index_value).to_pydatetime()
-    except (TypeError, ValueError):
-        return None
+    return history_time.observation_time(history, index_value)
 
 
 def _info_observation_time(value: object) -> Optional[dt]:
@@ -3816,6 +3830,7 @@ def _set_price_data(
     holding.price_observation_timestamp = None
     holding.price_is_fallback = False
     holding.price_history_price_only = None
+    history = history_time.admit_history(history, holding.ticker or "")
 
     if history is not None and not history.empty and "Close" in history:
         native = _usable_positive_real_series(history["Close"]).copy()
@@ -3826,7 +3841,7 @@ def _set_price_data(
         # (_clip_to_as_of), so none of them depends on the unit.
         native = native.dropna()
         native = native[native.map(lambda value: math.isfinite(value) and value > 0).astype(bool)]
-        native = _clip_to_as_of(native)
+        native = _clip_to_as_of(native, holding.ticker or "")
         fx_evidence: dict[str, dict[str, object]] = {}
         if history_currency != "EUR":
             prices = convert_to_eur(native, history_currency)
@@ -3858,7 +3873,7 @@ def _set_price_data(
                 raw, raw_currency = _normalize_minor_currency(raw, currency)
                 raw = raw.dropna()
                 raw = raw[raw.map(lambda value: math.isfinite(value) and value > 0).astype(bool)]
-                raw = _clip_to_as_of(raw)
+                raw = _clip_to_as_of(raw, holding.ticker or "")
                 raw_prices = (
                     convert_to_eur(raw, raw_currency)
                     if raw_currency != "EUR" else raw
@@ -3927,11 +3942,7 @@ def _set_price_data(
             _history_timestamp_key(selected_index),
             _HISTORY_ORIGIN_PRIMARY,
         )
-        fx_time = (
-            pd.Timestamp(selected_index).to_pydatetime()
-            if isinstance(fx.index, pd.DatetimeIndex)
-            else None
-        )
+        fx_time = history_time.observation_time(fx, selected_index)
         result = _valid_quote(converted * float(fx.iloc[-1]))
         return result, {
             "observation_time": fx_time,
