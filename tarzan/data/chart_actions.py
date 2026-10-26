@@ -154,7 +154,7 @@ def attach_rejected_chart_evidence(frame, client):
 
     dq.warning(
         "market_data",
-        "Malformed provider chart dates or volume were rejected. Independent "
+        "Unusable provider chart dates or volume were rejected. Independent "
         "valid dated prices are retained; auxiliary evidence requires review "
         "and this observation is not persisted or reused.",
         context=receipt["symbol"],

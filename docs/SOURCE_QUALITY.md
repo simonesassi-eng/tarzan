@@ -17,6 +17,13 @@ unusable timestamp and volume cells using the SDK's existing missing-value
 conventions. An unusable date cannot acquire an invented epoch or transfer its
 price to another row. Unusable volume cannot erase independently valid dated
 prices, but the SDK's missing-volume fill is not evidence of zero trading.
+In the inspected parallel-array schema, rejected undated rows are removed
+together before native action merging. Valid dated actions remain unchanged:
+an SDK-created action-only row with missing prices is still an action, never
+a newly invented price. Unknown array shapes are not silently rearranged.
+Genuine missing dates retain the native decoder convention without actions;
+with action merging they also require the dated-row guard and explicit
+uncertainty, since native `NaT` otherwise prevents even valid prices returning.
 Bounded rejection receipts follow these observations through FX, proxy,
 batch projection and merges. In-scope uncertainty stays visible and prevents
 positive memo reuse or persistence; a later valid source answer can recover.

@@ -326,7 +326,7 @@ def test_native_original_request_qualifies_a_chart_with_a_different_effective_ur
     response.url = "http://127.0.0.1:49152/synthetic-chart-probe"
     response.content = raw
     admitted = response.json()
-    assert admitted["chart"]["result"][0]["timestamp"] == [result["timestamp"][0], None]
+    assert admitted["chart"]["result"][0]["timestamp"] == [result["timestamp"][0]]
     assert response.content is raw and json.loads(response.content) == document
     assert response.request.method == "GET"
 
@@ -383,8 +383,8 @@ def test_auxiliary_decodes_are_independent_and_do_not_change_native_response_fac
     first["chart"]["result"][0]["timestamp"][0] = 0
     first["chart"]["result"][0]["meta"]["_tarzan_rejected_chart_fields_v1"].clear()
     second = response.json()["chart"]["result"][0]
-    assert second["timestamp"] == [result["timestamp"][0], None]
-    assert second["indicators"]["quote"][0]["volume"] == [None, 100]
+    assert second["timestamp"] == [result["timestamp"][0]]
+    assert second["indicators"]["quote"][0]["volume"] == [None]
     assert set(second["meta"]["_tarzan_rejected_chart_fields_v1"]) == {"timestamp", "volume"}
     assert response.content is raw and json.loads(response.text) == document
     assert response.status_code == 200 and response.reason == "OK"

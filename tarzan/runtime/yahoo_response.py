@@ -164,6 +164,39 @@ def _admit_auxiliary_scalar(value, *, timestamp):
     return value  # Preserve optional native custom-decoder scalar contracts.
 
 
+def _drop_rejected_date_rows(result, timestamps):
+    """Remove undated rows together, never relocate their independent prices.
+
+    A native NaT is safe without actions but can abort native action merging.
+    Pruning is limited to the inspected parallel-array schema. Unrecognized
+    shapes retain their failure instead of being silently repaired.
+    """
+    indicators = result.get("indicators")
+    if type(indicators) is not dict:
+        return
+    arrays = []
+    for name, fields in (*_PRICE_ARRAYS, ("quote", ("volume",))):
+        entries = indicators.get(name)
+        if entries is None:
+            continue
+        if type(entries) is not list:
+            return
+        for entry in entries:
+            if type(entry) is not dict:
+                return
+            for field in fields:
+                values = entry.get(field)
+                if values is None:
+                    continue
+                if type(values) is not list or len(values) != len(timestamps):
+                    return
+                arrays.append((entry, field, values))
+    retained = [index for index, value in enumerate(timestamps) if value is not None]
+    result["timestamp"] = [timestamps[index] for index in retained]
+    for entry, field, values in arrays:
+        entry[field] = [values[index] for index in retained]
+
+
 def _admit_chart_auxiliary(document):
     if type(document) is not dict:
         return document
@@ -174,10 +207,15 @@ def _admit_chart_auxiliary(document):
         if type(result) is not dict or type(result.get("timestamp")) is not list:
             continue
         timestamps = result["timestamp"]
+        events = result.get("events")
+        has_actions = type(events) is dict and any(
+            type(events.get(name)) is dict and bool(events[name])
+            for name in ("splits", "dividends", "capitalGains")
+        )
         rejected = {}
         for index, value in enumerate(timestamps):
             admitted = _admit_auxiliary_scalar(value, timestamp=True)
-            if admitted is None and value is not None:
+            if admitted is None and (value is not None or has_actions):
                 receipt = rejected.setdefault("timestamp", _new_rejection_receipt())
                 _record_rejection(receipt, None)
                 timestamps[index] = None
@@ -200,6 +238,8 @@ def _admit_chart_auxiliary(document):
         metadata = result.get("meta")
         if rejected and type(metadata) is dict:
             metadata[CHART_FIELDS_REJECTIONS_META] = rejected
+        if "timestamp" in rejected:
+            _drop_rejected_date_rows(result, timestamps)
     return document
 
 
