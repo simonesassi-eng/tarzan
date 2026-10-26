@@ -246,12 +246,12 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
     Memoized per currency for the run (cleared by :func:`reset_run_caches`):
     every holding in a given currency shares one series instead of re-reading
     the disk cache and re-attempting the refresh."""
-    from tarzan.data.chart_actions import has_rejected_splits
+    from tarzan.data.chart_actions import has_rejected_chart_evidence
 
     return memoized(
         "enricher.fx", currency, lambda: _fetch_fx_pair_uncached(currency),
         legacy=_fx_memo,
-        cache_if=lambda series: not has_rejected_splits(series),
+        cache_if=lambda series: not has_rejected_chart_evidence(series),
     )
 
 
@@ -275,9 +275,9 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
             frame = history_time.admit_history(
                 history_time.attach_native_session_evidence(frame, ticker), p,
             )
-            from tarzan.data.chart_actions import attach_rejected_splits
+            from tarzan.data.chart_actions import attach_rejected_chart_evidence
 
-            return attach_rejected_splits(frame, ticker)
+            return attach_rejected_chart_evidence(frame, ticker)
 
         history = _retry(_call, what=f"FX {pair}")
         if history is not None and not history.empty:
@@ -1587,9 +1587,9 @@ def _reusable_price_observation(frame: Optional[pd.DataFrame]) -> bool:
     """Do not retain unusable SDK answers that may hide transient failure."""
     if frame is None or frame.empty or "Close" not in frame:
         return False
-    from tarzan.data.chart_actions import has_rejected_splits
+    from tarzan.data.chart_actions import has_rejected_chart_evidence
 
-    if has_rejected_splits(frame):
+    if has_rejected_chart_evidence(frame):
         return False
     close = pd.to_numeric(frame["Close"], errors="coerce")
     usable = close.replace([float("inf"), float("-inf")], float("nan")).gt(0)
@@ -1632,9 +1632,9 @@ def _download_price_history(
         frame = history_time.admit_history(
             history_time.attach_native_session_evidence(frame, client), symbol,
         )
-        from tarzan.data.chart_actions import attach_rejected_splits
+        from tarzan.data.chart_actions import attach_rejected_chart_evidence
 
-        return attach_rejected_splits(frame, client)
+        return attach_rejected_chart_evidence(frame, client)
 
     from tarzan.runtime.session import current_session
 

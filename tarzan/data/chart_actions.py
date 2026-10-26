@@ -1,4 +1,4 @@
-"""Retain typed split rejection evidence beside independent native prices.
+"""Retain typed chart-field rejection evidence beside independent prices.
 
 This evidence only restricts repair, persistence and reuse; it never grants a
 new price, listing, action or source authority. It is not a provider revision
@@ -14,10 +14,11 @@ import yfinance as yf
 from yfinance.scrapers.history import PriceHistory
 from yfinance.ticker import Ticker
 
-from tarzan.runtime.yahoo_response import SPLIT_REJECTIONS_META
+from tarzan.runtime.yahoo_response import CHART_FIELDS_REJECTIONS_META, SPLIT_REJECTIONS_META
 
 
 REJECTION_ATTR = "tarzan_rejected_split_evidence_v1"
+FIELD_REJECTION_ATTR = "tarzan_rejected_chart_fields_v1"
 _NATIVE_TICKER_HISTORY = Ticker.history
 _NATIVE_PRICE_HISTORY = PriceHistory.history
 
@@ -27,7 +28,13 @@ def has_rejected_splits(frame):
     return isinstance(frame, (pd.DataFrame, pd.Series)) and REJECTION_ATTR in frame.attrs
 
 
-def attach_rejected_splits(frame, client):
+def has_rejected_chart_evidence(frame):
+    return has_rejected_splits(frame) or (
+        isinstance(frame, (pd.DataFrame, pd.Series)) and FIELD_REJECTION_ATTR in frame.attrs
+    )
+
+
+def _completed_metadata(frame, client):
     """Read only completed native metadata, with no lazy SDK/provider access."""
     if (
         not isinstance(frame, pd.DataFrame) or frame.empty
@@ -37,12 +44,16 @@ def attach_rejected_splits(frame, client):
         or Ticker.history is not _NATIVE_TICKER_HISTORY
         or PriceHistory.history is not _NATIVE_PRICE_HISTORY
     ):
-        return frame
+        return None
     history = vars(client).get("_price_history")
     metadata = vars(history).get("_history_metadata") if type(history) is PriceHistory else None
     if not isinstance(metadata, dict) or metadata.get("symbol") != vars(client).get("ticker"):
-        return frame
-    observation = metadata.get(SPLIT_REJECTIONS_META)
+        return None
+    return metadata
+
+
+def _scoped_receipt(observation, frame, metadata):
+    """The same bounded causal scope applies to every rejection receipt."""
     if (
         type(observation) is not dict
         or set(observation) != {
@@ -55,7 +66,7 @@ def attach_rejected_splits(frame, client):
         or type(observation["date_bounds"]) is not list
         or len(observation["date_bounds"]) not in (0, 2)
     ):
-        return frame
+        return None
     unknown = observation["unknown_date"]
     dates = []
     lower, upper = frame.index.min().date(), frame.index.max().date()
@@ -92,12 +103,21 @@ def attach_rejected_splits(frame, client):
             dates.append(day.isoformat())
     # Future/out-of-window actions cannot degrade or modify an older tape.
     if not dates and not unknown:
-        return frame
-    receipt = {
+        return None
+    return {
         "symbol": str(metadata["symbol"]),
         "dates": tuple(sorted(set(dates))),
         "unknown_date": unknown,
     }
+
+
+def attach_rejected_splits(frame, client):
+    metadata = _completed_metadata(frame, client)
+    if metadata is None:
+        return frame
+    receipt = _scoped_receipt(metadata.get(SPLIT_REJECTIONS_META), frame, metadata)
+    if receipt is None:
+        return frame
     result = frame.copy()
     result.attrs[REJECTION_ATTR] = receipt
     from tarzan.runtime import data_quality as dq
@@ -107,6 +127,36 @@ def attach_rejected_splits(frame, client):
         "Malformed provider split factors were rejected. Independent prices "
         "are retained without that split repair; historical action evidence "
         "requires review and this observation is not persisted or reused.",
+        context=receipt["symbol"],
+    )
+    return result
+
+
+def attach_rejected_chart_evidence(frame, client):
+    """Keep split and independent auxiliary uncertainty beside valid prices."""
+    result = attach_rejected_splits(frame, client)
+    metadata = _completed_metadata(result, client)
+    evidence = metadata.get(CHART_FIELDS_REJECTIONS_META) if metadata is not None else None
+    if type(evidence) is not dict or set(evidence) - {"timestamp", "volume"}:
+        return result
+    scopes = {}
+    for field, observation in evidence.items():
+        receipt = _scoped_receipt(observation, result, metadata)
+        if receipt is not None:
+            scopes[field] = receipt
+    if not scopes:
+        return result
+    result = result.copy()
+    receipt = _merge_receipts(list(scopes.values()))
+    receipt["fields"] = tuple(sorted(scopes))
+    result.attrs[FIELD_REJECTION_ATTR] = receipt
+    from tarzan.runtime import data_quality as dq
+
+    dq.warning(
+        "market_data",
+        "Malformed provider chart dates or volume were rejected. Independent "
+        "valid dated prices are retained; auxiliary evidence requires review "
+        "and this observation is not persisted or reused.",
         context=receipt["symbol"],
     )
     return result
@@ -134,14 +184,53 @@ def attach_batch_rejections(frame, children):
     persistence of such a projection is preferable to losing its receipt;
     healthy source children and their own positive memos are not modified.
     """
-    receipts = [
-        child.attrs[REJECTION_ATTR] for child in children.values()
-        if has_rejected_splits(child)
-    ]
-    if not receipts:
+    if not any(has_rejected_chart_evidence(child) for child in children.values()):
         return frame
     result = frame.copy()
-    result.attrs[REJECTION_ATTR] = _merge_receipts(receipts)
+    for attribute in (REJECTION_ATTR, FIELD_REJECTION_ATTR):
+        receipts = [
+            child.attrs[attribute] for child in children.values()
+            if isinstance(child, (pd.DataFrame, pd.Series)) and attribute in child.attrs
+        ]
+        if receipts:
+            receipt = _merge_receipts(receipts)
+            if attribute == FIELD_REJECTION_ATTR:
+                receipt["fields"], malformed = _merged_fields(receipts)
+                receipt["unknown_date"] |= malformed
+            result.attrs[attribute] = receipt
+    return result
+
+
+def _merged_fields(receipts):
+    fields = set()
+    malformed = False
+    for receipt in receipts:
+        values = receipt.get("fields") if type(receipt) is dict else None
+        if type(values) not in (tuple, list) or not values or len(values) > 2:
+            malformed = True
+            continue
+        for field in values:
+            if type(field) is str and field in {"timestamp", "volume"}:
+                fields.add(field)
+            else:
+                malformed = True
+    return tuple(sorted(fields)), malformed
+
+
+def merge_rejected_chart_evidence(cached, fresh, merged):
+    result = merge_rejected_splits(cached, fresh, merged)
+    if result is None:
+        return result
+    receipts = [
+        frame.attrs[FIELD_REJECTION_ATTR] for frame in (cached, fresh)
+        if isinstance(frame, (pd.DataFrame, pd.Series)) and FIELD_REJECTION_ATTR in frame.attrs
+    ]
+    if receipts:
+        result = result.copy()
+        receipt = _merge_receipts(receipts)
+        receipt["fields"], malformed = _merged_fields(receipts)
+        receipt["unknown_date"] |= malformed
+        result.attrs[FIELD_REJECTION_ATTR] = receipt
     return result
 
 

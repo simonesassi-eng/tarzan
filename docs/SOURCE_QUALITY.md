@@ -11,6 +11,21 @@ price, quantity, value and EUR anchor; direct facts validate price and value.
 This preserves valid numeric conversions, source priority and unit mechanics.
 It cannot recover original type evidence already erased by an external parser.
 
+The owned native Yahoo response admits raw chart price and split primitives
+before SDK coercion. For a qualified completed chart response it also rejects
+unusable timestamp and volume cells using the SDK's existing missing-value
+conventions. An unusable date cannot acquire an invented epoch or transfer its
+price to another row. Unusable volume cannot erase independently valid dated
+prices, but the SDK's missing-volume fill is not evidence of zero trading.
+Bounded rejection receipts follow these observations through FX, proxy,
+batch projection and merges. In-scope uncertainty stays visible and prevents
+positive memo reuse or persistence; a later valid source answer can recover.
+Known future-only rejected volume cannot degrade an older admitted window.
+Native bytes, valid scalar values, custom decoder contracts, authentication,
+retry, ownership and source priority remain unchanged. Unknown envelopes
+retain their native failure contract; this is not a claim to repair every
+malformed provider field or previously cached type loss.
+
 ## Current-session prices
 
 The selector prioritizes coherent observations from the newest observed

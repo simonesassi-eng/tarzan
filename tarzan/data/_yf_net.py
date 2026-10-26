@@ -205,19 +205,19 @@ def _owned_download(symbols, **kwargs):
                 frame = history_time.admit_history(
                     history_time.attach_native_session_evidence(frame, client), symbol,
                 )
-            from tarzan.data.chart_actions import attach_rejected_splits
+            from tarzan.data.chart_actions import attach_rejected_chart_evidence
 
-            return attach_rejected_splits(frame, client)
+            return attach_rejected_chart_evidence(frame, client)
 
         # Each history operation, including its cookie/crumb requests/retries,
         # owns its timeout. A large catalog is NOT one 20-second operation.
-        from tarzan.data.chart_actions import has_rejected_splits
+        from tarzan.data.chart_actions import has_rejected_chart_evidence
 
         frame = memoized(
             "yahoo.batch_history", (symbol, tuple(arguments.items())),
             lambda: retry(history, what="batch history"),
             legacy={},
-            cache_if=lambda frame: not has_rejected_splits(frame),
+            cache_if=lambda frame: not has_rejected_chart_evidence(frame),
         )
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             return empty_df()
