@@ -2768,31 +2768,44 @@ def _transactional_equivalence_pairs(
 
     summaries = _order_instrument_summaries(orders)
     candidates: list[tuple[str, str]] = []
-    eligible = sorted(set(summaries) - excluded_isins)
+    directions: dict[str, int] = {}
+    for isin in sorted(set(summaries) - excluded_isins):
+        # The final pair rule requires exactly one verified bond and one
+        # unknown kind. Stocks/ETFs/cash can never become rollover authority.
+        if kind_by_isin.get(isin) not in (None, InstrumentKind.BOND):
+            continue
+        summary = summaries[isin]
+        quantities = summary["position_quantities"]
+        if not quantities:
+            continue
+        direction = (
+            1 if all(value > 0 for value in quantities)
+            else -1 if all(value < 0 for value in quantities)
+            else 0
+        )
+        types = summary["position_types"]
+        if direction > 0 and types == {OrderType.TRANSFER_IN}:
+            directions[isin] = direction
+        elif (
+            direction < 0
+            and types
+            and types.issubset({OrderType.SELL, OrderType.TRANSFER_OUT})
+        ):
+            directions[isin] = direction
+
+    # Compute per-instrument predicates once. Pair order and the complete
+    # ambiguity graph remain unchanged; do not greedily accept a first match.
+    eligible = sorted(directions)
     for index, left_isin in enumerate(eligible):
         for right_isin in eligible[index + 1:]:
             left, right = summaries[left_isin], summaries[right_isin]
-            left_quantities = left["position_quantities"]
-            right_quantities = right["position_quantities"]
-            if not left_quantities or not right_quantities:
-                continue
-            left_direction = 1 if all(value > 0 for value in left_quantities) else -1 if all(
-                value < 0 for value in left_quantities
-            ) else 0
-            right_direction = 1 if all(value > 0 for value in right_quantities) else -1 if all(
-                value < 0 for value in right_quantities
-            ) else 0
+            left_direction = directions[left_isin]
+            right_direction = directions[right_isin]
             if {left_direction, right_direction} != {-1, 1}:
                 continue
             positive, negative = (
                 (left, right) if left_direction > 0 else (right, left)
             )
-            if positive["position_types"] != {OrderType.TRANSFER_IN}:
-                continue
-            if not negative["position_types"] or not negative["position_types"].issubset(
-                {OrderType.SELL, OrderType.TRANSFER_OUT}
-            ):
-                continue
             if not math.isclose(
                 left["net_quantity"],
                 -right["net_quantity"],
