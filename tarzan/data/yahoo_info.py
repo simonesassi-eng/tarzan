@@ -13,6 +13,7 @@ import re
 from curl_cffi.requests.exceptions import HTTPError as _NATIVE_HTTP_ERROR
 import yfinance as yf
 from yfinance.base import TickerBase as _SDK_BASE
+from yfinance.scrapers.history import PriceHistory as _SDK_HISTORY
 from yfinance.scrapers.quote import Quote as _SDK_QUOTE
 from yfinance.ticker import Ticker as _SDK_TICKER
 
@@ -31,6 +32,14 @@ _NATIVE_SDK_PORTS = (
     (_SDK_QUOTE, "_fetch_complementary", _SDK_QUOTE._fetch_complementary),
     (_SDK_QUOTE, "_fetch", _SDK_QUOTE._fetch),
     (_SDK_QUOTE, "_fetch_additional_info", _SDK_QUOTE._fetch_additional_info),
+)
+_NATIVE_HISTORY_PORTS = (
+    (_SDK_BASE, "history", _SDK_BASE.history),
+    (_SDK_BASE, "_lazy_load_price_history", _SDK_BASE._lazy_load_price_history),
+    (_SDK_BASE, "_get_ticker_tz", _SDK_BASE._get_ticker_tz),
+    (_SDK_BASE, "_fetch_ticker_tz", _SDK_BASE._fetch_ticker_tz),
+    (_SDK_HISTORY, "__init__", _SDK_HISTORY.__init__),
+    (_SDK_HISTORY, "history", _SDK_HISTORY.history),
 )
 _ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
 _LISTING_FACTS = "yahoo.native_constructor_listing"
@@ -203,3 +212,47 @@ def info_for_enrichment(symbol):
     if identity is not None and isinstance(quote._info, dict):
         return _NativeListingInfo(quote._info, identity)
     return quote._info
+
+
+def _owns_timezone_only_history(client) -> bool:
+    """Inspect the native history path before declining unused PEG demand."""
+    if (
+        not _native_owned_core(client)
+        or type(_NATIVE_HISTORY_PORTS) is not tuple
+        or len(_NATIVE_HISTORY_PORTS) != 6
+        or vars(client).get("_price_history") is not None
+        or vars(client._quote).get("_already_fetched_complementary") is not False
+    ):
+        return False
+    try:
+        sdk_root = Path(yf.__file__).resolve().parent
+        for owner, name, original in _NATIVE_HISTORY_PORTS:
+            if getattr(owner, name) is not original:
+                return False
+            if not Path(original.__code__.co_filename).resolve().is_relative_to(sdk_root):
+                return False
+        return _SDK_BASE._lazy_load_price_history.__globals__.get("PriceHistory") is _SDK_HISTORY
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def history_for_enrichment(symbol, **arguments):
+    """Keep native history's full core timezone fallback, without unused PEG.
+
+    The inspected history entry uses info only for its two timezone keys.
+    Mark complementary metadata unnecessary on this fresh private client,
+    never on SDK classes, public clients or run-shared metadata. Required
+    native quote parsing, timezone limits, retries and provenance remain.
+    """
+    client = _yf_net.ticker(symbol)
+    if _owns_timezone_only_history(client):
+        client._quote._already_fetched_complementary = True
+    record_constructor_listing(client, symbol)
+    frame = client.history(**arguments)
+    from tarzan.data import history_time
+    from tarzan.data.chart_actions import attach_rejected_chart_evidence
+
+    frame = history_time.admit_history(
+        history_time.attach_native_session_evidence(frame, client), symbol,
+    )
+    return attach_rejected_chart_evidence(frame, client)

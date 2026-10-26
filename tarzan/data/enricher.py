@@ -1623,18 +1623,10 @@ def _download_price_history(
         arguments["start"] = start
 
     def _call():
-        from tarzan.data.yahoo_info import record_constructor_listing
+        from tarzan.data.yahoo_info import history_for_enrichment
 
         _space_yf_call()
-        client = _yf_net.ticker(symbol)
-        record_constructor_listing(client, symbol)
-        frame = client.history(**arguments)
-        frame = history_time.admit_history(
-            history_time.attach_native_session_evidence(frame, client), symbol,
-        )
-        from tarzan.data.chart_actions import attach_rejected_chart_evidence
-
-        return attach_rejected_chart_evidence(frame, client)
+        return history_for_enrichment(symbol, **arguments)
 
     from tarzan.runtime.session import current_session
 
