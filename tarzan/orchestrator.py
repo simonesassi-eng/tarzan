@@ -305,6 +305,28 @@ def _run_once(
     targets_per_holding_filename: str = "",
     strict: bool = False,
 ) -> tuple[PortfolioMetrics, InvestorConfig]:
+    """Own early referee work through successful or failed analysis completion."""
+    from tarzan.data.justetf import owned_prefetch_scope
+
+    with owned_prefetch_scope():
+        return _run_once_body(
+            config_source=config_source,
+            orders_source=orders_source,
+            targets_per_holding_source=targets_per_holding_source,
+            orders_filename=orders_filename,
+            targets_per_holding_filename=targets_per_holding_filename,
+            strict=strict,
+        )
+
+
+def _run_once_body(
+    config_source: Optional[Union[str, io.BytesIO]] = None,
+    orders_source: Optional[Union[str, io.BytesIO]] = None,
+    targets_per_holding_source: Optional[Union[str, io.BytesIO]] = None,
+    orders_filename: str = "",
+    targets_per_holding_filename: str = "",
+    strict: bool = False,
+) -> tuple[PortfolioMetrics, InvestorConfig]:
     """Execute the full analysis pipeline (order-only).
 
     The order list is the single source of truth: the snapshot — net

@@ -279,6 +279,21 @@ def build_workload_observation(
             "queue_wait_is_sum_of_overlapping_waiters": True,
             "queue_rejection_is_not_native_http_attempt": True,
         }
+        protected = coordinator.protection_snapshot()
+        if protected["groups_created"]:
+            protected_admission = {
+                name: _bounded_count(value).to_dict()
+                for name, value in protected.items()
+            }
+            result["protected_acquisition"] = protected_admission
+            result["truncated"] = result["truncated"] or any(
+                measure["truncated"] for measure in protected_admission.values()
+            )
+            result["native_acquisition_semantics"].update({
+                "priority": "purchased_early_fifo_before_essential_fifo_before_optional",
+                "reservation": "purchased_callback_slots_within_same_aggregate_cap",
+                "owned_referee_reservation_activation": "after_all_current_quotes_join",
+            })
         result["truncated"] = result["truncated"] or any(
             measure["truncated"] for measure in admission.values()
         )

@@ -751,7 +751,7 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         from tarzan.data import justetf
 
         by_isin = {str(h.ticker): h.isin for h in holdings if h.ticker and h.isin}
-        justetf.prefetch(by_isin.values())
+        justetf.prefetch_current_quotes(by_isin.values())
         referees = {tk: q for tk, isin in by_isin.items()
                     if (q := justetf.quote(isin))}
     except Exception as e:  # noqa: BLE001 — a referee must never block a stamp

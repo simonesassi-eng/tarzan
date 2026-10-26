@@ -19,6 +19,7 @@ import time
 _PROVIDERS = frozenset({"yahoo", "openfigi", "borsa", "justetf", "manual", "gemini"})
 _operation = ContextVar("tarzan_provider_operation", default=None)
 _optional_work = ContextVar("tarzan_optional_provider_work", default=None)
+_protected_work = ContextVar("tarzan_protected_provider_work", default=None)
 logger = logging.getLogger(__name__)
 
 
@@ -176,6 +177,21 @@ class ProviderBudget:
         with self.coordinator.essential_scope():
             yield
 
+    @contextmanager
+    def protected_requests(self, protection):
+        """Bind one owner's purchased-work reservation only in its callbacks."""
+        if getattr(protection, "_coordinator", None) is not self.coordinator:
+            raise ValueError("protected provider work belongs to another coordinator")
+        token = _protected_work.set((self, protection))
+        try:
+            yield
+        finally:
+            _protected_work.reset(token)
+
+    def protected_work_token(self):
+        active = _protected_work.get()
+        return active if active is not None and active[0] is self else None
+
     def _limiting_deadline(self, provider):
         deadline = self.deadline
         optional = False
@@ -281,11 +297,13 @@ class ProviderBudget:
         with self.operation(provider):
             for ordinal in range(1, policy.retry_budget + 2):
                 retryable = False
+                protected = self.protected_work_token()
                 # A permit encloses only native I/O. SDK coordination, cache
                 # leaders/followers, pacing and retry backoff hold no permit.
                 with self.coordinator.lease(
                     optional=self.optional_work_token() is not None,
                     remaining=lambda: self._remaining(provider),
+                    protection=protected[1] if protected is not None else None,
                 ):
                     # Queue time consumes the original operation/run budget.
                     # Do not pass a timeout calculated before admission.

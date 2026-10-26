@@ -368,6 +368,7 @@ class MetricsEngine:
         ]
         pending = []
         error = None
+        owner_interrupted = False
         planning_future = None
         # Declaration precedes submission and lasts through both joins. It
         # holds no native permit: SDK parents, cache waits and child executors
@@ -384,6 +385,7 @@ class MetricsEngine:
                         ))
                 except BaseException as failure:
                     error = failure
+                    owner_interrupted = not isinstance(failure, Exception)
                 if error is None and self._planning_inputs is not None:
                     try:
                         from tarzan.engine.owned_planning import prepare_plans_owned
@@ -396,6 +398,7 @@ class MetricsEngine:
                         planning_future = None
                     except BaseException as failure:
                         error = failure
+                        owner_interrupted = True
                 for phase, future in zip(phases, pending):
                     try:
                         future.result()
@@ -425,7 +428,9 @@ class MetricsEngine:
                             # An interruption of the owner's wait is instead
                             # the owner's primary error, even if a worker also
                             # reports cancellation while the executor drains.
-                            error = error or failure
+                            if not owner_interrupted:
+                                error = failure
+                                owner_interrupted = True
                 if planning_future is not None:
                     try:
                         self._prepared_plans = planning_future.result()
@@ -434,11 +439,11 @@ class MetricsEngine:
                         # owner-stage computation or publish partial plans.
                         self._prepared_plans = None
                     except BaseException as failure:
-                        if error is None or isinstance(error, Exception):
-                            worker_failure = (
-                                planning_future.done() and not planning_future.cancelled()
-                                and planning_future.exception() is failure
-                            )
+                        worker_failure = (
+                            planning_future.done() and not planning_future.cancelled()
+                            and planning_future.exception() is failure
+                        )
+                        if not owner_interrupted:
                             if worker_failure:
                                 # Source cancellations retain their established
                                 # order before a speculative worker interruption.
@@ -451,8 +456,21 @@ class MetricsEngine:
                                 # An interruption of the owner wait is primary,
                                 # irrespective of child completion order.
                                 error = failure
+                                owner_interrupted = True
             # Executor exit drains accepted callbacks even if submission or
             # a future failed. An unsubmitted branch is not a successful stage.
+        # Referee histories were submitted before this independent source pair.
+        # Join them after the overlapping preparation, but before adopting its
+        # financial facts. Their canonical cancellation precedes later workers;
+        # an actual interruption of this owner's wait/setup remains primary.
+        from tarzan.data.justetf import finish_owned_prefetch
+        try:
+            finish_owned_prefetch(current_session())
+        except BaseException as failure:
+            if not owner_interrupted and (
+                not isinstance(failure, Exception) or error is None
+            ):
+                error = failure
         return phases[:len(pending)], error
 
     def _record_prepared_plan_timing(self):
