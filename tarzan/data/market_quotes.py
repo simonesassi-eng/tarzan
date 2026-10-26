@@ -1862,14 +1862,16 @@ def intraday_feeds(
 
 def fetch_market_quotes(force: bool = False) -> list[dict]:
     """Fetch the curated market quotes (memoised per process). Best-effort:
-    returns whatever could be fetched; never raises."""
-    from tarzan.runtime.memo import memoized, provider_memo
+    returns whatever could be fetched; never raises.
+
+    ``force`` refreshes the composed strip, not the individual source caches.
+    """
+    from tarzan.runtime.memo import clear_provider_stores, memoized
     from tarzan.runtime.session import current_session
 
     if current_session() is not None:
         if force:
-            with provider_memo().lock:
-                provider_memo().store("market.strip").clear()
+            clear_provider_stores("market.strip")
         return memoized(
             "market.strip", "curated", _fetch_market_quotes_uncached, legacy={},
         )
