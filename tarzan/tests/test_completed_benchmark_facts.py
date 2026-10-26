@@ -432,3 +432,68 @@ def test_unowned_call_cannot_borrow_a_previous_runs_facts(raw_market):
     assert bm._completed_benchmark_history("COMPLETED.MI") is None
     with owned():
         assert bm._completed_benchmark_history("COMPLETED.MI") is None
+
+
+@pytest.mark.parametrize("boundary", ["optional", "whole-run"])
+@pytest.mark.parametrize("entry", ["default", "explicit-native", "native-engine"])
+def test_actual_native_metrics_entry_consumes_completed_benchmarks(
+    monkeypatch, raw_market, boundary, entry,
+):
+    from tarzan.engine import metrics
+    from tarzan.models.investor_config import InvestorConfig
+
+    calls, _state = raw_market
+    symbol = "COMPLETEDENTRY.MI"
+    with owned() as owner:
+        en._fetch_history(symbol)
+        expected = bm._fetch_benchmark_uncached(symbol)
+        definitions = {"complete": symbol}
+        if entry == "native-engine":
+            definitions.update({
+                en.cfg.benchmark_beta_name(): "COMPLETEBETA.MI",
+                en.cfg.benchmark_geo_allocation(): "COMPLETEGEO.MI",
+            })
+            for required_symbol in tuple(definitions.values())[1:]:
+                en._fetch_history(required_symbol)
+            monkeypatch.setattr(metrics, "BENCHMARKS", definitions)
+        before = len(calls)
+        with expired(owner, boundary):
+            if entry == "native-engine":
+                context = {}
+                missing = metrics.MetricsEngine(
+                    [], InvestorConfig(),
+                )._prepare_benchmark_context(context)
+                assert missing == ()
+                catalog = context["_benchmark_catalog"]
+                errors = context["benchmark_resolution_errors"]
+            else:
+                options = (
+                    {"fetch_history": metrics._fetch_benchmark_history}
+                    if entry == "explicit-native" else {}
+                )
+                catalog, errors = bm.preprocess_benchmarks(
+                    definitions, workers=2, **options,
+                )
+        assert errors == ()
+        assert set(catalog) == set(definitions)
+        assert_matches({"complete": catalog["complete"]}, expected, symbol)
+        assert len(calls) == before
+        assert not owner.providers.flight._pending
+
+
+def test_wrapped_explicit_native_fetch_remains_uninvoked_after_expiry(raw_market):
+    calls, _state = raw_market
+    with owned() as owner:
+        en._fetch_history("COMPLETED.MI")
+        before = len(calls)
+
+        @wraps(bm._fetch_benchmark_history)
+        def wrapper(_symbol):
+            pytest.fail("an injected fetch is not a completed native fact consumer")
+
+        with expired(owner):
+            catalog, errors = bm.preprocess_benchmarks(
+                {"complete": "COMPLETED.MI"}, fetch_history=wrapper,
+            )
+        assert not catalog and errors
+        assert len(calls) == before

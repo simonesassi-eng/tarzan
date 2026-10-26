@@ -389,7 +389,7 @@ def preprocess_benchmarks(
 
     def optional(name, input_ticker):
         if budget is not None and not budget.optional_request_allowed("yahoo"):
-            if fetch_history is None:
+            if fetch is _fetch_benchmark_history:
                 completed = _completed_benchmark_history(input_ticker)
                 if completed is not None:
                     return resolve(name, input_ticker, completed)
