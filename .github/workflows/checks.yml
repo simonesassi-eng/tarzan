@@ -51,3 +51,13 @@ jobs:
 
       - name: Run Tarzan tests
         run: python -m pytest tarzan/tests -q
+
+      # EXPERIMENT ONLY: no inputs, credentials, email or production workflow.
+      # This step is not proposed for publication on main.
+      - name: Measure immutable runtime install and first imports
+        run: |
+          mkdir -m 700 "${RUNNER_TEMP}/tarzan-runtime-install-wheels"
+          python -m pip download --require-hashes --only-binary=:all: --retries 5 --timeout 30 \
+            -r requirements.txt -d "${RUNNER_TEMP}/tarzan-runtime-install-wheels"
+          python scripts/benchmark_runtime_install.py \
+            --wheels "${RUNNER_TEMP}/tarzan-runtime-install-wheels" --samples 8
