@@ -127,10 +127,11 @@ each HTTP 404 is a missing instrument. The category is operational, not a new
 financial fact or analysis-identity input: it is retained only in native-attempt
 ledger entries, leaving the financial material-field contract unchanged.
 
-Owned Yahoo responses reject JSON booleans in raw OHLC/adjusted-close price
-arrays before the SDK can coerce `true`/`false` into apparently numeric prices.
-Rejected entries are missing observations, not invented zero/one prices.
-Valid numeric prices/strings, timestamps, volume, metadata flags, corporate
+Owned Yahoo responses admit raw OHLC/adjusted-close price cells before SDK
+coercion. Booleans, nonscalar JSON values, malformed numeric strings and
+nonfinite/overflowing prices become missing observations rather than invented
+zero/one prices or exceptions that discard the valid neighbouring rows.
+Valid finite numeric prices/strings, timestamps, volume, metadata flags, corporate
 actions, native response bytes/errors and alternative-source recovery retain
 their existing contracts. This local admission adds no provider request or
 negative cache. It cannot reconstruct original types already erased in an

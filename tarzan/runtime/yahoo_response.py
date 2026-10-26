@@ -2,11 +2,14 @@
 
 The owned curl client uses its documented response-class extension. Native
 bytes, status, authentication, error and cleanup contracts remain unchanged.
-Only JSON booleans in the five chart price arrays become missing observations;
-metadata flags, action events, timestamps and volume are not price arrays.
+Malformed JSON prices in the five chart price arrays become missing cells,
+without discarding their independent valid neighbours. Metadata flags,
+action events, timestamps and volume are not price arrays.
 """
 
 from __future__ import annotations
+
+import math
 
 from curl_cffi.requests import Response
 
@@ -15,6 +18,21 @@ _PRICE_ARRAYS = (
     ("quote", ("open", "high", "low", "close")),
     ("adjclose", ("adjclose",)),
 )
+
+
+def _admit_json_price(value):
+    """Retain valid raw numeric primitives; do not reinterpret custom decoders."""
+    kind = type(value)
+    if kind in (bool, list, dict):
+        return None
+    if kind in (int, float, str):
+        try:
+            return value if math.isfinite(float(value)) else None
+        except (OverflowError, TypeError, ValueError):
+            return None
+    # None is native missing data. Optional native JSON decoder hooks can
+    # supply non-JSON scalar types; leave their original caller contract.
+    return value
 
 
 def _admit_chart_prices(document):
@@ -41,13 +59,12 @@ def _admit_chart_prices(document):
                     values = array.get(field)
                     if type(values) is list:
                         for index, value in enumerate(values):
-                            if type(value) is bool:
-                                values[index] = None
+                            values[index] = _admit_json_price(value)
     return document
 
 
 class YahooChartResponse(Response):
-    """Preserve curl's own JSON/errors while rejecting typed boolean prices."""
+    """Keep curl's native JSON/errors and independently admit raw price cells."""
 
     def json(self, **kwargs):
         return _admit_chart_prices(super().json(**kwargs))
