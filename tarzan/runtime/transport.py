@@ -88,6 +88,67 @@ class ProviderRequestFailure(RuntimeError):
     """Bounded native request failure, without leaking its private request."""
 
 
+def _prepare_owned_yahoo_cache(factory):
+    """Serialize the inspected SDK's lazy local timezone-store initialization.
+
+    This runs under the client's existing creation lock, before any owned
+    Ticker can use the store concurrently. It does not acquire an HTTP permit,
+    fetch data, invent timezone entries, clear caches, or change source policy.
+    Injected factories/cache ports and unsupported SDKs keep their old contract.
+    """
+    from pathlib import Path
+    from types import FunctionType
+
+    from curl_cffi.requests import session as native_session
+
+    if (
+        factory is not native_session.Session
+        or getattr(factory, "__module__", None) != native_session.__name__
+        or not hasattr(factory.__init__, "__code__")
+        or Path(factory.__init__.__code__.co_filename).resolve()
+        != Path(native_session.__file__).resolve()
+    ):
+        return
+    try:
+        import yfinance
+        from yfinance import cache
+
+        if yfinance.__version__ != "1.7.0":
+            return
+        getter = cache.get_tz_cache
+        if (
+            type(getter) is not FunctionType
+            or Path(getter.__code__.co_filename).resolve() != Path(cache.__file__).resolve()
+        ):
+            return
+        store = getter()
+        if (
+            type(store) is not cache._TzCache
+            or type(store).__module__ != cache.__name__
+            or Path(type(store).__init__.__code__.co_filename).resolve()
+            != Path(cache.__file__).resolve()
+        ):
+            return
+        prepare = store.initialise
+        if (
+            getattr(prepare, "__func__", None) is not cache._TzCache.initialise
+            or Path(prepare.__code__.co_filename).resolve() != Path(cache.__file__).resolve()
+        ):
+            return
+        prepare()
+    except Exception as error:
+        # A broken/read-only optional SDK store must not prevent otherwise
+        # usable metadata or client creation. Never expose its path/contents.
+        try:
+            logger.warning(
+                "Native Yahoo timezone cache preparation unavailable (%s).",
+                type(error).__name__,
+                extra={"public_code": "YAHOO_NATIVE_CACHE_PREPARATION_UNAVAILABLE"},
+            )
+        except Exception:
+            pass
+
+
 def _transient(error):
     if isinstance(error, ProviderBudgetExceeded):
         return False
@@ -376,6 +437,7 @@ class ProviderBudget:
         with self._lock:
             if self._yahoo_client is None:
                 from curl_cffi.requests import Session
+                _prepare_owned_yahoo_cache(Session)
                 owner = self
 
                 class BudgetedSession(Session):

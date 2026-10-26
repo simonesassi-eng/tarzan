@@ -38,6 +38,10 @@ operation unavailable; the adapter does not bypass it to claim a price.
 
 ## Batch timezone contract
 
+The owned client prepares the inspected SDK's local timezone store before
+concurrent first lookups; see `YAHOO_CACHE_READINESS.md`. It inserts no
+timezone observations and does not replace native lookup or transport.
+
 Owned Tarzan intraday batches retain UTC indices and the same instants;
 `ignore_tz=True` retains venue-local labels. This is deliberate: newer native
 SDK batches can retain a shared listing timezone. Shape/value/instant tests
