@@ -204,10 +204,25 @@ def _get_fx_series(currency: str) -> pd.Series:
 
 def _usable_fx_series(series: Optional[pd.Series]) -> pd.Series:
     """Return finite positive FX rows while preserving transient provenance."""
-    if series is None or series.empty:
+    if not isinstance(series, pd.Series) or series.empty:
         return pd.Series(dtype=float)
     attrs = dict(series.attrs)
-    numeric = pd.to_numeric(series, errors="coerce")
+    # Coercion can turn JSON booleans into 1.0 and propagate complex values;
+    # an oversized object integer can even abort otherwise valid FX rows.
+    # Preserve the existing numeric path/dtype for real native tapes. Inspect
+    # object/extension declarations before coercion loses their type evidence.
+    if (
+        pd.api.types.is_numeric_dtype(series.dtype)
+        and not pd.api.types.is_bool_dtype(series.dtype)
+        and not pd.api.types.is_complex_dtype(series.dtype)
+    ):
+        admitted = series
+    else:
+        from tarzan.data.referee import finite_number
+        admitted = series[[
+            finite_number(value, positive=True) is not None for value in series
+        ]]
+    numeric = pd.to_numeric(admitted, errors="coerce")
     usable = numeric.replace(
         [float("inf"), float("-inf")],
         float("nan"),
@@ -231,7 +246,7 @@ def _fetch_fx_pair(currency: str) -> pd.Series:
 
 def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
     cache_key = f"FX_{currency}"
-    cached = price_cache.load_history(cache_key)
+    cached = _usable_fx_series(price_cache.load_history(cache_key))
     start = price_cache.refresh_start(cached)
 
     for pair, invert in [(f"{currency}EUR=X", False), (f"EUR{currency}=X", True)]:
@@ -248,8 +263,10 @@ def _fetch_fx_pair_uncached(currency: str) -> pd.Series:
 
         history = _retry(_call, what=f"FX {pair}")
         if history is not None and not history.empty:
-            fresh = 1.0 / history["Close"] if invert else history["Close"]
-            fresh = _usable_fx_series(fresh)
+            # Validate before reciprocal arithmetic hides booleans as floats.
+            fresh = _usable_fx_series(history["Close"])
+            if invert:
+                fresh = _usable_fx_series(1.0 / fresh)
             if fresh.empty:
                 continue
             merged = price_cache.merge_history(cached, fresh)

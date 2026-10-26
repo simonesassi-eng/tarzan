@@ -41,6 +41,15 @@ exactly once, with causal daily FX where required. Price-only history must
 remain separate from booked coupons so income is not counted twice.
 Manual or licensed data and credentials must not enter public artifacts.
 
+FX observations must be finite, positive real scalars. Boolean, complex,
+container and overflowing values are rejected before numeric coercion,
+inverse-pair arithmetic or merging with a fresh cache tail can erase their
+invalid type. Valid real native tapes retain the existing values, dtype,
+index and provenance. Direct-pair priority, inverse fallback and usable-cache
+fallback remain unchanged; absent FX never becomes a fabricated 1:1 rate.
+Security and FX causal alignment, minor-unit scaling and observation-age
+limits remain separate requirements, not evidence supplied by this scalar gate.
+
 `tarzan.data.bond_history` supplements historical-only holdings that have an
 exact BOND kind and no usable price-only tape. It uses the public Borsa Italiana
 chart's Euronext MOT/EuroTLX history with:
