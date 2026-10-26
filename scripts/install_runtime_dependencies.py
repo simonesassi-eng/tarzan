@@ -69,7 +69,7 @@ def main() -> int:
         # package needs an omitted tool, --require-hashes rejects the unpinned
         # implicit install instead of silently accepting an unchecked package.
         return subprocess.run([
-            sys.executable, "-m", "pip", "install", "--require-hashes",
+            sys.executable, "-m", "pip", "install", "--require-hashes", "--no-compile",
             "--retries", "5", "--timeout", "30", "-r", str(path),
         ], check=False).returncode
 

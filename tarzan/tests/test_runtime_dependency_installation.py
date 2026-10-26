@@ -100,7 +100,7 @@ def test_installer_invokes_resolver_and_hash_checks_with_private_transient_input
     monkeypatch.setattr(installer.subprocess, "run", run)
     assert installer.main() == 19
     assert seen[0][:-1] == [
-        installer.sys.executable, "-m", "pip", "install", "--require-hashes",
+        installer.sys.executable, "-m", "pip", "install", "--require-hashes", "--no-compile",
         "--retries", "5", "--timeout", "30", "-r",
     ]
     assert not Path(seen[0][-1]).exists()
