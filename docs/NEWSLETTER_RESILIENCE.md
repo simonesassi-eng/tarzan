@@ -127,6 +127,16 @@ each HTTP 404 is a missing instrument. The category is operational, not a new
 financial fact or analysis-identity input: it is retained only in native-attempt
 ledger entries, leaving the financial material-field contract unchanged.
 
+Owned Yahoo responses reject JSON booleans in raw OHLC/adjusted-close price
+arrays before the SDK can coerce `true`/`false` into apparently numeric prices.
+Rejected entries are missing observations, not invented zero/one prices.
+Valid numeric prices/strings, timestamps, volume, metadata flags, corporate
+actions, native response bytes/errors and alternative-source recovery retain
+their existing contracts. This local admission adds no provider request or
+negative cache. It cannot reconstruct original types already erased in an
+older cached observation, and is not evidence that real portfolio data contained
+such a malformed price.
+
 An optional `run.clock` in the encrypted version-1 report records the native
 context's actual `analysis_date`, mode and date basis (`HOST_LOCAL` or
 `EFFECTIVE_DATE`), with the host UTC offset at capture when known. It does not

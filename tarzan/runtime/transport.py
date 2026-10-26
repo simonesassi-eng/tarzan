@@ -460,7 +460,20 @@ class ProviderBudget:
                                 # from multiplying already-budgeted native attempts.
                                 raise ProviderRequestFailure("yahoo native request unavailable") from None
 
-                self._yahoo_client = BudgetedSession(impersonate="chrome")
+                client = BudgetedSession(impersonate="chrome")
+                from curl_cffi.requests import Response
+                from curl_cffi.requests.session import Session as NativeSession
+
+                if (
+                    isinstance(client, NativeSession)
+                    and getattr(client, "response_class", None) is Response
+                ):
+                    from tarzan.runtime.yahoo_response import YahooChartResponse
+
+                    # Native supported response factory, not an SDK/global
+                    # parser patch. Injected client ports keep their contract.
+                    client.response_class = YahooChartResponse
+                self._yahoo_client = client
             return self._yahoo_client
 
     def close(self):
