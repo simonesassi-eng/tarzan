@@ -283,6 +283,9 @@ class ProviderBudget:
     def _failure(self, provider, code):
         if type(provider) is not str or provider not in _PROVIDERS:
             raise ValueError("unknown provider transport")
+        from tarzan.runtime.quote_recovery import defer_retry_failure
+        if defer_retry_failure(self, provider, code):
+            return
         with self._lock:
             key = (provider, code)
             if key in self._reported:
@@ -446,7 +449,10 @@ class ProviderBudget:
                     def request(self, method, url, **kwargs):
                         requested = kwargs.pop("timeout", None)
                         native_request = super().request
-                        with _yahoo_request_observation(owner, url):
+                        from tarzan.runtime.quote_recovery import request_scope
+                        with _yahoo_request_observation(owner, url), request_scope(
+                            owner, method, url, kwargs.get("params"),
+                        ):
                             try:
                                 return owner.call(
                                     "yahoo",

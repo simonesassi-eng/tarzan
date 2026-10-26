@@ -214,14 +214,11 @@ def info_for_enrichment(symbol):
     return quote._info
 
 
-def _owns_timezone_only_history(client) -> bool:
-    """Inspect the native history path before declining unused PEG demand."""
+def _native_history_contract() -> bool:
+    """Reject unknown history methods or factories without creating a client."""
     if (
-        not _native_owned_core(client)
-        or type(_NATIVE_HISTORY_PORTS) is not tuple
+        type(_NATIVE_HISTORY_PORTS) is not tuple
         or len(_NATIVE_HISTORY_PORTS) != 6
-        or vars(client).get("_price_history") is not None
-        or vars(client._quote).get("_already_fetched_complementary") is not False
     ):
         return False
     try:
@@ -234,6 +231,16 @@ def _owns_timezone_only_history(client) -> bool:
         return _SDK_BASE._lazy_load_price_history.__globals__.get("PriceHistory") is _SDK_HISTORY
     except (AttributeError, OSError, TypeError, ValueError):
         return False
+
+
+def _owns_timezone_only_history(client) -> bool:
+    """Inspect the native history path before declining unused PEG demand."""
+    return (
+        _native_owned_core(client)
+        and vars(client).get("_price_history") is None
+        and vars(client._quote).get("_already_fetched_complementary") is False
+        and _native_history_contract()
+    )
 
 
 def history_for_enrichment(symbol, **arguments):

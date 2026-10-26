@@ -1397,6 +1397,7 @@ def _collect_candidate_metas(clean_isin: str, hint_ticker: str) -> list[_Candida
     """
     metas: list[_Candidate] = []
     symbols = _resolution_candidate_symbols(clean_isin, hint_ticker)[:_MAX_RESOLVE_FETCHES]
+    _prepare_native_candidate_infos(symbols)
     for sym in symbols:
         meta = _fetch_candidate_meta(sym)
         if meta is not None:
@@ -1534,6 +1535,10 @@ def _fetch_ticker_info(symbol: str) -> dict:
         return info_for_enrichment(symbol)
 
     def _load():
+        from tarzan.data.yahoo_info_groups import demanded_info
+        handled, observed = demanded_info(symbol)
+        if handled:
+            return observed if isinstance(observed, dict) else {}
         observed = _retry(_call, what=f"info {symbol}")
         # A failed or malformed metadata response cannot abort other venues.
         # Absence is shared only inside this owned run, never persisted as a
@@ -1542,6 +1547,65 @@ def _fetch_ticker_info(symbol: str) -> dict:
 
     return memoized(
         "enricher.info", symbol, _load,
+        legacy=_ticker_info_memo,
+    )
+
+
+_NATIVE_CANDIDATE_INFO_PORTS = (
+    _collect_candidate_metas, _resolution_candidate_symbols,
+    _fetch_candidate_meta, _fetch_ticker_info, _space_yf_call, _retry,
+)
+
+
+def _prepare_native_candidate_infos(symbols):
+    """Batch the exact metadata plan the unchanged ranking walk already needs.
+
+    Unknown ports, singleton plans, ISIN constructors and unowned work retain
+    the original per-candidate order. No history is acquired ahead of ranking.
+    The native gate deliberately declines the frozen tape's injected GET.
+    """
+    if len(symbols) < 2 or type(_NATIVE_CANDIDATE_INFO_PORTS) is not tuple:
+        return
+    active = (
+        _collect_candidate_metas, _resolution_candidate_symbols,
+        _fetch_candidate_meta, _fetch_ticker_info, _space_yf_call, _retry,
+    )
+    if (
+        len(_NATIVE_CANDIDATE_INFO_PORTS) != len(active)
+        or any(current is not native
+               for current, native in zip(active, _NATIVE_CANDIDATE_INFO_PORTS))
+    ):
+        return
+    from tarzan.data.yahoo_info_groups import _eligible_groups, demanded_many
+    from tarzan.data.yahoo_quote_batch import _native_data, _ordinary, _owned_response_port
+
+    handled, _groups = _eligible_groups()
+    if not handled or not all(_ordinary(symbol) for symbol in symbols):
+        return
+    data = _yf_net.yahoo_data()
+    if not _native_data(data) or not _owned_response_port(data):
+        return
+
+    def load(missing):
+        handled, observed = demanded_many(missing)
+        if handled:
+            return observed
+        # A contract may change after admission; no missing key is abandoned.
+        # Do not re-enter the same memo reservation through _fetch_ticker_info.
+        from tarzan.data.yahoo_info import info_for_enrichment
+
+        def individual(symbol):
+            def request():
+                _space_yf_call()
+                return info_for_enrichment(symbol)
+
+            observed = _retry(request, what=f"info {symbol}")
+            return observed if isinstance(observed, dict) else {}
+
+        return {symbol: individual(symbol) for symbol in missing}
+
+    memoized_many(
+        "enricher.info", symbols, load,
         legacy=_ticker_info_memo,
     )
 
@@ -1625,6 +1689,13 @@ def _download_price_history(
     def _call():
         from tarzan.data.yahoo_info import history_for_enrichment
 
+        from tarzan.data.yahoo_history_groups import demanded_history
+        handled, observed = demanded_history(
+            symbol, arguments,
+            lambda: history_for_enrichment(symbol, **arguments), _space_yf_call,
+        )
+        if handled:
+            return observed
         _space_yf_call()
         return history_for_enrichment(symbol, **arguments)
 
@@ -4428,7 +4499,10 @@ def enrich_holdings(holdings: list[Holding]) -> list[Holding]:
     slots: list[Optional[Holding]] = [None] * len(holdings)
     diagnostics: list[list] = [[] for _ in holdings]
     try:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        from tarzan.data.yahoo_history_groups import history_group_scope
+        from tarzan.data.yahoo_info_groups import metadata_group_scope
+        with metadata_group_scope(), history_group_scope(), \
+                ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Context variables do not propagate to executor threads implicitly.
             # Give each task its own copied context so run mode, effective date,
             # active ledger, and transport policy remain authoritative in workers.
