@@ -28,6 +28,7 @@ import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime as dt, timezone
 from functools import partial
@@ -422,7 +423,12 @@ def convert_to_eur(prices: pd.Series, currency: str) -> pd.Series:
     prices, currency = _normalize_minor_currency(prices, currency)
     if currency == "EUR":
         return prices
-    fx = _usable_fx_series(_get_fx_series(currency))
+    return _convert_with_fx(prices, _get_fx_series(currency))
+
+
+def _convert_with_fx(prices: pd.Series, fx: pd.Series) -> pd.Series:
+    """Align an already acquired FX fact with the unchanged causal policy."""
+    fx = _usable_fx_series(fx)
     fx = _clip_to_as_of(fx)
     if fx.empty:
         return pd.Series(dtype=float)
@@ -2128,13 +2134,8 @@ _NATIVE_BENCHMARK_DATA_PORTS = (
 )
 
 
-def _owns_native_benchmark_data_path(ticker: str) -> bool:
-    """Certify the unchanged run-owned benchmark acquisition entry path.
-
-    This is a consumer-specific capability boundary, not a different resolver.
-    Unowned/pinned callers and injected entry ports keep the existing complete
-    ticker-data contract, including all resolution/cache side effects.
-    """
+def _owns_benchmark_data_ports(ticker: str) -> bool:
+    """Inspect benchmark entry ports without constructing or searching an SDK client."""
     if (
         type(ticker) is not str
         or not ticker
@@ -2150,12 +2151,24 @@ def _owns_native_benchmark_data_path(ticker: str) -> bool:
         _resolve_bare_ticker,
     )
     try:
-        if not all(
+        return all(
             current is original
             and Path(original.__code__.co_filename).resolve() == Path(__file__).resolve()
             for current, original in zip(active, _NATIVE_BENCHMARK_DATA_PORTS)
-        ):
-            return False
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+
+def _owns_native_benchmark_data_path(ticker: str) -> bool:
+    """Certify the unchanged run-owned benchmark acquisition entry path.
+
+    Unowned/pinned callers and injected entry ports keep the complete
+    ticker-data contract, including all resolution/cache side effects.
+    """
+    if not _owns_benchmark_data_ports(ticker):
+        return False
+    try:
         from tarzan.data.yahoo_info import _native_owned_core
 
         return _native_owned_core(_yf_net.ticker(ticker))
@@ -2196,6 +2209,97 @@ def _fetch_benchmark_data(ticker: str, *, expected_name: str = "") -> dict:
             ticker, expected_name=expected_name, _benchmark_history_only=True,
         )
     return _fetch_ticker_data(ticker, expected_name=expected_name)
+
+
+def _completed_benchmark_inputs(ticker: str, *, expected_name: str = ""):
+    """Snapshot completed native facts; never construct, acquire or join work.
+
+    Used only after optional acquisition has been refused. A current bare
+    resolution or completed constructor identity may select a listing, but
+    this path cannot discover a different one. Ambiguous currencies require
+    the already completed metadata, and non-EUR prices require their completed
+    major-currency FX tape. All copies share one run-owned snapshot boundary.
+    """
+    from tarzan.data.yahoo_info import (
+        _native_owned_contract, completed_constructor_source,
+        is_native_isin_request, source_symbol_for_info,
+    )
+    from tarzan.runtime.session import current_session
+
+    if (
+        not _owns_benchmark_data_ports(ticker) or not _native_owned_contract()
+        or type(_NATIVE_COMPLETED_BENCHMARK_PORTS) is not tuple
+        or len(_NATIVE_COMPLETED_BENCHMARK_PORTS) != 6
+    ):
+        return None
+    active = (
+        _fetch_benchmark_data, _owns_benchmark_data_ports, convert_to_eur,
+        _convert_with_fx, _normalize_minor_currency, _get_fx_series,
+    )
+    try:
+        if not all(
+            current is original
+            and Path(original.__code__.co_filename).resolve() == Path(__file__).resolve()
+            for current, original in zip(active, _NATIVE_COMPLETED_BENCHMARK_PORTS)
+        ):
+            return None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+    selected = ticker
+    if _is_expandable_bare_ticker(ticker) and expected_name:
+        selected = _load_bare_resolution(ticker, include_expired=False)
+        if not selected:
+            return None
+
+    owner = current_session().providers
+    with owner.lock:
+        infos = owner.stores.get("enricher.info", {})
+        info = infos.get(selected)
+        metadata_free = "." in selected and bool(venue_currency(selected))
+        if not metadata_free and not isinstance(info, dict):
+            return None
+        info = info if isinstance(info, dict) else {}
+        requested_source = selected
+        selected = source_symbol_for_info(selected, info)
+        if selected == requested_source and is_native_isin_request(requested_source):
+            selected = completed_constructor_source(requested_source)
+            if selected == requested_source:
+                return None
+        histories = owner.stores.get("enricher.history", {})
+        history = histories.get(selected)
+        if history is None:
+            # A completed raw-ISIN request can own the same exact listing tape.
+            history = histories.get(requested_source)
+        if (
+            not isinstance(history, pd.DataFrame)
+            or history.attrs.get(_HISTORY_SYMBOL_ATTR) != selected
+            or not _history_has_market_evidence(history)
+            or not _clip_to_as_of(history, selected).index.equals(history.index)
+        ):
+            return None
+        if expected_name and _is_expandable_bare_ticker(ticker):
+            if not _history_visible_at_boundary(history):
+                return None
+
+        currency = venue_currency(selected) or info.get("currency")
+        fx = None
+        if currency and currency != "EUR":
+            if type(currency) is not str:
+                return None
+            major = _MINOR_TO_MAJOR_CURRENCY.get(currency, currency)
+            fx = owner.stores.get("enricher.fx", {}).get(major)
+            if not isinstance(fx, pd.Series) or fx.empty:
+                return None
+        return deepcopy({
+            "info": info, "history": history, _TICKER_SYMBOL_KEY: selected,
+        }), deepcopy(fx)
+
+
+_NATIVE_COMPLETED_BENCHMARK_PORTS = (
+    _fetch_benchmark_data, _owns_benchmark_data_ports, convert_to_eur,
+    _convert_with_fx, _normalize_minor_currency, _get_fx_series,
+)
 
 
 # ---------------------------------------------------------------------------

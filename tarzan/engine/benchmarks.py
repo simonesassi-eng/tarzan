@@ -17,6 +17,7 @@ from contextvars import copy_context
 from dataclasses import dataclass
 import logging
 import operator
+from pathlib import Path
 from threading import RLock
 from typing import Optional
 
@@ -192,6 +193,15 @@ def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
 
     expected_name = cfg.name_for(None, ticker) or ""
     data = _enr._fetch_benchmark_data(ticker, expected_name=expected_name)
+    return _benchmark_series_from_data(ticker, data)
+
+
+def _benchmark_series_from_data(
+    ticker: str, data: dict, *, convert_currency: Callable | None = None,
+) -> pd.Series:
+    """One financial construction for acquired and completed-only inputs."""
+    from tarzan.data import enricher as _enr
+
     selected_ticker = str(
         data.get(_enr._TICKER_SYMBOL_KEY) or ticker
     ).strip()
@@ -212,7 +222,9 @@ def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
         currency = _enr.venue_currency(selected_ticker) or data.get("info", {}).get("currency")
         native = _drop_weekends(prices)
         series = (
-            _drop_weekends(_enr.convert_to_eur(prices, currency))
+            _drop_weekends(
+                (convert_currency or _enr.convert_to_eur)(prices, currency)
+            )
             if currency and currency != "EUR"
             else native
         )
@@ -241,6 +253,57 @@ def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
             "and carry no currency mark", selected_ticker)
 
     return series
+
+
+_NATIVE_BENCHMARK_HISTORY_PORTS = (
+    _fetch_benchmark_history, _fetch_benchmark_uncached,
+    _benchmark_series_from_data, _drop_weekends,
+)
+
+
+def _completed_benchmark_history(ticker: str) -> pd.Series | None:
+    """Consume only completed facts, without reopening provider authority."""
+    from copy import deepcopy
+    from tarzan.data import enricher as _enr
+    from tarzan.runtime.session import current_session
+
+    session = current_session()
+    if (
+        session is None
+        or type(_NATIVE_BENCHMARK_HISTORY_PORTS) is not tuple
+        or len(_NATIVE_BENCHMARK_HISTORY_PORTS) != 4
+    ):
+        return None
+    active = (
+        _fetch_benchmark_history, _fetch_benchmark_uncached,
+        _benchmark_series_from_data, _drop_weekends,
+    )
+    try:
+        if not all(
+            current is original
+            and Path(original.__code__.co_filename).resolve() == Path(__file__).resolve()
+            for current, original in zip(active, _NATIVE_BENCHMARK_HISTORY_PORTS)
+        ):
+            return None
+        with session.providers.lock:
+            history = session.providers.stores.get("enricher.benchmark", {}).get(ticker)
+            if isinstance(history, pd.Series) and len(history.dropna()) >= 2:
+                return deepcopy(history)
+        completed = _enr._completed_benchmark_inputs(
+            ticker, expected_name=cfg.name_for(None, ticker) or "",
+        )
+        if completed is None:
+            return None
+        data, fx = completed
+
+        def convert(prices, currency):
+            prices, _major = _enr._normalize_minor_currency(prices, currency)
+            return _enr._convert_with_fx(prices, fx)
+
+        history = _benchmark_series_from_data(ticker, data, convert_currency=convert)
+        return history if len(history.dropna()) >= 2 else None
+    except Exception:  # noqa: BLE001 -- no speculative fallback acquisition
+        return None
 
 
 def preprocess_benchmarks(
@@ -273,9 +336,11 @@ def preprocess_benchmarks(
 
     budget = current_budget()
 
-    def resolve(name, input_ticker):
+    def resolve(name, input_ticker, completed_history=None):
         try:
-            history = fetch(input_ticker)
+            history = (
+                fetch(input_ticker) if completed_history is None else completed_history
+            )
         except Exception as error:  # noqa: BLE001
             return None, f"{name}: resolution failed ({type(error).__name__})"
         if history is None or history.empty or len(history) < 2:
@@ -324,6 +389,10 @@ def preprocess_benchmarks(
 
     def optional(name, input_ticker):
         if budget is not None and not budget.optional_request_allowed("yahoo"):
+            if fetch_history is None:
+                completed = _completed_benchmark_history(input_ticker)
+                if completed is not None:
+                    return resolve(name, input_ticker, completed)
             return None, f"{name}: optional provider budget exhausted"
         return resolve(name, input_ticker)
 
