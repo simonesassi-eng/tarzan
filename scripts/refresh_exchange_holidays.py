@@ -42,6 +42,7 @@ MICS = [
     "XLON",                                   # London (.L)
     "XNYS",                                   # US cash (indices, bare tickers)
     "XTKS", "XHKG", "XSHG", "XASX", "XKRX",   # Tokyo, Hong Kong, Shanghai, Sydney, Seoul
+    "XBOM",                                   # Mumbai (Nifty 50; NSE shares BSE's holidays)
 ]
 START, END = "2019-01-01", "2031-12-31"
 OUT = "tarzan/data/exchange_holidays.csv.gz"

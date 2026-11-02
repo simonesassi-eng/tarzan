@@ -28,6 +28,7 @@ from tarzan.export._perf_series import (
 from tarzan.export import _heat
 from tarzan.export.newsletter._constants import (
     ASSET_COLORS,
+    MARKET_FLAGS,
     MARKET_REGION_COLORS,
     PALETTE,
     TYPE,
@@ -178,12 +179,16 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         name = d["name"]
         # Tag futures so a full-width sparkline reads as a continuously traded
         # contract (change vs previous settlement), not a finished session.
-        # Idempotent: a name that already carries the tag (set directly in
-        # MARKETS, so it is unique from its cash-index counterpart) is left
-        # alone rather than doubled.
-        if (str(d.get("symbol", "")).upper().endswith("=F")
+        # Under the strip's own "Futures" heading the heading says it, so the
+        # "(FUT)" MARKETS carries (to stay unique from the cash index) is
+        # dropped there; elsewhere (commodities) it is added, never doubled.
+        if d.get("category") == "Futures":
+            name = name.removesuffix(" (FUT)")
+        elif (str(d.get("symbol", "")).upper().endswith("=F")
                 and not name.endswith("(FUT)")):
             name = f"{name} (FUT)"
+        flag = MARKET_FLAGS.get(d.get("symbol", ""))
+        label = f"{flag} {_esc(name)}" if flag else _esc(name)
         level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
                  else f'{d["value"]:,.2f}')
         td = (f'padding:4px 5px;border-bottom:1px solid {P["row_rule"]};'
@@ -191,7 +196,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         return (
             f'<tr>'
             f'<td style="{td}{TYPE["data"]}color:{P["ink"]};'
-            f'white-space:nowrap;">{_esc(name)}{_hours_line(d)}</td>'
+            f'white-space:nowrap;">{label}{_hours_line(d)}</td>'
             f'<td align="right" style="{td}">{_spark_for(d)}</td>'
             f'<td align="right" style="{td}{TYPE["data"]}color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'

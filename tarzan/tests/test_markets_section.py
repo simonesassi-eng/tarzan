@@ -297,3 +297,37 @@ class TestEveryMarkupBoundaryEscapes:
         for tile in hero["tiles"]:
             for field in ("label", "value", "caption"):
                 assert self._clean(str(tile[field])), tile
+
+
+def test_regions_run_in_opening_order_with_futures_on_their_own():
+    """Asia, Europe, US by cash open, then the round-the-clock groups; every
+    index future sits under Futures, and every row a country owns has a flag."""
+    assert mq.CATEGORY_ORDER[:4] == ["Asia", "Europe", "US", "Futures"]
+    cats = [c for _, _, c in mq.MARKETS]
+    assert cats == sorted(cats, key=mq.CATEGORY_ORDER.index)
+    index_futures = {"ES=F", "NQ=F", "YM=F", "RTY=F", "NKD=F"}
+    assert {s for _, s, c in mq.MARKETS if c == "Futures"} == index_futures
+    from tarzan.export.newsletter._constants import MARKET_FLAGS
+    assert [s for _, s, c in mq.MARKETS
+            if c not in ("Commodities",) and s != "BTC-USD"
+            and s not in MARKET_FLAGS] == []
+    # Every new venue has a session, so its hours line and Op./Cl. badge show.
+    for sym in ("^NSEI", "^STOXX", "FTSEMIB.MI"):
+        assert mq.session_caption(sym), sym
+
+
+def test_futures_heading_replaces_the_fut_tag_and_rows_carry_flags():
+    rows = [
+        {"name": "S&P 500 (FUT)", "symbol": "ES=F", "category": "Futures",
+         "value": 5010.0, "change": 12.0, "pct": 0.24,
+         "spark": [4998.0, 5010.0], "baseline": 4998.0},
+        {"name": "FTSE MIB", "symbol": "FTSEMIB.MI", "category": "Europe",
+         "value": 50000.0, "change": 50.0, "pct": 0.1,
+         "spark": [49950.0, 50000.0], "baseline": 49950.0},
+    ]
+    with mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
+        html = _build_markets(_ctx(rows))["html"]
+    assert "(FUT)" not in html
+    assert "\U0001F1FA\U0001F1F8 S&amp;P 500<" in html
+    assert "\U0001F1EE\U0001F1F9 FTSE MIB<" in html
+    assert html.index("Europe") < html.index("Futures")

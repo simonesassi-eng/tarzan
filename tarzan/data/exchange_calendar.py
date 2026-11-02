@@ -70,7 +70,7 @@ _SUFFIX_MIC: dict[str, str] = {
 _GROUP_MIC: dict[str, str] = {
     "EU": "XMIL", "L": "XLON", "US": "XNYS", "JP": "XTKS", "HK": "XHKG",
     "CN": "XSHG", "AU": "XASX", "KR": "XKRX", "DE_REG": "XETR",
-    "HE": "XHEL", "IR": "XDUB",
+    "HE": "XHEL", "IR": "XDUB", "IN": "XBOM",
 }
 
 # Indices whose own venue is NOT the one their exchange group resolves to.
@@ -82,6 +82,7 @@ _GROUP_MIC: dict[str, str] = {
 # state a German index open on a German holiday and shut on an Italian one.
 _INDEX_MIC: dict[str, str] = {
     "^GDAXI": "XETR", "^FCHI": "XPAR", "^N100": "XPAR", "^STOXX50E": "XETR",
+    "^STOXX": "XETR",
 }
 
 

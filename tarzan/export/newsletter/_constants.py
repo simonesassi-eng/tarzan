@@ -54,10 +54,31 @@ MARKET_REGION_COLORS = {
     "US": "#2563EB",           # blue
     "Europe": "#D97706",       # amber
     "Asia": "#DB2777",         # pink
+    "Futures": "#0891B2",      # cyan
     "Crypto": "#7C3AED",       # purple
     "Commodities": "#15803D",  # green
     "Currencies": "#64748B",   # slate
     "Indices": "#64748B",      # slate (offline fallback bucket)
+}
+
+# Country flag per markets-strip symbol (emoji: Gmail/Apple Mail draw them,
+# desktop Outlook on Windows falls back to the two letters). The EU flag marks
+# pan-European indices, a pair carries both currencies' flags, and
+# commodities carry none: they belong to no country.
+_US, _EU, _JP = "\U0001F1FA\U0001F1F8", "\U0001F1EA\U0001F1FA", "\U0001F1EF\U0001F1F5"
+_GB, _DE = "\U0001F1EC\U0001F1E7", "\U0001F1E9\U0001F1EA"
+MARKET_FLAGS = {
+    "^AXJO": "\U0001F1E6\U0001F1FA", "^N225": _JP, "^KS11": "\U0001F1F0\U0001F1F7",
+    "^HSI": "\U0001F1ED\U0001F1F0", "000001.SS": "\U0001F1E8\U0001F1F3",
+    "^NSEI": "\U0001F1EE\U0001F1F3",
+    "^STOXX50E": _EU, "^STOXX": _EU, "^N100": _EU,
+    "FTSEMIB.MI": "\U0001F1EE\U0001F1F9", "^GDAXI": _DE,
+    "^FCHI": "\U0001F1EB\U0001F1F7", "^FTSE": _GB, "EXHD.DE": _DE,
+    **{s: _US for s in ("^GSPC", "^DJI", "^IXIC", "^NDX", "^RUT", "^VIX",
+                        "^IRX", "^FVX", "^TNX", "^TYX",
+                        "ES=F", "NQ=F", "YM=F", "RTY=F")},
+    "NKD=F": _JP,
+    "EURUSD=X": _EU + _US, "JPY=X": _US + _JP, "GBP=X": _US + _GB,
 }
 
 _NEWSLETTER_CLASS_ORDER = list(_ORDER_NEWSLETTER)

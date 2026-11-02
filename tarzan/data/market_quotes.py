@@ -54,6 +54,7 @@ _SESSIONS: dict[str, tuple[str, tuple[int, int], tuple[int, int]]] = {
     "CN": ("Asia/Shanghai", (9, 30), (15, 0)),    # Shanghai
     "AU": ("Australia/Sydney", (10, 0), (16, 0)),  # Sydney
     "KR": ("Asia/Seoul", (9, 0), (15, 30)),       # Seoul
+    "IN": ("Asia/Kolkata", (9, 15), (15, 30)),    # NSE/BSE Mumbai
     # German regional/retail venues (Munich, Stuttgart, Berlin, Düsseldorf,
     # Hamburg, Hanover, Tradegate), which really do quote 08:00–22:00 — an ETF
     # whose only Yahoo listing is one of these prints hours before and after
@@ -76,7 +77,9 @@ _INDEX_EXCHANGE: dict[str, str] = {
     "^IRX": "US", "^FVX": "US", "^TNX": "US", "^TYX": "US",
     "^FTSE": "L",
     "^FCHI": "EU", "^GDAXI": "EU", "^STOXX50E": "EU", "^N100": "EU",
+    "^STOXX": "EU",
     "^N225": "JP", "^HSI": "HK", "^AXJO": "AU", "^KS11": "KR",
+    "^NSEI": "IN",
 }
 
 # Yahoo listing suffix → exchange group. This must cover EVERY venue the ISIN
@@ -481,9 +484,29 @@ def market_session_age_seconds(
         day += timedelta(days=1)
     return max(0.0, age)
 
-# (display name, yfinance symbol, category), in display order. The strip
-# shows at most 2 rows per category (the newsletter caps it).
+# (display name, yfinance symbol, category), in display order.
 MARKETS: list[tuple[str, str, str]] = [
+    # Regions run in the order their cash sessions open (Asia, Europe, US),
+    # then the instruments that trade around the clock. Within Asia the rows
+    # follow the same rule: Sydney, Tokyo, Seoul, Hong Kong, Shanghai, Mumbai.
+    ("ASX 200", "^AXJO", "Asia"),
+    ("Nikkei 225", "^N225", "Asia"),
+    ("KOSPI", "^KS11", "Asia"),
+    ("Hang Seng", "^HSI", "Asia"),
+    ("SSE Composite", "000001.SS", "Asia"),
+    ("Nifty 50", "^NSEI", "Asia"),
+    # Europe — equity indices + a German 10Y reference. Yahoo exposes no
+    # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
+    # government-bond ETF proxy: iShares eb.rexx Government Germany 5.5-10.5yr
+    # (EXHD.DE), a EUR PRICE centered on the ~10Y segment (moves inverse to
+    # yield), not a yield.
+    ("Euro Stoxx 50", "^STOXX50E", "Europe"),
+    ("Stoxx 600", "^STOXX", "Europe"),
+    ("FTSE MIB", "FTSEMIB.MI", "Europe"),
+    ("DAX", "^GDAXI", "Europe"),
+    ("CAC 40", "^FCHI", "Europe"),
+    ("FTSE 100", "^FTSE", "Europe"),
+    ("Bund 10Y", "EXHD.DE", "Europe"),
     # US — equity indices + US Treasury yields (^IRX/^FVX/^TNX/^TYX), grouped
     # together since they are all US-market references.
     ("S&P 500", "^GSPC", "US"),
@@ -496,38 +519,19 @@ MARKETS: list[tuple[str, str, str]] = [
     ("US 5-Yr", "^FVX", "US"),
     ("US 10-Yr", "^TNX", "US"),
     ("US 30-Yr", "^TYX", "US"),
-    # US index futures (CME/CBOT E-mini contracts), right after their cash
-    # index. Their own name already carries "(FUT)" -- not left to the
-    # render-time auto-suffix in _row() -- because otherwise this name would
-    # collide with the cash index's ("S&P 500" listed twice), which breaks
-    # any lookup keyed by name (fetch_market_quotes results included). Trade
-    # nearly around the clock but not literally 24/7 (see
-    # futures_open_now()/market_status() for the real Globex weekly + daily
-    # schedule) rather than the cash session above them.
-    # NQ=F tracks the Nasdaq-100 specifically, which now sits above as its
-    # own cash entry (distinct from the Composite, ^IXIC) -- named
-    # "Nasdaq 100 (FUT)" to pair with it directly.
-    ("S&P 500 (FUT)", "ES=F", "US"),     # E-mini S&P
-    ("Dow 30 (FUT)", "YM=F", "US"),      # E-mini Dow
-    ("Nasdaq 100 (FUT)", "NQ=F", "US"),  # E-mini Nasdaq
-    ("Russell 2000 (FUT)", "RTY=F", "US"),  # E-mini Russell
-    # Europe — equity indices + a German 10Y reference. Yahoo exposes no
-    # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
-    # government-bond ETF proxy: iShares eb.rexx Government Germany 5.5-10.5yr
-    # (EXHD.DE), a EUR PRICE centered on the ~10Y segment (moves inverse to
-    # yield), not a yield.
-    ("FTSE 100", "^FTSE", "Europe"),
-    ("CAC 40", "^FCHI", "Europe"),
-    ("DAX", "^GDAXI", "Europe"),
-    ("Euronext 100", "^N100", "Europe"),
-    ("Euro Stoxx 50", "^STOXX50E", "Europe"),
-    ("Bund 10Y", "EXHD.DE", "Europe"),
-    # Asia
-    ("SSE Composite", "000001.SS", "Asia"),
-    ("Nikkei 225", "^N225", "Asia"),
-    ("Hang Seng", "^HSI", "Asia"),
-    ("ASX 200", "^AXJO", "Asia"),
-    ("KOSPI", "^KS11", "Asia"),
+    # Equity index futures, the set the mainstream sites show (Yahoo, CNBC:
+    # the US E-minis) plus the Nikkei, the one non-US index future Yahoo
+    # serves (CME, USD-quoted). Eurex/ICE/HKEX contracts (Euro Stoxx 50, DAX,
+    # FTSE, Hang Seng) are not on Yahoo at all. The names carry "(FUT)"
+    # because they must stay unique from their cash index -- lookups key on
+    # the name (fetch_market_quotes results included); the strip drops the tag
+    # under its own "Futures" heading. Near-24h Globex schedule: see
+    # futures_open_now()/market_status().
+    ("Nikkei 225 (FUT)", "NKD=F", "Futures"),
+    ("S&P 500 (FUT)", "ES=F", "Futures"),     # E-mini S&P
+    ("Nasdaq 100 (FUT)", "NQ=F", "Futures"),  # E-mini Nasdaq
+    ("Dow 30 (FUT)", "YM=F", "Futures"),      # E-mini Dow
+    ("Russell 2000 (FUT)", "RTY=F", "Futures"),  # E-mini Russell
     # Commodities. Two global crude benchmarks are shown side by side: WTI
     # (CL=F, NYMEX/CME — the US reference) and Brent (BZ=F, ICE Futures Europe
     # — the international reference used for most of the world incl. Europe).
@@ -546,7 +550,7 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Bitcoin", "BTC-USD", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["US", "Europe", "Asia", "Commodities", "Currencies"]
+CATEGORY_ORDER = ["Asia", "Europe", "US", "Futures", "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None
 _memo_at: float = 0.0  # monotonic timestamp the memo was filled
