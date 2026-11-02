@@ -495,39 +495,28 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Hang Seng", "^HSI", "Asia"),
     ("SSE Composite", "000001.SS", "Asia"),
     ("Nifty 50", "^NSEI", "Asia"),
-    # Europe — equity indices + a German 10Y reference. Yahoo exposes no
-    # German 10Y yield ticker (à la ^TNX), so "Bund 10Y" is a German
-    # government-bond ETF proxy: iShares eb.rexx Government Germany 5.5-10.5yr
-    # (EXHD.DE), a EUR PRICE centered on the ~10Y segment (moves inverse to
-    # yield), not a yield.
+    # Europe
     ("Euro Stoxx 50", "^STOXX50E", "Europe"),
     ("Stoxx 600", "^STOXX", "Europe"),
     ("FTSE MIB", "FTSEMIB.MI", "Europe"),
     ("DAX", "^GDAXI", "Europe"),
     ("CAC 40", "^FCHI", "Europe"),
     ("FTSE 100", "^FTSE", "Europe"),
-    ("Bund 10Y", "EXHD.DE", "Europe"),
-    # US — equity indices + US Treasury yields (^IRX/^FVX/^TNX/^TYX), grouped
-    # together since they are all US-market references.
+    # US. Treasury yields live with the other government bonds, in the Bonds
+    # section market_feeds.py builds.
     ("S&P 500", "^GSPC", "US"),
     ("Dow 30", "^DJI", "US"),
     ("Nasdaq Composite", "^IXIC", "US"),
     ("Nasdaq 100", "^NDX", "US"),
     ("Russell 2000", "^RUT", "US"),
     ("VIX", "^VIX", "US"),
-    ("US 13-Wk", "^IRX", "US"),
-    ("US 5-Yr", "^FVX", "US"),
-    ("US 10-Yr", "^TNX", "US"),
-    ("US 30-Yr", "^TYX", "US"),
-    # Equity index futures, the set the mainstream sites show (Yahoo, CNBC:
-    # the US E-minis) plus the Nikkei, the one non-US index future Yahoo
-    # serves (CME, USD-quoted). Eurex/ICE/HKEX contracts (Euro Stoxx 50, DAX,
-    # FTSE, Hang Seng) are not on Yahoo at all. The names carry "(FUT)"
-    # because they must stay unique from their cash index -- lookups key on
-    # the name (fetch_market_quotes results included); the strip drops the tag
-    # under its own "Futures" heading. Near-24h Globex schedule: see
-    # futures_open_now()/market_status().
-    ("Nikkei 225 (FUT)", "NKD=F", "Futures"),
+    # US equity index futures (CME E-minis). The non-US ones (Osaka, SGX, ASX,
+    # Eurex, Euronext, ICE) are not on Yahoo and come from market_feeds.py,
+    # listed ahead of these so the section runs Asia, Europe, US. The names
+    # carry "(FUT)" because they must stay unique from their cash index --
+    # lookups key on the name (fetch_market_quotes results included); the
+    # strip drops the tag under its own "Futures" heading. Near-24h Globex
+    # schedule: see futures_open_now()/market_status().
     ("S&P 500 (FUT)", "ES=F", "Futures"),     # E-mini S&P
     ("Nasdaq 100 (FUT)", "NQ=F", "Futures"),  # E-mini Nasdaq
     ("Dow 30 (FUT)", "YM=F", "Futures"),      # E-mini Dow
@@ -550,7 +539,7 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Bitcoin", "BTC-USD", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["Asia", "Europe", "US", "Futures", "Commodities", "Currencies"]
+CATEGORY_ORDER = ["Asia", "Europe", "US", "Futures", "Bonds", "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None
 _memo_at: float = 0.0  # monotonic timestamp the memo was filled
@@ -1933,4 +1922,8 @@ def _fetch_market_quotes_uncached():
             logger.debug("market quote %s failed: %s", symbol, e)
             continue
 
-    return out
+    # Futures and yields Yahoo does not carry, voted across three public feeds.
+    # Ahead of the Yahoo rows: within a category the strip keeps this order,
+    # and the feed futures are the Asian and European ones.
+    from tarzan.data.market_feeds import fetch_feed_quotes
+    return fetch_feed_quotes(now) + out

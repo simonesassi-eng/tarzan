@@ -15,7 +15,8 @@ from tarzan.runtime.ledger import (
 from tarzan.runtime.transport import ProviderBudget, ProviderTransportSettings
 
 
-PROVIDERS = ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini")
+PROVIDERS = ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+             "tradingview", "cnbc", "marketwatch")
 
 
 class Cancelled(BaseException):
@@ -171,7 +172,7 @@ def test_one_hundred_failures_per_provider_have_no_cross_scope_counter_effect():
         futures = [pool.submit(batch, provider) for provider in reversed(PROVIDERS)]
         results = dict(item.result(timeout=3.0) for item in futures)
     all_ids = [value for values in results.values() for value in values]
-    assert len(all_ids) == len(set(all_ids)) == 600
+    assert len(all_ids) == len(set(all_ids)) == 100 * len(PROVIDERS)
     for provider, values in results.items():
         assert set(values) == {
             scoped_id("synthetic", "SYNTHETIC_FAULT", f"provider:{provider}", ordinal)

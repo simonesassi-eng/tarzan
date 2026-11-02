@@ -19,7 +19,8 @@ LEDGER_SCHEMA_VERSION = "1.0"
 # and arbitrary caller labels must never become failure identity/telemetry.
 _FAILURE_IDENTITY_SCOPES = frozenset(
     f"provider:{provider}"
-    for provider in ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini")
+    for provider in ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+                     "tradingview", "cnbc", "marketwatch")
 )
 
 

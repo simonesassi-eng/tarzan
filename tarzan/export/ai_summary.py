@@ -711,6 +711,13 @@ def build_digest(metrics, config) -> dict:
         mk = getattr(m, "market_quotes", None) or ()
         if mk:
             digest["markets_today"] = [
+                # Yields and spreads move in basis points, not percent.
+                {"name": d["name"], "level": _num(d["value"], 3),
+                 "unit": "yield %", "change_bp": _num(d["bp"], 1)}
+                if d.get("unit") == "yield" else
+                {"name": d["name"], "level": _num(d["value"], 1),
+                 "unit": "bp", "change_bp": _num(d["bp"], 1)}
+                if d.get("unit") == "spread" else
                 {"name": d["name"], "level": _num(d["value"], 2),
                  "change_pct": _num(d["pct"], 2)}
                 for d in mk

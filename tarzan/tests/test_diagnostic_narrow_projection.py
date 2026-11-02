@@ -16,6 +16,7 @@ import pytest
 from tarzan.contracts.reference import ReportReference, reference_for
 from tarzan.contracts import report as report_contract
 from tarzan.contracts.report import ReportView
+from tarzan.data.market_feeds import FEED_KEYS
 from tarzan.data.market_quotes import MARKETS
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
@@ -193,7 +194,7 @@ def _legacy_quality(metrics):
             ticker for ticker in held
             if metrics.intraday_evidence.get(ticker, {}).get("state") == "LAGGED_CURRENT_SESSION"
         ),
-        "macro_requested": len(MARKETS),
+        "macro_requested": len(MARKETS) + len(FEED_KEYS),
         "macro_available": len(metrics.market_quotes) if metrics.market_quotes is not None else None,
         "degraded_computers": list(metrics.degraded_computers),
     }

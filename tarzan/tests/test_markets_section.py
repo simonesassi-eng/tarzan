@@ -300,17 +300,21 @@ class TestEveryMarkupBoundaryEscapes:
 
 
 def test_regions_run_in_opening_order_with_futures_on_their_own():
-    """Asia, Europe, US by cash open, then the round-the-clock groups; every
-    index future sits under Futures, and every row a country owns has a flag."""
-    assert mq.CATEGORY_ORDER[:4] == ["Asia", "Europe", "US", "Futures"]
+    """Asia, Europe, US by cash open, then futures and bonds, then the
+    round-the-clock groups; the Yahoo futures are the US E-minis (the rest come
+    from market_feeds), and every row a country owns has a flag."""
+    from tarzan.data.market_feeds import FEED_KEYS, FEED_ROWS
+    from tarzan.export.newsletter._constants import MARKET_FLAGS
+
+    assert mq.CATEGORY_ORDER[:5] == ["Asia", "Europe", "US", "Futures", "Bonds"]
     cats = [c for _, _, c in mq.MARKETS]
     assert cats == sorted(cats, key=mq.CATEGORY_ORDER.index)
-    index_futures = {"ES=F", "NQ=F", "YM=F", "RTY=F", "NKD=F"}
-    assert {s for _, s, c in mq.MARKETS if c == "Futures"} == index_futures
-    from tarzan.export.newsletter._constants import MARKET_FLAGS
+    assert {s for _, s, c in mq.MARKETS if c == "Futures"} == {"ES=F", "NQ=F", "YM=F", "RTY=F"}
+    assert {r.category for r in FEED_ROWS} <= set(mq.CATEGORY_ORDER)
     assert [s for _, s, c in mq.MARKETS
             if c not in ("Commodities",) and s != "BTC-USD"
             and s not in MARKET_FLAGS] == []
+    assert [k for k in FEED_KEYS if k not in MARKET_FLAGS] == []
     # Every new venue has a session, so its hours line and Op./Cl. badge show.
     for sym in ("^NSEI", "^STOXX", "FTSEMIB.MI"):
         assert mq.session_caption(sym), sym

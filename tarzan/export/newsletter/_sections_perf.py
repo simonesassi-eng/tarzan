@@ -102,12 +102,22 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         rather than subject matter."""
         sym = d.get("symbol", "")
         up = str(sym).upper()
-        # ONE answer to "is this venue trading right now", for every instrument
-        # kind: market_status resolves the futures/FX weekly cycle and crypto
-        # too, and returns None only for a venue with no modelled session.
-        trading, _day = market_status(sym)
         ss = d.get("spark_series")
-        if ss is not None and len(ss) >= 2:
+        if d.get("feed_row"):
+            # Futures/yields from market_feeds: the feed states its own session
+            # window when it has one, and "trading now" is the print's age.
+            trading = bool(d.get("live"))
+            if ss is not None and len(ss) >= 2:
+                return _intraday_spark(ss, d["baseline"], w=66, h=20,
+                                       span=d.get("span"), in_progress=trading,
+                                       session_hours=d.get("session_hours"))
+        else:
+            # ONE answer to "is this venue trading right now", for every
+            # instrument kind: market_status resolves the futures/FX weekly
+            # cycle and crypto too, and returns None only for a venue with no
+            # modelled session.
+            trading, _day = market_status(sym)
+        if ss is not None and len(ss) >= 2 and not d.get("feed_row"):
             if up.endswith("=F") or up.endswith("=X"):
                 # Futures/FX have no cash session to draw on, so they keep the
                 # elapsed-fraction axis -- forcing in_progress=False stretched a
@@ -158,10 +168,21 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         session it means, and "Op." about which day is live. Abbreviated
         (not "Closed"/"Open") to leave room for the wider chart column."""
         sym = d.get("symbol", "")
-        cap = session_caption(sym)
-        if not cap:
-            return ""
-        is_open, day = market_status(sym)
+        if d.get("feed_row"):
+            # No modelled session for these venues: the time of the shown
+            # print (reader's clock) says how current it is, and "Op." means
+            # the print is recent enough to be the live market.
+            try:
+                from zoneinfo import ZoneInfo
+                at = d["as_of"].astimezone(ZoneInfo("Europe/Rome"))
+            except Exception:  # noqa: BLE001
+                return ""
+            cap, is_open, day = f"{at:%H:%M %Z}", bool(d.get("live")), f"{at:%a}"
+        else:
+            cap = session_caption(sym)
+            if not cap:
+                return ""
+            is_open, day = market_status(sym)
         if is_open is None:
             return (f'<div style="font-size:{TYPE_PX["label"]}px;'
                     f'color:{P["subtle"]};margin-top:1px;">{cap}</div>')
@@ -174,7 +195,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 f'{status}{day_suffix}</div>')
 
     def _row(d: dict) -> str:
-        up = d["pct"] >= 0
+        unit = d.get("unit", "index")
+        delta = d["bp"] if unit in ("yield", "spread") else d["pct"]
+        up = delta >= 0
         col = P["green"] if up else P["red"]
         name = d["name"]
         # Tag futures so a full-width sparkline reads as a continuously traded
@@ -189,8 +212,16 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             name = f"{name} (FUT)"
         flag = MARKET_FLAGS.get(d.get("symbol", ""))
         label = f"{flag} {_esc(name)}" if flag else _esc(name)
-        level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
-                 else f'{d["value"]:,.2f}')
+        if unit == "yield":
+            level, move = f'{d["value"]:.3f}%', f'{_signed(delta, 1)} bp'
+        elif unit == "spread":
+            level, move = f'{d["value"]:.0f} bp', f'{_signed(delta, 1)} bp'
+        else:
+            level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
+                     else f'{d["value"]:,.2f}')
+            move = f'{_signed(delta, 2)}%'
+        if d.get("verdict") == "disputed":
+            move += _UNVERIFIED_MARK
         td = (f'padding:4px 5px;border-bottom:1px solid {P["row_rule"]};'
               f'font-variant-numeric:tabular-nums;')
         return (
@@ -205,7 +236,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             # drawing negatives with a different, shorter glyph than the
             # thirty-odd other tables around it.
             f'<td align="right" style="{td}{TYPE["data"]}'
-            f'color:{col};white-space:nowrap;">{_signed(d["pct"], 2)}%</td>'
+            f'color:{col};white-space:nowrap;">{move}</td>'
             f'</tr>')
 
     def _region_head(cat: str) -> str:
@@ -262,6 +293,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 '</tr></table>')
     else:
         grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
+    grid += _feed_note(snap)
     # Section subtitle: when this live snapshot was captured, in the reader's
     # timezone (Europe/Rome) with a DST-aware label (CEST/CET) -- the anchor
     # that explains why a level here can differ from a live quote viewed later
@@ -1307,6 +1339,35 @@ def _bar_session_span(quote, raw_ticker: str):
 #: colour: the cell's colour already carries the heat ramp, and a mark survives a
 #: plain-text client.
 _UNVERIFIED_MARK = "?"
+
+
+def _feed_note(rows) -> str:
+    """The line under the markets strip naming every futures/yield row whose
+    sources disagree, with each source's figure, so a "?" is never a bare
+    mark. Empty when nothing is disputed."""
+    from tarzan.data.market_feeds import FEED_LABEL
+
+    parts = []
+    for d in rows:
+        if not d.get("feed_row") or d.get("verdict") != "disputed":
+            continue
+        bp = d.get("unit") in ("yield", "spread")
+
+        def fig(move):
+            return "n/a" if move is None else (
+                f"{_signed(move, 1)} bp" if bp else f"{_signed(move, 2)}%")
+
+        shown = d["bp"] if bp else d["pct"]
+        alts = "; ".join(f"{FEED_LABEL.get(f, f)} {fig(m)}"
+                         for f, _lvl, m in d.get("alternatives") or () if m is not None)
+        parts.append(f"{_esc(d['name'])}: {FEED_LABEL.get(d['source'], d['source'])} "
+                     f"{fig(shown)} (shown); {alts}")
+    if not parts:
+        return ""
+    P = PALETTE
+    return (f'<div style="margin-top:6px;font-size:{TYPE_PX["label"]}px;color:{P["subtle"]};">'
+            f'{_UNVERIFIED_MARK} Sources disagree on the day\u2019s move \u2014 '
+            + " &middot; ".join(parts) + '</div>')
 
 
 def _unverified_note(perf_by_ticker: dict, keys) -> str:

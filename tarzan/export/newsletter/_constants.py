@@ -55,6 +55,7 @@ MARKET_REGION_COLORS = {
     "Europe": "#D97706",       # amber
     "Asia": "#DB2777",         # pink
     "Futures": "#0891B2",      # cyan
+    "Bonds": "#4F46E5",        # indigo
     "Crypto": "#7C3AED",       # purple
     "Commodities": "#15803D",  # green
     "Currencies": "#64748B",   # slate
@@ -66,18 +67,24 @@ MARKET_REGION_COLORS = {
 # pan-European indices, a pair carries both currencies' flags, and
 # commodities carry none: they belong to no country.
 _US, _EU, _JP = "\U0001F1FA\U0001F1F8", "\U0001F1EA\U0001F1FA", "\U0001F1EF\U0001F1F5"
-_GB, _DE = "\U0001F1EC\U0001F1E7", "\U0001F1E9\U0001F1EA"
+_GB, _DE, _IT = "\U0001F1EC\U0001F1E7", "\U0001F1E9\U0001F1EA", "\U0001F1EE\U0001F1F9"
+_FR, _ES, _AU = "\U0001F1EB\U0001F1F7", "\U0001F1EA\U0001F1F8", "\U0001F1E6\U0001F1FA"
+_CN = "\U0001F1E8\U0001F1F3"
 MARKET_FLAGS = {
-    "^AXJO": "\U0001F1E6\U0001F1FA", "^N225": _JP, "^KS11": "\U0001F1F0\U0001F1F7",
-    "^HSI": "\U0001F1ED\U0001F1F0", "000001.SS": "\U0001F1E8\U0001F1F3",
+    "^AXJO": _AU, "^N225": _JP, "^KS11": "\U0001F1F0\U0001F1F7",
+    "^HSI": "\U0001F1ED\U0001F1F0", "000001.SS": _CN,
     "^NSEI": "\U0001F1EE\U0001F1F3",
     "^STOXX50E": _EU, "^STOXX": _EU, "^N100": _EU,
-    "FTSEMIB.MI": "\U0001F1EE\U0001F1F9", "^GDAXI": _DE,
-    "^FCHI": "\U0001F1EB\U0001F1F7", "^FTSE": _GB, "EXHD.DE": _DE,
+    "FTSEMIB.MI": _IT, "^GDAXI": _DE, "^FCHI": _FR, "^FTSE": _GB,
     **{s: _US for s in ("^GSPC", "^DJI", "^IXIC", "^NDX", "^RUT", "^VIX",
-                        "^IRX", "^FVX", "^TNX", "^TYX",
-                        "ES=F", "NQ=F", "YM=F", "RTY=F")},
-    "NKD=F": _JP,
+                        "ES=F", "NQ=F", "YM=F", "RTY=F",
+                        "bond:US2Y", "bond:US10Y", "bond:US30Y")},
+    "fut:SPI": _AU, "fut:NK": _JP, "fut:A50": _CN,
+    "fut:FESX": _EU, "fut:FDAX": _DE, "fut:FCE": _FR, "fut:Z": _GB,
+    "bond:DE2Y": _DE, "bond:DE10Y": _DE, "bond:IT2Y": _IT, "bond:IT10Y": _IT,
+    "spread:IT-DE10Y": _IT + _DE, "bond:FR10Y": _FR,
+    "bond:ES2Y": _ES, "bond:ES10Y": _ES, "bond:GB2Y": _GB, "bond:GB10Y": _GB,
+    "bond:JP10Y": _JP,
     "EURUSD=X": _EU + _US, "JPY=X": _US + _JP, "GBP=X": _US + _GB,
 }
 

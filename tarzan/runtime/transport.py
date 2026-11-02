@@ -16,7 +16,10 @@ import threading
 import time
 
 
-_PROVIDERS = frozenset({"yahoo", "openfigi", "borsa", "justetf", "manual", "gemini"})
+_PROVIDERS = frozenset({
+    "yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+    "tradingview", "cnbc", "marketwatch",
+})
 _operation = ContextVar("tarzan_provider_operation", default=None)
 _optional_work = ContextVar("tarzan_optional_provider_work", default=None)
 _protected_work = ContextVar("tarzan_protected_provider_work", default=None)

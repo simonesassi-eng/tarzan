@@ -1,0 +1,329 @@
+"""Futures and yields from the three public feeds: parsing, voting, composition.
+
+Network-free: every body below is shaped like the feed's real answer (recorded
+2 Nov 2026) with synthetic figures, served through the module's one HTTP seam.
+"""
+
+from __future__ import annotations
+
+import datetime
+from datetime import timedelta, timezone
+
+import pandas as pd
+import pytest
+
+from tarzan.data import market_feeds as mf
+
+NOW = datetime.datetime(2026, 11, 2, 16, 0, tzinfo=timezone.utc)   # Monday 17:00 CET
+FRI = datetime.datetime(2026, 10, 30, tzinfo=timezone.utc)
+
+
+def ms(t):
+    return int(t.timestamp() * 1000)
+
+
+# --- bodies shaped like each feed's real answer --------------------------------
+
+def tv_body(rows):
+    """rows: {symbol: (close, change_abs, update_time)}"""
+    return {"totalCount": len(rows),
+            "data": [{"s": s, "d": [c, ch, int(t.timestamp())]} for s, (c, ch, t) in rows.items()]}
+
+
+def cnbc_body(rows):
+    """rows: {symbol: (last, previous_day_closing, last_time)}"""
+    return {"FormattedQuoteResult": {"FormattedQuote": [
+        {"symbol": s, "code": 0, "last": last, "previous_day_closing": prev,
+         "last_time": t.strftime("%Y-%m-%dT%H:%M:%S.000%z")}
+        for s, (last, prev, t) in rows.items()]}}
+
+
+def cnbc_chart_body(points):
+    return {"barData": {"priceBars": [{"close": f"{v}", "tradeTimeinMills": ms(t)} for t, v in points]}}
+
+
+def mw_body(points, *, prior=None, prior_at=FRI, session=None):
+    extra = [{"Name": "MostRecentLast", "Date": ms(points[-1][0]), "Value": points[-1][1]}]
+    if prior is not None:
+        extra.append({"Name": "PriorClose", "Date": ms(prior_at), "Value": prior})
+    sessions = ([{"Kind": "Trading", "Start": ms(session[0]), "End": ms(session[1])}]
+                if session else [])
+    return {"TimeInfo": {"Ticks": [ms(t) for t, _ in points]},
+            "Series": [{"DataPoints": [[v] for _, v in points], "ExtraData": extra,
+                        "MarketSessions": sessions}]}
+
+
+def path(start, values, step_min=5):
+    return [(start + timedelta(minutes=step_min * i), v) for i, v in enumerate(values)]
+
+
+@pytest.fixture
+def serve(monkeypatch):
+    """Install bodies per feed; returns the list of requests made."""
+    seen = []
+
+    def install(tv=None, cnbc=None, cnbc_charts=None, mw=None):
+        def fake(provider, method, url, **kw):
+            seen.append(provider)
+            if provider == mf.TV:
+                return tv
+            if provider == mf.CNBC:
+                if "charts" in url:
+                    frame = "1D" if "/1D." in url else "1M"
+                    return (cnbc_charts or {}).get((kw["params"]["symbol"], frame))
+                return cnbc
+            if provider == mf.MW:
+                key = url  # the series key is inside the encoded query
+                for k, (intra, daily) in (mw or {}).items():
+                    if k.replace("/", "%2F") in key:
+                        return intra if "PT5M" in key else daily
+            return None
+        monkeypatch.setattr(mf, "_request_json", fake)
+        return seen
+    return install
+
+
+DE10 = mf.FeedRow("Bund 10Y", "bond:DE10Y", "Bonds", "yield",
+                  {mf.TV: "TVC:DE10Y", mf.CNBC: "DE10Y", mf.MW: "BOND/BX//TMBMKDE-10Y"},
+                  ((mf.TV, mf.CNBC), (mf.MW, mf.MW), (mf.TV, mf.MW), (mf.TV, None)), 10.0)
+IT10 = mf.FeedRow("BTP 10Y", "bond:IT10Y", "Bonds", "yield",
+                  {mf.TV: "TVC:IT10Y", mf.CNBC: "IT10Y", mf.MW: "BOND/BX//TMBMKIT-10Y"},
+                  DE10.recipes, 10.0)
+DAX = mf.FeedRow("DAX", "fut:FDAX", "Futures", "index",
+                 {mf.TV: "EUREX:FDAX1!", mf.MW: "FUTURE/DE/XEUR/DAX00"},
+                 ((mf.MW, mf.MW), (mf.CNBC, mf.CNBC), (mf.TV, mf.MW), (mf.TV, mf.CNBC), (mf.TV, None)),
+                 14.2)
+
+
+# --- parsers ----------------------------------------------------------------------
+
+class TestParsers:
+    def test_tradingview_previous_close_is_close_minus_change(self, serve):
+        serve(tv=tv_body({"TVC:DE10Y": (3.2928, -0.0313, NOW), "EUREX:FDAX1!": (-5, 1, NOW)}))
+        got = mf._tradingview_quotes(["TVC:DE10Y", "EUREX:FDAX1!"],
+                                     {"TVC:DE10Y": "yield", "EUREX:FDAX1!": "index"})
+        assert got["TVC:DE10Y"].prev == pytest.approx(3.3241)
+        assert got["TVC:DE10Y"].at == NOW
+        assert "EUREX:FDAX1!" not in got  # a non-positive index level is no quote
+
+    def test_cnbc_never_uses_a_bond_previous_close_but_keeps_a_futures_one(self, serve):
+        cet = timezone(timedelta(hours=1))
+        serve(cnbc=cnbc_body({"DE10Y": ("3.2929%", "3.2921%", NOW.astimezone(cet)),
+                              "@FFI.1": ("10,792.50", "10,756.50", NOW)}))
+        got = mf._cnbc_quotes(["DE10Y", "@FFI.1"], {"DE10Y": "yield", "@FFI.1": "index"})
+        assert got["DE10Y"].last == pytest.approx(3.2929) and got["DE10Y"].prev is None
+        assert got["@FFI.1"].prev == pytest.approx(10756.5)
+        assert got["DE10Y"].at == NOW
+
+    def test_marketwatch_prior_close_dated_the_same_day_is_discarded(self, serve):
+        """The rolled-baseline case: a 'prior' close from the last print's own day."""
+        bars = path(NOW - timedelta(hours=1), [3.30, 3.31, 3.31])
+        serve(mw={"BOND/BX//TMBMKDE-10Y": (mw_body(bars, prior=3.30, prior_at=NOW), None)})
+        obs, _chart = mf._marketwatch("BOND/BX//TMBMKDE-10Y", "yield")
+        assert obs.last == pytest.approx(3.31) and obs.prev is None
+
+    def test_marketwatch_reads_the_dated_prior_close_and_session_window(self, serve):
+        bars = path(NOW - timedelta(hours=1), [26000, 26050, 26100])
+        session = (NOW - timedelta(hours=9), NOW + timedelta(hours=4))
+        serve(mw={"FUTURE/DE/XEUR/DAX00": (mw_body(bars, prior=25913, session=session), None)})
+        obs, chart = mf._marketwatch("FUTURE/DE/XEUR/DAX00", "index")
+        assert obs.prev == 25913 and obs.last == 26100
+        assert chart.span[0] == pd.Timestamp(session[0]) and len(chart.intra) == 3
+
+    @pytest.mark.parametrize("body", [None, {}, {"data": "x"}, {"data": [{"s": "A"}]}, []])
+    def test_garbage_answers_yield_nothing_and_never_raise(self, serve, body):
+        serve(tv=body, cnbc=body)
+        assert mf._tradingview_quotes(["A"], {"A": "index"}) == {}
+        assert mf._cnbc_quotes(["A"], {"A": "index"}) == {}
+
+
+# --- voting -------------------------------------------------------------------------
+
+def obs(feed, last, prev, at=NOW):
+    return mf.Obs(feed, last, prev, at)
+
+
+class TestVoting:
+    def test_confirmed_level_and_change_is_verified(self):
+        shown = obs(mf.TV, 3.29, 3.32)
+        assert mf.verdict(shown, [obs(mf.MW, 3.31, 3.342)], "yield") == "verified"
+
+    def test_a_rolled_baseline_is_disputed(self):
+        """Same level, but one source measures the day from today's close."""
+        shown = obs(mf.TV, 4.41, 4.49)            # -8 bp
+        assert mf.verdict(shown, [obs(mf.MW, 4.41, 4.41)], "yield") == "disputed"
+
+    def test_two_sources_on_different_days_compare_only_levels(self):
+        """23:00 CET: MarketWatch has opened the Treasuries' next session (its
+        change is ~0 from today's close) while TradingView still measures today."""
+        today = mf.Obs(mf.TV, 4.88, 4.93, NOW, NOW.replace(hour=0))
+        tomorrow = mf.Obs(mf.MW, 4.882, 4.881, NOW, NOW.replace(hour=22))
+        assert mf.verdict(today, [tomorrow], "yield") == "verified"
+        same_day = mf.Obs(mf.MW, 4.882, 4.881, NOW, NOW.replace(hour=0) - timedelta(hours=2))
+        assert mf.verdict(today, [same_day], "yield") == "disputed"
+
+    def test_level_only_confirmation_counts_when_no_one_else_has_a_baseline(self):
+        assert mf.verdict(obs(mf.TV, 3.29, 3.32), [obs(mf.CNBC, 3.29, None)], "yield") == "verified"
+
+    def test_alone_is_single(self):
+        assert mf.verdict(obs(mf.TV, 3.29, 3.32), [], "yield") == "single"
+
+    def test_an_outvoted_source_is_not_shown_when_two_others_agree(self):
+        row = mf.FeedRow("FTSE 100", "fut:Z", "Futures", "index",
+                         {mf.TV: "Z", mf.CNBC: "F", mf.MW: "M"},
+                         ((mf.MW, mf.MW), (mf.CNBC, mf.CNBC), (mf.TV, None)))
+        votes = {mf.MW: obs(mf.MW, 11800, 11700),          # wrong contract
+                 mf.CNBC: obs(mf.CNBC, 10792, 10756),
+                 mf.TV: obs(mf.TV, 10791, 10756)}
+        shown, chart_feed, status = mf.choose(row, votes)
+        assert shown.feed == mf.CNBC and chart_feed == mf.CNBC and status == "verified"
+
+    def test_a_source_days_behind_does_not_vote(self):
+        votes = {mf.TV: obs(mf.TV, 23576, 23365), mf.MW: obs(mf.MW, 23278, 23023, NOW - timedelta(days=3))}
+        assert set(mf._fresh(votes)) == {mf.TV}
+
+    def test_no_baseline_anywhere_means_no_row(self):
+        assert mf.choose(DE10, {mf.CNBC: obs(mf.CNBC, 3.29, None)}) is None
+
+
+# --- composition ----------------------------------------------------------------------
+
+def _bond_world(serve, *, tv=True, cnbc=True, mw=True):
+    de = path(NOW - timedelta(hours=3), [3.33, 3.31, 3.30, 3.294], step_min=60)
+    it = path(NOW - timedelta(hours=3), [4.49, 4.45, 4.42, 4.413], step_min=60)
+    # CNBC draws one-minute bars, plus one stamped after the run's instant.
+    minutes = [(NOW - timedelta(minutes=480 - i), 3.30) for i in range(480)]
+    after = [(NOW + timedelta(minutes=10), 3.50)]
+    return serve(
+        tv=tv_body({"TVC:DE10Y": (3.294, -0.030, NOW), "TVC:IT10Y": (4.413, -0.077, NOW)}) if tv else None,
+        cnbc=cnbc_body({"DE10Y": ("3.294%", "3.294%", NOW), "IT10Y": ("4.413%", "4.413%", NOW)}) if cnbc else None,
+        cnbc_charts={("DE10Y", "1D"): cnbc_chart_body(minutes + after),
+                     ("IT10Y", "1D"): cnbc_chart_body(it)},
+        mw={"BOND/BX//TMBMKDE-10Y": (mw_body(de, prior=3.342), mw_body(path(FRI, [3.37, 3.342], 1440))),
+            "BOND/BX//TMBMKIT-10Y": (mw_body(it, prior=4.487), None)} if mw else None,
+    )
+
+
+class TestComposition:
+    def test_bonds_and_their_spread(self, serve):
+        _bond_world(serve)
+        rows = {d["symbol"]: d for d in mf.fetch_feed_quotes(NOW, rows=(DE10, IT10))}
+        de, it, spread = rows["bond:DE10Y"], rows["bond:IT10Y"], rows["spread:IT-DE10Y"]
+        assert de["source"] == mf.TV and de["verdict"] == "verified"
+        assert de["bp"] == pytest.approx(-3.0) and de["pct"] is None
+        assert spread["value"] == pytest.approx((4.413 - 3.294) * 100)
+        assert spread["bp"] == pytest.approx(it["bp"] - de["bp"])
+        assert list(rows) == ["bond:DE10Y", "bond:IT10Y", "spread:IT-DE10Y"]
+
+    def test_intraday_is_thinned_to_quarter_hours_and_never_after_the_run(self, serve):
+        _bond_world(serve)
+        de = {d["symbol"]: d for d in mf.fetch_feed_quotes(NOW, rows=(DE10,))}["bond:DE10Y"]
+        ser = de["spark_series"]
+        assert ser is not None and len(ser) <= 8 * 4 + 1
+        assert ser.index.max() <= pd.Timestamp(NOW)
+        # thinned to real observations, not bucket labels
+        assert ser.index[-1] == pd.Timestamp(NOW - timedelta(minutes=1))
+
+    def test_a_feed_down_still_shows_the_row(self, serve):
+        _bond_world(serve, tv=False)
+        de = {d["symbol"]: d for d in mf.fetch_feed_quotes(NOW, rows=(DE10,))}["bond:DE10Y"]
+        assert de["source"] == mf.MW and de["bp"] == pytest.approx((3.294 - 3.342) * 100)
+
+    def test_every_feed_down_shows_nothing(self, serve):
+        _bond_world(serve, tv=False, cnbc=False, mw=False)
+        assert mf.fetch_feed_quotes(NOW, rows=(DE10, IT10)) == []
+
+    def test_a_point_in_time_run_makes_no_request(self, serve):
+        from tarzan import runtime
+
+        seen = _bond_world(serve)
+        runtime.configure(as_of=datetime.date(2026, 6, 30))
+        assert mf.fetch_feed_quotes(NOW, rows=(DE10,)) == []
+        assert seen == []
+
+    def test_a_chart_of_another_session_is_not_drawn(self, serve):
+        old = path(NOW - timedelta(days=3), [26000, 26010, 26020])
+        serve(tv=tv_body({"EUREX:FDAX1!": (26100, 187, NOW)}),
+              mw={"FUTURE/DE/XEUR/DAX00": (mw_body(old, prior=25913, prior_at=FRI - timedelta(days=1)), None)})
+        dax = mf.fetch_feed_quotes(NOW, rows=(DAX,))[0]
+        assert dax["source"] == mf.TV and dax["spark_series"] is None
+
+    def test_live_means_a_recent_print(self, serve):
+        serve(tv=tv_body({"EUREX:FDAX1!": (26100, 187, NOW - timedelta(hours=2))}))
+        assert mf.fetch_feed_quotes(NOW, rows=(DAX,))[0]["live"] is False
+
+    def test_a_parser_crash_omits_rows_instead_of_raising(self, serve, monkeypatch):
+        serve()
+        monkeypatch.setattr(mf, "_tradingview_quotes", lambda *a: 1 / 0)
+        assert mf.fetch_feed_quotes(NOW, rows=(DAX,)) == []
+
+
+# --- rendering -------------------------------------------------------------------------
+
+def test_the_strip_prints_yields_in_bp_and_names_a_dispute():
+    from unittest import mock
+
+    import tarzan.data.market_quotes as mq
+    from tarzan.export.newsletter._constants import _NewsletterContext
+    from tarzan.export.newsletter._sections_perf import _build_markets
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.portfolio import PortfolioMetrics
+
+    base = {"feed_row": True, "category": "Bonds", "spark": [], "spark_series": None,
+            "span": None, "session_hours": 10.0, "as_of": NOW, "live": True,
+            "observed_day": NOW.date(), "stale_session": False, "pct": None, "change": 0.0}
+    rows = [
+        dict(base, name="Bund 10Y", symbol="bond:DE10Y", unit="yield", value=3.2941,
+             bp=-3.13, baseline=3.325, verdict="verified", source=mf.TV, alternatives=[]),
+        dict(base, name="BTP–Bund 10Y", symbol="spread:IT-DE10Y", unit="spread", value=111.9,
+             bp=-4.7, baseline=116.6, verdict="verified", source=mf.TV, alternatives=[]),
+        dict(base, name="Bonos 2Y", symbol="bond:ES2Y", unit="yield", value=3.2202,
+             bp=4.3, baseline=3.177, verdict="disputed", source=mf.TV,
+             alternatives=[(mf.CNBC, 3.22, None), (mf.MW, 3.173, -0.3)]),
+    ]
+    ctx = _NewsletterContext(
+        metrics=PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0,
+                                 market_quotes=tuple(rows)),
+        config=InvestorConfig(), issue_number=1,
+        benchmark_alpha_beta="S&P 500", benchmark_geo="MSCI ACWI")
+    with mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
+        html = _build_markets(ctx)["html"]
+    assert "3.294%" in html and "−3.1 bp" in html
+    assert "112 bp" in html
+    assert "+4.3 bp?" in html
+    assert "Bonos 2Y: TradingView +4.3 bp (shown); MarketWatch −0.3 bp" in html
+    assert "CNBC n/a" not in html
+    assert "\U0001F1EE\U0001F1F9\U0001F1E9\U0001F1EA BTP" in html
+    assert "17:00 CET" in html
+
+
+def test_the_chart_axis_covers_every_bar(serve):
+    """A lone print the evening before must not squeeze the day onto the edge."""
+    evening = [(NOW - timedelta(hours=18), 5.29)]
+    day = path(NOW - timedelta(hours=8), [5.24, 5.23, 5.22, 5.20], step_min=150)
+    serve(tv=tv_body({"TVC:GB10Y": (5.20, -0.09, NOW)}),
+          cnbc=cnbc_body({"UK10Y": ("5.20%", "5.20%", NOW)}),
+          cnbc_charts={("UK10Y", "1D"): cnbc_chart_body(evening + day)})
+    gilt = mf.FeedRow("Gilt 10Y", "bond:GB10Y", "Bonds", "yield",
+                      {mf.TV: "TVC:GB10Y", mf.CNBC: "UK10Y"}, DE10.recipes, 10.0)
+    d = mf.fetch_feed_quotes(NOW, rows=(gilt,))[0]
+    lo, hi = d["span"]
+    ser = d["spark_series"]
+    assert lo <= ser.index[0] and hi >= ser.index[-1]
+    # ...and the stray evening print is not part of the drawn session
+    assert ser.index[0] == pd.Timestamp(day[0][0])
+
+
+def test_the_ai_digest_reads_yields_in_basis_points():
+    from tarzan.export import ai_summary
+    from tarzan.models.investor_config import InvestorConfig
+    from tarzan.models.portfolio import PortfolioMetrics
+
+    rows = ({"name": "Bund 10Y", "unit": "yield", "value": 3.2941, "bp": -3.13, "pct": None},
+            {"name": "BTP–Bund 10Y", "unit": "spread", "value": 111.94, "bp": -4.7, "pct": None},
+            {"name": "DAX", "unit": "index", "value": 26107.0, "bp": None, "pct": 0.75})
+    m = PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0, market_quotes=rows)
+    got = ai_summary.build_digest(m, InvestorConfig())["markets_today"]
+    assert got[0] == {"name": "Bund 10Y", "level": 3.294, "unit": "yield %", "change_bp": -3.1}
+    assert got[1]["unit"] == "bp" and got[1]["change_bp"] == -4.7
+    assert got[2] == {"name": "DAX", "level": 26107.0, "change_pct": 0.75}

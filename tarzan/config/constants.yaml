@@ -95,6 +95,10 @@ provider_transport:
     justetf: {timeout_seconds: 10, retry_budget: 1}
     manual: {timeout_seconds: 40, retry_budget: 0}
     gemini: {timeout_seconds: 20, retry_budget: 0}
+    # Markets strip feeds for futures and yields Yahoo lacks (market_feeds.py).
+    tradingview: {timeout_seconds: 10, retry_budget: 1}
+    cnbc: {timeout_seconds: 10, retry_budget: 1}
+    marketwatch: {timeout_seconds: 10, retry_budget: 1}
 
 # Validated provider and valuation policy by explicit instrument kind and data
 # class. These values are evidence-bearing release configuration, not hidden

@@ -97,6 +97,7 @@ def _quality(metrics):
     if metrics is None:
         return {}
     from tarzan.contracts.reference import reference_for
+    from tarzan.data.market_feeds import FEED_KEYS
     from tarzan.data.market_quotes import MARKETS
 
     reference = reference_for(metrics)
@@ -134,7 +135,7 @@ def _quality(metrics):
             ticker for ticker in held
             if metrics.intraday_evidence.get(ticker, {}).get("state") == "LAGGED_CURRENT_SESSION"
         ),
-        "macro_requested": len(MARKETS),
+        "macro_requested": len(MARKETS) + len(FEED_KEYS),
         "macro_available": len(metrics.market_quotes) if metrics.market_quotes is not None else None,
         "degraded_computers": list(metrics.degraded_computers),
     }

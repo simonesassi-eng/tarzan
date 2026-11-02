@@ -93,6 +93,19 @@ def _no_official_quote_batch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_market_feeds(monkeypatch):
+    """The futures/yield feeds answer nothing unless a test installs bodies.
+
+    Stubbed at the one HTTP seam, so every parser, vote and composition step
+    still runs on whatever a test feeds it, and an unstubbed run gets the
+    honest "no rows" rather than reaching the network.
+    """
+    monkeypatch.setattr("tarzan.data.market_feeds._request_json",
+                        lambda *a, **k: None, raising=True)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _disable_ai_summary(monkeypatch):
     """Force the AI portfolio summary off for the whole suite so tests
     never hit the network or consume API tokens. Tests that exercise the
