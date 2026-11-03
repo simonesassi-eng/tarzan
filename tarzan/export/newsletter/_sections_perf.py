@@ -284,13 +284,15 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 if entries[i][0] != entries[i - 1][0]), half)
     left, right = entries[:cut], entries[cut:]
     if right:
-        grid = ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0" style="margin-top:10px;">'
-                '<tr>'
-                f'<td width="49%" valign="top">{_table(left)}</td>'
-                '<td width="2%"></td>'
-                f'<td width="49%" valign="top">{_table(right)}</td>'
-                '</tr></table>')
+        # Two blocks that sit side by side when there is room and stack when
+        # there is not. A two-cell table never wraps: on a phone it pushed the
+        # right column (bonds, commodities, FX) off the screen. 2 x 270 + 12
+        # fits the 556 px desktop body; the template's phone breakpoint widens
+        # each stacked block to the full width (.mk-col).
+        col = ('display:inline-block;vertical-align:top;width:100%;'
+               'max-width:270px;margin-top:10px;')
+        grid = (f'<div class="mk-col" style="{col}margin-right:12px;">{_table(left)}</div>'
+                f'<div class="mk-col" style="{col}">{_table(right)}</div>')
     else:
         grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
     grid += _feed_note(snap)
