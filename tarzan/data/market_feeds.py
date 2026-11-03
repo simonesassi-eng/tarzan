@@ -61,6 +61,9 @@ _STALE_BEHIND = timedelta(hours=3)
 # A row is "trading now" when its shown print is at most this old. Covers the
 # feeds' 10-15 minute delay with room to spare.
 _LIVE_WITHIN = timedelta(minutes=30)
+# A drawn bar this far from both the median and the level is a bad print:
+# basis points for a yield, percent for an index.
+_SPIKE = {"yield": 30.0, "index": 4.5}
 # A gap this long inside one feed's intraday bars separates two sessions.
 _SESSION_GAP = timedelta(hours=4)
 # A drawn intraday line must end near the quote it sits under.
@@ -103,6 +106,14 @@ def _bond(name, key, hours=10.0, **symbols):
                    ((TV, CNBC), (MW, MW), (TV, MW), (TV, None)), hours)
 
 
+def _treasury(name, key, **symbols):
+    # TradingView starts a Treasury's day at 00:00 UTC, so its "change" is
+    # since midnight, not since the New York close every other site measures
+    # from. MarketWatch's dated prior close is the New York close.
+    return FeedRow(name, key, "Bonds", "yield", symbols,
+                   ((MW, MW), (TV, CNBC), (TV, MW), (TV, None)), 24.0)
+
+
 # Display order inside each category follows the cash-open order (Asia,
 # Europe, US), as the rest of the strip does.
 FEED_ROWS: tuple[FeedRow, ...] = (
@@ -117,12 +128,12 @@ FEED_ROWS: tuple[FeedRow, ...] = (
             **{TV: "EURONEXT:FCE1!", MW: "FUTURE/FR//FCE00"}),
     _future("FTSE 100", "fut:Z", hours=20.0,
             **{TV: "ICEEUR:Z1!", CNBC: "@FFI.1", MW: "FUTURE/UK/IFEU/Z00"}),
-    _bond("US 2Y", "bond:US2Y", hours=24.0,
-          **{TV: "TVC:US02Y", CNBC: "US2Y", MW: "BOND/BX//TMUBMUSD02Y"}),
-    _bond("US 10Y", "bond:US10Y", hours=24.0,
-          **{TV: "TVC:US10Y", CNBC: "US10Y", MW: "BOND/BX//TMUBMUSD10Y"}),
-    _bond("US 30Y", "bond:US30Y", hours=24.0,
-          **{TV: "TVC:US30Y", CNBC: "US30Y", MW: "BOND/BX//TMUBMUSD30Y"}),
+    _treasury("US 2Y", "bond:US2Y",
+              **{TV: "TVC:US02Y", CNBC: "US2Y", MW: "BOND/BX//TMUBMUSD02Y"}),
+    _treasury("US 10Y", "bond:US10Y",
+              **{TV: "TVC:US10Y", CNBC: "US10Y", MW: "BOND/BX//TMUBMUSD10Y"}),
+    _treasury("US 30Y", "bond:US30Y",
+              **{TV: "TVC:US30Y", CNBC: "US30Y", MW: "BOND/BX//TMUBMUSD30Y"}),
     _bond("Bund 2Y", "bond:DE2Y",
           **{TV: "TVC:DE02Y", CNBC: "DE2Y", MW: "BOND/BX//TMBMKDE-02Y"}),
     _bond("Bund 10Y", "bond:DE10Y",
@@ -328,7 +339,7 @@ def _mw_series(key: str, step: str, frame: str):
     from urllib.parse import urlencode
 
     query = {"Step": step, "TimeFrame": frame, "EntitlementToken": _MW_TOKEN,
-             "IncludeMockTick": True, "FilterNullSlots": False, "FilterClosedPoints": True,
+             "IncludeMockTick": False, "FilterNullSlots": False, "FilterClosedPoints": True,
              "IncludeClosedSlots": False, "IncludeOfficialClose": True, "InjectOpen": False,
              "ShowPreMarket": False, "ShowAfterHours": False, "UseExtendedTimeFrame": True,
              "WantPriorClose": True, "IncludeCurrentQuotes": False,
@@ -372,14 +383,13 @@ def _marketwatch(key: str, unit: str) -> tuple[Optional[Obs], Chart]:
         if trading and _number(trading[-1].get("Start")) and _number(trading[-1].get("End")):
             chart.span = (pd.Timestamp(int(trading[-1]["Start"]), unit="ms", tz="UTC"),
                           pd.Timestamp(int(trading[-1]["End"]), unit="ms", tz="UTC"))
-        recent = extra.get("MostRecentLast") or {}
-        last = _plausible(_number(recent.get("Value")), unit)
-        if intra is not None and len(intra):
+        # Only real bars date a print. On a holiday (the JGB on 3 Nov 2026)
+        # the series is one point stamped at the session's END, which
+        # outdated the other feeds' real prints and got them discarded as
+        # stale; a session is at least two bars.
+        last = at = None
+        if intra is not None and len(intra) >= 2:
             last, at = float(intra.iloc[-1]), intra.index[-1].to_pydatetime()
-        elif last is not None and _number(recent.get("Date")):
-            at = datetime.fromtimestamp(int(recent["Date"]) / 1000, timezone.utc)
-        else:
-            at = None
         prior = extra.get("PriorClose") or {}
         prev = _plausible(_number(prior.get("Value")), unit)
         prior_ms = _number(prior.get("Date"))
@@ -423,6 +433,11 @@ def _agreement(a: Obs, b: Obs, unit: str) -> tuple[bool, Optional[bool]]:
         level = abs(a.last / b.last - 1.0) * 100.0 <= tol_level
     ca, cb = _change(a, unit), _change(b, unit)
     if ca is None or cb is None:
+        return level, None
+    if unit == "yield" and abs(a.last - b.last) * 100.0 > tol_change:
+        # Levels this far apart are two different benchmark bonds (LSEG's and
+        # Tullett's 2Y Bund were 4.6 bp apart on 3 Nov 2026); their moves are
+        # two bonds' moves, not one figure to confirm.
         return level, None
     if a.session and b.session and abs(a.session - b.session) > _OTHER_SESSION:
         return level, None  # different days' moves: nothing to compare
@@ -489,6 +504,29 @@ def _parallel(calls: list):
         return out
 
 
+def _session_only(ser, start, last, unit):
+    """One session's bars, without isolated bad prints.
+
+    ``start`` is the session start a feed states. Without it, a continuous
+    market's "1D" chart from CNBC runs from the previous session (36 hours of
+    Asian futures, two days of Treasuries). A bar far from BOTH the series'
+    median and the shown level is a bad print, not a move: CNBC's US 2Y
+    carried one 5.026% bar in a 4.59% day, which flattened the whole line.
+    """
+    if ser is None:
+        return None
+    if start is not None:
+        ser = ser[ser.index >= start - timedelta(minutes=1)]
+    if len(ser) < 2:
+        return None
+    far = _SPIKE[unit]
+    scale = 100.0 if unit == "yield" else 100.0 / max(abs(float(ser.median())), 1e-9)
+    med = float(ser.median())
+    keep = ((ser - med).abs() * scale <= far) | ((ser - last).abs() * scale <= far)
+    ser = ser[keep]
+    return ser if len(ser) >= 2 else None
+
+
 def _clip(ser, now, step=None):
     """Nothing after the run's reference instant; optionally one point per
     ``step`` (CNBC draws one-minute bars: a thousand points, four times over in
@@ -518,7 +556,11 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
     import pandas as pd
 
     unit = row.unit
-    intra = _clip(chart.intra, now, "15min")
+    start = shown.session or next((o.session for o in others if o.session), None)
+    if start is None and chart.span:
+        start = chart.span[0].to_pydatetime()
+    intra = _session_only(_clip(chart.intra, now), start, shown.last, unit)
+    intra = _clip(intra, now, "15min")
     if intra is not None and abs(intra.index[-1].to_pydatetime() - shown.at) > _CHART_BEHIND:
         # The chart is not of the quote's session (a feed rolled early or
         # late): draw nothing rather than another session under this level.

@@ -327,3 +327,48 @@ def test_the_ai_digest_reads_yields_in_basis_points():
     assert got[0] == {"name": "Bund 10Y", "level": 3.294, "unit": "yield %", "change_bp": -3.1}
     assert got[1]["unit"] == "bp" and got[1]["change_bp"] == -4.7
     assert got[2] == {"name": "DAX", "level": 26107.0, "change_pct": 0.75}
+
+
+# --- the cases seen live on 3 Nov 2026 ------------------------------------------------
+
+def test_a_lone_bad_print_is_not_drawn(serve):
+    """CNBC's US 2Y carried one 5.026% bar in a 4.59% day."""
+    bars = path(NOW - timedelta(hours=3), [4.59, 4.60, 5.026, 4.60, 4.59, 4.598], step_min=30)
+    serve(tv=tv_body({"TVC:DE10Y": (3.294, -0.03, NOW, )}),
+          cnbc=cnbc_body({"DE10Y": ("3.294%", "3.294%", NOW)}),
+          cnbc_charts={("DE10Y", "1D"): cnbc_chart_body([(t, v - 1.3) for t, v in bars])})
+    ser = mf.fetch_feed_quotes(NOW, rows=(DE10,))[0]["spark_series"]
+    assert ser.max() < 3.4 and len(ser) == 5
+
+
+def test_the_chart_is_one_session_from_the_stated_start(serve):
+    """CNBC's '1D' for Asian futures ran 36 hours; TradingView states the start."""
+    start = NOW - timedelta(hours=5)
+    bars = path(NOW - timedelta(hours=36), [8900 + i for i in range(73)], step_min=30)
+    serve(tv={"data": [{"s": "ASX24:AP1!", "d": [8972, -18, int(NOW.timestamp()), int(start.timestamp())]}]},
+          cnbc=cnbc_body({"@YAP.1": ("8,972", "8,990", NOW)}),
+          cnbc_charts={("@YAP.1", "1D"): cnbc_chart_body(bars)})
+    spi = mf.FeedRow("ASX SPI 200", "fut:SPI", "Futures", "index",
+                     {mf.TV: "ASX24:AP1!", mf.CNBC: "@YAP.1"}, DAX.recipes)
+    ser = mf.fetch_feed_quotes(NOW, rows=(spi,))[0]["spark_series"]
+    assert ser.index[0] >= pd.Timestamp(start) - pd.Timedelta(minutes=1)
+
+
+def test_marketwatch_without_bars_does_not_vote(serve):
+    """A holiday: one point, stamped with the session's end."""
+    body = mw_body([(NOW - timedelta(hours=2), 2.77)], prior=2.77)
+    serve(mw={"BOND/BX//TMBMKJP-10Y": (body, None)})
+    obs, chart = mf._marketwatch("BOND/BX//TMBMKJP-10Y", "yield")
+    assert obs is None and chart.intra is None
+
+
+def test_two_benchmark_bonds_are_compared_on_level_only():
+    """LSEG's and Tullett's 2Y Bund were 4.6 bp apart with opposite moves."""
+    lseg = mf.Obs(mf.TV, 3.0327, 3.0474, NOW)
+    tullett = mf.Obs(mf.MW, 3.078, 3.0376, NOW)
+    assert mf.verdict(lseg, [tullett], "yield") == "verified"
+
+
+def test_treasuries_are_measured_from_the_new_york_close():
+    row = next(r for r in mf.FEED_ROWS if r.key == "bond:US10Y")
+    assert row.recipes[0] == (mf.MW, mf.MW)
