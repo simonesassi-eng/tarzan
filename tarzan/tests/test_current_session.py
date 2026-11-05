@@ -359,3 +359,46 @@ class TestTheRunRecordsWhatDataItHeld:
             cs._log_tape_vintage(None)
 
         assert not [r for r in caplog.records if "Tape vintage" in r.getMessage()]
+
+
+class TestAVendorDroppedYesterdaysBar:
+    """5 Nov 2026, 09:45 and 10:35: Yahoo's daily history for every holding went
+    from Monday 3 to today, without Tuesday 4. The published previous close is the
+    repair for exactly that, but it has to be put on the dividend-adjusted ruler
+    first, and the factor was read on the missing day itself: no bar, no factor, no
+    repair, and every 1D in the issue printed "—"."""
+
+    def _holding_without_yesterday(self):
+        # Wed 12 .. Mon 17 Aug, then nothing until today (Wed 19): Tue 18 is gone.
+        idx = pd.DatetimeIndex(["2026-08-12", "2026-08-13", "2026-08-14", "2026-08-17"])
+        raw = pd.Series([100.0, 101.0, 102.0, 103.0], index=idx)
+        h = _holding("XESC.MI", [98.0, 98.98, 99.96, 100.94], quantity=10.0, start="2026-08-12")
+        # Back-adjusted total-return ruler: an ex-date on Thu 13 scales only the
+        # sessions before it.
+        h.price_history = raw * pd.Series([0.98, 1.0, 1.0, 1.0], index=idx)
+        h.price_history_price_only = raw
+        return h
+
+    def test_the_previous_close_is_written_from_the_last_known_factor(self, monkeypatch):
+        from tarzan.engine.stats import compute_period_return
+
+        h = self._holding_without_yesterday()
+        _quotes(monkeypatch, {"XESC.MI": {"price": 105.0, "prev_close": 104.0}})
+
+        assert cs.apply_to_holdings([h]) == ("XESC.MI",)
+
+        tue = pd.Timestamp("2026-08-18")
+        assert h.price_history[tue] == pytest.approx(104.0)
+        one_day = compute_period_return(h.price_history, "1d")
+        assert one_day == pytest.approx((105.0 / 104.0 - 1) * 100, rel=1e-3)
+
+    def test_a_factor_from_more_than_a_week_back_is_not_borrowed(self, monkeypatch):
+        h = self._holding_without_yesterday()
+        old = pd.DatetimeIndex(["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"])
+        h.price_history_price_only.index = old
+        h.price_history.index = old
+        _quotes(monkeypatch, {"XESC.MI": {"price": 105.0, "prev_close": 104.0}})
+
+        cs.apply_to_holdings([h])
+
+        assert pd.Timestamp("2026-08-18") not in h.price_history.index

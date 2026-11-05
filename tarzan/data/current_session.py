@@ -766,6 +766,21 @@ def _quotes_not_older_than(quotes, date, today, ticker):
     }
 
 
+def _last_common_close(price_only, total_return, raw_at, adjusted_at,
+                       within=pd.Timedelta(days=7)):
+    """``(raw, adjusted)`` closes of the latest session both tapes hold before the
+    given rows and no more than ``within`` before them, else ``(None, None)``."""
+    raw = price_only[(price_only.index < raw_at) & (price_only.index >= raw_at - within)].dropna()
+    adj = total_return[(total_return.index < adjusted_at)
+                       & (total_return.index >= adjusted_at - within)].dropna()
+    common = raw.index.normalize().intersection(adj.index.normalize())
+    if not len(common):
+        return None, None
+    day = common.max()
+    return (float(raw[raw.index.normalize() == day].iloc[-1]),
+            float(adj[adj.index.normalize() == day].iloc[-1]))
+
+
 def apply_to_holdings(holdings: list) -> tuple[str, ...]:
     """Stamp the current session onto every holding's series AND price.
 
@@ -843,6 +858,16 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
             adjusted_index = previous.tz_localize(total_return.index.tz) if total_return.index.tz else previous
             raw = price_only.get(raw_index)
             adjusted = total_return.get(adjusted_index)
+            if raw is None or adjusted is None or pd.isna(raw) or pd.isna(adjusted):
+                # The vendor dropped that very bar, which is exactly when this
+                # repair is needed (5 Nov 2026: every holding's history skipped
+                # 4 Nov and every 1D printed "—"). The factor only moves on an
+                # ex-dividend date, so the last session both rulers hold, at
+                # most a week earlier, carries it.
+                # ponytail: wrong by the dividend if the missing day was itself
+                # an ex-date; read the vendor's dividend events if that matters.
+                raw, adjusted = _last_common_close(
+                    price_only, total_return, raw_index, adjusted_index)
             if raw is None or adjusted is None or pd.isna(raw) or pd.isna(adjusted) or raw <= 0:
                 # An absent factor is not evidence that the two rulers coincide.
                 return dict(quote, prev_close=None)
