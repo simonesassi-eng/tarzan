@@ -515,8 +515,13 @@ def test_memo_serves_within_ttl_and_refetches_after(monkeypatch):
 # session_caption — trading hours / continuous-market caption
 # ---------------------------------------------------------------------------
 def test_session_caption_continuous_market_shows_approx_24h():
-    for ticker in ("ES=F", "NQ=F", "YM=F", "RTY=F", "EURUSD=X", "BTC-USD"):
+    for ticker in ("CL=F", "GC=F", "EURUSD=X", "BTC-USD"):
         assert mq.session_caption(ticker) == "\u224824h", ticker
+
+
+def test_us_index_futures_show_the_real_globex_window():
+    for ticker in ("ES=F", "NQ=F", "YM=F", "RTY=F"):
+        assert mq.session_caption(ticker) == "18:00\u201317:00 ET", ticker
 
 
 def test_session_caption_bounded_session_shows_hours_and_zone():

@@ -226,6 +226,9 @@ _SESSION_LABEL: dict[str, str] = {
 }
 
 
+_CME_EQUITY_FUTURES = frozenset({"ES=F", "NQ=F", "YM=F", "RTY=F"})
+
+
 def session_caption(ticker: str) -> str:
     """A short, human caption for an instrument's trading session.
 
@@ -238,6 +241,10 @@ def session_caption(ticker: str) -> str:
     fabricated or misleading open/close pair. Empty string when the exchange
     is not one of the modelled groups. Never raises.
     """
+    if (ticker or "").upper() in _CME_EQUITY_FUTURES:
+        # Globex: Sunday-Friday from 18:00 to 17:00 ET the next day, with the
+        # one-hour 17:00 halt (futures_open_now decides open/closed on it).
+        return "18:00\u201317:00 ET"
     if is_continuous_market(ticker):
         return "\u224824h"
     ex = _exchange_for(ticker)

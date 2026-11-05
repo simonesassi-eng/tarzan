@@ -372,3 +372,42 @@ def test_two_benchmark_bonds_are_compared_on_level_only():
 def test_treasuries_are_measured_from_the_new_york_close():
     row = next(r for r in mf.FEED_ROWS if r.key == "bond:US10Y")
     assert row.recipes[0] == (mf.MW, mf.MW)
+
+
+# --- futures timetables ---------------------------------------------------------------
+
+def _row(key):
+    return next(r for r in mf.FEED_ROWS if r.key == key)
+
+
+@pytest.mark.parametrize("when, is_open, day", [
+    (datetime.datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc), True, "Thu"),    # 13:00 CET
+    (datetime.datetime(2026, 11, 5, 23, 30, tzinfo=timezone.utc), False, "Thu"),  # 00:30 Fri, before 01:10
+    (datetime.datetime(2026, 11, 7, 11, 0, tzinfo=timezone.utc), False, "Fri"),   # Saturday
+    # Christmas Friday: Xetra is shut on the 24th too, so the last session is Wednesday.
+    (datetime.datetime(2026, 12, 25, 11, 0, tzinfo=timezone.utc), False, "Wed"),
+])
+def test_eurex_hours_and_status(when, is_open, day):
+    caption, open_now, label = mf.schedule(_row("fut:FDAX"), when)
+    assert caption == "01:10–22:00 CET"
+    assert (open_now, label) == (is_open, day)
+
+
+def test_osaka_night_session_belongs_to_the_day_it_starts():
+    nk = _row("fut:NK")
+    friday_night = datetime.datetime(2026, 11, 6, 20, 0, tzinfo=timezone.utc)   # Sat 05:00 JST
+    assert mf.schedule(nk, friday_night)[1:] == (True, "Fri")
+    the_break = datetime.datetime(2026, 11, 9, 7, 30, tzinfo=timezone.utc)      # Mon 16:30 JST
+    assert mf.schedule(nk, the_break)[1:] == (False, "Mon")
+    culture_day = datetime.datetime(2026, 11, 3, 1, 0, tzinfo=timezone.utc)     # Tue 10:00, holiday
+    assert mf.schedule(nk, culture_day)[1] is False
+
+
+def test_bonds_have_no_timetable_and_keep_the_print_time():
+    assert mf.schedule(_row("bond:DE10Y"), NOW) is None
+
+
+def test_every_future_has_a_timetable_and_singapore_a_zone_label():
+    futures = [r for r in mf.FEED_ROWS if r.category == "Futures"]
+    assert all(r.sessions and r.tz for r in futures)
+    assert mf.schedule(_row("fut:A50"), NOW)[0].endswith(" SGT")

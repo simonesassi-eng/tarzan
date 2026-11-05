@@ -91,11 +91,23 @@ class FeedRow:
     # recipe whose figures another source confirms is shown.
     recipes: tuple = ()
     hours: float = 22.0  # session length, for the elapsed-time chart axis
+    # The exchange's trading windows, local wall clock ("HH:MM", "HH:MM"); an end
+    # before its start runs into the next morning. With ``tz``, they caption the
+    # row and decide open/closed. ``calendar`` is a cash ticker on the same
+    # exchange calendar, for holidays.
+    sessions: tuple = ()
+    tz: str = ""
+    calendar: str = ""
 
 
-def _future(name, key, hours=22.0, **symbols):
+def _future(name, key, hours=22.0, *, sessions=(), tz="", calendar="", **symbols):
     return FeedRow(name, key, "Futures", "index", symbols,
-                   ((MW, MW), (CNBC, CNBC), (TV, MW), (TV, CNBC), (TV, None)), hours)
+                   ((MW, MW), (CNBC, CNBC), (TV, MW), (TV, CNBC), (TV, None)), hours,
+                   sessions, tz, calendar)
+
+
+# Official trading hours, exchange-local.
+_EUREX = dict(sessions=(("01:10", "22:00"),), tz="Europe/Berlin", calendar="^GDAXI")
 
 
 def _bond(name, key, hours=10.0, **symbols):
@@ -117,16 +129,23 @@ def _treasury(name, key, **symbols):
 # Display order inside each category follows the cash-open order (Asia,
 # Europe, US), as the rest of the strip does.
 FEED_ROWS: tuple[FeedRow, ...] = (
-    _future("ASX SPI 200", "fut:SPI", **{TV: "ASX24:AP1!", CNBC: "@YAP.1"}),
-    _future("Nikkei 225", "fut:NK", **{TV: "OSE:NK2251!", CNBC: "@JNI.1"}),
-    _future("FTSE China A50", "fut:A50", **{TV: "SGX:CN1!", CNBC: "@SFC.1"}),
-    _future("Euro Stoxx 50", "fut:FESX", hours=14.2,
+    _future("ASX SPI 200", "fut:SPI", sessions=(("09:50", "16:30"), ("17:10", "07:00")),
+            tz="Australia/Sydney", calendar="^AXJO", **{TV: "ASX24:AP1!", CNBC: "@YAP.1"}),
+    _future("Nikkei 225", "fut:NK", sessions=(("08:45", "15:45"), ("17:00", "06:00")),
+            tz="Asia/Tokyo", calendar="^N225", **{TV: "OSE:NK2251!", CNBC: "@JNI.1"}),
+    _future("FTSE China A50", "fut:A50", sessions=(("09:00", "16:35"), ("17:15", "05:15")),
+            tz="Asia/Singapore", **{TV: "SGX:CN1!", CNBC: "@SFC.1"}),
+    _future("Euro Stoxx 50", "fut:FESX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FESX1!", MW: "FUTURE/DE/XEUR/FESX00"}),
-    _future("DAX", "fut:FDAX", hours=14.2,
+    _future("Stoxx 600", "fut:FXXP", hours=14.2, **_EUREX,
+            **{TV: "EUREX:FXXP1!", MW: "FUTURE/DE/XEUR/FXXP00"}),
+    _future("DAX", "fut:FDAX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FDAX1!", MW: "FUTURE/DE/XEUR/DAX00"}),
-    _future("CAC 40", "fut:FCE", hours=14.0,
+    _future("CAC 40", "fut:FCE", hours=14.0, sessions=(("08:00", "22:00"),),
+            tz="Europe/Paris", calendar="^FCHI",
             **{TV: "EURONEXT:FCE1!", MW: "FUTURE/FR//FCE00"}),
-    _future("FTSE 100", "fut:Z", hours=20.0,
+    _future("FTSE 100", "fut:Z", hours=20.0, sessions=(("01:00", "21:00"),),
+            tz="Europe/London", calendar="^FTSE",
             **{TV: "ICEEUR:Z1!", CNBC: "@FFI.1", MW: "FUTURE/UK/IFEU/Z00"}),
     _treasury("US 2Y", "bond:US2Y",
               **{TV: "TVC:US02Y", CNBC: "US2Y", MW: "BOND/BX//TMUBMUSD02Y"}),
@@ -552,6 +571,55 @@ def _clip(ser, now, step=None):
         return None
 
 
+# Zone labels where the tz database has none (it prints "+08" for Singapore).
+_ZONE_LABEL = {"Asia/Singapore": "SGT"}
+
+
+def schedule(row: FeedRow, now: datetime):
+    """``(caption, open now, session weekday)`` from the row's trading windows,
+    or None when the row has none (bonds). A window belongs to the day it
+    starts on: an evening session that runs past midnight is that day's.
+    Holidays come from ``row.calendar``'s exchange; without one (SGX) only
+    weekends close it."""
+    if not row.sessions or not row.tz:
+        return None
+    from datetime import time as dtime
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(row.tz)
+    local = now.astimezone(tz)
+
+    def trading_day(day):
+        if day.weekday() >= 5:
+            return False
+        if not row.calendar:
+            return True
+        from tarzan.data.exchange_calendar import is_session
+        return is_session(row.calendar, day)
+
+    def window(day, start, end):
+        a = datetime.combine(day, dtime.fromisoformat(start), tzinfo=tz)
+        b = datetime.combine(day, dtime.fromisoformat(end), tzinfo=tz)
+        return a, (b if b > a else b + timedelta(days=1))
+
+    label = _ZONE_LABEL.get(row.tz) or local.strftime("%Z")
+    caption = ", ".join(f"{a}\u2013{b}" for a, b in row.sessions) + f" {label}"
+    latest = None  # the most recent window that has begun on a trading day
+    for back in range(0, 8):
+        day = local.date() - timedelta(days=back)
+        if not trading_day(day):
+            continue
+        for start, end in row.sessions:
+            a, b = window(day, start, end)
+            if a <= local < b:
+                return caption, True, f"{day:%a}"
+            if a <= local and (latest is None or a > latest[0]):
+                latest = (a, day)
+        if latest is not None:
+            break
+    return caption, False, (f"{latest[1]:%a}" if latest else "")
+
+
 def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list, now) -> dict:
     import pandas as pd
 
@@ -569,6 +637,8 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
     spark = ([float(x) for x in intra.values] if intra is not None
              else [float(x) for x in daily.values[-40:]] if daily is not None else [])
     delta = _change(shown, unit)
+    timetable = schedule(row, now)
+    live = timetable[1] if timetable else (now - shown.at) <= _LIVE_WITHIN
     span = chart.span
     if intra is not None and (span is None or intra.index[0] < span[0] or intra.index[-1] > span[1]):
         # No session window from the feed (or one the bars overrun): the axis
@@ -578,7 +648,6 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
         # the evening before; a fixed-length axis from there piled the whole
         # day's moves onto the right edge as a cliff.
         t0, t1 = intra.index[0], intra.index[-1]
-        live = (now - shown.at) <= _LIVE_WITHIN
         span = (t0, max(t0 + pd.Timedelta(hours=row.hours), t1) if live else t1)
     return {
         "name": row.name, "symbol": row.key, "category": row.category,
@@ -588,7 +657,9 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
         "bp": delta if unit == "yield" else None,
         "baseline": shown.prev, "spark": spark, "spark_series": intra,
         "span": span, "session_hours": row.hours,
-        "as_of": shown.at, "live": (now - shown.at) <= _LIVE_WITHIN,
+        "as_of": shown.at, "live": live,
+        "hours_caption": timetable[0] if timetable else None,
+        "session_day": timetable[2] if timetable else None,
         "observed_day": shown.at.date(), "stale_session": False,
         "alternatives": [(o.feed, o.last, _change(o, unit)) for o in others],
     }

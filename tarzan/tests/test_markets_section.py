@@ -82,12 +82,12 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
                                (True, "Tue") if sym == "^GSPC"
                                else (True, "Mon"))):
         html = _build_markets(_ctx())["html"]
-    # "S&P 500 (FUT)" gets its own \u224824h line and its own day/status,
+    # "S&P 500 (FUT)" gets its own Globex window and its own day/status,
     # not the cash index's hours or its day, and the FUT tag is not
     # doubled by the render-time auto-suffix (name already carries it).
     fut_pos = html.index("S&amp;P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
-    assert "\u224824h" in fut_chunk
+    assert "18:00\u201317:00 ET" in fut_chunk
     assert "Op. Mon" in fut_chunk
     assert "09:30" not in fut_chunk  # not the cash index's hours
     assert "(FUT) (FUT)" not in html

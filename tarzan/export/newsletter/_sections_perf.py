@@ -168,10 +168,14 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         session it means, and "Op." about which day is live. Abbreviated
         (not "Closed"/"Open") to leave room for the wider chart column."""
         sym = d.get("symbol", "")
-        if d.get("feed_row"):
-            # No modelled session for these venues: the time of the shown
-            # print (reader's clock) says how current it is, and "Op." means
-            # the print is recent enough to be the live market.
+        if d.get("feed_row") and d.get("hours_caption"):
+            # A future with its exchange's timetable: hours and open/closed
+            # from the timetable, like every exchange-listed row.
+            cap, is_open, day = d["hours_caption"], bool(d.get("live")), d.get("session_day") or ""
+        elif d.get("feed_row"):
+            # No timetable (bonds trade over the counter): the time of the
+            # shown print (reader's clock) says how current it is, and "Op."
+            # means the print is recent enough to be the live market.
             try:
                 from zoneinfo import ZoneInfo
                 at = d["as_of"].astimezone(ZoneInfo("Europe/Rome"))

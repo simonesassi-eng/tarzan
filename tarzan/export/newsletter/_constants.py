@@ -80,7 +80,7 @@ MARKET_FLAGS = {
                         "ES=F", "NQ=F", "YM=F", "RTY=F",
                         "bond:US2Y", "bond:US10Y", "bond:US30Y")},
     "fut:SPI": _AU, "fut:NK": _JP, "fut:A50": _CN,
-    "fut:FESX": _EU, "fut:FDAX": _DE, "fut:FCE": _FR, "fut:Z": _GB,
+    "fut:FESX": _EU, "fut:FXXP": _EU, "fut:FDAX": _DE, "fut:FCE": _FR, "fut:Z": _GB,
     "bond:DE2Y": _DE, "bond:DE10Y": _DE, "bond:IT2Y": _IT, "bond:IT10Y": _IT,
     "spread:IT-DE10Y": _IT + _DE, "bond:FR10Y": _FR,
     "bond:ES2Y": _ES, "bond:ES10Y": _ES, "bond:GB2Y": _GB, "bond:GB10Y": _GB,
