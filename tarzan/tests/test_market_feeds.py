@@ -389,7 +389,7 @@ def _row(key):
 ])
 def test_eurex_hours_and_status(when, is_open, day):
     caption, open_now, label = mf.schedule(_row("fut:FDAX"), when)
-    assert caption == "01:10–22:00 CET"
+    assert caption.startswith("01:10–22:00 CE")
     assert (open_now, label) == (is_open, day)
 
 
@@ -410,4 +410,5 @@ def test_bonds_have_no_timetable_and_keep_the_print_time():
 def test_every_future_has_a_timetable_and_singapore_a_zone_label():
     futures = [r for r in mf.FEED_ROWS if r.category == "Futures"]
     assert all(r.sessions and r.tz for r in futures)
-    assert mf.schedule(_row("fut:A50"), NOW)[0].endswith(" SGT")
+    # Singapore 09:00-16:35, 17:15-05:15 on the reader's clock (CET in November).
+    assert mf.schedule(_row("fut:A50"), NOW)[0] == "02:00–09:35, 10:15–22:15 CET"

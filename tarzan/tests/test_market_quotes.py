@@ -8,6 +8,7 @@ the underlying history fetch is monkeypatched instead.
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 import tarzan.data.market_quotes as mq
 from tarzan.data.market_quotes import fetch_market_quotes  # real impl, bound now
@@ -519,15 +520,32 @@ def test_session_caption_continuous_market_shows_approx_24h():
         assert mq.session_caption(ticker) == "\u224824h", ticker
 
 
-def test_us_index_futures_show_the_real_globex_window():
+@pytest.fixture
+def _thursday_5_nov(monkeypatch):
+    """Both sides of the Atlantic on winter time."""
+    from datetime import datetime, timezone
+    monkeypatch.setattr(mq, "_intraday_reference_now",
+                        lambda tzinfo=None: datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc))
+
+
+def test_us_index_futures_show_the_real_globex_window(_thursday_5_nov):
+    # 18:00-17:00 ET is midnight to 23:00 on the reader's clock.
     for ticker in ("ES=F", "NQ=F", "YM=F", "RTY=F"):
-        assert mq.session_caption(ticker) == "18:00\u201317:00 ET", ticker
+        assert mq.session_caption(ticker) == "00:00\u201323:00 CET", ticker
 
 
-def test_session_caption_bounded_session_shows_hours_and_zone():
-    assert mq.session_caption("^GSPC") == "09:30\u201316:00 ET"
-    assert mq.session_caption("^FTSE") == "08:00\u201316:30 GMT"
-    assert mq.session_caption("^N225") == "09:00\u201315:00 JST"
+def test_session_caption_states_hours_on_the_readers_clock(_thursday_5_nov):
+    assert mq.session_caption("^GSPC") == "15:30\u201322:00 CET"
+    assert mq.session_caption("^FTSE") == "09:00\u201317:30 CET"
+    assert mq.session_caption("^N225") == "01:00\u201307:00 CET"
+
+
+def test_reader_hours_follow_each_sides_summer_time():
+    import datetime as dt
+    ny = (((9, 30), (16, 0)),)
+    assert mq.reader_hours("America/New_York", ny, day=dt.date(2026, 7, 15)) == "15:30\u201322:00 CEST"
+    # Mid-March the US has moved its clocks and Europe has not yet.
+    assert mq.reader_hours("America/New_York", ny, day=dt.date(2026, 3, 20)) == "14:30\u201321:00 CET"
 
 
 def test_session_caption_unknown_exchange_is_empty():

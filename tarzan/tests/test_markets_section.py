@@ -44,12 +44,15 @@ _SAMPLE = [
 
 
 def test_cash_index_shows_hours_open_badge_and_day():
+    import datetime as dt
     mq._memo = None
+    winter = dt.datetime(2026, 11, 5, 12, 0, tzinfo=dt.timezone.utc)
     with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
+         mock.patch.object(mq, "_intraday_reference_now", lambda tzinfo=None: winter), \
          mock.patch.object(mq, "market_status",
                            return_value=(True, "Tue")):
         html = _build_markets(_ctx())["html"]
-    assert "09:30\u201316:00 ET" in html
+    assert "15:30\u201322:00 CET" in html   # New York's session, on the reader's clock
     assert "&#9679;</span> Op. Tue" in html
 
 
@@ -87,7 +90,7 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
     # doubled by the render-time auto-suffix (name already carries it).
     fut_pos = html.index("S&amp;P 500 (FUT)")
     fut_chunk = html[fut_pos:fut_pos + 250]
-    assert "18:00\u201317:00 ET" in fut_chunk
+    assert "\u201323:00 CE" in fut_chunk or "\u201322:00 CE" in fut_chunk  # Globex, reader's clock
     assert "Op. Mon" in fut_chunk
     assert "09:30" not in fut_chunk  # not the cash index's hours
     assert "(FUT) (FUT)" not in html

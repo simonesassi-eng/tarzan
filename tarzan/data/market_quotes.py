@@ -217,43 +217,61 @@ def market_open_now(ticker: str, now: Optional[datetime] = None) -> Optional[boo
     return dtime(oh, om) <= n.time() <= dtime(ch, cm)
 
 
-# Short zone label per exchange group, for a compact human-readable hours
-# caption ("09:30\u201316:00 ET") rather than a raw IANA zone name.
-_SESSION_LABEL: dict[str, str] = {
-    "EU": "CET", "L": "GMT", "US": "ET", "JP": "JST",
-    "HK": "HKT", "CN": "CST", "AU": "AEST", "KR": "KST",
-    "HE": "EET", "IR": "IST",
-}
-
-
 _CME_EQUITY_FUTURES = frozenset({"ES=F", "NQ=F", "YM=F", "RTY=F"})
 
 
-def session_caption(ticker: str) -> str:
-    """A short, human caption for an instrument's trading session.
+READER_TZ = "Europe/Rome"
 
-    A bounded cash session gets its local hours and zone abbreviation, e.g.
-    "09:30\u201316:00 ET" \u2014 always in the exchange's own local time, since that
-    is how every financial site quotes session hours and the reader already
-    holds several exchanges' worth of them side by side. A continuously
-    traded instrument (futures/FX/crypto, per :func:`is_continuous_market`)
-    has no single bounded session to state, so it gets "\u224824h" instead of a
-    fabricated or misleading open/close pair. Empty string when the exchange
+
+def reader_hours(tzname: str, windows, day=None) -> str:
+    """Exchange trading ``windows`` (``((open_h, open_m), (close_h, close_m))``,
+    exchange-local; a close before its open runs into the next day) as the
+    reader sees them: "15:30\u201322:00 CET". Converted on ``day`` (default: the
+    run's date at the exchange), so the weeks when Europe and the US or Sydney
+    are on different summer time read correctly."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    src, dst = ZoneInfo(tzname), ZoneInfo(READER_TZ)
+    if day is None:
+        day = _intraday_reference_now().astimezone(src).date()
+    parts, label = [], ""
+    for (oh, om), (ch, cm) in windows:
+        start = datetime.combine(day, dtime(oh, om), tzinfo=src)
+        end = datetime.combine(day, dtime(ch, cm), tzinfo=src)
+        if end <= start:
+            end += timedelta(days=1)
+        start, end = start.astimezone(dst), end.astimezone(dst)
+        parts.append(f"{start:%H:%M}\u2013{end:%H:%M}")
+        label = f"{start:%Z}"
+    return f"{', '.join(parts)} {label}"
+
+
+def session_caption(ticker: str) -> str:
+    """A short, human caption for an instrument's trading session, in the
+    reader's own clock (Europe/Rome), e.g. "15:30\u201322:00 CET" for New York:
+    the reader compares venues against the time on their own watch.
+
+    A continuously traded instrument (FX/crypto/commodity futures, per
+    :func:`is_continuous_market`) has no single bounded session to state, so it
+    gets "\u224824h" instead of a fabricated open/close pair; the CME equity
+    index futures state their Globex window. Empty string when the exchange
     is not one of the modelled groups. Never raises.
     """
-    if (ticker or "").upper() in _CME_EQUITY_FUTURES:
-        # Globex: Sunday-Friday from 18:00 to 17:00 ET the next day, with the
-        # one-hour 17:00 halt (futures_open_now decides open/closed on it).
-        return "18:00\u201317:00 ET"
-    if is_continuous_market(ticker):
-        return "\u224824h"
-    ex = _exchange_for(ticker)
-    if ex is None or ex not in _SESSIONS:
+    try:
+        if (ticker or "").upper() in _CME_EQUITY_FUTURES:
+            # Globex: Sunday-Friday 18:00 to 17:00 ET the next day, with the
+            # one-hour 17:00 halt (futures_open_now decides open/closed on it).
+            return reader_hours(_SESSIONS["US"][0], (((18, 0), (17, 0)),))
+        if is_continuous_market(ticker):
+            return "\u224824h"
+        ex = _exchange_for(ticker)
+        if ex is None or ex not in _SESSIONS:
+            return ""
+        tzname, opens, closes = _SESSIONS[ex]
+        return reader_hours(tzname, ((opens, closes),))
+    except Exception:  # noqa: BLE001 — a caption must never break a render
         return ""
-    tzname, (oh, om), (ch, cm) = _SESSIONS[ex]
-    label = _SESSION_LABEL.get(ex, "")
-    hours = f"{oh:02d}:{om:02d}\u2013{ch:02d}:{cm:02d}"
-    return f"{hours} {label}".strip()
 
 
 def futures_open_now(now: Optional[datetime] = None) -> bool:

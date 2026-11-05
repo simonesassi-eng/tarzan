@@ -571,10 +571,6 @@ def _clip(ser, now, step=None):
         return None
 
 
-# Zone labels where the tz database has none (it prints "+08" for Singapore).
-_ZONE_LABEL = {"Asia/Singapore": "SGT"}
-
-
 def schedule(row: FeedRow, now: datetime):
     """``(caption, open now, session weekday)`` from the row's trading windows,
     or None when the row has none (bonds). A window belongs to the day it
@@ -602,8 +598,11 @@ def schedule(row: FeedRow, now: datetime):
         b = datetime.combine(day, dtime.fromisoformat(end), tzinfo=tz)
         return a, (b if b > a else b + timedelta(days=1))
 
-    label = _ZONE_LABEL.get(row.tz) or local.strftime("%Z")
-    caption = ", ".join(f"{a}\u2013{b}" for a, b in row.sessions) + f" {label}"
+    from tarzan.data.market_quotes import reader_hours
+
+    caption = reader_hours(row.tz, [
+        tuple(tuple(int(x) for x in t.split(":")) for t in w) for w in row.sessions
+    ], day=local.date())
     latest = None  # the most recent window that has begun on a trading day
     for back in range(0, 8):
         day = local.date() - timedelta(days=back)
