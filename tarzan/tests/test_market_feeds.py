@@ -245,7 +245,7 @@ class TestComposition:
         old = path(NOW - timedelta(days=3), [26000, 26010, 26020])
         serve(tv=tv_body({"EUREX:FDAX1!": (26100, 187, NOW)}),
               mw={"FUTURE/DE/XEUR/DAX00": (mw_body(old, prior=25913, prior_at=FRI - timedelta(days=1)), None)})
-        dax = mf.fetch_feed_quotes(NOW, rows=(DAX,))[0]
+        dax = mf.fetch_feed_quotes(NOW, rows=(_row("fut:FDAX"),))[0]
         assert dax["source"] == mf.TV and dax["spark_series"] is None
 
     def test_live_means_a_recent_print(self, serve):
@@ -412,3 +412,72 @@ def test_every_future_has_a_timetable_and_singapore_a_zone_label():
     assert all(r.sessions and r.tz for r in futures)
     # Singapore 09:00-16:35, 17:15-05:15 on the reader's clock (CET in November).
     assert mf.schedule(_row("fut:A50"), NOW)[0] == "02:00–09:35, 10:15–22:15 CET"
+
+
+# --- out-of-session behaviour (7 Nov 2026) -------------------------------------------
+
+SAT = datetime.datetime(2026, 11, 7, 13, 0, tzinfo=timezone.utc)
+FRI_UTC = datetime.datetime(2026, 11, 6, tzinfo=timezone.utc)
+
+
+def test_a_closed_future_shows_the_settlement_and_confirms_the_baseline(serve):
+    """TradingView prints Friday's settlement (25875), MarketWatch the 22:00 last
+    trade (25754): both measure from Thursday's 26418, so they confirm each other."""
+    bars = path(FRI_UTC.replace(hour=6, minute=40), [26100 - 6 * i for i in range(58)], step_min=15)
+    serve(tv={"data": [{"s": "EUREX:FDAX1!", "d": [25875, 25875 - 26418,
+                                                    int(SAT.replace(hour=9).timestamp()),
+                                                    int(FRI_UTC.timestamp())]}]},
+          mw={"FUTURE/DE/XEUR/DAX00": (mw_body(bars, prior=26418,
+                                                prior_at=FRI_UTC - timedelta(days=1)), None)})
+    dax = mf.fetch_feed_quotes(SAT, rows=(_row("fut:FDAX"),))[0]
+    assert dax["source"] == mf.TV and dax["value"] == 25875
+    assert dax["verdict"] == "verified"
+    assert dax["pct"] == pytest.approx((25875 / 26418 - 1) * 100)
+    assert dax["spark_series"] is not None          # Friday's session is drawn
+    assert dax["live"] is False
+
+
+def test_a_saturday_stamp_does_not_push_the_other_bond_sources_out(serve):
+    """CNBC stamped the Bund with Saturday 08:31: TradingView and MarketWatch
+    (Friday) were dropped as stale and the row disappeared."""
+    fri_eve = FRI_UTC.replace(hour=20, minute=59)
+    serve(tv=tv_body({"TVC:DE10Y": (3.2541, 0.0153, fri_eve)}),
+          cnbc=cnbc_body({"DE10Y": ("3.2508%", "3.2508%", SAT.replace(hour=8, minute=31))}),
+          mw={"BOND/BX//TMBMKDE-10Y": (mw_body(path(FRI_UTC.replace(hour=7), [3.25, 3.26, 3.2678], 300),
+                                                prior=3.2611, prior_at=FRI_UTC - timedelta(days=1)), None)})
+    rows = mf.fetch_feed_quotes(SAT, rows=(DE10,))
+    assert rows and rows[0]["source"] == mf.TV and rows[0]["verdict"] == "verified"
+
+
+def test_a_closed_futures_source_from_an_older_session_still_does_not_vote(serve):
+    votes = {mf.TV: obs(mf.TV, 25875, 26418, SAT),
+             mf.MW: obs(mf.MW, 26100, 26300, SAT - timedelta(days=3))}
+    assert set(mf._fresh(votes, _row("fut:FDAX"), SAT)) == {mf.TV}
+
+
+def test_the_eight_oclock_issue_draws_marketwatchs_pre_market(serve):
+    """08:00 CET on a weekday: MarketWatch's regular day starts at 07:50, its
+    pre-market at 07:30; with the pre-market bars the line has something to draw."""
+    run = datetime.datetime(2026, 11, 5, 7, 3, tzinfo=timezone.utc)
+    pre = (run.replace(hour=6, minute=30), run.replace(hour=6, minute=50))
+    bars = path(run.replace(hour=6, minute=30), [26000, 26010, 26005, 26020, 26030, 26025], step_min=5)
+    body = mw_body(bars, prior=25990, prior_at=run - timedelta(days=1), session=pre)
+    body["Series"][0]["MarketSessions"] = [
+        {"Kind": "PreMarket", "Start": ms(pre[0]), "End": ms(pre[1])},
+        {"Kind": "Trading", "Start": ms(pre[1]), "End": ms(run.replace(hour=21))}]
+    serve(tv=tv_body({"EUREX:FDAX1!": (26030, 40, run)}),
+          mw={"FUTURE/DE/XEUR/DAX00": (body, None)})
+    dax = mf.fetch_feed_quotes(run, rows=(_row("fut:FDAX"),))[0]
+    assert dax["spark_series"] is not None and dax["spark_series"].index[0] == pd.Timestamp(pre[0])
+    assert dax["live"] is True
+
+
+def test_marketwatch_is_asked_for_its_pre_market_bars(monkeypatch):
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    asked = []
+    monkeypatch.setattr(mf, "_request_json", lambda provider, method, url, **kw: asked.append(url))
+    mf._mw_series("FUTURE/DE/XEUR/DAX00", "PT5M", "D1")
+    query = json.loads(parse_qs(urlparse(asked[0]).query)["json"][0])
+    assert query["ShowPreMarket"] is True and query["IncludeMockTick"] is False

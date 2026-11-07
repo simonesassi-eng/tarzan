@@ -58,14 +58,21 @@ _MW_KEY, _MW_TOKEN = "cecc4267a0", "cecc4267a0194af89ca343805a3e57af"
 # A source whose last print is this much older than the freshest one is not
 # reporting the same market (MarketWatch's Hang Seng sat three days behind).
 _STALE_BEHIND = timedelta(hours=3)
+# Out of session: a print older than a long weekend is from a dead feed
+# (MarketWatch's Hang Seng sat three days behind).
+_ANCIENT = timedelta(days=4)
 # A row is "trading now" when its shown print is at most this old. Covers the
 # feeds' 10-15 minute delay with room to spare.
 _LIVE_WITHIN = timedelta(minutes=30)
 # A drawn bar this far from both the median and the level is a bad print:
 # basis points for a yield, percent for an index.
 _SPIKE = {"yield": 30.0, "index": 4.5}
+# Intraday series longer than this are thinned to one point per 15 minutes.
+_THIN_ABOVE = 96
 # A gap this long inside one feed's intraday bars separates two sessions.
 _SESSION_GAP = timedelta(hours=4)
+# Closed futures: settlement and last trade may differ by an evening's move.
+_CLOSED_LEVEL = 2.0
 # A drawn intraday line must end near the quote it sits under.
 _CHART_BEHIND = timedelta(hours=2)
 # Session starts further apart than this are different trading days. The same
@@ -360,7 +367,10 @@ def _mw_series(key: str, step: str, frame: str):
     query = {"Step": step, "TimeFrame": frame, "EntitlementToken": _MW_TOKEN,
              "IncludeMockTick": False, "FilterNullSlots": False, "FilterClosedPoints": True,
              "IncludeClosedSlots": False, "IncludeOfficialClose": True, "InjectOpen": False,
-             "ShowPreMarket": False, "ShowAfterHours": False, "UseExtendedTimeFrame": True,
+             # Pre-market: Eurex trades from 01:10 CET but MarketWatch's regular
+             # day starts at 07:50; its pre-market bars from 07:30 are all an 08:00
+             # issue can draw (the night hours are on none of the three feeds).
+             "ShowPreMarket": True, "ShowAfterHours": False, "UseExtendedTimeFrame": True,
              "WantPriorClose": True, "IncludeCurrentQuotes": False,
              "ResetTodaysAfterHoursPercentChange": False,
              "Series": [{"Key": key, "Dialect": "Charting", "Kind": "Ticker", "SeriesId": "s1",
@@ -397,11 +407,12 @@ def _marketwatch(key: str, unit: str) -> tuple[Optional[Obs], Chart]:
     try:
         intra, series = _mw_points(_mw_series(key, "PT5M", "D1"), unit)
         extra = {e.get("Name"): e for e in series.get("ExtraData") or [] if isinstance(e, dict)}
-        trading = [s for s in series.get("MarketSessions") or []
-                   if isinstance(s, dict) and s.get("Kind") == "Trading"]
-        if trading and _number(trading[-1].get("Start")) and _number(trading[-1].get("End")):
-            chart.span = (pd.Timestamp(int(trading[-1]["Start"]), unit="ms", tz="UTC"),
-                          pd.Timestamp(int(trading[-1]["End"]), unit="ms", tz="UTC"))
+        windows = [s for s in series.get("MarketSessions") or []
+                   if isinstance(s, dict) and s.get("Kind") in ("PreMarket", "Trading")
+                   and _number(s.get("Start")) and _number(s.get("End"))]
+        if windows:
+            chart.span = (pd.Timestamp(int(windows[0]["Start"]), unit="ms", tz="UTC"),
+                          pd.Timestamp(int(windows[-1]["End"]), unit="ms", tz="UTC"))
         # Only real bars date a print. On a holiday (the JGB on 3 Nov 2026)
         # the series is one point stamped at the session's END, which
         # outdated the other feeds' real prints and got them discarded as
@@ -443,8 +454,20 @@ def _change(o: Obs, unit: str) -> Optional[float]:
     return (o.last / o.prev - 1.0) * 100.0 if o.prev else None
 
 
-def _agreement(a: Obs, b: Obs, unit: str) -> tuple[bool, Optional[bool]]:
-    """(levels agree, changes agree — None when either has no baseline)."""
+def _agreement(a: Obs, b: Obs, unit: str, closed: bool = False) -> tuple[bool, Optional[bool]]:
+    """(levels agree, changes agree — None when either has no baseline).
+
+    ``closed``: a future whose session is over. Its official close is the
+    settlement (TradingView prints it), while MarketWatch and CNBC keep the
+    last trade, which for Eurex runs on from the 17:30 settlement to 22:00, so
+    the two legitimately differ by the evening's trading. Then the BASELINE is
+    what must match (both measure from the same previous settlement), and the
+    level only within a session's range."""
+    if closed and unit == "index":
+        if a.prev is None or b.prev is None:
+            return abs(a.last / b.last - 1.0) * 100.0 <= _CLOSED_LEVEL, None
+        return (abs(a.last / b.last - 1.0) * 100.0 <= _CLOSED_LEVEL,
+                abs(a.prev / b.prev - 1.0) * 100.0 <= _TOLERANCE[unit][1])
     tol_level, tol_change = _TOLERANCE[unit]
     if unit == "yield":
         level = abs(a.last - b.last) * 100.0 <= tol_level
@@ -463,40 +486,67 @@ def _agreement(a: Obs, b: Obs, unit: str) -> tuple[bool, Optional[bool]]:
     return level, abs(ca - cb) <= tol_change
 
 
-def verdict(shown: Obs, others: list[Obs], unit: str) -> str:
+def verdict(shown: Obs, others: list[Obs], unit: str, closed: bool = False) -> str:
     """"verified": another source confirms the level and, where it can, the
-    day's change; "disputed": other sources answered but none confirms;
-    "single": nobody else answered."""
+    day's change (closed futures: the baseline); "disputed": other sources
+    answered but none confirms; "single": nobody else answered."""
     if not others:
         return "single"
-    checks = [_agreement(shown, o, unit) for o in others]
+    checks = [_agreement(shown, o, unit, closed) for o in others]
     if not any(level for level, _ in checks):
         return "disputed"
     changes = [chg for _, chg in checks if chg is not None]
     return "verified" if not changes or any(changes) else "disputed"
 
 
-def _fresh(obs: dict) -> dict:
-    """Drop sources reporting a much older print than the freshest one."""
+def _fresh(obs: dict, row: Optional[FeedRow] = None, now: Optional[datetime] = None) -> dict:
+    """Drop sources not reporting the current market.
+
+    Print times are only evidence while a future's exchange is trading: then a
+    source three hours behind the freshest one is stuck. Out of session they
+    mean nothing — CNBC stamps a closed market with the current time (or, for
+    the FTSE, tonight's 22:00), TradingView with the settlement's publication —
+    and comparing them dropped TradingView and MarketWatch from every European
+    bond on Saturdays, leaving CNBC alone with no usable baseline and the rows
+    gone. Then only a print older than a long weekend is stale; a stuck feed
+    otherwise shows in its LEVEL, which the vote weighs.
+    """
     if not obs:
         return obs
-    newest = max(o.at for o in obs.values())
-    return {f: o for f, o in obs.items() if o.at >= newest - _STALE_BEHIND}
+    if now is None:
+        newest = max(o.at for o in obs.values())
+        return {f: o for f, o in obs.items() if o.at >= newest - _STALE_BEHIND}
+    timetable = _timetable(row, now) if row is not None else None
+    at = {f: min(o.at, now) for f, o in obs.items()}
+    if timetable is not None and timetable[1]:
+        newest = max(at.values())
+        return {f: o for f, o in obs.items() if at[f] >= newest - _STALE_BEHIND}
+    if timetable is not None and timetable[3] is not None:
+        # A closed future: current if it printed during the session just ended.
+        return {f: o for f, o in obs.items() if at[f] >= timetable[3]}
+    return {f: o for f, o in obs.items() if o.at >= now - _ANCIENT}
 
 
-def choose(row: FeedRow, obs: dict) -> Optional[tuple]:
+def choose(row: FeedRow, obs: dict, closed: bool = False) -> Optional[tuple]:
     """(quote Obs, chart feed, verdict) for the first recipe another source
     confirms, else the first that can be shown at all; None when no recipe has
-    a level AND a previous close."""
+    a level AND a previous close.
+
+    ``closed`` (a future after its session): TradingView's settlement-to-
+    settlement figure first, the exchange's official day."""
     first = None
-    for quote_feed, chart_feed in row.recipes:
+    recipes = (sorted(row.recipes, key=lambda r: r[0] != TV)
+               if closed and row.unit == "index" else row.recipes)
+    for quote_feed, chart_feed in recipes:
         shown = obs.get(quote_feed)
         if shown is None or shown.prev is None:
             continue
         if chart_feed is not None and chart_feed not in row.symbols:
             continue
+        if chart_feed == MW and MW not in obs:
+            continue  # MarketWatch had no bars to draw (FTSE on a Saturday)
         others = [o for f, o in obs.items() if f != quote_feed]
-        v = verdict(shown, others, row.unit)
+        v = verdict(shown, others, row.unit, closed)
         if v != "disputed":
             return shown, chart_feed, v
         first = first or (shown, chart_feed, v)
@@ -546,7 +596,7 @@ def _session_only(ser, start, last, unit):
     return ser if len(ser) >= 2 else None
 
 
-def _clip(ser, now, step=None):
+def _clip(ser, now, step=None, anchor=None):
     """Nothing after the run's reference instant; optionally one point per
     ``step`` (CNBC draws one-minute bars: a thousand points, four times over in
     the SVG, would cost ~40 KB a row of an email Gmail clips at 102 KB)."""
@@ -560,12 +610,25 @@ def _clip(ser, now, step=None):
             # One session: whatever precedes the last overnight-sized hole is
             # another day's stray print (CNBC opens a gilt's day at 22:33 the
             # evening before), which would draw the empty night as a flat line.
+            # Of the stretches between such holes, the one the shown quote
+            # belongs to: the last that began by ``anchor``. On a Saturday
+            # CNBC's "1D" runs from Thursday to a few stray Saturday prints,
+            # and the last stretch alone was too short to draw.
             holes = ser.index.to_series().diff() > _SESSION_GAP
-            if holes.any():
-                ser = ser[ser.index >= holes[holes].index[-1]]
+            starts = [ser.index[0], *holes[holes].index]
+            if anchor is not None:
+                began = [t for t in starts if t <= pd.Timestamp(anchor)]
+                first = began[-1] if began else starts[0]
+            else:
+                first = starts[-1]
+            later = [t for t in starts if t > first]
+            ser = ser[(ser.index >= first) & ((ser.index < later[0]) if later else True)]
             # The last REAL observation of each bucket, at its own time: a
-            # bucket label could post-date the run's reference instant.
-            ser = ser.groupby(ser.index.floor(step)).tail(1)
+            # bucket label could post-date the run's reference instant. Only a
+            # long series is thinned: half an hour of five-minute bars at 08:00
+            # would otherwise shrink to two points.
+            if len(ser) > _THIN_ABOVE:
+                ser = ser.groupby(ser.index.floor(step)).tail(1)
         return ser if len(ser) >= 2 else None
     except Exception:  # noqa: BLE001
         return None
@@ -577,6 +640,13 @@ def schedule(row: FeedRow, now: datetime):
     starts on: an evening session that runs past midnight is that day's.
     Holidays come from ``row.calendar``'s exchange; without one (SGX) only
     weekends close it."""
+    timetable = _timetable(row, now)
+    return timetable[:3] if timetable else None
+
+
+def _timetable(row: FeedRow, now: datetime):
+    """:func:`schedule` plus the start of the trading day the latest (or
+    current) window belongs to."""
     if not row.sessions or not row.tz:
         return None
     from datetime import time as dtime
@@ -592,6 +662,9 @@ def schedule(row: FeedRow, now: datetime):
             return True
         from tarzan.data.exchange_calendar import is_session
         return is_session(row.calendar, day)
+
+    def day_start(day):
+        return min(window(day, a, b)[0] for a, b in row.sessions)
 
     def window(day, start, end):
         a = datetime.combine(day, dtime.fromisoformat(start), tzinfo=tz)
@@ -611,12 +684,14 @@ def schedule(row: FeedRow, now: datetime):
         for start, end in row.sessions:
             a, b = window(day, start, end)
             if a <= local < b:
-                return caption, True, f"{day:%a}"
+                return caption, True, f"{day:%a}", day_start(day)
             if a <= local and (latest is None or a > latest[0]):
                 latest = (a, day)
         if latest is not None:
             break
-    return caption, False, (f"{latest[1]:%a}" if latest else "")
+    if latest is None:
+        return caption, False, "", None
+    return caption, False, f"{latest[1]:%a}", day_start(latest[1])
 
 
 def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list, now) -> dict:
@@ -627,16 +702,30 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
     if start is None and chart.span:
         start = chart.span[0].to_pydatetime()
     intra = _session_only(_clip(chart.intra, now), start, shown.last, unit)
-    intra = _clip(intra, now, "15min")
-    if intra is not None and abs(intra.index[-1].to_pydatetime() - shown.at) > _CHART_BEHIND:
-        # The chart is not of the quote's session (a feed rolled early or
-        # late): draw nothing rather than another session under this level.
-        intra = None
+    intra = _clip(intra, now, "15min", anchor=shown.at)
+    timetable = _timetable(row, now)
+    if intra is not None:
+        last_bar = intra.index[-1].to_pydatetime()
+        if timetable is not None and not timetable[1] and timetable[3] is not None:
+            # Closed: the shown print may carry the settlement's publication
+            # time, hours after the last trade; the chart only has to be of the
+            # session that just ended.
+            wrong_session = last_bar < timetable[3]
+        elif (now - shown.at) <= _LIVE_WITHIN:
+            wrong_session = abs(last_bar - shown.at) > _CHART_BEHIND
+        else:
+            # Out of session (a bond on a Saturday): the line ends at the last
+            # trade, the quote may be stamped hours later (Bund 2Y: 18:00 and
+            # 21:00); it only has to be the same trading day.
+            wrong_session = abs(last_bar - shown.at) > _OTHER_SESSION
+        if wrong_session:
+            # The chart is not of the quote's session (a feed rolled early or
+            # late): draw nothing rather than another session under this level.
+            intra = None
     daily = _clip(chart.daily, now)
     spark = ([float(x) for x in intra.values] if intra is not None
              else [float(x) for x in daily.values[-40:]] if daily is not None else [])
     delta = _change(shown, unit)
-    timetable = schedule(row, now)
     live = timetable[1] if timetable else (now - shown.at) <= _LIVE_WITHIN
     span = chart.span
     if intra is not None and (span is None or intra.index[0] < span[0] or intra.index[-1] > span[1]):
@@ -729,8 +818,9 @@ def fetch_feed_quotes(now: Optional[datetime] = None, rows=FEED_ROWS) -> list[di
                 obs[CNBC] = cnbc[r.symbols[CNBC]]
             if r.key in mw and mw[r.key][0] is not None:
                 obs[MW] = mw[r.key][0]
-            obs = _fresh(obs)
-            pick = choose(r, obs)
+            obs = _fresh(obs, r, now)
+            timetable = _timetable(r, now)
+            pick = choose(r, obs, closed=bool(timetable) and not timetable[1])
             if pick is not None:
                 chosen[r.key] = (r, obs, *pick)
 
