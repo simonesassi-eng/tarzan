@@ -4,8 +4,10 @@ Yahoo only serves CME index futures and US Treasury yields. For everything else
 (Eurex/ICE/Osaka/SGX/ASX futures, European and Japanese yields) the strip reads
 three public, keyless feeds — the same endpoints that power their own websites:
 
-* TradingView's scanner: one POST for every quote, with a previous close that
-  is always the prior trading day's (futures: the prior settlement). No history.
+* TradingView: its scanner (one POST for every quote, with a previous close
+  that is always the prior trading day's; futures: the prior settlement) and
+  its chart socket (five-minute bars of every session whole, a Eurex future's
+  night hours included), which draws every line first.
 * CNBC (Reuters data): quotes plus a one-day intraday chart. Its quoted
   previous close for BONDS rolls to the same day's close after the European
   close, so it is never used as a bond baseline, and its daily history is
@@ -136,11 +138,14 @@ def _treasury(name, key, **symbols):
 # Display order inside each category follows the cash-open order (Asia,
 # Europe, US), as the rest of the strip does.
 FEED_ROWS: tuple[FeedRow, ...] = (
-    _future("ASX SPI 200", "fut:SPI", sessions=(("09:50", "16:30"), ("17:10", "07:00")),
+    # Asian night sessions open the NEXT trading day (JPX, ASX24 and SGX all
+    # count them that way, settlement at the day session's close): "-" marks a
+    # window that starts the evening of the previous trading day.
+    _future("ASX SPI 200", "fut:SPI", sessions=(("-17:10", "07:00"), ("09:50", "16:30")),
             tz="Australia/Sydney", calendar="^AXJO", **{TV: "ASX24:AP1!", CNBC: "@YAP.1"}),
-    _future("Nikkei 225", "fut:NK", sessions=(("08:45", "15:45"), ("17:00", "06:00")),
+    _future("Nikkei 225", "fut:NK", sessions=(("-17:00", "06:00"), ("08:45", "15:45")),
             tz="Asia/Tokyo", calendar="^N225", **{TV: "OSE:NK2251!", CNBC: "@JNI.1"}),
-    _future("FTSE China A50", "fut:A50", sessions=(("09:00", "16:35"), ("17:15", "05:15")),
+    _future("FTSE China A50", "fut:A50", sessions=(("-17:15", "05:15"), ("09:00", "16:35")),
             tz="Asia/Singapore", **{TV: "SGX:CN1!", CNBC: "@SFC.1"}),
     _future("Euro Stoxx 50", "fut:FESX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FESX1!", MW: "FUTURE/DE/XEUR/FESX00"}),
@@ -359,6 +364,129 @@ def _cnbc_chart(symbol: str, unit: str) -> Chart:
         except Exception:  # noqa: BLE001
             continue
     return chart
+
+
+# TradingView's chart feed is a websocket, the one its own charts read: the only
+# free intraday source holding a Eurex future's whole day. MarketWatch's starts
+# at 07:30 CET, CNBC carries no Eurex contract, so every 08:00 issue drew the DAX
+# from nothing although the contract had traded since 01:10.
+_TV_WS = "wss://data.tradingview.com/socket.io/websocket"
+_TV_BARS = 300  # five-minute bars: 25 hours, a whole session even on a Saturday
+
+
+def _tv_frame(payload: dict) -> str:
+    text = json.dumps(payload, separators=(",", ":"))
+    return f"~m~{len(text)}~m~{text}"
+
+
+def _tv_split(raw: str) -> list[str]:
+    """The socket.io-style envelope: ``~m~<length>~m~<payload>`` repeated."""
+    import re
+
+    out = []
+    while raw:
+        m = re.match(r"~m~(\d+)~m~", raw)
+        if not m:
+            break
+        n, start = int(m.group(1)), m.end()
+        out.append(raw[start:start + n])
+        raw = raw[start + n:]
+    return out
+
+
+def _tv_read_bars(ws, symbols: list[str], deadline: float, clock=None) -> dict:
+    """``{symbol: [(epoch seconds, close), ...]}`` read from an open chart socket.
+
+    One chart session per symbol. Heartbeats (``~h~N``) are echoed or the server
+    hangs up. A symbol the feed rejects is simply absent. Stops when every
+    symbol answered or at ``deadline`` (``clock()`` seconds).
+    """
+    import random
+    import string
+    import time
+
+    clock = clock or time.monotonic
+    sessions = {}
+    ws.send(_tv_frame({"m": "set_auth_token", "p": ["unauthorized_user_token"]}))
+    for i, sym in enumerate(symbols):
+        cs = "cs_" + "".join(random.choices(string.ascii_lowercase, k=12))
+        sessions[cs] = sym
+        ws.send(_tv_frame({"m": "chart_create_session", "p": [cs, ""]}))
+        ws.send(_tv_frame({"m": "resolve_symbol", "p": [
+            cs, "sym", "=" + json.dumps({"symbol": sym, "adjustment": "splits",
+                                         "session": "extended"})]}))
+        ws.send(_tv_frame({"m": "create_series", "p": [cs, "s", "s", "sym", "5", _TV_BARS, ""]}))
+    bars, done = {}, set()
+    while len(done) < len(sessions):
+        left = deadline - clock()
+        if left <= 0:
+            break
+        try:
+            raw = ws.recv(timeout=left)
+        except TimeoutError:
+            break
+        for frame in _tv_split(raw if isinstance(raw, str) else raw.decode()):
+            if frame.startswith("~h~"):
+                ws.send(f"~m~{len(frame)}~m~{frame}")
+                continue
+            try:
+                msg = json.loads(frame)
+            except ValueError:
+                continue
+            head, args = msg.get("m"), msg.get("p") or []
+            cs = args[0] if args else None
+            if cs not in sessions:
+                continue
+            if head in ("symbol_error", "series_error", "critical_error"):
+                done.add(cs)
+            elif head == "timescale_update":
+                try:
+                    rows = args[1]["s"]["s"]
+                    bars[sessions[cs]] = [(float(r["v"][0]), r["v"][4]) for r in rows]
+                except (KeyError, IndexError, TypeError):
+                    pass
+                done.add(cs)
+    return bars
+
+
+def _tv_connect(timeout: float):
+    """The one network seam of the chart socket (the suite stubs it)."""
+    from websockets.sync.client import connect
+
+    return connect(_TV_WS, origin="https://www.tradingview.com", user_agent_header=_UA,
+                   open_timeout=timeout, close_timeout=2)
+
+
+def _tradingview_charts(symbols: list[str], units: dict) -> dict:
+    """``{symbol: pd.Series of closes (UTC)}`` for ``symbols``, one socket for
+    all of them, bounded by the provider budget. Empty on any failure."""
+    import time
+
+    import pandas as pd
+    from tarzan.runtime.transport import provider_call
+
+    if not symbols:
+        return {}
+
+    def fetch(timeout):
+        with _tv_connect(timeout) as ws:
+            return _tv_read_bars(ws, symbols, time.monotonic() + timeout)
+
+    try:
+        raw = provider_call(TV, fetch, timeout=_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 — a chart must never break a run
+        logger.info("TradingView charts unreachable (%s)", type(e).__name__)
+        return {}
+    out = {}
+    for sym, rows in (raw or {}).items():
+        pts = {}
+        for ts, close in rows:
+            value = _plausible(_number(close), units.get(sym, "index"))
+            if value is not None and math.isfinite(ts):
+                pts[pd.Timestamp(int(ts), unit="s", tz="UTC")] = value
+        if len(pts) >= 2:
+            out[sym] = pd.Series(pts).sort_index()
+    return out
 
 
 def _mw_series(key: str, step: str, frame: str):
@@ -645,8 +773,14 @@ def schedule(row: FeedRow, now: datetime):
 
 
 def _timetable(row: FeedRow, now: datetime):
-    """:func:`schedule` plus the start of the trading day the latest (or
-    current) window belongs to."""
+    """:func:`schedule` plus the start and end of the trading day the latest
+    (or current) window belongs to, and that window itself.
+
+    A trading day is a weekday its exchange is open (``row.calendar``). Its
+    windows are on that date, except one marked "-", which opens the evening of
+    the PREVIOUS trading day (Osaka's Friday-evening session belongs to Monday).
+    The weekday shown is the calendar day the current or latest window began.
+    """
     if not row.sessions or not row.tz:
         return None
     from datetime import time as dtime
@@ -663,54 +797,68 @@ def _timetable(row: FeedRow, now: datetime):
         from tarzan.data.exchange_calendar import is_session
         return is_session(row.calendar, day)
 
-    def day_start(day):
-        return min(window(day, a, b)[0] for a, b in row.sessions)
+    def previous_trading_day(day):
+        day -= timedelta(days=1)
+        while not trading_day(day):
+            day -= timedelta(days=1)
+        return day
 
-    def window(day, start, end):
-        a = datetime.combine(day, dtime.fromisoformat(start), tzinfo=tz)
-        b = datetime.combine(day, dtime.fromisoformat(end), tzinfo=tz)
-        return a, (b if b > a else b + timedelta(days=1))
+    def windows(day):
+        out = []
+        for start, end in row.sessions:
+            base = previous_trading_day(day) if start.startswith("-") else day
+            a = datetime.combine(base, dtime.fromisoformat(start.lstrip("-")), tzinfo=tz)
+            b = datetime.combine(base, dtime.fromisoformat(end), tzinfo=tz)
+            out.append((a, b if b > a else b + timedelta(days=1)))
+        return out
 
     from tarzan.data.market_quotes import reader_hours
 
+    by_clock = sorted(row.sessions, key=lambda w: w[0].lstrip("-"))
     caption = reader_hours(row.tz, [
-        tuple(tuple(int(x) for x in t.split(":")) for t in w) for w in row.sessions
+        tuple(tuple(int(x) for x in t.lstrip("-").split(":")) for t in w) for w in by_clock
     ], day=local.date())
-    latest = None  # the most recent window that has begun on a trading day
-    for back in range(0, 8):
-        day = local.date() - timedelta(days=back)
+    latest = None  # (window start, its trading day) of the latest window begun
+    for ahead in range(4, -9, -1):
+        day = local.date() + timedelta(days=ahead)
         if not trading_day(day):
             continue
-        for start, end in row.sessions:
-            a, b = window(day, start, end)
+        spans = windows(day)
+        for a, b in spans:
             if a <= local < b:
-                return caption, True, f"{day:%a}", day_start(day)
+                return (caption, True, f"{a:%a}",
+                        min(x for x, _ in spans), max(y for _, y in spans), (a, b))
             if a <= local and (latest is None or a > latest[0]):
-                latest = (a, day)
-        if latest is not None:
-            break
+                latest = (a, day, b)
     if latest is None:
-        return caption, False, "", None
-    return caption, False, f"{latest[1]:%a}", day_start(latest[1])
+        return caption, False, "", None, None, None
+    spans = windows(latest[1])
+    return (caption, False, f"{latest[0]:%a}",
+            min(x for x, _ in spans), max(y for _, y in spans), (latest[0], latest[2]))
 
 
 def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list, now) -> dict:
     import pandas as pd
 
     unit = row.unit
-    start = shown.session or next((o.session for o in others if o.session), None)
+    timetable = _timetable(row, now)
+    window = timetable[5] if timetable else None
+    # A future draws the session in progress, or the one just ended: Osaka's
+    # trading day spans Friday evening to Monday afternoon, an axis no line
+    # can be read on. Its % is still the trading day's, from the settlement.
+    start = (window[0] if window else
+             shown.session or next((o.session for o in others if o.session), None))
     if start is None and chart.span:
         start = chart.span[0].to_pydatetime()
     intra = _session_only(_clip(chart.intra, now), start, shown.last, unit)
     intra = _clip(intra, now, "15min", anchor=shown.at)
-    timetable = _timetable(row, now)
     if intra is not None:
         last_bar = intra.index[-1].to_pydatetime()
-        if timetable is not None and not timetable[1] and timetable[3] is not None:
+        if window is not None and not timetable[1]:
             # Closed: the shown print may carry the settlement's publication
             # time, hours after the last trade; the chart only has to be of the
             # session that just ended.
-            wrong_session = last_bar < timetable[3]
+            wrong_session = last_bar < window[0]
         elif (now - shown.at) <= _LIVE_WITHIN:
             wrong_session = abs(last_bar - shown.at) > _CHART_BEHIND
         else:
@@ -728,6 +876,10 @@ def _row_dict(row: FeedRow, shown: Obs, chart: Chart, status: str, others: list,
     delta = _change(shown, unit)
     live = timetable[1] if timetable else (now - shown.at) <= _LIVE_WITHIN
     span = chart.span
+    if window is not None:
+        # The exchange's own session (01:10-22:00 for Eurex), so the line
+        # grows across the real session whichever feed drew it.
+        span = (pd.Timestamp(window[0]), pd.Timestamp(window[1]))
     if intra is not None and (span is None or intra.index[0] < span[0] or intra.index[-1] > span[1]):
         # No session window from the feed (or one the bars overrun): the axis
         # runs from the first bar for one session length while the market
@@ -828,15 +980,30 @@ def fetch_feed_quotes(now: Optional[datetime] = None, rows=FEED_ROWS) -> list[di
         # with its quote).
         cnbc_charts = [(r.key, r.symbols[CNBC], r.unit) for r, _o, _s, feed, _v in chosen.values()
                        if feed == CNBC]
-        drawn = _parallel([(_cnbc_chart, sym, unit) for _k, sym, unit in cnbc_charts])
-        charts = {k: c for (k, _s, _u), c in zip(cnbc_charts, drawn) if c is not None}
+        tv_wanted = {r.symbols[TV]: r.unit for r, *_ in chosen.values() if TV in r.symbols}
+        drawn = _parallel([(_tradingview_charts, list(tv_wanted), tv_wanted)]
+                          + [(_cnbc_chart, sym, unit) for _k, sym, unit in cnbc_charts])
+        tv_lines = drawn[0] or {}
+        charts = {k: c for (k, _s, _u), c in zip(cnbc_charts, drawn[1:]) if c is not None}
 
         out = {}
         for key, (r, obs, shown, chart_feed, status) in chosen.items():
-            chart = (charts.get(key) if chart_feed == CNBC
-                     else mw[key][1] if chart_feed == MW and key in mw else Chart())
+            fallback = (charts.get(key) if chart_feed == CNBC
+                        else mw[key][1] if chart_feed == MW and key in mw else Chart()) or Chart()
             others = [o for f, o in obs.items() if f != shown.feed]
-            out[key] = _row_dict(r, shown, chart or Chart(), status, others, now)
+            # TradingView's line first: it holds every session whole (a Eurex
+            # future's night hours included) and is the same feed as most shown
+            # levels. The recipe's own chart when TradingView has none, or one
+            # of the wrong session.
+            line = tv_lines.get(r.symbols.get(TV))
+            row = None
+            if line is not None:
+                row = _row_dict(r, shown, Chart(intra=line, daily=fallback.daily,
+                                                span=fallback.span),
+                                status, others, now)
+                if row["spark_series"] is None:
+                    row = None
+            out[key] = row or _row_dict(r, shown, fallback, status, others, now)
         for name, key, a, b in SPREADS:
             spread = _spread(name, key, out.get(a), out.get(b))
             if spread is not None:

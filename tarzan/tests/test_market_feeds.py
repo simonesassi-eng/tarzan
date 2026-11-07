@@ -7,6 +7,7 @@ Network-free: every body below is shaped like the feed's real answer (recorded
 from __future__ import annotations
 
 import datetime
+import json
 from datetime import timedelta, timezone
 
 import pandas as pd
@@ -481,3 +482,122 @@ def test_marketwatch_is_asked_for_its_pre_market_bars(monkeypatch):
     mf._mw_series("FUTURE/DE/XEUR/DAX00", "PT5M", "D1")
     query = json.loads(parse_qs(urlparse(asked[0]).query)["json"][0])
     assert query["ShowPreMarket"] is True and query["IncludeMockTick"] is False
+
+
+# --- TradingView chart socket --------------------------------------------------------
+
+class FakeSocket:
+    """Plays back server frames; records what the client sent."""
+
+    def __init__(self, frames):
+        self.frames, self.sent = list(frames), []
+
+    def send(self, text):
+        self.sent.append(text)
+
+    def recv(self, timeout=None):
+        if not self.frames:
+            raise TimeoutError
+        return self.frames.pop(0)
+
+
+def _wire(payload):
+    text = json.dumps(payload) if not isinstance(payload, str) else payload
+    return f"~m~{len(text)}~m~{text}"
+
+
+def _session_ids(sock):
+    return [json.loads(f.split("~m~", 2)[2])["p"][0] for f in sock.sent
+            if '"chart_create_session"' in f]
+
+
+def test_the_socket_reader_collects_bars_echoes_heartbeats_and_skips_rejects():
+    import itertools
+
+    sock = FakeSocket([])
+    # The reader creates its sessions first; answer them afterwards.
+    orig_send = sock.send
+
+    def send(text):
+        orig_send(text)
+        ids = _session_ids(sock)
+        if len(ids) == 2 and not sock.frames and '"create_series"' in text:
+            good, bad = ids
+            sock.frames = [
+                _wire("~h~7"),
+                _wire({"m": "timescale_update", "p": [good, {"s": {"s": [
+                    {"i": 0, "v": [1793926800, 1, 1, 1, 26100.0, 5]},
+                    {"i": 1, "v": [1793927100, 1, 1, 1, 26110.0, 5]}]}}]}),
+                _wire({"m": "symbol_error", "p": [bad, "sym", "invalid symbol"]}),
+            ]
+    sock.send = send
+    clock = itertools.count(0.0, 0.01)
+    bars = mf._tv_read_bars(sock, ["EUREX:FDAX1!", "BAD:XX"], deadline=5.0, clock=lambda: next(clock))
+    assert bars == {"EUREX:FDAX1!": [(1793926800.0, 26100.0), (1793927100.0, 26110.0)]}
+    assert "~m~4~m~~h~7" in sock.sent          # heartbeat echoed
+
+
+def test_the_socket_reader_gives_up_at_its_deadline():
+    sock = FakeSocket([])
+    assert mf._tv_read_bars(sock, ["EUREX:FDAX1!"], deadline=0.0) == {}
+
+
+def test_tradingview_charts_never_raise():
+    """The suite's socket refuses to connect: no line, no exception."""
+    assert mf._tradingview_charts(["EUREX:FDAX1!"], {}) == {}
+
+
+def test_tradingview_charts_parse_the_socket_through_the_real_path(monkeypatch):
+    import contextlib
+
+    class Answering(FakeSocket):
+        def send(self, text):
+            super().send(text)
+            if '"create_series"' in text:
+                cs = _session_ids(self)[-1]
+                self.frames.append(_wire({"m": "timescale_update", "p": [cs, {"s": {"s": [
+                    {"i": 0, "v": [1793926800, 0, 0, 0, 26100.0, 1]},
+                    {"i": 1, "v": [1793927100, 0, 0, 0, -5.0, 1]},          # implausible: dropped
+                    {"i": 2, "v": [1793927400, 0, 0, 0, 26120.0, 1]}]}}]}))
+
+    monkeypatch.setattr(mf, "_tv_connect", lambda timeout: contextlib.nullcontext(Answering([])))
+    line = mf._tradingview_charts(["EUREX:FDAX1!"], {"EUREX:FDAX1!": "index"})["EUREX:FDAX1!"]
+    assert list(line.values) == [26100.0, 26120.0] and str(line.index.tz) == "UTC"
+
+
+def test_the_tradingview_line_draws_the_whole_eurex_day(serve, monkeypatch):
+    """08:00 CET: MarketWatch has nothing yet, TradingView has bars since 01:10."""
+    run = datetime.datetime(2026, 11, 5, 7, 5, tzinfo=timezone.utc)
+    night = path(run.replace(hour=0, minute=15), [26000 + i for i in range(80)], step_min=5)
+    line = pd.Series({t: v for t, v in night if t <= run})
+    serve(tv={"data": [{"s": "EUREX:FDAX1!", "d": [26079, 79, int(run.timestamp()),
+                                                    int(run.replace(hour=0, minute=0).timestamp())]}]})
+    monkeypatch.setattr(mf, "_tradingview_charts", lambda syms, units: {"EUREX:FDAX1!": line})
+    dax = mf.fetch_feed_quotes(run, rows=(_row("fut:FDAX"),))[0]
+    ser = dax["spark_series"]
+    assert ser is not None and ser.index[0] <= pd.Timestamp(run.replace(hour=0, minute=30))
+    lo, hi = dax["span"]
+    assert (f"{lo:%H:%M}", f"{hi:%H:%M}") == ("01:10", "22:00")   # Eurex, Frankfurt time
+
+
+def test_a_tradingview_line_of_another_session_falls_back_to_the_recipes_chart(serve, monkeypatch):
+    run = datetime.datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+    old = pd.Series({run - timedelta(days=3, minutes=5 * i): 26000.0 + i for i in range(10)}).sort_index()
+    today = path(run.replace(hour=7), [26100, 26110, 26120, 26130], step_min=60)
+    serve(tv={"data": [{"s": "EUREX:FDAX1!", "d": [26130, 30, int(run.timestamp()),
+                                                    int(run.replace(hour=0).timestamp())]}]},
+          mw={"FUTURE/DE/XEUR/DAX00": (mw_body(today, prior=26100, prior_at=run - timedelta(days=1)), None)})
+    monkeypatch.setattr(mf, "_tradingview_charts", lambda syms, units: {"EUREX:FDAX1!": old})
+    dax = mf.fetch_feed_quotes(run, rows=(_row("fut:FDAX"),))[0]
+    assert dax["spark_series"] is not None and dax["spark_series"].index[0].day == 5
+
+
+def test_an_osaka_evening_session_belongs_to_the_next_trading_day():
+    nk = _row("fut:NK")
+    friday_evening = datetime.datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)   # Fri 21:00 JST
+    caption, is_open, day, start, end, window = mf._timetable(nk, friday_evening)
+    assert is_open and day == "Fri"
+    # The trading day it opens is Monday's: from Friday 17:00 to Monday 15:45 JST...
+    assert (start.strftime("%a %H:%M"), end.strftime("%a %H:%M")) == ("Fri 17:00", "Mon 15:45")
+    # ...but the chart shows the session in progress.
+    assert (window[0].strftime("%a %H:%M"), window[1].strftime("%a %H:%M")) == ("Fri 17:00", "Sat 06:00")

@@ -689,3 +689,21 @@ def test_market_status_cash_market_weekend_shows_friday():
 
 def test_market_status_unknown_ticker_is_none():
     assert mq.market_status("SOME.XX") == (None, "")
+
+
+def test_a_closed_futures_session_is_still_its_weekend_chart(monkeypatch):
+    """Saturday 7 Nov 2026: ES=F's last bar is Friday 22:45 CET. Globex is shut,
+    so Friday's session is the line to draw; on a weekday the same age is stale."""
+    from datetime import datetime, timezone
+    bars = pd.Series([7600.0, 7610.0, 7605.0],
+                     index=pd.date_range("2026-11-06 21:15", periods=3, freq="15min", tz="UTC"))
+    saturday = datetime(2026, 11, 7, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(mq, "_intraday_reference_now",
+                        lambda tzinfo=None: saturday.astimezone(tzinfo or timezone.utc))
+    assert mq._has_intraday(bars, "ES=F") is True
+    assert mq._has_intraday(bars, "EURUSD=X") is True
+    tuesday = datetime(2026, 11, 10, 13, 0, tzinfo=timezone.utc)   # open, bars days old
+    stale = bars.copy(); stale.index = stale.index + pd.Timedelta(days=3)
+    monkeypatch.setattr(mq, "_intraday_reference_now",
+                        lambda tzinfo=None: tuesday.astimezone(tzinfo or timezone.utc))
+    assert mq._has_intraday(stale, "ES=F") is False

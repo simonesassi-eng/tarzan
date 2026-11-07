@@ -102,6 +102,10 @@ def _no_market_feeds(monkeypatch):
     """
     monkeypatch.setattr("tarzan.data.market_feeds._request_json",
                         lambda *a, **k: None, raising=True)
+    def no_socket(timeout):
+        raise ConnectionError("chart socket not stubbed")
+
+    monkeypatch.setattr("tarzan.data.market_feeds._tv_connect", no_socket, raising=True)
     yield
 
 

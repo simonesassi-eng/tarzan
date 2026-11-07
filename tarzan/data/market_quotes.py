@@ -632,6 +632,9 @@ _SIBLING_PRICE_TOLERANCE = 0.10
 # feed frozen at the open (the .MI failure this guard was built for, which
 # stops advancing for the whole session) while accepting one that is merely
 # behind. A lagging-but-advancing feed is worth far more than yesterday.
+# A closed future/FX pair's last session is still its chart up to a long
+# weekend after it ended.
+_CLOSED_CONTINUOUS_MAX_SECONDS = 4 * 86400
 _INTRADAY_STALE_AFTER_SECONDS = 10800  # 3h — Yahoo's EU ETF 15m feed lags
 
 
@@ -906,6 +909,14 @@ def _has_intraday(ser, ticker: Optional[str] = None) -> bool:
             # session that did happen.
             return True
         age_seconds = (now - last_ts.to_pydatetime()).total_seconds()
+        t = (ticker or "").upper()
+        if (t.endswith("=F") or t.endswith("=X")) \
+                and market_status(t, _intraday_reference_now())[0] is False:
+            # Futures and FX "trade around the clock" but not over the weekend
+            # (nor in the CME's daily halt): then the session just ended IS the
+            # chart, however old its last bar. Without this every Saturday and
+            # Sunday issue drew no line for the US futures, commodities and FX.
+            return 0 <= age_seconds <= _CLOSED_CONTINUOUS_MAX_SECONDS
     except Exception:  # noqa: BLE001
         return False
     return 0 <= age_seconds <= _INTRADAY_STALE_AFTER_SECONDS
