@@ -295,7 +295,7 @@ def test_the_strip_prints_yields_in_bp_and_names_a_dispute():
     assert "Bonos 2Y: TradingView +4.3 bp (shown); MarketWatch −0.3 bp" in html
     assert "CNBC n/a" not in html
     assert "\U0001F1EE\U0001F1F9\U0001F1E9\U0001F1EA BTP" in html
-    assert "17:00 CET" in html
+    assert "upd 17:00&nbsp;&middot;&nbsp;Op." in html   # a bond: the print's time on the reader's clock
 
 
 def test_the_chart_axis_covers_every_bar(serve):

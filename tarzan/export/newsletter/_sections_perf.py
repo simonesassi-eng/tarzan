@@ -108,7 +108,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             # window when it has one, and "trading now" is the print's age.
             trading = bool(d.get("live"))
             if ss is not None and len(ss) >= 2:
-                return _intraday_spark(ss, d["baseline"], w=66, h=20,
+                return _intraday_spark(ss, d["baseline"], w=_SPARK_W, h=_SPARK_H,
                                        span=d.get("span"), in_progress=trading,
                                        session_hours=d.get("session_hours"))
         else:
@@ -134,7 +134,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 in_progress = (False if is_continuous_market(sym) else trading)
                 sess_hours = None
             return _intraday_spark(ss, d.get("baseline", d["value"]),
-                                   w=66, h=20, span=session_span(sym),
+                                   w=_SPARK_W, h=_SPARK_H, span=session_span(sym),
                                    in_progress=in_progress,
                                    session_hours=sess_hours)
         if d.get("stale_session") or trading:
@@ -149,54 +149,53 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             # to a session that needs naming (the stale case).
             day = d.get("observed_day") if d.get("stale_session") else None
             return _flat_dashed_spark(
-                w=66, h=20,
+                w=_SPARK_W, h=_SPARK_H,
                 note=(f'{day.strftime("%a")} close' if day is not None else ""))
         # Venue closed and no intraday feed for it -- a real, if uneven, gap in
         # Yahoo's coverage for some exchanges. The last ~40 daily closes are a
         # COMPLETE period, so filling the width claims nothing false. Label
         # matches _flat_dashed_spark's own wording for the same gap.
         chart = _day_spark(d.get("spark", []), d.get("baseline", d["value"]),
-                           w=66, h=20, stretch=True)
+                           w=_SPARK_W, h=_SPARK_H, stretch=True)
         if not chart:
             return chart
         return chart + spark_note("no intraday")
 
-    def _hours_line(d: dict) -> str:
-        """Local trading hours (or \u224824h for a continuously traded
-        instrument) plus an open/closed dot and the calendar day that
-        status refers to \u2014 so "Cl." is never ambiguous about which
-        session it means, and "Op." about which day is live. Abbreviated
-        (not "Closed"/"Open") to leave room for the wider chart column."""
+    def _status(d: dict) -> tuple:
+        """``(hours, open now, weekday)``: the session on the reader's clock
+        (no zone; the subtitle names it once), whether it trades now and the
+        calendar day that status refers to, so "Cl." always names its session.
+        Bonds trade over the counter: the shown print's time instead."""
         sym = d.get("symbol", "")
         if d.get("feed_row") and d.get("hours_caption"):
-            # A future with its exchange's timetable: hours and open/closed
-            # from the timetable, like every exchange-listed row.
             cap, is_open, day = d["hours_caption"], bool(d.get("live")), d.get("session_day") or ""
         elif d.get("feed_row"):
-            # No timetable (bonds trade over the counter): the time of the
-            # shown print (reader's clock) says how current it is, and "Op."
-            # means the print is recent enough to be the live market.
             try:
                 from zoneinfo import ZoneInfo
                 at = d["as_of"].astimezone(ZoneInfo("Europe/Rome"))
             except Exception:  # noqa: BLE001
-                return ""
-            cap, is_open, day = f"{at:%H:%M %Z}", bool(d.get("live")), f"{at:%a}"
+                return "", None, ""
+            cap, is_open, day = f"upd {at:%H:%M}", bool(d.get("live")), f"{at:%a}"
         else:
             cap = session_caption(sym)
-            if not cap:
-                return ""
             is_open, day = market_status(sym)
+        for zone in (" CET", " CEST"):
+            cap = cap.removesuffix(zone)
+        return cap, is_open, day
+
+    def _sub_line(d: dict) -> str:
+        """The small line under a name: hours, then Op./Cl. and its day, kept
+        together so a narrow column wraps the hours, never the status."""
+        cap, is_open, day = _status(d)
         if is_open is None:
-            return (f'<div style="font-size:{TYPE_PX["label"]}px;'
-                    f'color:{P["subtle"]};margin-top:1px;">{cap}</div>')
-        dot_col = P["green"] if is_open else P["subtle"]
-        status = "Op." if is_open else "Cl."
-        day_suffix = f" {day}" if day else ""
-        return (f'<div style="font-size:{TYPE_PX["label"]}px;'
-                f'color:{P["subtle"]};margin-top:1px;">{cap} &middot; '
-                f'<span style="color:{dot_col};">&#9679;</span> '
-                f'{status}{day_suffix}</div>')
+            text = _esc(cap)
+        else:
+            status = ("Op." if is_open else "Cl.") + (f"&nbsp;{day}" if day else "")
+            text = f"{_esc(cap)}&nbsp;&middot;&nbsp;{status}" if cap else status
+        if not text:
+            return ""
+        return (f'<div style="font-size:7.5px;font-weight:500;line-height:1.1;'
+                f'color:{P["subtle"]};margin:1px 0 0 12px;">{text}</div>')
 
     def _row(d: dict) -> str:
         unit = d.get("unit", "index")
@@ -204,16 +203,10 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         up = delta >= 0
         col = P["green"] if up else P["red"]
         name = d["name"]
-        # Tag futures so a full-width sparkline reads as a continuously traded
-        # contract (change vs previous settlement), not a finished session.
-        # Under the strip's own "Futures" heading the heading says it, so the
-        # "(FUT)" MARKETS carries (to stay unique from the cash index) is
-        # dropped there; elsewhere (commodities) it is added, never doubled.
-        if d.get("category") == "Futures":
-            name = name.removesuffix(" (FUT)")
-        elif (str(d.get("symbol", "")).upper().endswith("=F")
-                and not name.endswith("(FUT)")):
-            name = f"{name} (FUT)"
+        # The "(FUT)" MARKETS carries keeps a future's name unique from its cash
+        # index; on the board the "Futures" heading says it, and a commodity
+        # is a futures price by nature, so neither shows the tag.
+        name = name.removesuffix(" (FUT)")
         flag = MARKET_FLAGS.get(d.get("symbol", ""))
         label = f"{flag} {_esc(name)}" if flag else _esc(name)
         if unit == "yield":
@@ -226,36 +219,39 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             move = f'{_signed(delta, 2)}%'
         if d.get("verdict") == "disputed":
             move += _UNVERIFIED_MARK
-        td = (f'padding:4px 5px;border-bottom:1px solid {P["row_rule"]};'
+        is_open = _status(d)[1]
+        dot = (f'<span style="color:{P["green"] if is_open else P["subtle"]};'
+               f'font-size:8px;">&#9679;</span>')
+        td = (f'padding:3px 4px;border-bottom:1px solid {P["row_rule"]};'
               f'font-variant-numeric:tabular-nums;')
         return (
             f'<tr>'
-            f'<td style="{td}{TYPE["data"]}color:{P["ink"]};'
-            f'white-space:nowrap;">{label}{_hours_line(d)}</td>'
-            f'<td align="right" style="{td}">{_spark_for(d)}</td>'
+            f'<td style="{td}{TYPE["data"]}color:{P["ink"]};line-height:1.15;">'
+            # A name longer than its column is cut with an ellipsis rather than
+            # running under the line beside it.
+            f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+            f'{dot} {label}</div>{_sub_line(d)}</td>'
+            f'<td style="{td}padding-left:2px;padding-right:2px;">{_spark_for(d)}</td>'
             f'<td align="right" style="{td}{TYPE["data"]}color:{P["muted"]};'
             f'white-space:nowrap;">{level}</td>'
             # The minus SIGN, as everywhere else in the issue: Python's "+"
             # format flag emits an ASCII hyphen, so this strip was the one table
             # drawing negatives with a different, shorter glyph than the
             # thirty-odd other tables around it.
-            f'<td align="right" style="{td}{TYPE["data"]}'
+            f'<td align="right" style="{td}{TYPE["data"]}font-weight:700;'
             f'color:{col};white-space:nowrap;">{move}</td>'
             f'</tr>')
 
     def _region_head(cat: str) -> str:
-        return (f'<tr><td colspan="4" style="padding:6px 5px 4px;'
-                f'border-bottom:1px solid {P["row_rule"]};{TYPE["label"]}'
+        return (f'<tr><td colspan="4" style="padding:8px 4px 3px;{TYPE["label"]}'
                 f'color:{_rc(cat)};">{_esc(str(cat))}</td></tr>')
 
     def _table(entries: list) -> str:
-        """One column of the strip: region heads interleaved with their rows."""
-        head = (f'<tr>' + "".join(
-            f'<td align="{al}" style="padding:5px 5px;background:{P["card_alt"]};'
-            f'border-bottom:1px solid {P["border"]};{TYPE["label"]}'
-            f'color:{P["muted"]};">{lbl}</td>'
-            for lbl, al in (("Index", "left"), ("Chart", "right"),
-                            ("Level", "right"), ("Chg %", "right"))) + '</tr>')
+        """One column of the board: region heads interleaved with their rows.
+
+        Fixed layout with the widths declared up front: the first row is a
+        region head spanning every column, so without the ``colgroup`` the
+        columns split evenly and the name was squeezed to a quarter."""
         body, last = [], None
         for cat, d in entries:
             if cat != last:
@@ -263,10 +259,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
                 last = cat
             body.append(_row(d))
         return ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0" style="border:1px solid '
-                f'{P["border"]};border-radius:8px;overflow:hidden;'
-                'border-collapse:separate;border-spacing:0;">'
-                + head + "".join(body) + '</table>')
+                'cellspacing="0" border="0" style="table-layout:fixed;">'
+                f'<colgroup><col><col width="{_SPARK_W + 4}"><col width="50">'
+                '<col width="56"></colgroup>' + "".join(body) + '</table>')
 
     # Region order: the configured order first, then any category the snapshot
     # carries that the configuration does not know about, so nothing is dropped.
@@ -289,14 +284,14 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     left, right = entries[:cut], entries[cut:]
     if right:
         grid = ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0" style="margin-top:10px;">'
+                'cellspacing="0" border="0" style="margin-top:4px;">'
                 '<tr>'
                 f'<td width="49%" valign="top">{_table(left)}</td>'
                 '<td width="2%"></td>'
                 f'<td width="49%" valign="top">{_table(right)}</td>'
                 '</tr></table>')
     else:
-        grid = f'<div style="margin-top:10px;">{_table(left)}</div>'
+        grid = f'<div style="margin-top:4px;">{_table(left)}</div>'
     grid += _feed_note(snap)
     # Section subtitle: when this live snapshot was captured, in the reader's
     # timezone (Europe/Rome) with a DST-aware label (CEST/CET) -- the anchor
@@ -310,7 +305,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         from zoneinfo import ZoneInfo
         from tarzan import runtime as _runtime
         _cap = _runtime.context().captured_at.astimezone(ZoneInfo("Europe/Rome"))
-        sub = f"As of {_cap:%H:%M %Z}"
+        sub = f"As of {_cap:%H:%M %Z} \u00b7 session hours in {_cap:%Z}"
     except Exception:  # noqa: BLE001
         sub = ""
     return {"available": True, "html": grid, "sub": sub}
@@ -1343,6 +1338,9 @@ def _bar_session_span(quote, raw_ticker: str):
 #: colour: the cell's colour already carries the heat ramp, and a mark survives a
 #: plain-text client.
 _UNVERIFIED_MARK = "?"
+
+# The Markets board's inline line: context beside the figures, not a chart.
+_SPARK_W, _SPARK_H = 40, 13
 
 
 def _feed_note(rows) -> str:

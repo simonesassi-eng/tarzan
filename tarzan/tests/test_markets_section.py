@@ -52,8 +52,9 @@ def test_cash_index_shows_hours_open_badge_and_day():
          mock.patch.object(mq, "market_status",
                            return_value=(True, "Tue")):
         html = _build_markets(_ctx())["html"]
-    assert "15:30\u201322:00 CET" in html   # New York's session, on the reader's clock
-    assert "&#9679;</span> Op. Tue" in html
+    # New York's session on the reader's clock (the zone is named once, in the
+    # section subtitle), then the status and its day.
+    assert "15:30\u201322:00&nbsp;&middot;&nbsp;Op.&nbsp;Tue" in html
 
 
 def test_cash_index_shows_closed_badge_and_day():
@@ -62,7 +63,7 @@ def test_cash_index_shows_closed_badge_and_day():
          mock.patch.object(mq, "market_status",
                            return_value=(False, "Fri")):
         html = _build_markets(_ctx())["html"]
-    assert "&#9679;</span> Cl. Fri" in html
+    assert "&middot;&nbsp;Cl.&nbsp;Fri" in html
 
 
 def test_chg_column_shows_only_percent_not_the_absolute_value():
@@ -85,15 +86,15 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
                                (True, "Tue") if sym == "^GSPC"
                                else (True, "Mon"))):
         html = _build_markets(_ctx())["html"]
-    # "S&P 500 (FUT)" gets its own Globex window and its own day/status,
-    # not the cash index's hours or its day, and the FUT tag is not
-    # doubled by the render-time auto-suffix (name already carries it).
-    fut_pos = html.index("S&amp;P 500 (FUT)")
-    fut_chunk = html[fut_pos:fut_pos + 250]
-    assert "\u201323:00 CE" in fut_chunk or "\u201322:00 CE" in fut_chunk  # Globex, reader's clock
-    assert "Op. Mon" in fut_chunk
-    assert "09:30" not in fut_chunk  # not the cash index's hours
-    assert "(FUT) (FUT)" not in html
+    # The future (second "S&P 500" row) gets its own Globex window and its own
+    # day/status, not the cash index's hours or its day; the board shows no
+    # "(FUT)" tag (the heading says it).
+    fut_pos = html.rindex("S&amp;P 500")
+    fut_chunk = html[fut_pos:fut_pos + 400]
+    assert "\u201323:00&nbsp;" in fut_chunk or "\u201322:00&nbsp;" in fut_chunk  # Globex, reader's clock
+    assert "Op.&nbsp;Mon" in fut_chunk
+    assert "15:30" not in fut_chunk  # not the cash index's hours
+    assert "(FUT)" not in html
 
 
 def test_futures_show_closed_with_day_over_the_weekend():
@@ -104,9 +105,9 @@ def test_futures_show_closed_with_day_over_the_weekend():
                                (False, "Fri") if sym == "ES=F"
                                else (False, "Fri"))):
         html = _build_markets(_ctx())["html"]
-    fut_pos = html.index("S&amp;P 500 (FUT)")
-    fut_chunk = html[fut_pos:fut_pos + 250]
-    assert "Cl. Fri" in fut_chunk
+    fut_pos = html.rindex("S&amp;P 500")
+    fut_chunk = html[fut_pos:fut_pos + 400]
+    assert "Cl.&nbsp;Fri" in fut_chunk
 
 
 def test_daily_close_fallback_chart_is_labelled_no_intraday():
@@ -338,3 +339,17 @@ def test_futures_heading_replaces_the_fut_tag_and_rows_carry_flags():
     assert "\U0001F1FA\U0001F1F8 S&amp;P 500<" in html
     assert "\U0001F1EE\U0001F1F9 FTSE MIB<" in html
     assert html.index("Europe") < html.index("Futures")
+
+
+def test_the_board_declares_its_column_widths_so_a_long_name_cannot_push_the_line_out():
+    """With fixed layout the first row (a region head spanning every column)
+    decides the widths; without a colgroup the name got a quarter of the
+    column and the inline lines vanished behind wrapped hour captions."""
+    long_name = [{"name": "Nasdaq Composite", "symbol": "^IXIC", "category": "US",
+                  "value": 24573.0, "change": 250.0, "pct": 1.06,
+                  "spark": [24300.0, 24573.0], "baseline": 24323.0}]
+    mq._memo = None
+    with mock.patch.object(mq, "market_status", return_value=(False, "Fri")):
+        html = _build_markets(_ctx(long_name))["html"]
+    assert "table-layout:fixed;" in html and '<colgroup><col><col width="44">' in html
+    assert "text-overflow:ellipsis" in html
