@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from tarzan.data import history_time, manual_proxies, price_cache
@@ -121,6 +122,30 @@ ASSET_PROXY = {
     "Commodities": ["^BCOM", "DBC"],          # Bloomberg Commodity index → DBC (2006)
     "Crypto": ["BTC-USD"],                    # Bitcoin, 2014+
 }
+
+# Annual expense ratio of every proxy that is itself a FUND. A fund's returns are
+# already net of its own fees and the backtest then charges the target ETF's TER
+# on the synthetic base, so without this gross-up the pre-inception tail paid two
+# sets of fees — from ~0.05%/yr (VTMGX) to ~1.5-2%/yr (the managed-futures funds,
+# which made every trend sleeve look worse than it was). Indices and futures
+# (^SP500TR, ^GSPC, GC=F, ^BCOM, BTC-USD) carry no fee and are absent. Net
+# expense ratios as reported Nov 2026. The two managed-futures funds report
+# 1.99% (RYMFX) and 3.39% (AQMNX), totals that bundle interest and short expense
+# on the derivatives book; only a conservative 1.5% is added back, because
+# over-crediting would fabricate return.
+PROXY_FUND_ER = {
+    "EWJ": 0.0049, "EZU": 0.0050, "VTMGX": 0.0005, "FDIVX": 0.0066, "EFA": 0.0032,
+    "VEIEX": 0.0029, "EEM": 0.0072, "VTWSX": 0.0010, "ACWI": 0.0032,
+    "VUSTX": 0.0020, "VFITX": 0.0020, "IEF": 0.0015, "GLD": 0.0040, "DBC": 0.0085,
+    "RYMFX": 0.0150, "AQMNX": 0.0150,
+}
+
+
+def _gross_up(r: pd.Series, sym: Optional[str]) -> pd.Series:
+    """Add a fund proxy's own expense ratio back onto its daily returns."""
+    er = PROXY_FUND_ER.get(sym or "")
+    return r + er / TRADING_DAYS if er and r is not None and not r.empty else r
+
 
 CASH_KEYS = ("Alternative", "Cash & Cash Equivalents")
 _FINANCING_SYMBOL = "^IRX"
@@ -770,6 +795,7 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
         elif k in EQUITY_GEO_PROXY or k in ASSET_PROXY:
             candidates = EQUITY_GEO_PROXY.get(k) or ASSET_PROXY.get(k)
             r, sym = _resolve_bucket(candidates)
+            r = _gross_up(r, sym)
             if sym is not None and not r.empty:
                 USED_PROXY[k] = (f"{sym}{ccy}", r.index.min())
             out[k] = _usd_returns_to_eur(r)
@@ -799,8 +825,9 @@ def _alt_series(fin: Optional[pd.Series]):
 
     Priority: an ad-hoc series in the cache DB (``MANUAL_MFSIM``, e.g. an SG
     CTA/Trend index ingested once) -> real trend funds spliced longest-first
-    (RYMFX ~2007, overridden by AQMNX ~2010 where they overlap) -> cash for the
-    pre-2007 tail -> cash-only fallback. Using RYMFX for 2007-2010 means the GFC
+    (RYMFX ~2007, overridden by AQMNX ~2010 where they overlap) -> for the
+    pre-2007 tail, AQR's TSMOM factor calibrated on those funds when ingested
+    (see ``_tsmom_tail``), else cash -> cash-only fallback. Using RYMFX for 2007-2010 means the GFC
     crisis-alpha of managed futures is modeled instead of a flat cash line.
 
     The ad-hoc series is READ FROM THE CACHE DB only, never parsed from a file
@@ -813,7 +840,7 @@ def _alt_series(fin: Optional[pd.Series]):
         return r, "custom managed-futures series (cache)", r.index.min()
 
     # Real trend funds, deepest history first; later funds override in overlap.
-    parts = [(sym, _returns(sym)) for sym in (_MF_FUND_DEEP, _MF_FUND)]
+    parts = [(sym, _gross_up(_returns(sym), sym)) for sym in (_MF_FUND_DEEP, _MF_FUND)]
     parts = [(sym, r) for sym, r in parts if r is not None and not r.empty]
     if not parts:
         start = fin.index.min() if fin is not None and not fin.empty else None
@@ -828,8 +855,68 @@ def _alt_series(fin: Optional[pd.Series]):
     label = "/".join(used)
     if fin is None or fin.empty:
         return trend, f"{label} (managed futures)", tstart
+    tail = _tsmom_tail(trend, fin, tstart)
+    if tail is not None:
+        s, beta = tail
+        spliced = pd.concat([fin.loc[fin.index < s.index.min()], s, trend]).sort_index()
+        return (spliced, f"AQR TSMOM x{beta:.2f} {s.index.min():%Y}+/{label} {tstart:%Y}+",
+                s.index.min())
     spliced = pd.concat([fin.loc[fin.index < tstart], trend]).sort_index()
     return spliced, f"{label} {tstart:%Y}+/cash", tstart
+
+
+_TSMOM_KEY = "TSMOM"
+_TSMOM_MIN_OVERLAP_MONTHS = 36
+
+
+def _tsmom_tail(trend: pd.Series, fin: pd.Series, tstart: pd.Timestamp):
+    """Managed-futures returns BEFORE the real trend funds exist, from AQR's
+    Time Series Momentum factor (Moskowitz-Ooi-Pedersen, 1985+), or None.
+
+    Without it the bucket is flat cash before 2007, so a sleeve stacked on top
+    of equity (a return-stacked trend ETF) lost its financing cost every year of
+    2000-2006 — the 2000-02 bear market in which trend made most of its money.
+    The factor supplies only the TIMING (which months trend won or lost); its
+    paper LEVEL is not trusted. It is gross of fees and of 1990s-sized trading
+    costs, and calibrating its mean on 2007+ produced 13-27%/yr for 1995-2006
+    where real CTAs made roughly 8-10%. So the tail is
+    ``beta * (factor - its tail mean) + mean live excess`` plus cash, with beta
+    the monthly OLS slope of the real funds' excess return on the factor over
+    their overlap. A monthly return spread evenly over its days would be ~7x too
+    smooth (1.3% vol vs the funds' ~9.6%) and fabricate Sharpe, so each month
+    carries zero-sum daily noise at the funds' own intra-month volatility; the
+    month still compounds to its target exactly.
+    AQR's file is copyrighted, so it is never vendored: ingest it locally with
+    ``python -m tarzan.data.manual_proxies ingest TSMOM <xlsx>``.
+    """
+    lvl = _clip_cached_to_as_of(manual_proxies.get_series(_TSMOM_KEY))
+    if lvl is None or lvl.empty:
+        return None
+    month = lambda s: s.index.to_period("M")  # noqa: E731
+    factor = lvl.groupby(month(lvl)).last().pct_change().dropna()
+    f_d = fin.reindex(trend.index).ffill().fillna(0.0)
+    log_ex = np.log((1.0 + trend) / (1.0 + f_d))
+    live = np.expm1(log_ex.groupby(month(log_ex)).sum()).iloc[1:-1]   # drop partial months
+    xy = pd.concat([factor, live], axis=1, join="inner").dropna()
+    if len(xy) < _TSMOM_MIN_OVERLAP_MONTHS:
+        return None
+    beta = float(np.polyfit(xy.iloc[:, 0].values, xy.iloc[:, 1].values, 1)[0])
+    days = fin.loc[(fin.index < tstart) & (fin.index >= lvl.index.min())]
+    x = factor[factor.index < tstart.to_period("M")]
+    if days.empty or x.empty:
+        return None
+    m_ex = beta * (x - x.mean()) + live.mean()
+    target = np.log1p(m_ex.reindex(month(days)).values)
+    grp = month(days)
+    n = days.groupby(grp).transform("size").values
+    sd = float((log_ex - log_ex.groupby(month(log_ex)).transform("mean")).std())
+    # ponytail: fixed-seed iid noise; intra-month cross-asset correlation is lost
+    # (monthly correlation is kept). Swap in a real daily trend index if one is ingested.
+    z = pd.Series(np.random.default_rng(0).standard_normal(len(days)), index=days.index)
+    z = (z - z.groupby(grp).transform("mean")).values
+    d_ex = np.expm1(target / n + sd * z)
+    out = pd.Series((1.0 + d_ex) * (1.0 + days.values) - 1.0, index=days.index).dropna()
+    return (out, beta) if not out.empty else None
 
 
 # ---------------------------------------------------------------------------

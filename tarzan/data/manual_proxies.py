@@ -24,6 +24,7 @@ Populate the DB ad-hoc, e.g.::
 
     python -m tarzan.data.manual_proxies ingest CRRYSIM path/to/US_BNPIF73P.xlsx
     python -m tarzan.data.manual_proxies ingest MFSIM   path/to/sg_cta_index.csv
+    python -m tarzan.data.manual_proxies ingest TSMOM   path/to/Time-Series-Momentum-Factors-Monthly.xlsx
     python -m tarzan.data.manual_proxies list
 
 The raw index level is cached; excess→total-return collateral, fees and
@@ -56,6 +57,9 @@ _DIR = _ROOT / "tbtf-analisi"
 _SOURCES = {
     "CRRYSIM": ("US_BNPIF73P.xlsx", "bnp"),
     "NHCTA": ("NHIndexMonthly.csv", "nhcta"),
+    # AQR "Time Series Momentum: Factors, Monthly" (1985+): the pre-2007 tail of
+    # the managed-futures bucket. Copyrighted, so ingested locally, never vendored.
+    "TSMOM": ("Time-Series-Momentum-Factors-Monthly.xlsx", "aqr_tsmom"),
 }
 
 
@@ -163,7 +167,25 @@ def _parse_generic(path: Path) -> Optional[pd.Series]:
     return None
 
 
-_PARSERS = {"bnp": _parse_bnp, "nhcta": _parse_nhcta, "generic": _parse_generic}
+def _parse_aqr_tsmom(path: Path) -> Optional[pd.Series]:
+    """AQR TSMOM workbook → daily LEVEL of the all-asset TSMOM factor.
+
+    The factor is an EXCESS return; collateral is added downstream in
+    ``proxy_data``. The data sit under a header row whose second cell is
+    "TSMOM", below several rows of free-text notes."""
+    raw = pd.read_excel(path, sheet_name="TSMOM Factors", header=None)
+    hdr = raw.index[raw.iloc[:, 1].astype(str).str.strip() == "TSMOM"]
+    if hdr.empty:
+        return None
+    body = raw.iloc[hdr[0] + 1:, :2]
+    idx = pd.to_datetime(body.iloc[:, 0], errors="coerce").dt.normalize()
+    r = pd.Series(pd.to_numeric(body.iloc[:, 1], errors="coerce").values,
+                  index=idx).dropna().sort_index()
+    return _monthly_ret_to_daily_levels(r) if not r.empty else None
+
+
+_PARSERS = {"bnp": _parse_bnp, "nhcta": _parse_nhcta, "aqr_tsmom": _parse_aqr_tsmom,
+            "generic": _parse_generic}
 
 
 # ---------------------------------------------------------------------------
