@@ -192,7 +192,10 @@ def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
     from tarzan.data import enricher as _enr
 
     expected_name = cfg.name_for(None, ticker) or ""
-    data = _enr._fetch_benchmark_data(ticker, expected_name=expected_name)
+    # The row's ISIN keeps a bare ticker on its own listing when another fund
+    # shares the symbol on a different venue (see _resolve_bare_ticker).
+    isin, _ = cfg.resolve_taxonomy_identity("", ticker)
+    data = _enr._fetch_benchmark_data(ticker, expected_name=expected_name, isin=isin)
     return _benchmark_series_from_data(ticker, data)
 
 

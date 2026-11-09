@@ -16,7 +16,7 @@ from tarzan.export.newsletter import _sections_perf
 from tarzan.contracts.reference import ReportReference
 
 
-def _fixture(monkeypatch, *, target_rows=()):
+def _fixture(monkeypatch, *, target_rows=(), extra_watch=(), taxonomy=None):
     """NTSG is held AND tracked; UEQC is tracked only; AVWC is tracked AND a
     positive per-holding target that is not held. Returns the built section."""
     # Hermetic prepared facts, not a later global name resolver.
@@ -26,7 +26,9 @@ def _fixture(monkeypatch, *, target_rows=()):
             "wisdomtree global efficient core",
             "ubs cmci commodity carry",
             "avantis global equity",
+            *extra_watch,
         ),
+        taxonomy=taxonomy or {},
     )
 
     holdings_df = pd.DataFrame([{
@@ -284,3 +286,29 @@ def test_a_reference_only_row_is_not_printed_in_the_watchlist(monkeypatch):
     out = _sections_perf._build_performance(_Ctx())
     names = [r["name"] for r in out["benchmark_rows"]]
     assert names == ["Tracked Fund"], names
+
+
+def test_symbol_root_shared_by_two_funds_does_not_merge_them(monkeypatch):
+    """MAET (UCITS, IE000BS31R00) resolves to the Milan listing MATE.MI, whose
+    root is also the Nasdaq MATE (US56164V3033), a different fund. Keyed by bare
+    ticker, the target took the US fund's class and ticker, the UCITS's own
+    watchlist row survived as a duplicate, and the US fund vanished."""
+    out = _fixture(monkeypatch, extra_watch=(
+        "man active trend enhanced", "man active trend enhanced ucits etf eur hedged"),
+        taxonomy={"IE000BS31R00": ("Equities", "Equity Trend Stacked"),
+                  "MAET": ("Equities", "Equity Trend Stacked"),
+                  "US56164V3033": ("Equities", "Efficient Core"),
+                  "MATE": ("Equities", "Efficient Core")},
+        target_rows=[
+            {"ticker": "MATE.MI", "isin": "IE000BS31R00",
+             "name": "Man Active Trend Enhanced UCITS ETF EUR Hedged",
+             "type": "Target not held", "1d": 1.0},
+            {"ticker": "MATE", "name": "Man Active Trend Enhanced",
+             "type": "Benchmark index", "1d": 2.0},
+            {"ticker": "MAET.DE", "name": "Man Active Trend Enhanced UCITS ETF EUR Hedged",
+             "type": "Benchmark index", "1d": 1.0},
+        ])
+    (target,) = out["target_rows"]
+    assert target["ticker"] == "MAET" and target["role"] == "Equity Trend Stacked", target
+    watch = [r["raw_ticker"] for r in out["benchmark_rows"]]
+    assert "MATE" in watch and "MAET.DE" not in watch, watch

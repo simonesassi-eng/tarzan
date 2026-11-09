@@ -613,6 +613,7 @@ def _resolve_bare_ticker(
     *,
     expected_name: str,
     expected_currency: str,
+    isin: str = "",
     _benchmark_history_only: bool = False,
 ) -> Optional[dict]:
     """Promote a bare ticker to one full listing with usable daily history.
@@ -622,14 +623,22 @@ def _resolve_bare_ticker(
     name coherence, currency, venue priority, and valid history. This keeps
     the input taxonomy venue-neutral while producing one canonical provider
     symbol for every downstream daily-data consumer.
+
+    A US ISIN pins the bare (US) listing. Without that, a US fund whose ticker
+    is shared by a European sibling (MATE on Nasdaq, US56164V3033, vs MATE.MI,
+    the UCITS IE000BS31R00) out-ranked itself on venue and currency and was
+    silently valued with the other fund's prices.
     """
     from tarzan import runtime
 
+    us_listing_only = str(isin or "").strip().upper().startswith("US")
     allows_live_transport = runtime.allows_live_transport()
     cached = _load_bare_resolution(
         ticker,
         include_expired=not allows_live_transport,
     )
+    if cached and us_listing_only and "." in cached:
+        cached = ""
     if cached:
         info = (
             {}
@@ -649,7 +658,8 @@ def _resolve_bare_ticker(
         return None
 
     bare = str(ticker or "").strip().upper()
-    symbols = [bare, *(f"{bare}{suffix}" for suffix in ISIN_EXCHANGE_SUFFIXES)]
+    symbols = [bare] if us_listing_only else [
+        bare, *(f"{bare}{suffix}" for suffix in ISIN_EXCHANGE_SUFFIXES)]
     candidates = [
         candidate
         for symbol in dict.fromkeys(symbols)
@@ -692,6 +702,7 @@ def _fetch_ticker_data(
     *,
     expected_name: str = "",
     expected_currency: str = "",
+    isin: str = "",
     _benchmark_history_only: bool = False,
 ) -> dict:
     """Fetch market data and retain the exact provider symbol consumed.
@@ -713,6 +724,7 @@ def _fetch_ticker_data(
             ticker,
             expected_name=expected_name,
             expected_currency=expected_currency,
+            isin=isin,
             **resolution_options,
         )
         if promoted is not None:
@@ -1013,6 +1025,19 @@ def _resolve_isin(
     from tarzan.models.instrument_key import normalize_ticker
 
     allows_live_transport = runtime.allows_live_transport()
+    # A US ISIN with a bare hint is the US listing. Ranking would otherwise let a
+    # European fund sharing the symbol win on venue and currency (MATE.MI, the
+    # UCITS IE000BS31R00, valued as the Nasdaq MATE, US56164V3033); the bare-key
+    # caches cannot tell the two apart because they key by symbol root.
+    # ponytail: also pins a US stock held on Xetra to its US listing (same asset,
+    # USD-converted); add a venue hint to the order row if that ever matters.
+    if clean_isin.upper().startswith("US") and _is_expandable_bare_ticker(hint_ticker):
+        pinned = _resolve_bare_ticker(hint_ticker, expected_name="",
+                                      expected_currency=expected_currency, isin=clean_isin)
+        if pinned is not None:
+            symbol = pinned.get(_TICKER_SYMBOL_KEY) or hint_ticker.upper()
+            price_cache.store_resolution(clean_isin, symbol)
+            return pinned, symbol
     known_symbols: list[str] = []
     _, taxonomy_ticker = cfg.resolve_taxonomy_identity(clean_isin, "")
     xref_ticker = ""
@@ -2190,7 +2215,7 @@ def _owns_history_only_benchmark(ticker: str) -> bool:
     )
 
 
-def _fetch_benchmark_data(ticker: str, *, expected_name: str = "") -> dict:
+def _fetch_benchmark_data(ticker: str, *, expected_name: str = "", isin: str = "") -> dict:
     """Acquire exactly the facts consumed by benchmark series construction.
 
     A qualified listing never changes identity in the native ticker-data path.
@@ -2206,9 +2231,9 @@ def _fetch_benchmark_data(ticker: str, *, expected_name: str = "") -> dict:
         # history admission and discovery walk. Do not pre-read a mapping here:
         # a concurrent cache update between two reads could change the identity.
         return _fetch_ticker_data(
-            ticker, expected_name=expected_name, _benchmark_history_only=True,
+            ticker, expected_name=expected_name, isin=isin, _benchmark_history_only=True,
         )
-    return _fetch_ticker_data(ticker, expected_name=expected_name)
+    return _fetch_ticker_data(ticker, expected_name=expected_name, isin=isin)
 
 
 def _completed_benchmark_inputs(ticker: str, *, expected_name: str = ""):
@@ -3680,6 +3705,7 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                         ticker,
                         expected_name=holding.name,
                         expected_currency=holding.currency or "",
+                        isin=clean_isin if is_valid_isin else "",
                     )
                 else:
                     data = _fetch_ticker_data(ticker)

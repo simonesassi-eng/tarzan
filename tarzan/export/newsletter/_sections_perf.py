@@ -9,7 +9,8 @@ from typing import Optional
 
 import pandas as pd
 
-from tarzan.models.instrument_key import normalize_ticker
+from tarzan import config as cfg
+from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.export._format import (
     display_instrument_name,
     eur_smart as _eur_smart,
@@ -2456,12 +2457,18 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
         for _, r in target_df.iterrows():
             raw_ticker = str(r.get("ticker") or "").strip()
             bare = normalize_ticker(raw_ticker)
-            asset_class, role = taxonomy.get(bare, (None, None))
+            # ISIN first: the resolved listing's symbol root is not unique across
+            # venues (MATE.MI is the UCITS IE000BS31R00, MATE on Nasdaq another
+            # fund), so a bare-ticker lookup gave the target the US row's class,
+            # role and name, and showed it under the wrong ticker.
+            isin = normalize_isin(r.get("isin"))
+            asset_class, role = (taxonomy.get(isin) if isin else None) or taxonomy.get(bare, (None, None))
+            curated_ticker = cfg.resolve_taxonomy_identity(isin, "")[1] if isin else ""
             target_rows.append({
                 "name": display_instrument_name(
                     r.get("isin"), raw_ticker,
                     str(r.get("name") or raw_ticker), names=ctx.reference.names),
-                "ticker": _display_ticker(raw_ticker),
+                "ticker": _display_ticker(curated_ticker or raw_ticker),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
                 "role": role,
@@ -2489,6 +2496,24 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     target_bares = {
         normalize_ticker(str(r.get("raw_ticker") or "")) for r in target_rows
     } - {""}
+    # A catalog row is keyed by its curated ticker, the target by the resolved
+    # listing, so compare ISINs when the taxonomy knows the catalog row's ISIN:
+    # MAET (IE000BS31R00) is the target listed as MATE.MI and must drop, while
+    # the Nasdaq MATE (US56164V3033) is a different fund and must stay.
+    target_isin_by_bare = {
+        normalize_ticker(str(r.get("raw_ticker") or "")):
+            normalize_isin(r.get("_src", {}).get("isin"))
+        for r in target_rows
+    }
+    target_isins = set(target_isin_by_bare.values()) - {""}
+
+    def _is_target_copy(bare: str, bench_isin: str) -> bool:
+        if bench_isin and bench_isin in target_isins:
+            return True
+        if bare not in target_bares:
+            return False
+        target_isin = target_isin_by_bare.get(bare, "")
+        return not (bench_isin and target_isin and bench_isin != target_isin)
 
     # The catalog is the FETCH set, which is wider than the watchlist: a row
     # flagged only as the alpha/beta or geo reference has its series pulled for
@@ -2517,7 +2542,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             raw_ticker = str(r.get("ticker") or "").strip()
             bare = normalize_ticker(raw_ticker)
-            if bare in target_bares:
+            bench_isin = normalize_isin(cfg.resolve_taxonomy_identity("", bare)[0])
+            if _is_target_copy(bare, bench_isin):
                 continue
             asset_class, role = taxonomy.get(bare, (None, None))
             benchmark_rows.append({

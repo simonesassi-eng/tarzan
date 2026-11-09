@@ -109,7 +109,7 @@ class TestVenueCurrency:
         enricher._benchmark_memo.clear()
         monkeypatch.setattr(
             enricher, "_fetch_ticker_data",
-            lambda ticker, expected_name="": {
+            lambda ticker, expected_name="", isin="": {
                 "info": {"currency": "USD"},          # flaky/wrong under load
                 "history": raw,
                 enricher._TICKER_SYMBOL_KEY: "ISAC.MI",

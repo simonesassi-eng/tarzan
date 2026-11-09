@@ -1889,6 +1889,9 @@ class MetricsEngine:
                 continue
             row = {
                 "ticker": h.ticker,
+                # The resolved listing's symbol root is not an identity (MATE.MI
+                # is one fund, MATE on Nasdaq another); the renderer keys on this.
+                "isin": h.isin or "",
                 "name": h.name or h.ticker,
                 # Neither "portfolio" nor "benchmark" as a substring: every
                 # consumer of this frame selects on one of those two words, so a

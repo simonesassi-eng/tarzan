@@ -730,3 +730,26 @@ def test_bonus_exact_isin_to_venue_mapping_is_identity_even_without_name_or_curr
         # Expected settlement currency alone is not instrument identity.
         result = en._resolve_isin(ISIN, "", expected_currency="EUR")
     assert result is not None and result[1] == MI
+
+
+def test_us_isin_keeps_the_bare_us_listing_over_a_european_namesake(source):
+    """MATE (Nasdaq, US ISIN) and MATE.MI (a different UCITS fund) share a
+    symbol; venue and currency ranking used to hand the US row the Milan
+    prices. A US ISIN must pin the bare listing, from discovery and from cache."""
+    source.info = {ROOT: metadata(25., currency="USD"), MI: metadata()}
+    source.histories = {ROOT: frame(25.), MI: frame()}
+    with owned():
+        assert selected(resolve()) == (MI, 100.)          # no ISIN: unchanged
+        us = en._resolve_bare_ticker(ROOT, expected_name=NAME, expected_currency="",
+                                     isin="US0000000001")
+        assert selected(us) == (ROOT, 25.)                # cached MI is rejected
+
+
+def test_us_isin_resolution_pins_the_us_listing(source):
+    """The ISIN path must reach the same answer: a US ISIN with a bare hint is
+    never resolved to a European namesake, even when that one ranks higher."""
+    source.info = {ROOT: metadata(25., currency="USD"), MI: metadata()}
+    source.histories = {ROOT: frame(25.), MI: frame()}
+    with owned():
+        data, symbol = en._resolve_isin("US0000000001", hint_ticker=ROOT)
+        assert symbol == ROOT and data["history"]["Close"].iloc[-1] == 25.
