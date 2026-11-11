@@ -145,8 +145,20 @@ FEED_ROWS: tuple[FeedRow, ...] = (
             tz="Australia/Sydney", calendar="^AXJO", **{TV: "ASX24:AP1!", CNBC: "@YAP.1"}),
     _future("Nikkei 225", "fut:NK", sessions=(("-17:00", "06:00"), ("08:45", "15:45")),
             tz="Asia/Tokyo", calendar="^N225", **{TV: "OSE:NK2251!", CNBC: "@JNI.1"}),
+    # KRX and HKEX count their night session to the next trading day, like JPX.
+    # Neither contract is on CNBC or MarketWatch: TradingView alone ("single").
+    _future("KOSPI 200", "fut:KS200", sessions=(("-18:00", "06:00"), ("08:45", "15:45")),
+            tz="Asia/Seoul", calendar="^KS11", **{TV: "KRX:K2I1!"}),
+    # The 12:00-13:00 lunch break is folded into one day window: a third
+    # window wrapped the hours line onto two rows for one hour of pause.
+    _future("Hang Seng", "fut:HSI", sessions=(("-17:15", "03:00"), ("09:15", "16:30")),
+            tz="Asia/Hong_Kong", calendar="^HSI", **{TV: "HKEX:HSI1!"}),
     _future("FTSE China A50", "fut:A50", sessions=(("-17:15", "05:15"), ("09:00", "16:35")),
             tz="Asia/Singapore", **{TV: "SGX:CN1!", CNBC: "@SFC.1"}),
+    # GIFT Nifty (NSE IX, GIFT City): the Nifty 50 contract that trades ~21h,
+    # both sessions on the same trading day. TradingView alone.
+    _future("GIFT Nifty 50", "fut:NIFTY", sessions=(("06:30", "15:40"), ("16:35", "02:45")),
+            tz="Asia/Kolkata", calendar="^NSEI", **{TV: "NSEIX:NIFTY1!"}),
     _future("Euro Stoxx 50", "fut:FESX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FESX1!", MW: "FUTURE/DE/XEUR/FESX00"}),
     _future("Stoxx 600", "fut:FXXP", hours=14.2, **_EUREX,

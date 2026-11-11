@@ -304,13 +304,13 @@ class TestEveryMarkupBoundaryEscapes:
 
 
 def test_regions_run_in_opening_order_with_futures_on_their_own():
-    """Asia, Europe, US by cash open, then futures and bonds, then the
+    """Futures first, then Asia, Europe, US by cash open, then bonds, then the
     round-the-clock groups; the Yahoo futures are the US E-minis (the rest come
     from market_feeds), and every row a country owns has a flag."""
     from tarzan.data.market_feeds import FEED_KEYS, FEED_ROWS
     from tarzan.export.newsletter._constants import MARKET_FLAGS
 
-    assert mq.CATEGORY_ORDER[:5] == ["Asia", "Europe", "US", "Futures", "Bonds"]
+    assert mq.CATEGORY_ORDER[:5] == ["Futures", "Asia", "Europe", "US", "Bonds"]
     cats = [c for _, _, c in mq.MARKETS]
     assert cats == sorted(cats, key=mq.CATEGORY_ORDER.index)
     assert {s for _, s, c in mq.MARKETS if c == "Futures"} == {"ES=F", "NQ=F", "YM=F", "RTY=F"}
@@ -338,7 +338,7 @@ def test_futures_heading_replaces_the_fut_tag_and_rows_carry_flags():
     assert "(FUT)" not in html
     assert "\U0001F1FA\U0001F1F8 S&amp;P 500<" in html
     assert "\U0001F1EE\U0001F1F9 FTSE MIB<" in html
-    assert html.index("Europe") < html.index("Futures")
+    assert html.index("Futures") < html.index("Europe")
 
 
 def test_the_board_declares_its_column_widths_so_a_long_name_cannot_push_the_line_out():

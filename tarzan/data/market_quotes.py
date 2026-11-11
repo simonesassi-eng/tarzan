@@ -519,9 +519,21 @@ def market_session_age_seconds(
 
 # (display name, yfinance symbol, category), in display order.
 MARKETS: list[tuple[str, str, str]] = [
-    # Regions run in the order their cash sessions open (Asia, Europe, US),
-    # then the instruments that trade around the clock. Within Asia the rows
-    # follow the same rule: Sydney, Tokyo, Seoul, Hong Kong, Shanghai, Mumbai.
+    # Futures first, then the regions in the order their cash sessions open
+    # (Asia, Europe, US), then the instruments that trade around the clock.
+    #
+    # US equity index futures (CME E-minis). The non-US ones (Osaka, SGX, ASX,
+    # Eurex, Euronext, ICE, KRX, HKEX, NSE IX) are not on Yahoo and come from
+    # market_feeds.py, listed ahead of these so the group runs Asia, Europe,
+    # US. The names carry "(FUT)" because they must stay unique from their
+    # cash index -- lookups key on the name (fetch_market_quotes results
+    # included); the strip drops the tag under its own "Futures" heading.
+    # Near-24h Globex schedule: see futures_open_now()/market_status().
+    ("S&P 500 (FUT)", "ES=F", "Futures"),     # E-mini S&P
+    ("Nasdaq 100 (FUT)", "NQ=F", "Futures"),  # E-mini Nasdaq
+    ("Dow 30 (FUT)", "YM=F", "Futures"),      # E-mini Dow
+    ("Russell 2000 (FUT)", "RTY=F", "Futures"),  # E-mini Russell
+    # Asia, by cash open: Sydney, Tokyo, Seoul, Hong Kong, Shanghai, Mumbai.
     ("ASX 200", "^AXJO", "Asia"),
     ("Nikkei 225", "^N225", "Asia"),
     ("KOSPI", "^KS11", "Asia"),
@@ -543,26 +555,15 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Nasdaq 100", "^NDX", "US"),
     ("Russell 2000", "^RUT", "US"),
     ("VIX", "^VIX", "US"),
-    # US equity index futures (CME E-minis). The non-US ones (Osaka, SGX, ASX,
-    # Eurex, Euronext, ICE) are not on Yahoo and come from market_feeds.py,
-    # listed ahead of these so the section runs Asia, Europe, US. The names
-    # carry "(FUT)" because they must stay unique from their cash index --
-    # lookups key on the name (fetch_market_quotes results included); the
-    # strip drops the tag under its own "Futures" heading. Near-24h Globex
-    # schedule: see futures_open_now()/market_status().
-    ("S&P 500 (FUT)", "ES=F", "Futures"),     # E-mini S&P
-    ("Nasdaq 100 (FUT)", "NQ=F", "Futures"),  # E-mini Nasdaq
-    ("Dow 30 (FUT)", "YM=F", "Futures"),      # E-mini Dow
-    ("Russell 2000 (FUT)", "RTY=F", "Futures"),  # E-mini Russell
-    # Commodities. Two global crude benchmarks are shown side by side: WTI
+    # Commodities. The two global crude benchmarks, Brent right under WTI: WTI
     # (CL=F, NYMEX/CME — the US reference) and Brent (BZ=F, ICE Futures Europe
     # — the international reference used for most of the world incl. Europe).
     ("WTI Crude", "CL=F", "Commodities"),
+    ("Brent Crude", "BZ=F", "Commodities"),
     ("Gold", "GC=F", "Commodities"),
     ("Silver", "SI=F", "Commodities"),
     ("Copper", "HG=F", "Commodities"),
     ("Natural Gas", "NG=F", "Commodities"),
-    ("Brent Crude", "BZ=F", "Commodities"),
     ("Platinum", "PL=F", "Commodities"),
     # Currencies (fiat FX pairs + Bitcoin, both quoted vs USD and traded
     # ~around the clock).
@@ -572,7 +573,9 @@ MARKETS: list[tuple[str, str, str]] = [
     ("Bitcoin", "BTC-USD", "Currencies"),
 ]
 
-CATEGORY_ORDER = ["Asia", "Europe", "US", "Futures", "Bonds", "Commodities", "Currencies"]
+# Futures first: around the clock, they are the strip's live read when the
+# cash sessions are shut.
+CATEGORY_ORDER = ["Futures", "Asia", "Europe", "US", "Bonds", "Commodities", "Currencies"]
 
 _memo: Optional[list[dict]] = None
 _memo_at: float = 0.0  # monotonic timestamp the memo was filled
