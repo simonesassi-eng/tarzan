@@ -21,7 +21,7 @@ def fake_drive(monkeypatch, pages, *, data=None, fail_download=None):
         def __init__(self, response):
             self.response = response
 
-        def execute(self):
+        def execute(self, num_retries=0):
             if isinstance(self.response, Exception):
                 raise self.response
             return self.response
@@ -40,7 +40,7 @@ def fake_drive(monkeypatch, pages, *, data=None, fail_download=None):
             self.buffer, self.request = buffer, request
             assert chunksize == drive.DOWNLOAD_CHUNK_BYTES
 
-        def next_chunk(self):
+        def next_chunk(self, num_retries=0):
             if self.request == fail_download:
                 raise OSError("synthetic download failure")
             self.buffer.write((data or {}).get(self.request, b"key,value\nx,1\n"))

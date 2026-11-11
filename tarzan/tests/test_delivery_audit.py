@@ -240,3 +240,31 @@ def test_production_apps_script_delivery_protocol_in_node():
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "corruption checks passed" in completed.stdout
+
+
+def test_a_section_that_raises_while_rendering_sends_a_failure_notice(
+    monkeypatch, tmp_path, isolated_delivery,
+):
+    """One broken section used to escape ``run_and_send``: no issue, no notice."""
+    monkeypatch.setattr(delivery, "_delivery_claim_store",
+                        lambda: LocalJsonDeliveryClaimStore(tmp_path / "claims.json"))
+    monkeypatch.setattr(delivery, "resolve_inputs", lambda: {
+        "orders": "orders.csv", "config": "targets.csv", "targets_per_holding": None,
+    })
+    monkeypatch.setattr(delivery, "run", lambda **kwargs: (PortfolioMetrics(total_value=100), InvestorConfig()))
+
+    def broken(**kwargs):
+        raise KeyError("a section's missing column")
+
+    monkeypatch.setattr(delivery, "render_newsletter", broken)
+    sent = []
+
+    def transport(**kwargs):
+        kwargs["before_invoke"]()
+        sent.append(kwargs)
+
+    monkeypatch.setattr(delivery, "send_email", transport)
+    delivery.run_and_send()
+    assert len(sent) == 1
+    assert sent[0]["subject"].endswith("Analysis failure")
+    assert "NEWSLETTER_RENDER_FAILED" in sent[0]["html"]

@@ -50,6 +50,9 @@ MAX_LIST_PAGES = 100
 MAX_LIST_FILES = 10_000
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 256 * 1024
+#: googleapiclient retries a transient 5xx/429/timeout with exponential backoff;
+#: one lost listing or chunk used to cost a whole issue (INPUT_RESOLUTION_FAILED).
+DRIVE_RETRIES = 4
 _DRIVE_ID = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,199}$")
 
@@ -174,7 +177,7 @@ def _select_files(service, folder_id, filenames, required):
         )
         if page_token is not None:
             arguments["pageToken"] = page_token
-        response = service.files().list(**arguments).execute()
+        response = service.files().list(**arguments).execute(num_retries=DRIVE_RETRIES)
         if not isinstance(response, dict) or not isinstance(response.get("files", []), list):
             raise RuntimeError("Drive returned an invalid file listing")
         batch = response.get("files", [])
@@ -291,7 +294,7 @@ def _download_selected_inputs(service, by_name, filenames, dest_dir):
             done = False
             chunks = 0
             while not done:
-                _, done = downloader.next_chunk()
+                _, done = downloader.next_chunk(num_retries=DRIVE_RETRIES)
                 chunks += 1
                 if chunks > MAX_DOWNLOAD_BYTES // DOWNLOAD_CHUNK_BYTES + 2:
                     raise RuntimeError("Drive download did not complete within the chunk limit")

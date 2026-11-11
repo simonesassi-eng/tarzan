@@ -38,6 +38,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false  # no later step pushes; keep the token out of .git/config
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -132,6 +134,7 @@ jobs:
           TARZAN_CACHE_KEY_B64: ${{ secrets.TARZAN_CACHE_KEY_B64 }}
           TARZAN_DIAGNOSTIC_DIR: ${{ runner.temp }}/tarzan-diagnostics
           TARZAN_RESTRICTED_CONSOLE: "1"
+          TZ: Europe/Rome
         run: python scripts/verify_newsletter.py
 
       # Publication credentials remain scoped only to the actual send step.
@@ -153,6 +156,9 @@ jobs:
           TARZAN_REQUESTED_AT: ${{ steps.trigger.outputs.requested_at }}
           TARZAN_WORKFLOW_CREATED_AT: ${{ steps.trigger.outputs.run_created_at }}
           TARZAN_RESTRICTED_CONSOLE: "1"
+          # The reader's clock: runners are UTC, so the analysis date and the
+          # footer's host-local "generated" stamp ran 1-2h behind the subject.
+          TZ: Europe/Rome
           TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
           DELIVERY_CLAIM_ENDPOINT: ${{ secrets.DELIVERY_CLAIM_ENDPOINT }}
           DELIVERY_CLAIM_TOKEN: ${{ secrets.DELIVERY_CLAIM_TOKEN }}

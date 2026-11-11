@@ -47,6 +47,16 @@ def main():
             "Newsletter entry point failed.",
             extra={"public_code": "NEWSLETTER_ENTRYPOINT_FAILED"},
         )
+    except KeyboardInterrupt:
+        # A cancelled job (or its timeout) signals SIGINT. Python's default
+        # handler would print the raw traceback, chained messages included, to
+        # the PUBLIC log, past the restricted formatter. Log a fixed code.
+        error_type = "KeyboardInterrupt"
+        exit_code = 130
+        logging.getLogger("tarzan.delivery").error(
+            "Newsletter entry point interrupted.",
+            extra={"public_code": "NEWSLETTER_ENTRYPOINT_INTERRUPTED"},
+        )
     finally:
         result = last_run_result()
         duration_seconds = time.monotonic() - started

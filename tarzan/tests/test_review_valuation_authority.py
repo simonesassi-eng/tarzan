@@ -114,6 +114,10 @@ def test_live_stamp_cannot_erase_unknown_or_conflicting_mechanics(monkeypatch, a
         "tarzan.data.market_quotes.official_quotes",
         lambda symbols: {"SYNTH.MI": {"price": 10.6, "prev_close": 10.5}},
     )
+    # No independent referee: this test is about mechanics, and an unstubbed
+    # justETF call only passed when an earlier test had warmed its cache.
+    monkeypatch.setattr("tarzan.data.justetf.prefetch_current_quotes", lambda isins: None)
+    monkeypatch.setattr("tarzan.data.justetf.quote", lambda isin: None)
     assert current_session.apply_to_holdings([h]) == ()
     pd.testing.assert_series_equal(h.price_history, original)
     assert h.current_value == 105.0

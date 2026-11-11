@@ -40,9 +40,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--output", default="output/")
     parser.add_argument(
         "--deterministic", action="store_true",
-        help="Reproducible run: pin the clock, skip live intraday quotes and "
-             "the AI summary, so the same inputs produce the same output "
-             "(golden-testable / offline-reproducible on a warm cache).",
+        help="Reproducible run (requires --as_of): pin the clock, skip live "
+             "intraday quotes and the AI summary, so the same inputs produce the "
+             "same output (golden-testable / offline-reproducible on a warm cache).",
     )
     parser.add_argument(
         "--as_of", default=None, metavar="YYYY-MM-DD",

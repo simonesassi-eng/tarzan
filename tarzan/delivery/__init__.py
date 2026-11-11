@@ -29,6 +29,12 @@ Environment variables (provided by GitHub Actions secrets in CI):
     SUBJECT_PREFIX             Default "Portfolio Digest"
     DRY_RUN                    If "1", render only, do not send
     TRIGGER_LABEL              Operational tag (not appended to subject)
+    TARZAN_STABLE_EVENT_ID     Idempotency key of the triggering event
+    TARZAN_REQUESTED_AT        When the event was requested (freshness check)
+    DELIVERY_CLAIM_ENDPOINT    Remote claim store (dedup across runs); unset =
+    DELIVERY_CLAIM_TOKEN         a local JSON store, which dedups one run only
+    DELIVERY_CLAIM_STORE_PATH  Path of that local JSON store
+    AUTHORIZED_RESEND_TOKEN    Allows a deliberate resend of a claimed event
 
 The order list is the single source of truth: the snapshot (positions,
 valuation, allocations) is derived from it, and it also drives the historical
@@ -408,7 +414,11 @@ def _failed_checks_sha() -> str:
     if not (token and repo and sha):
         return ""
     request = Request(
-        f"https://api.github.com/repos/{repo}/actions/runs?head_sha={sha}&per_page=20",
+        # Scoped to the Checks workflow: the repo-wide run list for one SHA fills
+        # with newsletter runs (~10 a day), so after two days without a commit
+        # the Checks run fell off its first page and a red suite went unflagged.
+        f"https://api.github.com/repos/{repo}/actions/workflows/checks.yml/runs"
+        f"?head_sha={sha}&per_page=5",
         headers={"Authorization": f"Bearer {token}",
                  "Accept": "application/vnd.github+json"})
     try:
@@ -743,19 +753,41 @@ def _publish_and_deliver(
         # that section, and it was the most expensive computation in the send
         # path. The What-If workbook still builds it, from the CLI run.
         semantic_audit: dict = {}
-        html = render_newsletter(
-            metrics=metrics,
-            config=config,
-            issue_number=issue_number,
-            semantic_audit=semantic_audit,
-            run_result=result,
-        )
-        from tarzan.export.newsletter._semantic import validate_newsletter_semantics
-        semantic_errors = validate_newsletter_semantics(
-            metrics,
-            semantic_audit,
-            html,
-        )
+        try:
+            html = render_newsletter(
+                metrics=metrics,
+                config=config,
+                issue_number=issue_number,
+                semantic_audit=semantic_audit,
+                run_result=result,
+            )
+        except Exception as exc:  # noqa: BLE001 — one broken section must not go silent
+            # An exception in any one section used to escape here: no issue, no
+            # failure notice, no ledger entry — the reader simply got nothing.
+            # It is now an analysis failure like any other, and is notified.
+            result.ledger.open_failure(
+                stage="newsletter_render",
+                stable_code="NEWSLETTER_RENDER_FAILED",
+                severity="CRITICAL",
+                error=exc,
+                affected_outputs=["newsletter", "delivery"],
+                analytical_impact="the analysis completed but the issue could not be rendered",
+                publication_impact="BLOCK_NORMAL_AND_NOTIFY_FAILURE",
+            )
+            logger.critical(
+                "Newsletter rendering failed; preparing failure notification.",
+                exc_info=True, extra={"public_code": "NEWSLETTER_RENDER_FAILED"},
+            )
+            html = None
+        if html is None:
+            semantic_errors = ()
+        else:
+            from tarzan.export.newsletter._semantic import validate_newsletter_semantics
+            semantic_errors = validate_newsletter_semantics(
+                metrics,
+                semantic_audit,
+                html,
+            )
         if semantic_errors:
             result.ledger.open_failure(
                 stage="newsletter_semantics",
@@ -783,8 +815,12 @@ def _publish_and_deliver(
                 "\n".join(f"  [{i}] {e}" for i, e in enumerate(semantic_errors, 1)),
                 extra={"public_code": "SEMANTIC_VALIDATION_FAILED"},
             )
-        subject = build_subject(metrics, subject_prefix, trigger_label)
-        html = _with_ci_notice(html, _failed_checks_sha())
+        if html is None:
+            html = _failure_notification_html(result)
+            subject = f"{subject_prefix} - Analysis failure"
+        else:
+            subject = build_subject(metrics, subject_prefix, trigger_label)
+            html = _with_ci_notice(html, _failed_checks_sha())
 
     # Rendering can add a fail-closed semantic failure. Evaluate and record the
     # single authoritative publication outcome only after that gate completes.

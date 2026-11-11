@@ -102,10 +102,10 @@ def test_partial_download_keeps_its_original_failure_when_cleanup_also_fails(
             downloader = sys.modules["googleapiclient.http"].MediaIoBaseDownload
             original_chunk = downloader.next_chunk
 
-            def chunk(self):
+            def chunk(self, num_retries=0):
                 if self.request == "targets":
                     raise KeyboardInterrupt()
-                return original_chunk(self)
+                return original_chunk(self, num_retries=num_retries)
 
             patch.setattr(downloader, "next_chunk", chunk)
         with pytest.raises(KeyboardInterrupt if interrupted else OSError) as caught:
