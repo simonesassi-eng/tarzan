@@ -326,20 +326,20 @@ def display_instrument_name(isin: Optional[str], ticker: Optional[str],
     is the fallback for an instrument the taxonomy has never seen, which is a
     real case worth reading rather than blanking.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+    from tarzan import config as _cfg
 
     names = _taxonomy_names() if names is None else names
-    for key in (normalize_isin(isin), normalize_ticker(ticker)):
-        if key and key in names:
-            return short_instrument_name(names[key], max_len)
+    curated = _cfg.catalog_lookup(names, isin, ticker)
+    if curated:
+        return short_instrument_name(curated, max_len)
     return short_instrument_name(raw_name, max_len)
 
 
 def base_symbol(symbol: Optional[str]) -> str:
     """The provider symbol without its exchange suffix: ``XDEV.MI`` → ``XDEV``.
 
-    Used for the ticker pins in the body, where the suffix is noise: no two
-    instruments in an issue share a base symbol, and the full symbol — with the
+    Used for the ticker pins in the body, where the suffix is noise (two funds
+    sharing a symbol are told apart by name and currency), and the full symbol — with the
     canonical and intraday feed it came from — is in the appendix's instrument
     reference. Stripping it in the body while keeping it in the audit table is
     the concept's rule, and it is what makes a ticker pin readable at 9px.

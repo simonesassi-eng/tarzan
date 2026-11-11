@@ -21,6 +21,7 @@ from tarzan.contracts.validation import isin_format_error
 from tarzan.data import geo_resolver, price_cache
 from tarzan.data.enricher import enrich_holdings
 from tarzan.models.holding import Holding
+from tarzan.models.instrument_key import normalize_isin
 
 from tarzan.backtest.model import WhatIfItem, composition_for
 
@@ -195,6 +196,7 @@ def build_symbol_map() -> dict[str, tuple[Optional[str], str]]:
     instead of a private, weaker ticker probe.
     """
     sym_map: dict[str, tuple[Optional[str], str]] = {}
+    shared: set[str] = set()  # bare tickers two different ISINs claim
     for name in ("targets_per_holding.csv", "instrument_taxonomy.csv"):
         p = ROOT / "input" / name
         if not p.exists():
@@ -211,6 +213,12 @@ def build_symbol_map() -> dict[str, tuple[Optional[str], str]]:
             if prev is None:
                 sym_map[bare] = (isin, full)
                 continue
+            if isin and prev[0] and normalize_isin(isin) != normalize_isin(prev[0]):
+                # Two funds behind one symbol (MATE: Nasdaq US56164V3033 and the
+                # UCITS IE000BS31R00). A ticker-only weights row cannot say which,
+                # so it gets no ISIN rather than the first row's.
+                shared.add(bare)
+                continue
             # Merge: keep any known ISIN, and prefer a SUFFIXED symbol (e.g.
             # CL2.MI) over a bare one (CL2), which resolves far better for a
             # non-US listing.
@@ -219,6 +227,12 @@ def build_symbol_map() -> dict[str, tuple[Optional[str], str]]:
             if "." not in merged_sym and "." in full:
                 merged_sym = full
             sym_map[bare] = (merged_isin, merged_sym)
+    for bare in shared:
+        logger.warning(
+            "Backtest: %s names more than one fund in the reference files; a weights "
+            "row that gives only the ticker is resolved without an ISIN - give its ISIN",
+            bare)
+        sym_map[bare] = (None, bare)
     return sym_map
 
 
@@ -238,22 +252,29 @@ def _taxonomy_geo(bare: str, isin: str):
         if idx.exists():
             df = pd.read_csv(idx)
             df.columns = [c.strip().lower() for c in df.columns]
+            claims: dict[str, set] = {}
+            for _, r in df.iterrows():
+                full = str(r.get("ticker", "")).strip()
+                rin = normalize_isin(r.get("isin", ""))
+                if full:
+                    claims.setdefault(full.split(".")[0].upper(), set()).add(rin)
             for _, r in df.iterrows():
                 geo = geo_resolver._parse_geo_row(r)
                 if not geo:
                     continue
                 full = str(r.get("ticker", "")).strip()
-                rin = str(r.get("isin", "")).strip()
-                if full:
-                    _GEO_BY_KEY[full.split(".")[0].upper()] = geo
-                if rin and rin.lower() != "nan":
-                    _GEO_BY_KEY[rin.upper()] = geo
+                rin = normalize_isin(r.get("isin", ""))
+                bare_key = full.split(".")[0].upper() if full else ""
+                # A symbol two funds share is no key: only their ISINs are.
+                if bare_key and len(claims.get(bare_key, ())) == 1:
+                    _GEO_BY_KEY[bare_key] = geo
+                if rin:
+                    _GEO_BY_KEY[rin] = geo
+    # ISIN first: it is the instrument; the symbol only stands in without one.
+    if isin and normalize_isin(isin) in _GEO_BY_KEY:
+        return _GEO_BY_KEY[normalize_isin(isin)]
     key = (bare or "").split(".")[0].upper()
-    if key in _GEO_BY_KEY:
-        return _GEO_BY_KEY[key]
-    if isin and isin.lower() != "nan" and isin.upper() in _GEO_BY_KEY:
-        return _GEO_BY_KEY[isin.upper()]
-    return None
+    return _GEO_BY_KEY.get(key)
 
 
 def resolve_symbol(bare: str, sym_map: dict) -> tuple[Optional[str], str]:

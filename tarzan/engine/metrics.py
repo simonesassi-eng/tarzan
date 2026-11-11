@@ -1918,6 +1918,7 @@ class MetricsEngine:
             bs = _cap_to_years(tape, 5)
             row = {
                 "ticker": record.ticker,
+                "isin": record.isin,
                 "name": record.name,
                 "type": "Benchmark index",
                 "currency": ccy,
@@ -2405,7 +2406,7 @@ class MetricsEngine:
                         if str(i or "").strip() and str(i).strip().lower() != "nan"}
                        if frame is not None and not frame.empty else {})
             for record in (ctx.get("_benchmark_catalog") or {}).values():
-                isin = (isin_of.get(str(record.ticker))
+                isin = (getattr(record, "isin", "") or isin_of.get(str(record.ticker))
                         or curated.get(normalize_ticker(str(record.ticker)).upper()) or "")
                 if isin:
                     subjects[(str(record.ticker), "Benchmark index")] = (
@@ -2910,9 +2911,7 @@ class MetricsEngine:
             )
             # Taxonomy lookup is classification-only; the operational ticker
             # retained in the row is always the full preprocessed symbol.
-            _meta = _taxonomy.get(normalize_ticker(record.ticker))
-            if not _meta:
-                _meta = _taxonomy.get(record.ticker.upper())
+            _meta = _cfg_mod.catalog_lookup(_taxonomy, record.isin, record.ticker, record.name)
             if isinstance(_meta, tuple) and len(_meta) >= 2:
                 _ac, _role = _meta[0], _meta[1]
             else:

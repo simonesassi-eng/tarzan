@@ -51,7 +51,8 @@ def plan_weights(target_rows: dict) -> tuple[dict[str, float], list[str]]:
     A repeated instrument carrying DIFFERENT weights is a contradiction in the input,
     not something to average: the larger is kept and the conflict is reported.
     """
-    from tarzan.models.instrument_key import normalize_ticker
+    from tarzan import config as cfg
+    from tarzan.models.instrument_key import QUALIFIER, normalize_ticker
 
     out: dict[str, float] = {}
     notes: list[str] = []
@@ -61,7 +62,12 @@ def plan_weights(target_rows: dict) -> tuple[dict[str, float], list[str]]:
             continue
         ticker = str((row or {}).get("ticker") or "").strip()
         isin = str((row or {}).get("isin") or "").strip()
-        key = (normalize_ticker(ticker) if ticker else "") or isin.upper()
+        # The catalog's key: the bare ticker, so two share classes of one
+        # curated fund still meet (CL2 twice), qualified with the ISIN when two
+        # catalog rows share the symbol (MATE), so two funds never do.
+        catalog_key = cfg.catalog_key(isin, ticker) if (isin or ticker) else ""
+        key = (catalog_key.upper() if QUALIFIER in catalog_key
+               else normalize_ticker(catalog_key or ticker)) or isin.upper()
         if not key:
             notes.append("a target row names neither a ticker nor an ISIN; skipped")
             continue
@@ -80,7 +86,7 @@ def _primary_class(ticker: str) -> Optional[str]:
     """The instrument's curated asset class, needed as the breakdown's fallback."""
     from tarzan import config as cfg
 
-    row = (cfg.instrument_taxonomy() or {}).get(str(ticker).split(".")[0].upper())
+    row = cfg.catalog_lookup(cfg.instrument_taxonomy() or {}, None, ticker)
     if isinstance(row, dict):
         return row.get("asset_class") or None
     if isinstance(row, (tuple, list)) and row:

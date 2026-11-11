@@ -128,11 +128,14 @@ def _lookup_asset_geo(
     ``CL2.MI``. An exact string compare silently dropped such a holding's whole
     equity notional into a "Not Available" geography bucket.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker, split_qualified
 
     df = _load_asset_geo()
     if df is None or df.empty:
         return None
+    # A qualified symbol (MATE@IE000BS31R00) carries its ISIN.
+    ticker, qualified_isin = split_qualified(ticker)
+    isin = isin or qualified_isin
 
     # Match by ISIN
     if isin and "isin" in df.columns:
@@ -147,7 +150,12 @@ def _lookup_asset_geo(
     if ticker and "ticker" in df.columns:
         col = df["ticker"].map(normalize_ticker)
         match = df[col == normalize_ticker(ticker)]
-        if not match.empty:
+        if isin and "isin" in df.columns:
+            # A row with another ISIN is another fund, whatever its symbol.
+            row_isins = match["isin"].map(normalize_isin)
+            match = match[(row_isins == "") | (row_isins == normalize_isin(isin))]
+        # One row, or none: a symbol two rows share names neither.
+        if len(match) == 1:
             geo = _parse_geo_row(match.iloc[0])
             if geo:
                 return geo, "index_geo_allocation (ticker)"

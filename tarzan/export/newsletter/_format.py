@@ -140,9 +140,9 @@ def _display_ticker(symbol: Optional[str]) -> Optional[str]:
     The suffix is part of the instrument's identity and is never dropped from
     the DATA -- the appendix's instrument reference prints the full canonical
     and intraday symbols, and the semantic gate checks the frames rather than
-    this string. In the body it is noise: no two instruments in an issue share a
-    base symbol, and ".MI" on every pin costs three characters of a 9px label
-    that has to sit beside a name.
+    this string. In the body it is noise: ".MI" on every pin costs three
+    characters of a 9px label that has to sit beside a name, and where two funds
+    share a symbol (the two MATEs) the name and currency tell them apart.
 
     Synthetic portfolio/mix labels stay hidden because they are not provider
     tickers.

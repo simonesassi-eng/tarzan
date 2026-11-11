@@ -45,7 +45,6 @@ from tarzan.instruments.registry import InstrumentKind, TypeEvidenceGateway
 from tarzan.instruments.valuation import holding_kind_resolution
 from tarzan.models.currency import to_major
 from tarzan.models.holding import AssetClass, Holding
-from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.models.order import Order, OrderType
 from tarzan.runtime import data_quality as dq
 from tarzan.runtime.ledger import Availability
@@ -1658,11 +1657,19 @@ def build_allocation_timeline(
     _taxonomy = _cfg.instrument_taxonomy()
     _exp_lut = _cfg.class_exposure_lookup()
 
+    from tarzan.models.instrument_key import is_isin as _is_isin
+
+    def _catalog(lut, key):
+        """The catalog row's value for one identity key, which is an ISIN, or a
+        ticker for an instrument known only by its symbol."""
+        return (_cfg.catalog_lookup(lut, key, None) if _is_isin(key)
+                else _cfg.catalog_lookup(lut, None, key))
+
     def _class_for(isin: str) -> Optional[str]:
         holding = enriched_by_isin.get(isin)
         if holding and holding.asset_class:
             return holding.asset_class.value
-        hit = _taxonomy.get(normalize_isin(isin)) or _taxonomy.get(normalize_ticker(isin))
+        hit = _catalog(_taxonomy, isin)
         if hit and hit[0]:
             return hit[0]
         intrinsic = {
@@ -1683,7 +1690,7 @@ def build_allocation_timeline(
         if h is not None and getattr(h, "class_breakdown", None):
             return {(k.value if hasattr(k, "value") else str(k)): v
                     for k, v in h.class_breakdown.items()}
-        ov = _exp_lut.get(normalize_isin(isin)) or _exp_lut.get(normalize_ticker(isin))
+        ov = _catalog(_exp_lut, isin)
         if ov:
             return dict(ov)
         category = _class_for(isin)

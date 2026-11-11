@@ -289,23 +289,23 @@ def test_a_reference_only_row_is_not_printed_in_the_watchlist(monkeypatch):
 
 
 def test_symbol_root_shared_by_two_funds_does_not_merge_them(monkeypatch):
-    """MAET (UCITS, IE000BS31R00) resolves to the Milan listing MATE.MI, whose
-    root is also the Nasdaq MATE (US56164V3033), a different fund. Keyed by bare
-    ticker, the target took the US fund's class and ticker, the UCITS's own
-    watchlist row survived as a duplicate, and the US fund vanished."""
+    """The UCITS MATE (IE000BS31R00) trades as MATE.MI, whose root is also the
+    Nasdaq MATE (US56164V3033), a different fund. Keyed by bare ticker, the
+    target took the US fund's class and ticker, the UCITS's own watchlist row
+    survived as a duplicate, and the US fund vanished."""
     out = _fixture(monkeypatch, extra_watch=(
         "man active trend enhanced", "man active trend enhanced ucits etf eur hedged"),
         taxonomy={"IE000BS31R00": ("Equities", "Equity Trend Stacked"),
-                  "MAET": ("Equities", "Equity Trend Stacked"),
-                  "US56164V3033": ("Equities", "Efficient Core"),
-                  "MATE": ("Equities", "Efficient Core")},
+                  "US56164V3033": ("Equities", "Efficient Core")},
         target_rows=[
             {"ticker": "MATE.MI", "isin": "IE000BS31R00",
              "name": "Man Active Trend Enhanced UCITS ETF EUR Hedged",
              "type": "Target not held", "1d": 1.0},
-            {"ticker": "MATE", "name": "Man Active Trend Enhanced",
+            {"ticker": "MATE@US56164V3033", "isin": "US56164V3033",
+             "name": "Man Active Trend Enhanced",
              "type": "Benchmark index", "1d": 2.0},
-            {"ticker": "MAET.DE", "name": "Man Active Trend Enhanced UCITS ETF EUR Hedged",
+            {"ticker": "MATE@IE000BS31R00", "isin": "IE000BS31R00",
+             "name": "Man Active Trend Enhanced UCITS ETF EUR Hedged",
              "type": "Benchmark index", "1d": 1.0},
         ])
     (target,) = out["target_rows"]
@@ -314,4 +314,4 @@ def test_symbol_root_shared_by_two_funds_does_not_merge_them(monkeypatch):
     assert target["ticker"] == "MATE" and target["role"] == "Equity Trend Stacked", target
     assert "EUR" in target["name"] or "Hdgd" in target["name"], target
     watch = [r["raw_ticker"] for r in out["benchmark_rows"]]
-    assert "MATE" in watch and "MAET.DE" not in watch, watch
+    assert [t for t in watch if t.startswith("MATE")] == ["MATE@US56164V3033"], watch

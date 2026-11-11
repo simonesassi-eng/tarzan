@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 from tarzan.contracts.immutable import freeze_json
 
 
@@ -21,8 +20,17 @@ class ReportReference:
     benchmark_geo: str = ""
 
     def __post_init__(self):
+        from tarzan.config import FrozenIdentityMap
+
         for name in ("names", "taxonomy", "benchmarks", "metric_ratings"):
-            object.__setattr__(self, name, freeze_json(getattr(self, name)))
+            value = getattr(self, name)
+            frozen = freeze_json(value)
+            index = getattr(value, "index", None)
+            if index is not None:
+                # A catalog map keeps the catalog it was built from: the
+                # identity rule must not change under a prepared reference.
+                frozen = FrozenIdentityMap(frozen, index)
+            object.__setattr__(self, name, frozen)
         object.__setattr__(
             self, "benchmark_identities",
             tuple(tuple(item) for item in self.benchmark_identities),
@@ -49,10 +57,9 @@ class ReportReference:
         )
 
     def name_for(self, isin, ticker):
-        for key in (normalize_isin(isin), normalize_ticker(ticker)):
-            if key and key in self.names:
-                return self.names[key]
-        return None
+        from tarzan import config
+
+        return config.catalog_lookup(self.names, isin, ticker)
 
 
 def reference_for(metrics) -> ReportReference:

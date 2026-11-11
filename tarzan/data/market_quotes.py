@@ -143,6 +143,14 @@ def _exchange_for(ticker: str) -> Optional[str]:
 
         resolved_isin, resolved_ticker = cfg.resolve_taxonomy_identity("", t)
         resolved = str(resolved_ticker or "").strip().upper()
+        if not resolved_isin:
+            # A symbol two catalog rows share (MATE: a Nasdaq fund and the Milan
+            # symbol of a UCITS) resolves to neither. A BARE provider symbol is
+            # by definition the one without a venue suffix, i.e. the US listing
+            # when one of those rows is a US fund.
+            index = cfg.catalog()
+            if any(index.isin_of(r).startswith("US") for r in index.by_exact.get(t.casefold(), [])):
+                return "US"
         if resolved != t and "." in resolved:
             return _SUFFIX_EXCHANGE.get(resolved.rsplit(".", 1)[1])
         # The curated row's own ticker IS this bare symbol, and its ISIN is US:

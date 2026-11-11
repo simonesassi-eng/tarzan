@@ -2462,15 +2462,14 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             # fund), so a bare-ticker lookup gave the target the US row's class,
             # role and name, and showed it under the wrong ticker.
             isin = normalize_isin(r.get("isin"))
-            asset_class, role = (taxonomy.get(isin) if isin else None) or taxonomy.get(bare, (None, None))
+            asset_class, role = cfg.catalog_lookup(taxonomy, isin, raw_ticker) or (None, None)
             target_rows.append({
                 "name": display_instrument_name(
                     r.get("isin"), raw_ticker,
                     str(r.get("name") or raw_ticker), names=ctx.reference.names),
                 # The listing's symbol, as every other section prints it (MATE
-                # for MATE.MI), not the catalog key (MAET): one fund, one name in
-                # the issue. Identity stays the ISIN, which is what keeps it apart
-                # from the Nasdaq MATE; the name and currency say which is which.
+                # for MATE.MI). Identity stays the ISIN, which is what keeps it
+                # apart from the Nasdaq MATE; the name and currency say which.
                 "ticker": _display_ticker(raw_ticker),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
@@ -2501,8 +2500,8 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
     } - {""}
     # A catalog row is keyed by its curated ticker, the target by the resolved
     # listing, so compare ISINs when the taxonomy knows the catalog row's ISIN:
-    # MAET (IE000BS31R00) is the target listed as MATE.MI and must drop, while
-    # the Nasdaq MATE (US56164V3033) is a different fund and must stay.
+    # the UCITS MATE (IE000BS31R00) is the target listed as MATE.MI and must
+    # drop, while the Nasdaq MATE (US56164V3033) is a different fund and stays.
     target_isin_by_bare = {
         normalize_ticker(str(r.get("raw_ticker") or "")):
             normalize_isin(r.get("_src", {}).get("isin"))
@@ -2545,10 +2544,11 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 tags.append(("GEO", PALETTE["accent"], PALETTE["accent_bg"]))
             raw_ticker = str(r.get("ticker") or "").strip()
             bare = normalize_ticker(raw_ticker)
-            bench_isin = normalize_isin(cfg.resolve_taxonomy_identity("", bare)[0])
+            bench_isin = normalize_isin(r.get("isin")) or normalize_isin(
+                cfg.resolve_taxonomy_identity("", bare, name)[0])
             if _is_target_copy(bare, bench_isin):
                 continue
-            asset_class, role = taxonomy.get(bare, (None, None))
+            asset_class, role = cfg.catalog_lookup(taxonomy, bench_isin, raw_ticker, name) or (None, None)
             benchmark_rows.append({
                 # Display name goes through the SAME shortener as the holding
                 # rows so "iShares Nasdaq 100 UCITS ETF" reads like the rest of

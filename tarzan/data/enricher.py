@@ -4306,27 +4306,23 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
     lut = cfg.instrument_taxonomy()
     if not lut:
         return False
-    keys = []
-    if holding.isin:
-        keys.append(normalize_isin(holding.isin))
-    if holding.ticker:
-        keys.append(normalize_ticker(holding.ticker))
-    # Bidirectional bridge: a taxonomy row may be keyed by only one of
-    # (ISIN, ticker) while the holding knows only the other — e.g. a Fineco
-    # ISIN-only order vs a ticker-only UEQC row. Resolve across the learned
-    # ISIN↔ticker xref so either identifier reaches the row. (The xref is
-    # populated as instruments resolve; ticker→ISIN also lets an ISIN-keyed
-    # row match a ticker-only holding.)
+    # Identities to try, strongest first: the holding's own (ISIN, ticker),
+    # then the learned ISIN<->ticker xref, because a taxonomy row may carry
+    # only one of the two while the holding knows only the other (a Fineco
+    # ISIN-only order vs a ticker-only UEQC row). Each is read under the
+    # catalog's identity rule, so a symbol never reaches a row whose ISIN
+    # contradicts the holding's.
+    identities = [(holding.isin, holding.ticker)]
     if holding.isin:
         xref_ticker = price_cache.load_ticker_isin_reverse(normalize_isin(holding.isin))
         if xref_ticker:
-            keys.append(normalize_ticker(xref_ticker))
-    if holding.ticker:
+            identities.append((holding.isin, xref_ticker))
+    if holding.ticker and not holding.isin:
         xref_isin = price_cache.load_ticker_isin(holding.ticker)
         if xref_isin:
-            keys.append(normalize_isin(xref_isin))
-    for k in keys:
-        hit = lut.get(k)
+            identities.append((xref_isin, holding.ticker))
+    for isin_k, ticker_k in identities:
+        hit = cfg.catalog_lookup(lut, isin_k, ticker_k, holding.name)
         if not hit:
             continue
         ac_str, role = hit
@@ -4445,8 +4441,7 @@ def _apply_class_breakdown(holding: Holding) -> None:
     }
     # Nudge for likely-notional instruments missing an explicit override.
     lut = cfg.class_exposure_lookup()
-    keyed = (normalize_isin(holding.isin) in lut or
-             normalize_ticker(holding.ticker) in lut)
+    keyed = cfg.catalog_lookup(lut, holding.isin, holding.ticker, holding.name) is not None
     if not keyed:
         hint_src = f"{holding.role or ''} {holding.name or ''}".lower()
         if (any(h in (holding.role or "").lower() for h in cfg._NOTIONAL_ROLE_HINTS)

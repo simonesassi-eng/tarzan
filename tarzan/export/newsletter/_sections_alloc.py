@@ -1054,8 +1054,11 @@ def _build_ticker_sources(ctx: _NewsletterContext) -> dict:
     quotes = getattr(m, "intraday_quotes", {}) or {}
     for name, requested, isin in ctx.reference.benchmark_identities:
         hist = str(resolved.get(name) or "")
+        # A shared symbol (MATE: Nasdaq and UCITS) must not merge two funds:
+        # a row matched by symbol whose ISIN differs is another instrument.
         known = next((by_identity[k] for k in (isin, normalize_ticker(hist or requested))
-                      if k and k in by_identity), None)
+                      if k and k in by_identity
+                      and by_identity[k]["isin"] in ("", isin or by_identity[k]["isin"])), None)
         if known is not None:
             if _presence_rank(known["presence"]) > _PRESENCE_BANDS.index("Watchlist"):
                 known["presence"] = "Watchlist"

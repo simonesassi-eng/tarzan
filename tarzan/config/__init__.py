@@ -12,6 +12,7 @@ instrument_taxonomy.csv (``watchlist``, ``is_benchmark_alpha_beta``,
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import Optional
 
@@ -109,41 +110,217 @@ def _load_indexes_csv() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _cell(row, column: str) -> str:
+    value = row.get(column)
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    value = str(value).strip()
+    return "" if value.casefold() == "nan" else value
+
+
+class _CatalogIndex:
+    """The curated catalog, indexed once, with ONE identity rule.
+
+    An instrument is its ISIN. A symbol identifies a catalog row only when it
+    is unambiguous: exactly one row carries it, and that row's ISIN does not
+    contradict the ISIN the caller holds. Two rows sharing a symbol (MATE on
+    Nasdaq, US56164V3033, and the Milan UCITS IE000BS31R00) are each keyed by a
+    qualified symbol (``MATE@IE000BS31R00``) wherever code keys on the symbol;
+    a bare ``MATE`` resolves to neither rather than to whichever row came
+    first, which is how the UCITS was once priced, named and classed as the US
+    fund. An ISIN the catalog does not know never borrows a same-symbol row.
+    """
+
+    def __init__(self, frame: pd.DataFrame):
+        from collections import defaultdict
+        from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+
+        self.rows = [] if frame.empty else list(frame.to_dict("records"))
+        self.by_isin: dict[str, dict] = {}
+        self.by_exact: dict[str, list] = defaultdict(list)
+        self.by_bare: dict[str, list] = defaultdict(list)
+        duplicate_isins = set()
+        for row in self.rows:
+            isin = normalize_isin(_cell(row, "isin"))
+            ticker = _cell(row, "ticker")
+            if isin:
+                if isin in self.by_isin:
+                    duplicate_isins.add(isin)
+                self.by_isin.setdefault(isin, row)
+            if ticker:
+                self.by_exact[ticker.casefold()].append(row)
+                self.by_bare[normalize_ticker(ticker)].append(row)
+        self.shared = {bare for bare, rows in self.by_bare.items() if len(rows) > 1}
+        unresolvable = sorted(
+            bare for bare in self.shared
+            if sum(1 for r in self.by_bare[bare] if not normalize_isin(_cell(r, "isin"))) > 0
+        )
+        if duplicate_isins:
+            _warn_taxonomy(f"ISIN listed on more than one row (first wins): {sorted(duplicate_isins)}")
+        if unresolvable:
+            _warn_taxonomy(
+                "symbol shared by several rows, at least one without an ISIN, so those "
+                f"rows cannot be told apart and resolve to none: {unresolvable}")
+
+    def isin_of(self, row) -> str:
+        from tarzan.models.instrument_key import normalize_isin
+        return normalize_isin(_cell(row, "isin"))
+
+    def key(self, row) -> str:
+        """The symbol code keys this row on: its ticker, qualified with its ISIN
+        when another row shares the symbol."""
+        from tarzan.models.instrument_key import normalize_ticker, qualify
+
+        ticker = _cell(row, "ticker")
+        if normalize_ticker(ticker) in self.shared:
+            return qualify(ticker, self.isin_of(row))
+        return ticker
+
+    def row(self, isin=None, ticker=None, name=None, *, venue_strict: bool = False):
+        """The one catalog row this identity names, or None.
+
+        ``ticker`` may be qualified (``MATE@IE000BS31R00``) or carry a venue
+        suffix. ``venue_strict``: a suffixed symbol the catalog does not list
+        is an explicit venue choice and matches no bare row. ``name`` only
+        breaks a tie between rows the symbol leaves ambiguous.
+        """
+        from tarzan.models.instrument_key import normalize_isin, normalize_ticker, split_qualified
+
+        symbol, qualified_isin = split_qualified(ticker)
+        isin = normalize_isin(isin) or qualified_isin
+        if isin and isin in self.by_isin:
+            return self.by_isin[isin]
+        candidates = []
+        if symbol:
+            candidates = self.by_exact.get(symbol.casefold(), [])
+            if not candidates and not ("." in symbol and venue_strict):
+                candidates = self.by_bare.get(normalize_ticker(symbol), [])
+        if isin:
+            # A row with ANOTHER ISIN is another instrument, whatever its symbol.
+            candidates = [r for r in candidates if self.isin_of(r) in ("", isin)]
+        if not candidates and name:
+            # Last resort, for a row the catalog lists without an ISIN (CL2):
+            # its exact curated name, under the same no-contradiction rule.
+            wanted = str(name).strip().casefold()
+            candidates = [r for r in self.rows if _cell(r, "name").casefold() == wanted
+                          and (not isin or self.isin_of(r) in ("", isin))]
+        if len(candidates) > 1 and name:
+            wanted = str(name).strip().casefold()
+            named = [r for r in candidates if _cell(r, "name").casefold() == wanted]
+            candidates = named or candidates
+        if len(candidates) > 1:
+            unique = {id(r) for r in candidates}
+            if len(unique) > 1:
+                return None
+        return candidates[0] if candidates else None
+
+
+_CATALOG: list = [None, None]  # (frame the index was built from, index)
+
+
+def catalog() -> _CatalogIndex:
+    """The indexed catalog for the current taxonomy file (rebuilt when the
+    loader's cache is cleared, so tests and ``reset_input_caches`` see it)."""
+    frame = _load_indexes_csv()
+    if _CATALOG[0] is not frame:
+        _CATALOG[0], _CATALOG[1] = frame, _CatalogIndex(frame)
+    return _CATALOG[1]
+
+
+def catalog_key(isin: Optional[str], ticker: Optional[str]) -> str:
+    """The catalog's own key for an instrument (see :meth:`_CatalogIndex.key`),
+    or the ticker unchanged when the catalog does not know it."""
+    row = catalog().row(isin, ticker)
+    return catalog().key(row) if row is not None else str(ticker or "").strip()
+
+
+class IdentityMap(dict):
+    """A catalog lookup that remembers the catalog index it was built from, so
+    :func:`catalog_lookup` applies that catalog's identity rule even after the
+    global taxonomy has changed (a prepared report reference keeps its own)."""
+
+    index: Optional["_CatalogIndex"] = None
+
+
+class FrozenIdentityMap(Mapping):
+    """Read-only view of an :class:`IdentityMap` that keeps its index."""
+
+    def __init__(self, data: Mapping, index: Optional["_CatalogIndex"]):
+        self._data, self.index = data, index
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __repr__(self):
+        return f"FrozenIdentityMap({dict(self._data)!r})"
+
+
 def _by_isin_and_ticker(df: pd.DataFrame, extract) -> dict:
-    """Build a taxonomy lookup keyed by both ISIN and bare ticker.
+    """Build a taxonomy lookup keyed by ISIN, by the row's catalog key, and by
+    the bare ticker where the bare ticker names one row only.
 
     ``extract(row) -> value`` returns the cell value for a row, or ``None`` to
-    skip it. Keys are the canonical identity normalizers (``normalize_isin`` /
-    ``normalize_ticker``); ISIN entries win over ticker entries on collision.
-    One place to keep the taxonomy build rule and the identity convention.
+    skip it. A symbol two rows share is deliberately NOT a key: a dict lookup
+    on it would silently return whichever row came first. Read these maps with
+    :func:`catalog_lookup`, which applies the catalog's identity rule.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+    from tarzan.models.instrument_key import normalize_ticker
 
-    by_isin: dict[str, object] = {}
-    by_ticker: dict[str, object] = {}
-    for _, row in df.iterrows():
+    index = catalog()
+    out = IdentityMap()
+    out.index = index
+    for row in index.rows:
         value = extract(row)
         if value is None:
             continue
-        isin = normalize_isin(row.get("isin"))
-        if isin:
-            by_isin.setdefault(isin, value)
-        ticker = normalize_ticker(row.get("ticker"))
-        if ticker:
-            by_ticker.setdefault(ticker, value)
-    merged = dict(by_ticker)
-    merged.update(by_isin)  # ISIN wins on collision
-    return merged
+        isin = index.isin_of(row)
+        bare = normalize_ticker(_cell(row, "ticker"))
+        keys = [isin, index.key(row)]
+        if bare and bare not in index.shared:
+            keys.append(bare)
+        for key in keys:
+            if key:
+                out.setdefault(key, value)
+    return out
 
 
-def _lookup_by_identity(lut: dict, isin: Optional[str], ticker: Optional[str]):
-    """Read a ``_by_isin_and_ticker`` map by ISIN then bare ticker, or None."""
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+def catalog_lookup(lut: Mapping, isin: Optional[str], ticker: Optional[str],
+                   name: Optional[str] = None):
+    """Read a :func:`_by_isin_and_ticker` map for one instrument, or None.
 
-    for key in (normalize_isin(isin), normalize_ticker(ticker)):
+    The instrument is first identified as a catalog row by the rule of the
+    catalog the map was built from (ISIN; else an unambiguous, non-contradicting
+    symbol); the map is then read at THAT row's key. An instrument the catalog
+    cannot identify gets nothing, never a same-symbol neighbour's values.
+
+    A map built by hand (no index) is read the simple way: ISIN, then bare
+    symbol. It holds whatever its author put in it, which is the authority.
+    """
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker, split_qualified
+
+    index = getattr(lut, "index", None)
+    if index is None:
+        symbol, qualified_isin = split_qualified(ticker)
+        for key in (normalize_isin(isin) or qualified_isin, normalize_ticker(symbol)):
+            if key and key in lut:
+                return lut[key]
+        return None
+    row = index.row(isin, ticker, name)
+    if row is None:
+        return None
+    for key in (index.isin_of(row), index.key(row)):
         if key and key in lut:
             return lut[key]
     return None
+
+
+_lookup_by_identity = catalog_lookup  # the name existing callers use
 
 
 # The taxonomy column that says "track this instrument". It names the WATCHLIST,
@@ -204,24 +381,26 @@ def instrument_taxonomy() -> dict:
 
 
 def instrument_taxonomy_has(identity: Optional[str]) -> bool:
-    """Whether the curated taxonomy actually holds this ISIN or bare ticker.
+    """Whether the curated taxonomy actually holds this ISIN or symbol.
 
     ``resolve_taxonomy_identity`` echoes unknown input straight back — by
     design, so partial identities survive — which makes it useless for asking
     "does the taxonomy know this?". This answers that question against the
-    curated lookup, which contains only real rows, keyed by both ISIN and bare
-    ticker. Used to recognise a curated instrument through a provider ticker
-    alias when the row's own isin cell is empty.
+    catalog's real rows: an ISIN, an exact or bare ticker (a symbol two rows
+    share is still a curated symbol), or a qualified symbol.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+    from tarzan.models.instrument_key import normalize_isin, normalize_ticker, split_qualified
 
     if not identity:
         return False
-    lut = _taxonomy_lookup()
+    index = catalog()
     raw = str(identity).strip()
-    return any(
-        key and key in lut
-        for key in (raw, normalize_isin(raw), normalize_ticker(raw))
+    symbol, qualified_isin = split_qualified(raw)
+    return bool(
+        normalize_isin(raw) in index.by_isin
+        or (qualified_isin and qualified_isin in index.by_isin)
+        or (symbol and symbol.casefold() in index.by_exact)
+        or (normalize_ticker(symbol) and normalize_ticker(symbol) in index.by_bare)
     )
 
 
@@ -238,132 +417,30 @@ def resolve_taxonomy_identity(
     such as ``X710.MI``. ISIN wins when supplied; otherwise an exact ticker or
     a unique bare ticker is used. Name is only an ambiguity breaker. Ambiguous
     or absent taxonomy evidence is returned unchanged rather than guessed.
+
+    Returns ``(isin, ticker)``: the row's ISIN (or the caller's) and its PLAIN
+    ticker — a provider hint, never a qualified key (see :func:`catalog_key`).
+    A qualified input (``MATE@IE000BS31R00``) is read for its ISIN.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker
+    from tarzan.models.instrument_key import normalize_isin, split_qualified
 
-    normalized_isin = normalize_isin(isin)
-    raw_ticker = str(ticker or "").strip()
-    if raw_ticker.casefold() == "nan":
-        raw_ticker = ""
-    bare_ticker = normalize_ticker(raw_ticker)
-    raw_name = str(name or "").strip()
-    if raw_name.casefold() == "nan":
-        raw_name = ""
-
-    frame = _load_indexes_csv()
-    if frame.empty:
-        return normalized_isin, raw_ticker
-
-    def _cell(row, column: str) -> str:
-        value = row.get(column)
-        if value is None or pd.isna(value):
-            return ""
-        return str(value).strip()
-
-    rows = list(frame.to_dict("records"))
-    candidates = []
-    if normalized_isin:
-        candidates = [
-            row for row in rows
-            if normalize_isin(_cell(row, "isin")) == normalized_isin
-        ]
-
-    if not candidates and bare_ticker:
-        exact = [
-            row for row in rows
-            if _cell(row, "ticker").casefold() == raw_ticker.casefold()
-        ]
-        # A suffix supplied by the user is an explicit venue choice. If that
-        # full listing is absent from the taxonomy, preserve it rather than
-        # replacing it with a same-symbol listing from another exchange.
-        if exact:
-            candidates = exact
-        elif "." in raw_ticker:
-            return normalized_isin, raw_ticker
-        else:
-            candidates = [
-                row for row in rows
-                if normalize_ticker(_cell(row, "ticker")) == bare_ticker
-            ]
-
-    if not candidates and raw_name:
-        candidates = [
-            row for row in rows
-            if _cell(row, "name").casefold() == raw_name.casefold()
-        ]
-
-    if not candidates:
-        return normalized_isin, raw_ticker
-
-    if len(candidates) > 1 and raw_name:
-        exact_name = [
-            row for row in candidates
-            if _cell(row, "name").casefold() == raw_name.casefold()
-        ]
-        if exact_name:
-            candidates = exact_name
-
-    identities = {
-        (
-            normalize_isin(_cell(row, "isin")),
-            _cell(row, "ticker"),
-        )
-        for row in candidates
-        if normalize_isin(_cell(row, "isin")) or _cell(row, "ticker")
-    }
-    if len(identities) != 1:
-        return normalized_isin, raw_ticker
-
-    taxonomy_isin, taxonomy_ticker = next(iter(identities))
-    return (
-        normalized_isin or taxonomy_isin,
-        taxonomy_ticker or raw_ticker,
-    )
+    symbol, qualified_isin = split_qualified(ticker)
+    normalized_isin = normalize_isin(isin) or qualified_isin
+    index = catalog()
+    row = index.row(normalized_isin, symbol, name, venue_strict=True)
+    if row is None:
+        return normalized_isin, symbol
+    return normalized_isin or index.isin_of(row), _cell(row, "ticker") or symbol
 
 
 def kind_for(isin: Optional[str], ticker: Optional[str]) -> Optional[str]:
     """Return one supported mechanics kind from curated taxonomy evidence.
 
-    ISIN evidence wins when the taxonomy contains it. If the supplied ISIN is
-    absent, an unambiguous exact/resolved ticker may still identify a curated
-    row; this supports broker placeholders without allowing a conflicting ISIN
-    row to be overridden. ETC/ETN listings use ETF per-unit mechanics.
+    The catalog row is identified by the catalog's rule (ISIN; else an
+    unambiguous symbol that does not contradict the ISIN), so a broker
+    placeholder still finds its row while a conflicting ISIN row is never
+    borrowed. ETC/ETN listings use ETF per-unit mechanics.
     """
-    from tarzan.models.instrument_key import normalize_isin
-
-    normalized_isin = normalize_isin(isin)
-    raw_ticker = str(ticker or "").strip()
-    frame = _load_indexes_csv()
-    if frame.empty or "kind" not in frame.columns:
-        return None
-
-    def _clean(value) -> str:
-        if value is None or pd.isna(value):
-            return ""
-        return str(value).strip()
-
-    rows = list(frame.to_dict("records"))
-    candidates = [
-        row for row in rows
-        if normalized_isin
-        and normalize_isin(_clean(row.get("isin"))) == normalized_isin
-    ]
-    if not candidates and raw_ticker:
-        resolved_isin, resolved_ticker = resolve_taxonomy_identity(
-            "", raw_ticker
-        )
-        if resolved_isin:
-            candidates = [
-                row for row in rows
-                if normalize_isin(_clean(row.get("isin"))) == resolved_isin
-            ]
-        if not candidates:
-            expected = str(resolved_ticker or raw_ticker).strip().casefold()
-            candidates = [
-                row for row in rows
-                if _clean(row.get("ticker")).casefold() == expected
-            ]
-
     mapping = {
         "stock": "STOCK",
         "equity": "STOCK",
@@ -373,15 +450,10 @@ def kind_for(isin: Optional[str], ticker: Optional[str]) -> Optional[str]:
         "bond": "BOND",
         "cash": "CASH",
     }
-    kinds = {
-        mapping[value]
-        for value in (
-            _clean(row.get("kind")).casefold()
-            for row in candidates
-        )
-        if value in mapping
-    }
-    return next(iter(kinds)) if len(kinds) == 1 else None
+    row = catalog().row(isin, ticker)
+    if row is None:
+        return None
+    return mapping.get(_cell(row, "kind").casefold())
 
 
 # Notional asset-class exposure columns in instrument_taxonomy.csv → AssetClass value.
@@ -666,9 +738,12 @@ def benchmarks() -> dict[str, str]:
     footnote naming an index it never used.
     """
     result = {}
+    index = catalog()
     for flag in _TRACKED_FLAGS:
         for name, row in _named_rows(flag):
-            ticker = str(row.get("ticker", "")).strip()
+            # The catalog key, qualified when another row shares the symbol:
+            # it is the fetch and memo key of the instrument's series.
+            ticker = index.key(row.to_dict())
             if ticker:
                 result.setdefault(name, ticker)
     return result or dict(default_benchmarks())
@@ -689,11 +764,12 @@ def benchmark_identities() -> tuple[tuple[str, str, str], ...]:
     from tarzan.models.instrument_key import normalize_isin
 
     seen: dict[str, tuple[str, str, str]] = {}
+    index = catalog()
     for flag in _TRACKED_FLAGS:
         for name, row in _named_rows(flag):
             seen.setdefault(name, (
                 name,
-                str(row.get("ticker", "")).strip(),
+                index.key(row.to_dict()),
                 normalize_isin(row.get("isin")),
             ))
     return tuple(seen.values())

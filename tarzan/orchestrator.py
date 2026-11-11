@@ -702,9 +702,8 @@ def _check_taxonomy_coverage(holdings) -> None:
     try:
         from tarzan import config as _cfg
         from tarzan.runtime import data_quality as _dq
-        from tarzan.models.instrument_key import normalize_isin, normalize_ticker
 
-        taxonomy = _cfg.instrument_taxonomy()  # keys: uppercased ISIN + bare ticker
+        taxonomy = _cfg.instrument_taxonomy()  # read with catalog_lookup (identity rule)
         if not taxonomy:
             _dq.warning(
                 "taxonomy",
@@ -717,9 +716,8 @@ def _check_taxonomy_coverage(holdings) -> None:
         for h in holdings:
             if getattr(h, "is_seeded_target", False):
                 continue  # seeds aren't part of the real snapshot
-            isin_k = normalize_isin(getattr(h, "isin", None))
-            tick_k = normalize_ticker(getattr(h, "ticker", None))
-            if (isin_k and isin_k in taxonomy) or (tick_k and tick_k in taxonomy):
+            if _cfg.catalog_lookup(taxonomy, getattr(h, "isin", None),
+                                   getattr(h, "ticker", None), getattr(h, "name", None)):
                 continue
             label = h.ticker or h.isin or "?"
             ac = h.asset_class.value if getattr(h, "asset_class", None) else "Alternative"

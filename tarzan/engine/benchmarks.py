@@ -137,6 +137,10 @@ class ResolvedBenchmark:
     # canonical EUR series must not carry a second, independently stale copy.
     history_native: Optional[pd.Series] = None
     currency: Optional[str] = None
+    # The catalog row's ISIN. A listing's symbol is not an identity (MATE is a
+    # Nasdaq fund and the Milan symbol of a UCITS), so every consumer that
+    # classifies, names or cross-checks a benchmark keys on this.
+    isin: str = ""
 
 
 _NATIVE_ATTR = "tarzan_native_series"
@@ -190,12 +194,16 @@ def _fetch_benchmark_history(ticker: str) -> pd.Series:
 
 def _fetch_benchmark_uncached(ticker: str) -> pd.Series:
     from tarzan.data import enricher as _enr
+    from tarzan.models.instrument_key import split_qualified
 
-    expected_name = cfg.name_for(None, ticker) or ""
-    # The row's ISIN keeps a bare ticker on its own listing when another fund
-    # shares the symbol on a different venue (see _resolve_bare_ticker).
-    isin, _ = cfg.resolve_taxonomy_identity("", ticker)
-    data = _enr._fetch_benchmark_data(ticker, expected_name=expected_name, isin=isin)
+    # ``ticker`` is the catalog key, qualified (MATE@IE000BS31R00) when two rows
+    # share the symbol. The provider gets the plain symbol; the ISIN keeps it on
+    # its own listing when another fund shares the symbol on a different venue
+    # (see _resolve_bare_ticker).
+    symbol, isin = split_qualified(ticker)
+    expected_name = cfg.name_for(isin, symbol) or ""
+    isin = isin or cfg.resolve_taxonomy_identity("", symbol)[0]
+    data = _enr._fetch_benchmark_data(symbol, expected_name=expected_name, isin=isin)
     return _benchmark_series_from_data(ticker, data)
 
 
@@ -205,8 +213,12 @@ def _benchmark_series_from_data(
     """One financial construction for acquired and completed-only inputs."""
     from tarzan.data import enricher as _enr
 
+    from tarzan.models.instrument_key import split_qualified
+
+    # Never a qualified catalog key as a listing: the provider symbol, else the
+    # plain symbol it was requested under.
     selected_ticker = str(
-        data.get(_enr._TICKER_SYMBOL_KEY) or ticker
+        data.get(_enr._TICKER_SYMBOL_KEY) or split_qualified(ticker)[0]
     ).strip()
     history = data.get("history", pd.DataFrame())
     if history.empty:
@@ -294,7 +306,7 @@ def _completed_benchmark_history(ticker: str) -> pd.Series | None:
                 return deepcopy(history)
         completed = _enr._completed_benchmark_inputs(
             ticker, expected_name=cfg.name_for(None, ticker) or "",
-        )
+        )  # a qualified key matches no completed bare resolution: none, not the neighbour's
         if completed is None:
             return None
         data, fx = completed
@@ -367,9 +379,11 @@ def preprocess_benchmarks(
         native = canonical_history.attrs.pop(_NATIVE_ATTR, None)
         if native is not None and len(native):
             native.name = resolved_ticker
+        row = cfg.catalog().row(None, input_ticker, name)
         return ResolvedBenchmark(
             name=name,
             requested_ticker=input_ticker,
+            isin=cfg.catalog().isin_of(row) if row is not None else "",
             ticker=resolved_ticker,
             history=canonical_history,
             history_native=native,
