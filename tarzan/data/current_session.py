@@ -6,19 +6,18 @@ tables through ``compute_period_return``. The portfolio's own valuation, though,
 is selected by the capability policy from whatever price enrichment settled on —
 so "today" existed twice, and the two disagreed whenever one of them fell back.
 
-Measured on a live run (24 Aug 2026, 16 holdings): fourteen agreed to four
-decimals, and the two that did not were both fallbacks. MONEY.MI's valuation had
-dropped to its 10.0920 order price while the market quoted 10.1840 (+0.91%,
-€88); NTSG.MI's valuation sat at 29.2843 against a validated 29.0950 (−0.65%,
-€203). Net effect: the hero printed a portfolio total beside P&L tiles that
-implied one €115 lower, from a silent stale order price.
+On a live run most holdings agreed to four decimals, and the ones that did not
+were all fallbacks: a valuation that had dropped to its order price while the
+market quoted ~1% higher, another sitting off a validated quote. Net effect: the
+hero printed a portfolio total beside P&L tiles that implied a different one,
+from a silent stale order price.
 
 So there is one rule, applied once, here:
 
 * today's point is the clean market QUOTE, validated against the series' OWN
   last real close — never a valuation that may have fallen back to an order
-  price (stamping that put a 10.09 endpoint against a 10.18 anchor and printed
-  a spurious −0.92% 5D);
+  price (stamping that put an order-price endpoint against a market anchor and
+  printed a spurious 5D move);
 * the previous session's close is the published ``prev_close``, scaled onto that
   same ruler (:func:`prev_close_eur`) and written ONLY onto that session's row
   (:func:`stamp_today`), so a vendor's missing bar is repaired without

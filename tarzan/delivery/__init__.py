@@ -121,15 +121,15 @@ def build_subject(metrics, prefix: str, trigger_label: str = "") -> str:
 
     The LABEL is always the SESSION DATE the figure describes — the session in
     progress while the book is printing, the last completed one otherwise — e.g.
-    "Portfolio Digest - 10:35 - 08 Oct +0.31%" or
-    "Portfolio Digest - 09:12 - 14 Sep −0.59%". "1D" survives only as the fallback
+    "Portfolio Digest - 10:35 - 08 Oct +0.50%" or
+    "Portfolio Digest - 09:12 - 14 Sep −0.50%". "1D" survives only as the fallback
     when no session date can be read off the series.
 
     This used to say "1D" unconditionally, on the reasoning that the figure is live
     whenever a venue the book trades on is open and the previous close when none is.
     There is a third state that reasoning misses, and it is the one the reader meets
-    every morning: the venue is OPEN and no bar exists yet. At 09:12 on Tue 15 Sep
-    2026 every holding's tape ended on Mon 14 Sep, so "1D −0.59%" was Monday's
+    every morning: the venue is OPEN and no bar exists yet. At 09:12 on a Tuesday
+    every holding's tape still ends on Monday, so "1D" would print Monday's
     completed session under today's name — and the subject is the first and often the
     only thing read.
 

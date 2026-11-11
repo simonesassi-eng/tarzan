@@ -40,8 +40,8 @@
  * 1. Open https://script.google.com and create a new project.
  * 2. Paste this file as Code.gs.
  * 3. In Project Settings, set the following Script Properties:
- *      GH_OWNER       Your GitHub username or org (e.g. "simonsa")
- *      GH_REPO        Repository name (e.g. "Tarzan-personal")
+ *      GH_OWNER       Your GitHub username or org (e.g. "your-username")
+ *      GH_REPO        Repository name (e.g. "Tarzan")
  *      GH_TOKEN       Fine-grained PAT scoped to this repo, with
  *                     "Contents: Read and write" for repository_dispatch.
  *                     Actions write is not needed by this script.

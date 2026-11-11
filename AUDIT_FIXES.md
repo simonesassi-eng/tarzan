@@ -1,7 +1,7 @@
 # Correzioni dell'audit — 21 ottobre 2026
 
 Base: commit `9a8a728`. Modifiche inizialmente implementate e verificate nella
-copia `/Users/simonsa/Tarzan-fixes-2026-10-21`, poi integrate nel repository
+copia locale separata, poi integrate nel repository
 originale `/Volumes/workplace/PersonalProjects/Tarzan` il 21 ottobre 2026.
 
 La suite completa è stata rieseguita nell'originale dopo l'integrazione.
@@ -113,7 +113,7 @@ viene saltato e va eseguito separatamente.
 Le correzioni sono già applicate al repository originale. Commit e push
 sono stati autorizzati dall'utente; la pubblicazione su GitHub non aggiorna
 automaticamente Apps Script. La patch
-`/Users/simonsa/Tarzan-audit-fixes-2026-10-21.patch` conserva la versione
+una patch locale (fuori dal repo) conserva la versione
 preparata sulla base `9a8a728`: non va riapplicata al repository già corretto.
 
 Il nuovo protocollo di claim richiede anche il deployment della nuova versione

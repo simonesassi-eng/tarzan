@@ -471,10 +471,9 @@ def _run_once_body(
 
     # When the per-instrument plan carries weights, IT is the plan: the asset-class and
     # equity-geography targets are derived from it and the ones declared in targets.csv
-    # are not used. Three hand-maintained lists had no way to stay in agreement and on
-    # the reference book had stopped -- the plan implies 21% fixed income against a
-    # declared 28%, and 15% alternative against 11% -- so every drift figure measured
-    # the book against a portfolio its own plan does not produce.
+    # are not used. Three hand-maintained lists had no way to stay in agreement, and
+    # once they drifted apart every drift figure measured the book against a
+    # portfolio its own plan does not produce.
     #
     # Placed here, before enrichment and before any consumer reads a target, so the
     # engine, the rebalancer and the newsletter all see one set of numbers.
@@ -558,18 +557,16 @@ def _run_once_body(
     # valuation is selected separately, so "today" used to exist twice: the
     # stamp lived in MetricsEngine and therefore ran AFTER this policy and after
     # _valuation, which is why total_value and the series terminal could not
-    # agree by construction. Measured live on 24 Aug 2026 they sat €115 apart on
-    # a six-figure book, entirely from two holdings whose valuation had fallen back
-    # (MONEY.MI to its 10.0920 order price against a market 10.1840).
+    # agree by construction: whenever a holding's valuation fell back (e.g. to its
+    # order price) the two disagreed by exactly that holding's gap.
     #
     # The seeds are stamped alongside the book. They are excluded from every
     # table, but their price series is read — the target-allocation line on the
     # "Vs target &" charts is built from held sleeves AND seeds, and the tracked
     # benchmarks (which include the same instruments) are stamped in the engine.
-    # Leaving the seeds out ended that line 77% on today's live prices and 23% on
-    # yesterday's closes: measured live on 26 Aug 2026 its since-inception figure
-    # read +13.87% where the all-closes computation gives +13.64%. It also priced
-    # a buy-new action at the previous close.
+    # Leaving the seeds out ended that line partly on today's live prices and
+    # partly on yesterday's closes, so its since-inception figure differed from the
+    # all-closes computation. It also priced a buy-new action at the previous close.
     from tarzan.data import current_session
     stamped_tickers = current_session.apply_to_holdings(holdings + seeds)
     if stamped_tickers:

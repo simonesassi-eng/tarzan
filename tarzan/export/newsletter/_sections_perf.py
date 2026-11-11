@@ -347,8 +347,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # other row, and that series' current point IS the live valuation
     # (metrics._current_prices stamps it), so re-deriving the session move from
     # performance_full would be a second answer to a question already answered
-    # — which is exactly how this row came to print a multi-thousand-euro loss
-    # beside a +€11 Session tile on 19 Aug 2026.
+    # — which is exactly how this row once printed a multi-thousand-euro loss
+    # beside a small positive Session tile.
 
     bt = f"1px solid {P['border']}"
 
@@ -840,8 +840,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
 
         # ── Volatility: one panel ─────────────────────────────────────────────
         # The by-window grid went first: six volatility plots restated one fact the
-        # RISK section already carries a tile for, and their per-window sigmas ranged
-        # 8.74-10.99% on the reference book — a spread no reader acts on. The 3M panel
+        # RISK section already carries a tile for, and their per-window sigmas differ
+        # by a couple of points at most — a spread no reader acts on. The 3M panel
         # has now gone the same way. It was kept to answer "was the last quarter
         # rougher than the book has been all along", which sounds like a question and
         # is answered by comparing two numbers, not two plots; and its slot is worth
@@ -1005,9 +1005,8 @@ def _intraday_weighted_path(quotes: dict, weights: dict):
         # This is also the rule the PORTFOLIO line has always effectively applied,
         # and the asymmetry was mine: refusing here while the portfolio blended on
         # meant one panel drew its own line and withheld the other's over the same
-        # missing symbol. Measured on the reference book: one sleeve of nine (5% of
-        # the target) absent from the quote catalog withheld the whole target line
-        # while all eight others had bars.
+        # missing symbol: one small sleeve absent from the quote catalog withheld
+        # the whole target line while every other sleeve had bars.
         total += weight
     if not paths or total <= 0:
         return None
@@ -1168,10 +1167,9 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
 
     # ── Every line starts at 0% ────────────────────────────────────────────────
     # Each path is a percentage of its OWN previous close, so at the bell its value
-    # is the overnight gap, not zero -- and the three gaps differ. Measured on the
-    # real book mid-session: the portfolio's line began at +0.144%, the target's at
-    # -0.029% and the benchmark's at +0.261%, three different heights on one axis,
-    # which is unreadable as a comparison however honest each line is.
+    # is the overnight gap, not zero -- and the three gaps differ, so the lines
+    # start at three different heights on one axis, which is unreadable as a
+    # comparison however honest each line is.
     #
     # So an ORIGIN is prepended: the previous close itself, at 0%, a few minutes
     # before the bell. Every line then leaves the same point and the overnight gap
@@ -1255,9 +1253,8 @@ def _perf_intraday_window(m, geo_name: Optional[str] = None) -> Optional[dict]:
     # The bars say WHEN the day moved; the tape says BY HOW MUCH, and every other 1D
     # cell in the issue reads the tape. This used to be settled by drawing the blend and
     # LABELLING it from the tape, which put a number at a dot that was not the dot's
-    # value: measured on the real book, the portfolio's line ended at -0.0277% under a
-    # label reading -0.0574% and the target's at -0.0313% under -0.0784%, so the three
-    # labels ran in a different order than the three dots. A reader saw a line sitting
+    # value: a line could end visibly above another while its label read lower, so
+    # the labels ran in a different order than the dots. A reader saw a line sitting
     # above another and labelled below it, which is indefensible however true each
     # figure is on its own.
     #

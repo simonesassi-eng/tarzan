@@ -202,7 +202,7 @@ def _hero_value_chart(values, unreal_eur, dates, flows, w: int = 580, h: int = 1
     from tarzan.export import _charts as _ch
     # Seven target ticks, not four: on a 30-day window the value axis spans a
     # few thousand euros and four gridlines put the whole line between two of
-    # them, so a reader could not tell €139k from €141k without the end label.
+    # them, so a reader could not tell two values 1.5% apart without the end label.
     _TICKS = 7
     vlo, vhi, vticks = _ch.nice_ticks(
         min(min(values), base), max(max(values), base), _TICKS
@@ -601,7 +601,7 @@ def session_span_labels(m, fmt: str = "%d/%m") -> tuple[str, str]:
     answers a third question ("the last index date strictly before today"), which
     coincides with neither end reliably, and was captioning both:
 
-      * on Sat 29 Aug 2026 it returned 28 Aug — the session the +0.45% figure ENDS
+      * on Sat 29 Aug 2026 it returned 28 Aug — the session the 1D figure ENDS
         on — under the wording "close-to-close vs 28 Aug", naming the endpoint as
         if it were the baseline. The baseline was Thursday the 27th.
       * on the evening of Fri 28, after the close, it returned 27 Aug while the

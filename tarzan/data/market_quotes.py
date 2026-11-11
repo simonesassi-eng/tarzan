@@ -1380,11 +1380,10 @@ def _stamp_session_close(intra, quote, *, own_feed: bool, ticker: str, now):
     """Append the official price as the intraday series' last point.
 
     The bars are a record of TRADES, so on a thinly traded instrument the last one
-    can sit an hour or more before the session's end. Measured across a 16-instrument
-    portfolio on 1 Sep 2026: the worst case's last hourly bar was 16:00 Rome against a
-    17:35 close, so reading it as "now" put the drawn session 0.47% away from the
-    official close every other 1D figure on the page uses. Eleven of the sixteen
-    disagreed that way, up to 0.72pp; the five that agreed to the cent were the ones
+    can sit an hour or more before the session's end: a last hourly bar at 16:00
+    Rome against a 17:35 close, read as "now", put the drawn session about half a
+    point away from the official close every other 1D figure on the page uses. Most
+    instruments disagreed that way; the ones that agreed to the cent were the ones
     printing right up to the close, and the previous close was identical in every
     case. The bars carry the SHAPE of the session; this gives them its END.
 

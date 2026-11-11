@@ -23,9 +23,19 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Addresses that must never author a commit here again. A denylist, not a
-#: "must be noreply" rule, so an outside contributor is not rejected.
-PERSONAL_EMAILS = ("simonesassi4@gmail.com", "simonsa@amazon.it")
+#: SHA-256 of the addresses that must never author a commit here again. Hashed,
+#: because writing the addresses themselves into a public file is the leak this
+#: guards against. A denylist, not a "must be noreply" rule, so an outside
+#: contributor is not rejected.
+PERSONAL_EMAIL_SHA256 = frozenset({
+    "be479117d8d8201962c48e8c41467b2c2402eb67d09e303e30e72a1393e95584",
+    "a165930172f31b59930adf3ba6f5cece8fc5cb8d0efe4ea01a174bd1d898b503",
+})
+
+
+def _is_personal(email: str) -> bool:
+    import hashlib
+    return hashlib.sha256(email.strip().lower().encode()).hexdigest() in PERSONAL_EMAIL_SHA256
 
 #: Fixtures that are synthetic by construction — same exclusions as the hook.
 EXCLUDED = ("tarzan/tests/golden/", "tarzan/stress/", ".githooks/")
@@ -146,7 +156,7 @@ class TestNoPersonalIdentityOnCommits:
             ["git", "-C", str(REPO), "log", "--format=%H %ae%n%H %ce", "-50"],
             capture_output=True, text=True).stdout
         offenders = [l for l in out.splitlines()
-                     if any(e in l for e in PERSONAL_EMAILS)]
+                     if l.split(" ", 1)[-1] and _is_personal(l.split(" ", 1)[-1])]
         assert not offenders, (
             "commits authored with a personal address:\n  "
             + "\n  ".join(offenders)

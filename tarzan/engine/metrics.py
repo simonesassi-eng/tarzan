@@ -2069,10 +2069,10 @@ class MetricsEngine:
 
         keys = [str(t) for t in hp["ticker"].dropna().unique() if t]
         # The TARGET's own sleeves too, seeds included -- a GUARD, not a fix for an
-        # observed gap. Measured on the reference book: all of them are already here,
-        # because ``holding_performance`` carries the tracked benchmarks alongside the
-        # holdings and every target sleeve happens to be one, so this union adds zero
-        # symbols (76 stayed 76). What it removes is the silent dependency on that
+        # observed gap. Today all of them are already here, because
+        # ``holding_performance`` carries the tracked benchmarks alongside the
+        # holdings and every target sleeve happens to be one, so this union adds no
+        # symbols. What it removes is the silent dependency on that
         # coincidence: a target weight on an instrument that is NOT a tracked
         # benchmark would be absent from the request, and the newsletter's 1D panel
         # refuses partial coverage (a blend over part of an allocation is a different
@@ -2643,11 +2643,11 @@ class MetricsEngine:
         stays in the denominator. Minutes after an open that pulls the figure
         toward zero, and nothing in the digest said so.
 
-        Measured on 27 Aug 2026: at 09:12 only CL2 (7.7% of the book) and UEQC
-        (4.6%) had a 27 Aug tick. Their real +0.74% and +0.15% moves rendered as a
-        portfolio "1D +0.06%" — reconstructed to +0.0637%, i.e. the whole figure
-        was two instruments spread over sixteen. By 10:11, with 91% priced, the
-        same book read +0.18%. The market had not tripled; the book had opened.
+        Observed at 09:12 one morning: only two small sleeves had a same-day tick,
+        so their real moves, spread over the whole book, rendered as a near-zero
+        portfolio "1D" — the whole figure was two instruments. An hour later, with
+        most of the book priced, the same book read three times as much. The
+        market had not tripled; the book had opened.
 
         The distortion is not even neutral: CL2 is a 2x leveraged ETF and one of
         the first to trade, so the early figure is weighted toward the most

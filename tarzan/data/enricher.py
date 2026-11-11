@@ -1329,9 +1329,9 @@ def _resolve_isin(
     #
     # Refusing leaves the instrument on the carry-flat/synthetic rung, which is
     # DEGRADED and disclosed. A confidently wrong listing would not be. Verified
-    # against the real book before shipping: all 35 held ISINs still resolve,
-    # including the nine that settle on a non-curated symbol — each of those has a
-    # name overlap or a currency agreement.
+    # before shipping that every held ISIN still resolves, including those that
+    # settle on a non-curated symbol — each has a name overlap or a currency
+    # agreement.
     identified = [
         c for c in candidates
         if cfg.instrument_taxonomy_has(c.symbol)
@@ -3843,7 +3843,7 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
 
         # Safety net: never let a holding carry a None/NaN current_value into
         # the portfolio total. A single NaN propagates through the sum and
-        # collapses the whole portfolio (the ~€13k-instead-of-€121k symptom
+        # collapses the whole portfolio (a total a fraction of the real one, the symptom
         # seen when yfinance throttles the live quote). Seed from the
         # last-known EUR value (CSV/order anchor) so the total stays sane.
         cv = holding.current_value

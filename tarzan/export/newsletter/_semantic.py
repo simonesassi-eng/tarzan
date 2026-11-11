@@ -899,7 +899,7 @@ def validate_newsletter_semantics(
         )
     # Plus the TARGET's own sleeves, seeds included, because ``_live_1d`` requests
     # them: the 1D panel blends the target's session from their bars and refuses
-    # partial coverage. On the reference book they are all in the frame anyway (every
+    # partial coverage. Today they are all in the frame anyway (every
     # target sleeve is also a tracked benchmark, and the frame carries those), so
     # this widens the expectation for a shape that is possible rather than one that
     # is present — but the request and the expectation must move together or every

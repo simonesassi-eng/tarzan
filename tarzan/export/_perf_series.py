@@ -289,9 +289,9 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         start = start.normalize()
         # The anchor is the BENCHMARK's, and the benchmark has years of history. A
         # book younger than the window then had its own series silently clipped to
-        # inception: on 9 Oct 2026 a 290-day book drew a panel headed "1Y" whose
-        # lines were the since-inception ones (benchmark +19.12%, TWR +14.66%), so
-        # "ACWI 1Y +19.12%" read as the index's one-year return, which it is not. The
+        # inception: a book under a year old drew a panel headed "1Y" whose lines
+        # were the since-inception ones, so "ACWI 1Y" read as the index's one-year
+        # return, which it is not. The
         # same rule as a missing anchor: the book does not reach back that far, so
         # there is no window (a week of slack, as ``window_anchor`` allows).
         if bucket != "1m" and val_all.index[0] > start + pd.Timedelta(days=7):
@@ -680,8 +680,8 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     # ``stats.risk_metric_row`` on the flow-adjusted NAV — which is NOT the figure
     # the RISK section prints. That table renders ``historical_risk``, whose
     # portfolio row is a current-weight static backtest over the common window of
-    # holdings with ≥1Y of history (10.77% live on 26 Aug 2026 against this
-    # 10.51%): a different construction over a different span, by explicit design
+    # holdings with ≥1Y of history: a different construction over a different
+    # span, so the two volatilities differ slightly, by explicit design
     # there. Two honest answers to two questions, not one number twice.
     def _clipped_vol(full, lo, hi, floor: int):
         """σ of ``full`` over ``[lo, hi]``, annualized, or None when the clip holds

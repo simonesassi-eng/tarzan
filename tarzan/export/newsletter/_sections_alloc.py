@@ -102,7 +102,7 @@ def _session_basis(perf: Optional[dict], m) -> str:
         return f'market {"open" if _market_is_open(p) else "closed"}'
     # Name the session the figure DESCRIBES, not the date on the other side of it.
     # "close-to-close vs 28 Aug" read as though 28 Aug were the baseline, while it
-    # was the endpoint: on Sat 29 Aug 2026 the +0.45% spanned Thu 27 → Fri 28.
+    # was the endpoint: on Sat 29 Aug 2026 the 1D figure spanned Thu 27 → Fri 28.
     _base, end = session_span_labels(m, "%d %b")
     return f"{end} session, close to close" if end else "close-to-close"
 
@@ -603,8 +603,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     #
     # Four cells, laid out as a 2x2 across two rows of the grid: cumulative in the
     # left column, annualized in the middle. The distance between the two
-    # cumulative figures is what the timing of contributions cost or earned
-    # (-2.11pp on the reference book), which no single tile here states and which
+    # cumulative figures is what the timing of contributions cost or earned,
+    # which no single tile here states and which
     # the since-inception chart draws.
     #
     # "since inception" and "annualized" rather than "cum."/"ann.": the labels are
