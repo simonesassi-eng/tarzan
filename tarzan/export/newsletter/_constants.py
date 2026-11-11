@@ -97,7 +97,8 @@ ASSET_CLASS_ORDER = _NEWSLETTER_CLASS_ORDER + sorted(_extra_classes)
 _PERF_CLASS_ORDER = list(_ORDER_PERF)
 _PERF_ROLE_ORDER = {
     "Equities": ["Equity Broad", "Equity Factor", "Equity Leveraged",
-                 "Efficient Core", "Multi-Asset"],
+                 "Efficient Core", "Trend Stacked", "Gold Stacked",
+                 "Carry Stacked", "Multi-Asset"],
     "Fixed Income": ["Govt Nominal", "Govt Linkers", "Aggregate/Credit",
                      "Long Duration"],
     "Commodities": ["Broad Basket", "Carry", "Market Neutral"],

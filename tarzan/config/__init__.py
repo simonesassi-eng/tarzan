@@ -469,7 +469,7 @@ _EXP_COLUMNS = {
 # Roles / name fragments that signal a capital-efficient / leveraged / multi-
 # asset fund whose true exposure is NOT its single asset_class — used to warn
 # when such an instrument lacks explicit exp_* values.
-_NOTIONAL_ROLE_HINTS = ("efficient core", "multi-asset", "equity leveraged")
+_NOTIONAL_ROLE_HINTS = ("efficient core", "stacked", "multi-asset", "equity leveraged")
 _NOTIONAL_NAME_HINTS = ("leverage", "efficient core", "lifestrategy",
                         "risk parity", "return stack", "90/60", "60/40",
                         "multi-asset", "multi asset", "balanced")
