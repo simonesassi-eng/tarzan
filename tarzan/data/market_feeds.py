@@ -159,10 +159,17 @@ FEED_ROWS: tuple[FeedRow, ...] = (
     # both sessions on the same trading day. TradingView alone.
     _future("GIFT Nifty 50", "fut:NIFTY", sessions=(("06:30", "15:40"), ("16:35", "02:45")),
             tz="Asia/Kolkata", calendar="^NSEI", **{TV: "NSEIX:NIFTY1!"}),
+    # MSCI Emerging Markets (ICE Futures US): the EM read with Asia shut.
+    # ICE's day runs 20:00-18:00 New York, counted to the next trading day.
+    _future("MSCI Emerging Mkts", "fut:MME", sessions=(("~20:00", "18:00"),),
+            tz="America/New_York", calendar="^GSPC", **{TV: "ICEUS:MME1!"}),
     _future("Euro Stoxx 50", "fut:FESX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FESX1!", MW: "FUTURE/DE/XEUR/FESX00"}),
     _future("Stoxx 600", "fut:FXXP", hours=14.2, **_EUREX,
             **{TV: "EUREX:FXXP1!", MW: "FUTURE/DE/XEUR/FXXP00"}),
+    # FTSE MIB (Euronext Milan): 08:00-22:00 Rome, read off its own bars.
+    _future("FTSE MIB", "fut:FIB", hours=14.0, sessions=(("08:00", "22:00"),),
+            tz="Europe/Rome", calendar="FTSEMIB.MI", **{TV: "EURONEXT:FIB1!"}),
     _future("DAX", "fut:FDAX", hours=14.2, **_EUREX,
             **{TV: "EUREX:FDAX1!", MW: "FUTURE/DE/XEUR/DAX00"}),
     _future("CAC 40", "fut:FCE", hours=14.0, sessions=(("08:00", "22:00"),),
@@ -791,7 +798,8 @@ def _timetable(row: FeedRow, now: datetime):
     A trading day is a weekday its exchange is open (``row.calendar``). Its
     windows are on that date, except one marked "-", which opens the evening of
     the PREVIOUS trading day (Osaka's Friday-evening session belongs to Monday).
-    The weekday shown is the calendar day the current or latest window began.
+    The weekday shown is the calendar day the current window began, or, when
+    closed, the reader's day on which the latest window ended.
     """
     if not row.sessions or not row.tz:
         return None
@@ -818,17 +826,21 @@ def _timetable(row: FeedRow, now: datetime):
     def windows(day):
         out = []
         for start, end in row.sessions:
-            base = previous_trading_day(day) if start.startswith("-") else day
-            a = datetime.combine(base, dtime.fromisoformat(start.lstrip("-")), tzinfo=tz)
+            # "-": the evening of the previous TRADING day (Osaka trades Friday
+            # night for Monday); "~": of the previous CALENDAR day (ICE opens
+            # Monday's session on Sunday evening, never on Friday's).
+            base = (previous_trading_day(day) if start.startswith("-")
+                    else day - timedelta(days=1) if start.startswith("~") else day)
+            a = datetime.combine(base, dtime.fromisoformat(start.lstrip("-~")), tzinfo=tz)
             b = datetime.combine(base, dtime.fromisoformat(end), tzinfo=tz)
             out.append((a, b if b > a else b + timedelta(days=1)))
         return out
 
     from tarzan.data.market_quotes import reader_hours
 
-    by_clock = sorted(row.sessions, key=lambda w: w[0].lstrip("-"))
+    by_clock = sorted(row.sessions, key=lambda w: w[0].lstrip("-~"))
     caption = reader_hours(row.tz, [
-        tuple(tuple(int(x) for x in t.lstrip("-").split(":")) for t in w) for w in by_clock
+        tuple(tuple(int(x) for x in t.lstrip("-~").split(":")) for t in w) for w in by_clock
     ], day=local.date())
     latest = None  # (window start, its trading day) of the latest window begun
     for ahead in range(4, -9, -1):
@@ -845,7 +857,15 @@ def _timetable(row: FeedRow, now: datetime):
     if latest is None:
         return caption, False, "", None, None, None
     spans = windows(latest[1])
-    return (caption, False, f"{latest[0]:%a}",
+    # Closed: the reader's day on which the latest window ENDED — when it last
+    # traded, on the clock the captions use. Its start day read a day stale for
+    # an ICE day (opens 20:00 New York the evening before: "Cl. Thu" all weekend
+    # after a Friday close); the exchange's own end day ran a day ahead for an
+    # Asian night session (Osaka's ends 06:00 Tokyo, still the reader's evening).
+    # One second back so a window ending at the reader's midnight is that day's.
+    from tarzan.data.market_quotes import READER_TZ
+    ended = (latest[2] - timedelta(seconds=1)).astimezone(ZoneInfo(READER_TZ))
+    return (caption, False, f"{ended:%a}",
             min(x for x, _ in spans), max(y for _, y in spans), (latest[0], latest[2]))
 
 

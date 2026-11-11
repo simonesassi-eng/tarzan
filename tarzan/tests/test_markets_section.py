@@ -353,3 +353,16 @@ def test_the_board_declares_its_column_widths_so_a_long_name_cannot_push_the_lin
         html = _build_markets(_ctx(long_name))["html"]
     assert "table-layout:fixed;" in html and '<colgroup><col><col width="44">' in html
     assert "text-overflow:ellipsis" in html
+
+
+def test_a_closed_future_is_labelled_with_the_readers_day_it_last_traded():
+    """ICE's MSCI EM opens Monday's session on Sunday evening, never Friday's;
+    Osaka's night session ends 06:00 Tokyo, still the reader's evening."""
+    from datetime import datetime, timezone
+    from tarzan.data import market_feeds as F
+
+    rows = {r.key: r for r in F.FEED_ROWS}
+    at = lambda s: datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    assert F.schedule(rows["fut:MME"], at("2026-11-14T12:00"))[1:] == (False, "Fri")  # Saturday
+    assert F.schedule(rows["fut:MME"], at("2026-11-16T01:30"))[1] is True             # Sun 20:30 NY
+    assert F.schedule(rows["fut:NK"], at("2026-11-11T23:20"))[1:] == (False, "Wed")

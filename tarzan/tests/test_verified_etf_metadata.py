@@ -79,7 +79,10 @@ def _provider(monkeypatch, info=None):
     provider_info = dict(MONEY_INFO if info is None else info)
     history = pd.DataFrame(
         {"Close": [10.0, 10.5], "Price Close": [10.0, 10.5]},
-        index=pd.date_range(end=runtime.today(), periods=2, tz="UTC"),
+        # Bars dated in the PAST: a bar at today's 00:00 UTC lies in the future
+        # between local and UTC midnight (00:00-01:00 Rome), and is refused.
+        index=pd.date_range(end=pd.Timestamp(runtime.today()) - pd.Timedelta(days=1),
+                            periods=2, tz="UTC"),
     )
     monkeypatch.setattr(enricher, "_resolve_isin", lambda *a, **k: (
         {"info": provider_info, "history": history}, "MONEY.MI",

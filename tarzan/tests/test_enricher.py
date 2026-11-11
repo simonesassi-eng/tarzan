@@ -948,8 +948,11 @@ class TestFetchHistoryProvenance:
         assert holding.data_source == "price_cache:CACHE-STALE"
 
     def test_valid_fresh_tail_remains_primary(self, monkeypatch):
-        cached_day = pd.Timestamp.now().normalize() - pd.Timedelta(days=2)
-        fresh_day = pd.Timestamp.now().normalize()
+        # The UTC date: a naive bar is read as UTC, and local midnight falls
+        # before UTC midnight in Rome, which put "today" an hour in the future.
+        today_utc = pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+        cached_day = today_utc - pd.Timedelta(days=2)
+        fresh_day = today_utc
         cached = pd.DataFrame({"Close": [100.0]}, index=[cached_day])
         fresh = pd.DataFrame({"Close": [101.0]}, index=[fresh_day])
         self._patch_history_sources(monkeypatch, cached, fresh)
