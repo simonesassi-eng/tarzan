@@ -309,6 +309,9 @@ def test_symbol_root_shared_by_two_funds_does_not_merge_them(monkeypatch):
              "type": "Benchmark index", "1d": 1.0},
         ])
     (target,) = out["target_rows"]
-    assert target["ticker"] == "MAET" and target["role"] == "Equity Trend Stacked", target
+    # Shown under its listing's symbol, as everywhere else in the issue, with
+    # the UCITS's own class and role (by ISIN, not the US fund's).
+    assert target["ticker"] == "MATE" and target["role"] == "Equity Trend Stacked", target
+    assert "EUR" in target["name"] or "Hdgd" in target["name"], target
     watch = [r["raw_ticker"] for r in out["benchmark_rows"]]
     assert "MATE" in watch and "MAET.DE" not in watch, watch

@@ -2463,12 +2463,15 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             # role and name, and showed it under the wrong ticker.
             isin = normalize_isin(r.get("isin"))
             asset_class, role = (taxonomy.get(isin) if isin else None) or taxonomy.get(bare, (None, None))
-            curated_ticker = cfg.resolve_taxonomy_identity(isin, "")[1] if isin else ""
             target_rows.append({
                 "name": display_instrument_name(
                     r.get("isin"), raw_ticker,
                     str(r.get("name") or raw_ticker), names=ctx.reference.names),
-                "ticker": _display_ticker(curated_ticker or raw_ticker),
+                # The listing's symbol, as every other section prints it (MATE
+                # for MATE.MI), not the catalog key (MAET): one fund, one name in
+                # the issue. Identity stays the ISIN, which is what keeps it apart
+                # from the Nasdaq MATE; the name and currency say which is which.
+                "ticker": _display_ticker(raw_ticker),
                 "raw_ticker": raw_ticker,
                 "asset_class": asset_class,
                 "role": role,
