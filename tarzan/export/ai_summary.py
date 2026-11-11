@@ -596,7 +596,7 @@ def _sp(v) -> str:
 def _pp(v) -> str:
     """Signed percentage points, 1 dp (e.g. -3.2pp)."""
     n = _num(v)
-    return "n/a" if n is None else f"{n:+.1f}pp"
+    return "n/a" if n is None else f"{round(n, 1) + 0.0:+.1f}pp"
 
 
 def _numbers_are_grounded(text: str, digest) -> bool:

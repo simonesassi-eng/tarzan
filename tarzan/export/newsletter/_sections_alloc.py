@@ -445,13 +445,15 @@ def _build_header(ctx: _NewsletterContext) -> dict:
     # legend, so the entry is their difference, not a new estimate.
     gap = benchmark_gap_pp(m, ctx.benchmark_geo)
     if gap is not None:
+        gap = round(gap, 2) + 0.0  # the sign and tone of what is PRINTED: never "+0.00"
         status_bar.append(_bar(
             f"VS {_bench_short(ctx.benchmark_geo)}",
             f'{"+" if gap > 0 else ("\u2212" if gap < 0 else "")}'
             f'{abs(gap):.2f}pp', _tone(gap)))
-    if risk.get("beta") is not None:
+    # A NaN is not a value: the risk tiles skip it, and so does the bar.
+    if not is_missing(risk.get("beta")):
         status_bar.append(_bar("\u03b2", f'{float(risk["beta"]):.2f}'))
-    if risk.get("sharpe") is not None:
+    if not is_missing(risk.get("sharpe")):
         status_bar.append(_bar("SHARPE", f'{float(risk["sharpe"]):.2f}'))
 
     # Data stamp: the issue date, the close the figures below rest on, and
@@ -648,7 +650,7 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # reader can already see.
     gap = benchmark_gap_history(m, ctx.benchmark_geo)
     if gap is not None:
-        now_pp = gap["now_pp"]
+        now_pp = round(gap["now_pp"], 2) + 0.0  # sign of the printed value
         sign = "+" if now_pp > 0 else ("\u2212" if now_pp < 0 else "")
         caption = (f'peak {"+" if gap["peak_pp"] >= 0 else "\u2212"}'
                    f'{abs(gap["peak_pp"]):.1f}pp {gap["peak_when"]}')

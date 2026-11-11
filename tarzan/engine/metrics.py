@@ -1867,6 +1867,7 @@ class MetricsEngine:
             _populate_perf_row(
                 row, s, bench_history, self._rf_daily(ctx),
                 benchmark_preparation=benchmark_preparation,
+                beta_series=_cap_to_years(h.price_history, 5),
             )
             row["today_priced"] = _tape_ends_today(s, _today)
             rows.append(row)
@@ -1905,6 +1906,7 @@ class MetricsEngine:
             _populate_perf_row(
                 row, _seed_tape, bench_history, self._rf_daily(ctx),
                 benchmark_preparation=benchmark_preparation,
+                beta_series=_cap_to_years(h.price_history, 5),
             )
             row["today_priced"] = _tape_ends_today(_seed_tape, _today)
             rows.append(row)
@@ -1926,6 +1928,7 @@ class MetricsEngine:
             _populate_perf_row(
                 row, bs, bench_history, self._rf_daily(ctx),
                 benchmark_preparation=benchmark_preparation,
+                beta_series=_cap_to_years(record.history, 5),
             )
             row["today_priced"] = _tape_ends_today(bs, _today)
             rows.append(row)
@@ -2848,10 +2851,16 @@ class MetricsEngine:
             used = eligible if eligible else candidates
             n_excluded = len(candidates) - len(used)
             total_w = sum(v for (_, v, _, _) in used) or 1.0
-            # Align on the common window (inner join → every day has all series).
-            ret_df = pd.concat(
-                {tk: s.pct_change() for (tk, _v, s, _sp) in used}, axis=1
-            ).dropna(how="any")
+            # Align PRICES on the union calendar, carry each venue's last close
+            # over its holidays, then cut to the common window — and only then
+            # take returns, as ``_target_history`` does. Returns taken first and
+            # inner-joined deleted every day any one venue was shut, and with it
+            # the other sleeves' moves on that day.
+            px = pd.concat(
+                {tk: normalize_index(s, drop_duplicates=True) for (tk, _v, s, _sp) in used},
+                axis=1,
+            ).sort_index().ffill().dropna(how="any")
+            ret_df = px.pct_change().dropna(how="any")
             if len(ret_df) >= 2:
                 weights = pd.Series(
                     {tk: v / total_w for (tk, v, _s, _sp) in used}

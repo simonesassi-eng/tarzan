@@ -1436,8 +1436,9 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     else:
         dv = float(day_val)
         pill_txt = _pct_compact(dv, signed=True) + (_UNVERIFIED_MARK if unverified else "")
-        pill_col = P["green"] if dv >= 0 else P["red"]
-        pill_bg = P["green_bg"] if dv >= 0 else P["red_bg"]
+        up = dv >= 0 or abs(dv) < 0.005  # a move that prints as 0.00% is not a loss
+        pill_col = P["green"] if up else P["red"]
+        pill_bg = P["green_bg"] if up else P["red_bg"]
     pill = (f'<span style="{TYPE["data"]}color:{pill_col};'
             f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
@@ -1795,6 +1796,9 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
                 ab_bench_name, case=False, na=False, regex=False,
             )
         ]
+        exact = bench_match[bench_match["name"].astype(str).str.strip().str.casefold()
+                            == str(ab_bench_name).strip().casefold()]
+        bench_match = exact if not exact.empty else bench_match  # the named row, not a longer name containing it
         if not bench_match.empty:
             ab_row = bench_match.iloc[0]
             for key in period_keys:
@@ -1970,8 +1974,10 @@ def _mover_pp(value: Optional[float]) -> str:
     """
     if value is None:
         return ""
-    sign = "+" if value >= 0 else "−"
-    return f"{sign}{abs(float(value)):.{3 if abs(value) < 0.1 else 2}f}"
+    decimals = 3 if abs(value) < 0.1 else 2
+    shown = round(float(value), decimals) + 0.0  # sign of the printed figure: no "−0.000"
+    sign = "+" if shown >= 0 else "−"
+    return f"{sign}{abs(shown):.{decimals}f}"
 
 
 def _mover_tint(fg: str, bg: str, alpha: float) -> str:
@@ -2352,6 +2358,9 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                 ab_bench_name, case=False, na=False, regex=False,
             )
         ]
+        exact = bench_match[bench_match["name"].astype(str).str.strip().str.casefold()
+                            == str(ab_bench_name).strip().casefold()]
+        bench_match = exact if not exact.empty else bench_match  # the named row, not a longer name containing it
         if not bench_match.empty:
             ab_row = bench_match.iloc[0]
             for p in periods:

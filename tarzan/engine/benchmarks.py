@@ -532,6 +532,7 @@ def _add_mix_to_histories(
 def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
                        rf_daily=None, *,
                        benchmark_preparation: BenchmarkPreparation | None = None,
+                       beta_series: pd.Series | None = None,
                        ) -> None:
     """Populate a performance row dict with period returns + risk metrics + alpha/beta.
 
@@ -542,6 +543,11 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     and alpha's native-return-date mean in the overlapping weekly OLS window;
     ``None`` falls back to the scalar rate, and scalar annual overrides retain
     their original authority.
+
+    ``beta_series`` is the same instrument in the BENCHMARK's currency (the EUR
+    tape) when ``s`` is its native listing tape. Alpha and beta regress it, not
+    ``s``: a USD tape against a EUR benchmark measures the dollar as much as the
+    fund (a USD listing of the benchmark itself read beta 0.82, alpha +2.9%).
     """
     prepared = PreparedStatistics(s, rf_daily)
     s = prepared.series
@@ -566,21 +572,24 @@ def _populate_perf_row(row: dict, s: pd.Series, bench_history: pd.Series,
     # benchmark's full multi-year history (which made α incoherent before).
     row["alpha"] = float("nan")
     row["beta"] = float("nan")
+    regressed = s
+    if beta_series is not None and len(beta_series) > 1 and beta_series is not s:
+        regressed = statistical_series(beta_series)
     if (bench_history is not None and len(bench_history) > 1
-            and len(s) > 1 and not daily_ret.empty):
+            and len(regressed) > 1 and not daily_ret.empty):
         weekly_reference = None
         if benchmark_preparation is None:
             bench_win = _clip_to_window(
-                bench_history, s.index.min(), s.index.max()
+                bench_history, regressed.index.min(), regressed.index.max()
             )
         else:
             weekly_reference = benchmark_preparation.window(
-                s.index.min(), s.index.max()
+                regressed.index.min(), regressed.index.max()
             )
             bench_win = weekly_reference.history
         if len(bench_win) > 1:
             beta, alpha = _compute_beta_alpha(
-                s, bench_win, cagr_val,
+                regressed, bench_win, cagr_val,
                 risk_free=(
                     None if isinstance(rf_daily, pd.Series) else rf_annual_pct(rf_daily)
                 ),

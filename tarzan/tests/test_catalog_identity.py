@@ -247,3 +247,4 @@ def test_the_rebalance_bridge_matches_a_target_by_its_isin_not_its_root(two_mate
     kept, new, sold = _holding_bridge_rows(_Ctx(), items, base=100.0, weights={US: 12.0},
                                            series=None, series_key="isin")
     assert len(new) == 1 and len(sold) == 1 and not kept
+

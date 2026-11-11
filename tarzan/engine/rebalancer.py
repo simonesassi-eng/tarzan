@@ -349,6 +349,11 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0, *,
 # Parameters
 # ---------------------------------------------------------------------------
 
+#: The smallest weight (% of the invested book) at which a position may be
+#: OPENED. Targets below it are flagged when the plan is loaded.
+MIN_NEW_POSITION_PCT = 5.0
+
+
 @dataclass
 class LSParams:
     """Tunables for the local search. Defaults favour proportional, every-ambit
@@ -966,19 +971,42 @@ def optimize_local_search(
     steps = [tv * f for f in params.step_fractions]
     rng = np.random.default_rng(params.seed)
 
-    # Initial trade: pinned positions (lo == hi) start at that value — this
-    # seeds the forced full-sell of 0%-target holdings; everything else at 0.
-    t = np.where(lo == hi, lo, 0.0)
-    best, best_cost = _descent(t, cost, lo, hi, tradeable, steps, params)
+    def _search(lo, hi, tradeable):
+        # Initial trade: pinned positions (lo == hi) start at that value — this
+        # seeds the forced full-sell of 0%-target holdings; everything else at 0.
+        t = np.where(lo == hi, lo, 0.0)
+        best, best_cost = _descent(t, cost, lo, hi, tradeable, steps, params)
+        # Iterated Local Search.
+        for _ in range(params.n_restarts):
+            kicked = _perturb(best, lo, hi, tradeable, tv, rng, params.perturbation_strength)
+            cand, cand_cost = _descent(kicked, cost, lo, hi, tradeable, steps, params)
+            if cand_cost < best_cost - 1e-9:
+                best, best_cost = cand, cand_cost
+        return _project_to_budget(best, cost, model, lo, hi, params)
 
-    # Iterated Local Search.
-    for _ in range(params.n_restarts):
-        kicked = _perturb(best, lo, hi, tradeable, tv, rng, params.perturbation_strength)
-        cand, cand_cost = _descent(kicked, cost, lo, hi, tradeable, steps, params)
-        if cand_cost < best_cost - 1e-9:
-            best, best_cost = cand, cand_cost
-
-    best = _project_to_budget(best, cost, model, lo, hi, params)
+    best = _search(lo, hi, tradeable)
+    # No position is OPENED below the floor: a new line is bought to at least
+    # MIN_NEW_POSITION_PCT of the book or not at all (a buy-only plan with a
+    # small contribution would otherwise open a 2-3% stub). Freeze each such
+    # line and search again; the freed budget goes where the objective says.
+    for _ in range(len(holdings)):
+        after = values + best
+        invested = float(after.sum() - model.settlement_cash_mask @ after)
+        stubs = [
+            i for i in range(len(holdings))
+            if values[i] <= 0 and best[i] > 0 and tradeable[i]
+            and invested > 0 and after[i] / invested * 100.0 < MIN_NEW_POSITION_PCT - 1e-9
+        ]
+        if not stubs:
+            break
+        for i in stubs:
+            lo[i] = hi[i] = 0.0
+            tradeable[i] = False
+            logger.info(
+                "Rebalance: not opening %s at %.1f%% (below the %.0f%% floor)",
+                holdings[i].ticker, after[i] / invested * 100.0, MIN_NEW_POSITION_PCT)
+        best = _search(lo, hi, tradeable)
+        best[stubs] = 0.0  # frozen means frozen, whatever the search proposed
 
     # Apply the display threshold, quantize EUR proposals to cents, then
     # reconstruct positions and funding exclusively from that final vector.

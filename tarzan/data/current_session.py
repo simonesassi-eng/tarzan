@@ -927,6 +927,7 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         )
         price = quote.get("price")
         if not price:
+            _refuse_incoherent_valuation(holding, float(usable.iloc[-1]))
             continue
         # ``pick_quote`` has already established that this price sits on the
         # series' own ruler (within the sibling tolerance of its last real
@@ -975,6 +976,40 @@ def apply_to_holdings(holdings: list) -> tuple[str, ...]:
         )
     _log_tape_vintage(holdings)
     return tuple(stamped)
+
+
+def _refuse_incoherent_valuation(holding, last_close: float) -> None:
+    """Hold the series' last real close when no quote survived ``pick_quote``
+    and the valuation enrichment selected sits off that close by more than the
+    sibling tolerance.
+
+    Enrichment may value a holding on the provider's ``regularMarketPrice``,
+    which is checked only for not being in the future. When ``pick_quote``
+    refuses every current quote, that print was never validated, so a 60% bad
+    tick would be booked in the total while the tape says "kept last close".
+    A level beyond the tolerance is the same evidence ``pick_quote`` refuses.
+    """
+    from tarzan.data.market_quotes import _SIBLING_PRICE_TOLERANCE
+    from tarzan.instruments.valuation import select_holding_valuation
+
+    current = getattr(holding, "current_price", None)
+    try:
+        current = float(current)
+    except (TypeError, ValueError):
+        return
+    if not (last_close > 0 and current > 0):
+        return
+    if abs(current / last_close - 1.0) <= _SIBLING_PRICE_TOLERANCE:
+        return
+    logger.warning(
+        "Valuation of %s refused: %.4f sits %+.1f%% off its last real close and no "
+        "current quote confirms it; holding the last close",
+        holding.ticker, current, (current / last_close - 1.0) * 100.0)
+    holding.current_price = last_close
+    holding.current_value = float(getattr(holding, "quantity", 0.0) or 0.0) * last_close
+    holding.price_is_fallback = True
+    holding.data_source = "last close (unconfirmed quote refused)"
+    holding.valuation_result = select_holding_valuation(holding)
 
 
 def _log_tape_vintage(holdings: list) -> None:

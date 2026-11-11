@@ -79,6 +79,11 @@ def plan_weights(target_rows: dict) -> tuple[dict[str, float], list[str]]:
         if not key:
             notes.append("a target row names neither a ticker nor an ISIN; skipped")
             continue
+        from tarzan.engine.rebalancer import MIN_NEW_POSITION_PCT
+        if weight < MIN_NEW_POSITION_PCT - _WEIGHT_EPS:
+            notes.append(
+                f"{key} targets {weight:g}%, below the {MIN_NEW_POSITION_PCT:g}% floor "
+                f"for a position; the plan will not open it at that size")
         seen = out.get(key)
         if seen is None:
             out[key] = weight

@@ -291,9 +291,9 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         # book younger than the window then had its own series silently clipped to
         # inception: a book under a year old drew a panel headed "1Y" whose lines
         # were the since-inception ones, so "ACWI 1Y" read as the index's one-year
-        # return, which it is not. The
-        # same rule as a missing anchor: the book does not reach back that far, so
-        # there is no window (a week of slack, as ``window_anchor`` allows).
+        # return, which it is not. The same rule as a missing anchor: the book
+        # does not reach back that far, so there is no window (a week of slack,
+        # as ``window_anchor`` allows).
         if bucket != "1m" and val_all.index[0] > start + pd.Timedelta(days=7):
             return None
     val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
@@ -791,8 +791,12 @@ def benchmark_gap_history(m: PortfolioMetrics,
     def _month(i):
         return pd.Timestamp(dates[i]).strftime("%b")
 
+    # "Now" is the masthead's number by construction (``benchmark_gap_pp``,
+    # the engine's TWR against the benchmark's end), so the two never print two
+    # gaps in one issue; the path's own endpoint only stands in without it.
+    now = benchmark_gap_pp(m, geo_name)
     return {
-        "now_pp": gaps[-1],
+        "now_pp": gaps[-1] if now is None else now,
         "peak_pp": gaps[peak_i],
         "peak_when": _month(peak_i),
         "turn_when": _month(turn_i) if turn_i is not None else None,
