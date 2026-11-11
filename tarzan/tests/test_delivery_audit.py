@@ -134,7 +134,7 @@ def test_failed_analysis_sends_only_a_sanitized_failure_notification(
         sent.append(kwargs)
 
     monkeypatch.setattr(delivery, "send_email", transport)
-    assert delivery.run_and_send() == 0
+    assert delivery.run_and_send() == 1  # notice delivered, issue failed
     assert len(sent) == 1
     assert sent[0]["subject"].endswith("Analysis failure")
     assert "UNHANDLED_RUN_FAILURE" in sent[0]["html"]
@@ -158,7 +158,7 @@ def test_input_resolution_failure_is_notified_without_reusing_old_metrics(
         sent.append(kwargs)
 
     monkeypatch.setattr(delivery, "send_email", transport)
-    assert delivery.run_and_send() == 0
+    assert delivery.run_and_send() == 1  # notice delivered, issue failed
     assert len(sent) == 1
     assert "INPUT_RESOLUTION_FAILED" in sent[0]["html"]
     assert "secret-order-list" not in sent[0]["html"]
@@ -264,7 +264,7 @@ def test_a_section_that_raises_while_rendering_sends_a_failure_notice(
         sent.append(kwargs)
 
     monkeypatch.setattr(delivery, "send_email", transport)
-    delivery.run_and_send()
+    assert delivery.run_and_send() == 1
     assert len(sent) == 1
     assert sent[0]["subject"].endswith("Analysis failure")
     assert "NEWSLETTER_RENDER_FAILED" in sent[0]["html"]

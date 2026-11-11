@@ -27,9 +27,12 @@
  * - The scheduler evaluates slots in Europe/Rome, including DST. The
  *   every-5-minute trigger is best-effort, not a punctual-delivery SLA.
  * - Each slot is guarded by an idempotency marker keyed on
- *   (date, slot) stored in Script Properties. It avoids ordinary repeated
- *   dispatches; GitHub dispatch and that marker are not one transaction.
- *   Durable delivery claims separately protect the shared SMTP boundary.
+ *   (date, slot) stored in Script Properties, written BEFORE the dispatch
+ *   and released only when GitHub definitely rejects it. A dispatch whose
+ *   response is lost therefore costs at most a missed slot, never a second
+ *   one. Durable delivery claims (doPost below) protect the SMTP boundary
+ *   across runs only when DELIVERY_CLAIM_ENDPOINT/_TOKEN are set as GitHub
+ *   secrets; without them each run dedups only itself.
  * - A slot only fires inside a bounded window after its target time
  *   (MAX_LAG_MINUTES). If the script was down past the window, the slot
  *   is skipped rather than sent stale — we prefer a missed hourly
@@ -308,8 +311,16 @@ function checkSchedule() {
       const decision = _slotDecision_(slot, nowMin, isWeekend, props, today);
       if (decision.fire) {
         const eventId = 'scheduled:' + today + ':' + slot.name;
-        _dispatch_(owner, repo, token, slot.label, 'scheduled:' + slot.name + ' ' + today, eventId);
+        // Marker FIRST: if GitHub accepts the dispatch but the response is
+        // lost (timeout, execution limit), the next tick must not dispatch the
+        // same slot again. Only a definite rejection releases the marker.
         _markSent_(props, today, slot.name, now);
+        try {
+          _dispatch_(owner, repo, token, slot.label, 'scheduled:' + slot.name + ' ' + today, eventId);
+        } catch (e) {
+          if (e && e.definiteRejection) props.deleteProperty(_markerKey_(today, slot.name));
+          throw e;
+        }
         dispatched += 1;
         Logger.log('Dispatched slot "%s" (label=%s) for %s (now=%s).',
                    slot.name, slot.label, today, _localFormat_(now, 'HH:mm'));
@@ -456,10 +467,15 @@ function processInbox() {
         for (const match of matches) {
           if (markerCount >= UPDATE_MARKER_LIMIT) break;
           const eventId = 'update:' + _opaqueDigest_(thread.getId() + ':' + match.id);
-          _dispatch_(owner, repo, token, 'on-demand', 'authenticated user reply',
-                     eventId, match.requestedAt);
           const key = _updateMarkerKey_(match.id);
-          props.setProperty(key, now.toISOString());
+          props.setProperty(key, now.toISOString());   // marker first, as for slots
+          try {
+            _dispatch_(owner, repo, token, 'on-demand', 'authenticated user reply',
+                       eventId, match.requestedAt);
+          } catch (e) {
+            if (e && e.definiteRejection) props.deleteProperty(key);
+            throw e;
+          }
           seen[key] = now.toISOString();
           markerCount += 1;
           dispatched += 1;
@@ -678,7 +694,9 @@ function _dispatch_(owner, repo, token, dispatchLabel, summary, eventId, request
       'GitHub dispatch failed: HTTP %s\nBody: %s',
       code, response.getContentText().slice(0, 500)
     );
-    throw new Error('GitHub dispatch failed with HTTP ' + code);
+    const error = new Error('GitHub dispatch failed with HTTP ' + code);
+    error.definiteRejection = true;   // GitHub answered: no event was created
+    throw error;
   }
   Logger.log('GitHub dispatch OK (label=%s): %s', dispatchLabel, summary);
 }

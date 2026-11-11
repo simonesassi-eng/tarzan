@@ -1187,4 +1187,8 @@ def _publish_and_deliver(
         html,
         DeliveryState.ACKNOWLEDGED_SUCCESS.value,
     )
+    # A delivered failure notice is still a failed issue: the run ends non-zero
+    # so the Actions list tells it apart from a digest (the mail did go out).
+    if publication.decision is PublicationDecision.BLOCK_NORMAL_AND_NOTIFY_FAILURE:
+        return 1
     return 0

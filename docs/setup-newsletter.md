@@ -366,10 +366,12 @@ each market slot, dispatches a send only when:
 - the current `Europe/Rome` time is at or after the slot time, but
   within `MAX_LAG_MINUTES` (default 25) of it;
 - weekend rules allow it (Sat/Sun: 08:00, 13:05 and 23:00 only); and
-- no dispatch marker exists for `(date, slot)`. Script locking and markers
-  avoid ordinary repeated dispatches; the GitHub HTTP call and marker write
-  are not one transaction. Delivery claims separately coordinate SMTP when
-  their shared durable service is configured.
+- no dispatch marker exists for `(date, slot)`. The marker is written
+  BEFORE the GitHub call and released only on a definite HTTP rejection, so
+  a dispatch whose response is lost costs at most a missed slot, never a
+  duplicate. Delivery claims coordinate SMTP across runs only when
+  `DELIVERY_CLAIM_ENDPOINT` and `DELIVERY_CLAIM_TOKEN` are set; without them
+  each run dedups only itself.
 
 Because the script formats time in `Europe/Rome`, **DST is handled
 natively** — a slot's target is the same wall-clock time year-round. There
