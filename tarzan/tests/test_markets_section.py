@@ -305,15 +305,17 @@ class TestEveryMarkupBoundaryEscapes:
 
 def test_regions_run_in_opening_order_with_futures_on_their_own():
     """Futures first, then Asia, Europe, US by cash open, then bonds, then the
-    round-the-clock groups; the Yahoo futures are the US E-minis (the rest come
-    from market_feeds), and every row a country owns has a flag."""
+    round-the-clock groups; every index future comes from market_feeds, and
+    every row a country owns has a flag."""
     from tarzan.data.market_feeds import FEED_KEYS, FEED_ROWS
     from tarzan.export.newsletter._constants import MARKET_FLAGS
 
     assert mq.CATEGORY_ORDER[:5] == ["Futures", "Asia", "Europe", "US", "Bonds"]
     cats = [c for _, _, c in mq.MARKETS]
     assert cats == sorted(cats, key=mq.CATEGORY_ORDER.index)
-    assert {s for _, s, c in mq.MARKETS if c == "Futures"} == {"ES=F", "NQ=F", "YM=F", "RTY=F"}
+    # Every index future, the CME E-minis included, is a feed row.
+    assert not {s for _, s, c in mq.MARKETS if c == "Futures"}
+    assert {"fut:ES", "fut:NQ", "fut:YM", "fut:RTY"} <= set(FEED_KEYS)
     assert {r.category for r in FEED_ROWS} <= set(mq.CATEGORY_ORDER)
     assert [s for _, s, c in mq.MARKETS
             if c not in ("Commodities",) and s != "BTC-USD"

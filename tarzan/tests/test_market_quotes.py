@@ -556,27 +556,31 @@ def test_session_caption_unknown_exchange_is_empty():
 # ---------------------------------------------------------------------------
 # New US index futures — must not collide in name with their cash index
 # ---------------------------------------------------------------------------
-def test_new_index_futures_present_with_correct_ticker_and_category():
-    wanted = {"ES=F": "S&P 500 (FUT)", "YM=F": "Dow 30 (FUT)",
-              "NQ=F": "Nasdaq 100 (FUT)", "RTY=F": "Russell 2000 (FUT)"}
-    by_ticker = {t: n for n, t, c in mq.MARKETS}
-    for ticker, name in wanted.items():
-        assert by_ticker.get(ticker) == name, ticker
+def test_us_index_futures_come_from_the_feeds_on_the_globex_day():
+    """The CME E-minis are feed rows: Yahoo's rows reasoned in cash days and,
+    after the 18:00 New York reopen, kept the finished session's line and day
+    under the new session's change."""
+    from datetime import datetime, timezone
+    from tarzan.data import market_feeds as F
 
-    cats = {t: c for _n, t, c in mq.MARKETS}
-    for ticker in wanted:
-        assert cats[ticker] == "Futures"
-        assert mq.is_continuous_market(ticker)
+    assert not {t for _n, t, c in mq.MARKETS if c == "Futures"}
+    rows = {r.key: r for r in F.FEED_ROWS}
+    for key in ("fut:ES", "fut:NQ", "fut:YM", "fut:RTY"):
+        row = rows[key]
+        assert row.category == "Futures" and {F.TV, F.CNBC, F.MW} <= set(row.symbols)
+    # Wed 11 Nov 2026, 18:44 New York = 00:44 Thursday in Rome: Thursday's
+    # Globex session is open, and labelled as the reader's Thursday.
+    assert F.schedule(rows["fut:ES"], datetime(2026, 11, 11, 23, 44, tzinfo=timezone.utc))[1:] == (True, "Thu")
+    # Saturday: closed since Friday 17:00 New York.
+    assert F.schedule(rows["fut:ES"], datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc))[1:] == (False, "Fri")
 
 
 def test_nasdaq_composite_and_100_are_both_present_and_distinct():
-    # Composite (^IXIC), 100 (^NDX) and the 100's futures (NQ=F) all show
-    # up as their own entries -- three genuinely different things, not one
-    # collapsed into another.
+    # Composite (^IXIC) and 100 (^NDX) are their own entries -- two genuinely
+    # different things, not one collapsed into another.
     by_ticker = {t: n for n, t, c in mq.MARKETS}
     assert by_ticker["^IXIC"] == "Nasdaq Composite"
     assert by_ticker["^NDX"] == "Nasdaq 100"
-    assert by_ticker["NQ=F"] == "Nasdaq 100 (FUT)"
     cats = {t: c for _n, t, c in mq.MARKETS}
     assert cats["^NDX"] == "US"
     assert not mq.is_continuous_market("^NDX")

@@ -81,6 +81,10 @@ MARKET_FLAGS = {
     "fut:SPI": _AU, "fut:NK": _JP, "fut:A50": _CN,
     "fut:KS200": "\U0001F1F0\U0001F1F7", "fut:HSI": "\U0001F1ED\U0001F1F0",
     "fut:NIFTY": "\U0001F1EE\U0001F1F3", "fut:FIB": _IT, "fut:MME": "",
+    "fut:ES": _US, "fut:NQ": _US, "fut:YM": _US, "fut:RTY": _US,
+    # Commodities belong to no country.
+    **{k: "" for k in ("cmd:CL", "cmd:BRN", "cmd:GC", "cmd:SI", "cmd:HG",
+                       "cmd:NG", "cmd:PL")},
     "fut:FESX": _EU, "fut:FXXP": _EU, "fut:FDAX": _DE, "fut:FCE": _FR, "fut:Z": _GB,
     "bond:DE2Y": _DE, "bond:DE10Y": _DE, "bond:IT2Y": _IT, "bond:IT10Y": _IT,
     "spread:IT-DE10Y": _IT + _DE, "bond:FR10Y": _FR,

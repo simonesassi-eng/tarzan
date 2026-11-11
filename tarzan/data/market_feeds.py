@@ -109,8 +109,9 @@ class FeedRow:
     calendar: str = ""
 
 
-def _future(name, key, hours=22.0, *, sessions=(), tz="", calendar="", **symbols):
-    return FeedRow(name, key, "Futures", "index", symbols,
+def _future(name, key, hours=22.0, *, sessions=(), tz="", calendar="",
+            category="Futures", **symbols):
+    return FeedRow(name, key, category, "index", symbols,
                    ((MW, MW), (CNBC, CNBC), (TV, MW), (TV, CNBC), (TV, None)), hours,
                    sessions, tz, calendar)
 
@@ -178,6 +179,46 @@ FEED_ROWS: tuple[FeedRow, ...] = (
     _future("FTSE 100", "fut:Z", hours=20.0, sessions=(("01:00", "21:00"),),
             tz="Europe/London", calendar="^FTSE",
             **{TV: "ICEEUR:Z1!", CNBC: "@FFI.1", MW: "FUTURE/UK/IFEU/Z00"}),
+    # CME E-minis. Yahoo's rows reasoned in cash days: after the 18:00 New York
+    # reopen (00:00 Rome) they kept the finished session's line and day under
+    # the new session's change. Globex's day is 18:00-17:00 New York, opened
+    # the previous CALENDAR evening (Monday's on Sunday). Three feeds vote.
+    _future("S&P 500", "fut:ES", sessions=(("~18:00", "17:00"),),
+            tz="America/New_York", calendar="^GSPC",
+            **{TV: "CME_MINI:ES1!", CNBC: "@SP.1", MW: "FUTURE/US/XCME/ES00"}),
+    _future("Nasdaq 100", "fut:NQ", sessions=(("~18:00", "17:00"),),
+            tz="America/New_York", calendar="^GSPC",
+            **{TV: "CME_MINI:NQ1!", CNBC: "@ND.1", MW: "FUTURE/US/XCME/NQ00"}),
+    _future("Dow 30", "fut:YM", sessions=(("~18:00", "17:00"),),
+            tz="America/New_York", calendar="^GSPC",
+            **{TV: "CBOT_MINI:YM1!", CNBC: "@DJ.1", MW: "FUTURE/US/XCBT/YM00"}),
+    _future("Russell 2000", "fut:RTY", sessions=(("~18:00", "17:00"),),
+            tz="America/New_York", calendar="^GSPC",
+            **{TV: "CME_MINI:RTY1!", CNBC: "@TFS.1", MW: "FUTURE/US/XCME/RTY00"}),
+    # Commodities: futures too, on the same exchange clocks. Yahoo's rows had
+    # the E-minis' defect (the finished session's line and day after the 18:00
+    # New York reopen), and its BZ=F is NYMEX's Brent look-alike, not ICE Brent.
+    *(_future(name, key, sessions=(("~18:00", "17:00"),), tz="America/New_York",
+              calendar="^GSPC", category="Commodities",
+              **{TV: tv, CNBC: cnbc, MW: mw})
+      for name, key, tv, cnbc, mw in (
+          ("WTI Crude", "cmd:CL", "NYMEX:CL1!", "@CL.1", "FUTURE/US/XNYM/CL00"),
+      )),
+    # ICE Brent trades 01:00-23:00 London (the week opens Sunday 23:00, an
+    # hour this does not model).
+    _future("Brent Crude", "cmd:BRN", sessions=(("01:00", "23:00"),), tz="Europe/London",
+            category="Commodities",
+            **{TV: "ICEEUR:BRN1!", CNBC: "@LCO.1", MW: "FUTURE/UK/IFEU/BRN00"}),
+    *(_future(name, key, sessions=(("~18:00", "17:00"),), tz="America/New_York",
+              calendar="^GSPC", category="Commodities",
+              **{TV: tv, CNBC: cnbc, **({MW: mw} if mw else {})})
+      for name, key, tv, cnbc, mw in (
+          ("Gold", "cmd:GC", "COMEX:GC1!", "@GC.1", "FUTURE/US//GC00"),
+          ("Silver", "cmd:SI", "COMEX:SI1!", "@SI.1", "FUTURE/US//SI00"),
+          ("Copper", "cmd:HG", "COMEX:HG1!", "@HG.1", "FUTURE/US//HG00"),
+          ("Natural Gas", "cmd:NG", "NYMEX:NG1!", "@NG.1", "FUTURE/US/XNYM/NG00"),
+          ("Platinum", "cmd:PL", "NYMEX:PL1!", "@PL.1", "FUTURE/US/XNYM/PL00"),
+      )),
     _treasury("US 2Y", "bond:US2Y",
               **{TV: "TVC:US02Y", CNBC: "US2Y", MW: "BOND/BX//TMUBMUSD02Y"}),
     _treasury("US 10Y", "bond:US10Y",
@@ -798,8 +839,8 @@ def _timetable(row: FeedRow, now: datetime):
     A trading day is a weekday its exchange is open (``row.calendar``). Its
     windows are on that date, except one marked "-", which opens the evening of
     the PREVIOUS trading day (Osaka's Friday-evening session belongs to Monday).
-    The weekday shown is the calendar day the current window began, or, when
-    closed, the reader's day on which the latest window ended.
+    The weekday shown is the day the current window began (a "~" window: its
+    trading day), or, when closed, the reader's day the latest window ended.
     """
     if not row.sessions or not row.tz:
         return None
@@ -850,7 +891,12 @@ def _timetable(row: FeedRow, now: datetime):
         spans = windows(day)
         for a, b in spans:
             if a <= local < b:
-                return (caption, True, f"{a:%a}",
+                # Open: the day the window began, on the exchange's clock —
+                # except a "~" window, which opens the evening BEFORE its
+                # trading day (Globex's Thursday starts Wednesday 18:00 New
+                # York, already Thursday in Rome): that one is its trading day.
+                evening_before = any(w[0].startswith("~") for w in row.sessions)
+                return (caption, True, f"{(day if evening_before else a):%a}",
                         min(x for x, _ in spans), max(y for _, y in spans), (a, b))
             if a <= local and (latest is None or a > latest[0]):
                 latest = (a, day, b)
