@@ -353,7 +353,11 @@ def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
             fin = financing_daily.reindex(df.index).ffill().fillna(0.0)
         s = s - (gross - 1.0) * (fin + spread_annual / TRADING_DAYS)
     if hedge_fx is not None and hedge_carry is not None:
-        fxr = hedge_fx.reindex(s.index).fillna(0.0)
+        # Remove the FX change over each of the series' OWN intervals — the
+        # same intervals the EUR conversion added it over — or a holiday's FX
+        # move survives in a "hedged" class.
+        from tarzan.data.proxy_data import _interval_fx_returns
+        fxr = _interval_fx_returns((1.0 + hedge_fx.fillna(0.0)).cumprod(), s.index)
         car = hedge_carry.reindex(s.index).fillna(0.0)
         s = (1.0 + s) / (1.0 + fxr) - 1.0 + car
     return s.dropna()
