@@ -294,7 +294,7 @@ def _instrument_matrix_block(ws, row, portfolios) -> int:
     reps: dict = {}
     for p in portfolios:
         for it in p.items:
-            reps.setdefault(it.bare, it)
+            reps.setdefault(it.key, it)
 
     def _cls(it):
         return (it.holding.asset_class.value
@@ -338,13 +338,13 @@ def _instrument_matrix_block(ws, row, portfolios) -> int:
                 a.font = _font(9, bold=True)
                 a.fill = _fill(bg)
                 a.border = _border()
-                b = ws.cell(row=row, column=2, value=name_by.get(it.bare, ""))
+                b = ws.cell(row=row, column=2, value=name_by.get(it.key, ""))
                 b.font = _font(9, color=_C["muted"])
                 b.fill = _fill(bg)
                 b.border = _border()
                 for j, wm in enumerate(wmaps):
                     c = ws.cell(row=row, column=_PCOL0 + j,
-                                value=(wm[it.bare] / 100.0 if it.bare in wm else None))
+                                value=(wm[it.key] / 100.0 if it.key in wm else None))
                     c.number_format = "0.0%"
                     c.alignment = _align("center")
                     c.fill = _fill(bg)

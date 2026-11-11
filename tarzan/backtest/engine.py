@@ -74,7 +74,17 @@ _HEDGED_TICKERS = {"AGGH", "XS5E", "XGIN", "MFEH"}
 
 
 def is_currency_hedged(it: "WhatIfItem") -> bool:
-    """True if this instrument is a EUR-hedged share class."""
+    """True if this instrument is a EUR-hedged share class.
+
+    The catalog row says so by name ("EUR Hedged"), found by ISIN first, so the
+    UCITS MATE (EUR Hedged) is hedged and the Nasdaq MATE is not. The ticker set
+    only covers an instrument the catalog does not list.
+    """
+    from tarzan import config
+
+    row = config.catalog().row(getattr(it, "isin", None), it.bare)
+    if row is not None:
+        return "eur hedged" in str(row.get("name") or "").casefold().replace("(", "").replace(")", "")
     return it.bare.upper() in _HEDGED_TICKERS
 
 
@@ -266,7 +276,7 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
             # curated EM tilt. The Developed legs are the wrong regressors here.
             loads = ({} if prefer_curated or em_factors is None
                      else syn.factor_loadings(base, real, em_factors))
-            _FACTOR_TILT[it.bare] = ({**loads, "_em": True} if loads
+            _FACTOR_TILT[it.key] = ({**loads, "_em": True} if loads
                                      else {**curated_em, "_curated": True, "_em": True})
             spliced = syn.factor_splice_monthly(base, real, em_factors,
                                                 loadings=(loads or curated_em))
@@ -278,9 +288,9 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
             # tilt on the real FF factor legs.
             curated = None if loads else curated_avail
             if loads:
-                _FACTOR_TILT[it.bare] = loads
+                _FACTOR_TILT[it.key] = loads
             elif curated:
-                _FACTOR_TILT[it.bare] = {**curated, "_curated": True}
+                _FACTOR_TILT[it.key] = {**curated, "_curated": True}
             spliced = syn.factor_splice(base, real, factors, loadings=curated)
         elif backfill == "calibrated":
             spliced = syn.calibrated_splice(base, real)
@@ -288,7 +298,7 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
             spliced = syn.splice_returns(base, real)
         if spliced is None or spliced.empty:
             continue
-        key = it.bare or f"i{i}"
+        key = it.key or f"i{i}"
         _check_backfill_realism(key, spliced, real)
         cols[key] = spliced
         weights[key] = it.weight / 100.0
@@ -322,8 +332,8 @@ def _conditional_run(p: "Portfolio", state: dict, rebalance: str, rf) -> dict:
         return {}
     # Exposure per unit of each fund's OWN NAV, so a levered sleeve takes a
     # proportionally larger shift (see rob.conditional_drift).
-    exposures = {it.bare: {k: v / 100.0 for k, v in (it.comp_notional or {}).items()}
-                 for it in p.items if it.bare in df.columns}
+    exposures = {it.key: {k: v / 100.0 for k, v in (it.comp_notional or {}).items()}
+                 for it in p.items if it.key in df.columns}
     monthly = ((1.0 + df).resample("ME").prod() - 1.0).dropna(how="any")
     if monthly.empty:
         return {}
@@ -487,7 +497,7 @@ def simulation_rows(portfolios) -> list[dict]:
     seen: dict[str, WhatIfItem] = {}
     for p in portfolios:
         for it in p.items:
-            seen.setdefault(it.bare, it)
+            seen.setdefault(it.key, it)
     rows: list[dict] = []
     for bare, it in sorted(seen.items()):
         exp = instrument_exposures(it)
@@ -513,7 +523,7 @@ def simulation_rows(portfolios) -> list[dict]:
                 base_lbl = "EM factor tilt" if is_em else "factor tilt"
                 label = f"curated {base_lbl}" if is_curated else base_lbl
                 base += f"  + {label} ⟨{legs}⟩"
-        rows.append({"ticker": bare, "real_from": real_from,
+        rows.append({"ticker": it.bare, "real_from": real_from,
                      "base_from": base_from, "base": base})
     return rows
 

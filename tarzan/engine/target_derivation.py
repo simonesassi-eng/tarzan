@@ -62,12 +62,20 @@ def plan_weights(target_rows: dict) -> tuple[dict[str, float], list[str]]:
             continue
         ticker = str((row or {}).get("ticker") or "").strip()
         isin = str((row or {}).get("isin") or "").strip()
-        # The catalog's key: the bare ticker, so two share classes of one
-        # curated fund still meet (CL2 twice), qualified with the ISIN when two
-        # catalog rows share the symbol (MATE), so two funds never do.
-        catalog_key = cfg.catalog_key(isin, ticker) if (isin or ticker) else ""
-        key = (catalog_key.upper() if QUALIFIER in catalog_key
-               else normalize_ticker(catalog_key or ticker)) or isin.upper()
+        # The catalog ROW this identity names, keyed as the catalog keys it:
+        # the bare ticker, so two share classes of one curated fund still meet
+        # (CL2 twice), qualified when two rows share the symbol (MATE), so two
+        # funds never do. An identity the catalog cannot name (an ISIN that
+        # contradicts the row of its symbol) is keyed by that ISIN, so it never
+        # borrows another fund's classes or geography.
+        index = cfg.catalog()
+        row = index.row(isin or None, ticker or None) if (isin or ticker) else None
+        if row is not None:
+            catalog_key = index.key(row)
+            key = (catalog_key.upper() if QUALIFIER in catalog_key
+                   else normalize_ticker(catalog_key))
+        else:
+            key = isin.upper() or normalize_ticker(ticker)
         if not key:
             notes.append("a target row names neither a ticker nor an ISIN; skipped")
             continue

@@ -211,6 +211,7 @@ def _verify(new_values, holdings, config, geo_frac, all_geos, fi_value=0.0, *,
             if tgt > 0 or actual > 0.05:
                 details.append(f"{h.ticker} {actual:.1f}% (tgt. {tgt:.0f}%)")
                 items.append({"category": h.name or h.ticker, "ticker": h.ticker,
+                              "isin": h.isin or "",
                               "actual_pct": actual, "target_pct": tgt})
         verifications.append({"check": "Per-Holding Portfolio Targets",
                               "kind": "per_holding_portfolio",

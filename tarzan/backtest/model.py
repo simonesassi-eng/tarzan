@@ -88,6 +88,18 @@ class WhatIfItem:
         self.geo_taxonomy = geo_taxonomy
 
     @property
+    def key(self) -> str:
+        """The sleeve's identity: its bare ticker, or ``TICKER@ISIN`` where the
+        catalog lists two funds under that ticker (MATE), so they never share a
+        sleeve, a weight or a matrix row. ``bare`` stays the display symbol."""
+        from tarzan import config
+        from tarzan.models.instrument_key import qualify
+
+        if self.isin and str(self.bare).upper() in config.catalog().shared:
+            return qualify(str(self.bare).upper(), self.isin)
+        return self.bare
+
+    @property
     def gross(self) -> float:
         return sum(self.comp_notional.values())
 
@@ -167,5 +179,5 @@ class Portfolio:
     def weights(self) -> dict[str, float]:
         out: dict[str, float] = {}
         for it in self.items:
-            out[it.bare] = out.get(it.bare, 0.0) + it.weight
+            out[it.key] = out.get(it.key, 0.0) + it.weight
         return out

@@ -236,45 +236,15 @@ def build_symbol_map() -> dict[str, tuple[Optional[str], str]]:
     return sym_map
 
 
-_GEO_BY_KEY: Optional[dict] = None
-
-
 def _taxonomy_geo(bare: str, isin: str):
-    """Authoritative equity geography from the taxonomy geo columns, keyed by
-    BARE ticker or ISIN. Reuses the canonical ``geo_resolver._parse_geo_row``
-    parser (same ``exp_*``/geo columns the enricher uses) so index/swap ETFs
-    get their real regional split instead of the listing country. Cached.
+    """Authoritative equity geography from the taxonomy geo columns, through the
+    canonical ``geo_resolver`` lookup and so the catalog's one identity rule:
+    the ISIN first, a symbol only where it is unambiguous and does not
+    contradict it. Index/swap ETFs get their real regional split instead of the
+    listing country.
     """
-    global _GEO_BY_KEY
-    if _GEO_BY_KEY is None:
-        _GEO_BY_KEY = {}
-        idx = ROOT / "input" / "instrument_taxonomy.csv"
-        if idx.exists():
-            df = pd.read_csv(idx)
-            df.columns = [c.strip().lower() for c in df.columns]
-            claims: dict[str, set] = {}
-            for _, r in df.iterrows():
-                full = str(r.get("ticker", "")).strip()
-                rin = normalize_isin(r.get("isin", ""))
-                if full:
-                    claims.setdefault(full.split(".")[0].upper(), set()).add(rin)
-            for _, r in df.iterrows():
-                geo = geo_resolver._parse_geo_row(r)
-                if not geo:
-                    continue
-                full = str(r.get("ticker", "")).strip()
-                rin = normalize_isin(r.get("isin", ""))
-                bare_key = full.split(".")[0].upper() if full else ""
-                # A symbol two funds share is no key: only their ISINs are.
-                if bare_key and len(claims.get(bare_key, ())) == 1:
-                    _GEO_BY_KEY[bare_key] = geo
-                if rin:
-                    _GEO_BY_KEY[rin] = geo
-    # ISIN first: it is the instrument; the symbol only stands in without one.
-    if isin and normalize_isin(isin) in _GEO_BY_KEY:
-        return _GEO_BY_KEY[normalize_isin(isin)]
-    key = (bare or "").split(".")[0].upper()
-    return _GEO_BY_KEY.get(key)
+    found = geo_resolver._lookup_asset_geo(isin or "", bare or "")
+    return found[0] if found else None
 
 
 def resolve_symbol(bare: str, sym_map: dict) -> tuple[Optional[str], str]:
@@ -351,7 +321,7 @@ def portfolio_items(rows, universe) -> list[WhatIfItem]:
         # ticker-only run resolves for free; else try to resolve from ticker.
         final_isin = (isin or h.isin or "").strip()
         if final_isin:
-            price_cache.store_ticker_isin(disp, final_isin)
+            price_cache.store_ticker_isin(sym or disp, final_isin)
         else:
             final_isin = (geo_resolver.resolve_isin(sym)
                           or geo_resolver.resolve_isin(disp) or "")

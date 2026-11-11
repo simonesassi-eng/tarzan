@@ -34,24 +34,27 @@ import re
 from typing import Optional
 
 
+QUALIFIER = "@"
+_ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+
+
 def normalize_isin(raw: Optional[str]) -> str:
-    """Uppercased, whitespace/hyphen-stripped ISIN; '' for blank/'nan'.
+    """Uppercased, whitespace/hyphen-stripped ISIN; '' for anything that is not
+    ISIN-shaped (blank, 'nan', a placeholder such as 'N/A', a ticker typed into
+    the ISIN column). A non-ISIN must not act as an identity: it would
+    contradict the holding's catalog row and strip its class, name and TER.
 
     The single canonical ISIN normalizer; ``contracts.validation`` re-exports it.
     """
     if raw is None:
         return ""
     s = str(raw).strip().upper().replace(" ", "").replace("-", "")
-    return "" if s in ("", "NAN") else s
-
-
-QUALIFIER = "@"
-_ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+    return s if _ISIN_SHAPE.fullmatch(s) else ""
 
 
 def is_isin(raw: Optional[str]) -> bool:
     """Whether ``raw`` normalizes to the ISIN shape (2 letters, 9 alnum, 1 digit)."""
-    return bool(_ISIN_SHAPE.fullmatch(normalize_isin(raw)))
+    return bool(normalize_isin(raw))
 
 
 def qualify(ticker: str, isin: Optional[str]) -> str:

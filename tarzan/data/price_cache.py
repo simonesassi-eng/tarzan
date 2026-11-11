@@ -980,23 +980,58 @@ def _visible_xref(entry, as_of=None) -> Optional[str]:
     return _normalize_profile_isin(entry["isin"]) or None
 
 
+def _xref_key(ticker: str) -> tuple[str, bool]:
+    """The cache key for ``ticker`` and whether its symbol root is shared.
+
+    The key is the bare root, so every venue of one fund shares one entry —
+    unless the catalog lists two different funds under that root (MATE: the
+    Nasdaq fund, and the UCITS that trades as MATE.MI). Then each LISTING keys
+    its own entry, or the two would overwrite each other run after run.
+    """
+    from tarzan.models.instrument_key import split_qualified
+
+    symbol, _isin = split_qualified(ticker)
+    bare = normalize_ticker(symbol)
+    try:
+        from tarzan import config
+        shared = bare in config.catalog().shared
+    except Exception:  # noqa: BLE001 — no catalog, no sharing to protect
+        shared = False
+    return (symbol.strip().upper() if shared else bare), shared
+
+
 def load_ticker_isin(ticker: str, *, as_of=None) -> Optional[str]:
     """Cached exact-identity assertion visible to the reporting boundary."""
     if not ticker:
         return None
-    return _visible_xref(_load_ticker_isin_map().get(normalize_ticker(ticker)), as_of)
+    from tarzan.models.instrument_key import split_qualified
+
+    qualified = split_qualified(ticker)[1]
+    if qualified:
+        return qualified  # the key already names the fund
+    key, shared = _xref_key(ticker)
+    return _asserted_xref(_load_ticker_isin_map().get(key), shared, as_of)
+
+
+def _asserted_xref(entry, shared: bool, as_of=None) -> Optional[str]:
+    """``_visible_xref``, except that a shared-root entry written before
+    listings were keyed apart may hold BOTH funds' ISINs: that asserts nothing."""
+    if shared and isinstance(entry, list) and len({
+            _normalize_profile_isin(r.get("isin")) for r in entry if isinstance(r, dict)}) > 1:
+        return None
+    return _visible_xref(entry, as_of)
 
 
 def load_ticker_isin_reverse(isin: str, *, as_of=None) -> Optional[str]:
-    """Cached bare ticker for an ISIN — the reverse of :func:`load_ticker_isin`
-    — or None. The stored map is ticker→ISIN, so this scans its items; the map
+    """Cached ticker for an ISIN (bare, or the listing where the root is shared)
+    — the reverse of :func:`load_ticker_isin` — or None. The stored map is ticker→ISIN, so this scans its items; the map
     holds at most a few hundred instruments, so a linear scan is fine and keeps
     a single source of truth (no second on-disk map to keep in sync)."""
     if not isin:
         return None
     want = isin.replace("-", "").strip().upper()
     for ticker, mapped_isin in _load_ticker_isin_map().items():
-        if _visible_xref(mapped_isin, as_of) == want:
+        if _asserted_xref(mapped_isin, _xref_key(ticker)[1], as_of) == want:
             return ticker
     return None
 
@@ -1013,7 +1048,7 @@ def store_ticker_isin(ticker: str, isin: str, *, observed_at=None) -> None:
     if len(clean) != 12 or not clean[:2].isalpha():
         return
     try:
-        key = normalize_ticker(ticker)
+        key, _shared = _xref_key(ticker)
         observed = _parse_profile_observed_at(
             observed_at or datetime.now(timezone.utc).isoformat(),
         )

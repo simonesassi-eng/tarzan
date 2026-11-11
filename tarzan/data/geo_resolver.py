@@ -83,6 +83,16 @@ def _load_asset_geo() -> Optional[pd.DataFrame]:
         return None
 
 
+_INDEX_FOR: list = [None, None]  # (frame, index): the loaded taxonomy, indexed once
+
+
+def _index_for(df: pd.DataFrame):
+    from tarzan import config as cfg
+    if _INDEX_FOR[0] is not df:
+        _INDEX_FOR[0], _INDEX_FOR[1] = df, cfg._CatalogIndex(df)
+    return _INDEX_FOR[1]
+
+
 def _normalize_index_str(s: str) -> str:
     """Normalize an index name for fuzzy matching.
 
@@ -128,7 +138,7 @@ def _lookup_asset_geo(
     ``CL2.MI``. An exact string compare silently dropped such a holding's whole
     equity notional into a "Not Available" geography bucket.
     """
-    from tarzan.models.instrument_key import normalize_isin, normalize_ticker, split_qualified
+    from tarzan.models.instrument_key import normalize_isin, split_qualified
 
     df = _load_asset_geo()
     if df is None or df.empty:
@@ -137,28 +147,15 @@ def _lookup_asset_geo(
     ticker, qualified_isin = split_qualified(ticker)
     isin = isin or qualified_isin
 
-    # Match by ISIN
-    if isin and "isin" in df.columns:
-        col = df["isin"].map(normalize_isin)
-        match = df[col == normalize_isin(isin)]
-        if not match.empty:
-            geo = _parse_geo_row(match.iloc[0])
-            if geo:
-                return geo, "index_geo_allocation (isin)"
-
-    # Match by ticker
-    if ticker and "ticker" in df.columns:
-        col = df["ticker"].map(normalize_ticker)
-        match = df[col == normalize_ticker(ticker)]
-        if isin and "isin" in df.columns:
-            # A row with another ISIN is another fund, whatever its symbol.
-            row_isins = match["isin"].map(normalize_isin)
-            match = match[(row_isins == "") | (row_isins == normalize_isin(isin))]
-        # One row, or none: a symbol two rows share names neither.
-        if len(match) == 1:
-            geo = _parse_geo_row(match.iloc[0])
-            if geo:
-                return geo, "index_geo_allocation (ticker)"
+    # ISIN, then an unambiguous symbol that does not contradict it: the
+    # catalog's one identity rule, not a second copy of it.
+    index = _index_for(df)
+    row = index.row(isin, ticker)
+    if row is not None:
+        geo = _parse_geo_row(pd.Series({str(k).strip().lower(): v for k, v in row.items()}))
+        if geo:
+            via = "isin" if isin and index.isin_of(row) == normalize_isin(isin) else "ticker"
+            return geo, f"index_geo_allocation ({via})"
 
     # Match by index name (best match by word overlap, longest wins ties)
     if index_name and "name" in df.columns:
@@ -169,6 +166,9 @@ def _lookup_asset_geo(
             row_index = str(row.get("name", "")).strip()
             if not row_index or row_index.lower() == "nan":
                 continue
+            row_isin = normalize_isin(row.get("isin", ""))
+            if isin and row_isin and row_isin != normalize_isin(isin):
+                continue  # another fund, whatever its index is called
             row_normalized = _normalize_index_str(row_index)
             row_words = set(row_normalized.split())
             if not row_words:

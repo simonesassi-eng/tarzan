@@ -2395,19 +2395,14 @@ class MetricsEngine:
                     subjects[(str(h.ticker), "Target not held")] = (
                         h.isin, h.price_history, h.price_history_native, h.price_currency)
             isin_of = {t: v[0] for (t, _kind), v in subjects.items()}
-            # The curated taxonomy is keyed by BARE ticker ("XDEV"), the catalog by
-            # listing ("XDEV.MI"). ``resolve_taxonomy_identity`` keeps a curated
-            # identity rather than returning an ISIN for a listing, so it left 32 of 40
-            # EUR watchlist rows unchecked; the bare-ticker map is the direct lookup.
-            from tarzan.models.instrument_key import normalize_ticker
-            frame = cfg._load_indexes_csv()
-            curated = ({str(t).strip().upper(): str(i or "").strip()
-                        for t, i in zip(frame.get("ticker", []), frame.get("isin", []))
-                        if str(i or "").strip() and str(i).strip().lower() != "nan"}
-                       if frame is not None and not frame.empty else {})
+            # A benchmark's ISIN is the one its record carries (resolved from its
+            # catalog row); failing that, the catalog row its symbol names under
+            # the one identity rule — a symbol two funds share names neither.
+            catalog = cfg.catalog()
             for record in (ctx.get("_benchmark_catalog") or {}).values():
+                row = catalog.row(None, str(record.ticker), getattr(record, "name", None))
                 isin = (getattr(record, "isin", "") or isin_of.get(str(record.ticker))
-                        or curated.get(normalize_ticker(str(record.ticker)).upper()) or "")
+                        or (catalog.isin_of(row) if row is not None else ""))
                 if isin:
                     subjects[(str(record.ticker), "Benchmark index")] = (
                         isin, record.history, record.history_native, record.currency)

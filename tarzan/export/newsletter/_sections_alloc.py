@@ -1785,6 +1785,7 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
     class_of: dict[str, str] = {}
     ticker_of: dict[str, str] = {}
     name_of: dict[str, str] = {}
+    root_isins: dict[str, set] = {}
     if df is not None and not df.empty:
         for _, row in df.iterrows():
             isin = str(row.get("isin", "") or "").strip()
@@ -1795,20 +1796,26 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
                     isin_of[str(key).strip().upper()] = isin
             tkr = str(row.get("ticker", "") or "").strip()
             if tkr:
-                isin_of[tkr.upper().split(".")[0]] = isin
+                root_isins.setdefault(tkr.upper().split(".")[0], set()).add(isin)
             class_of[isin] = str(row.get("asset_class", "") or "")
             ticker_of[isin] = tkr
             name_of[isin] = str(row.get("name", "") or "")
 
     def isin_for(it) -> str:
-        for key in (it.get("isin"), it.get("ticker"), it.get("category")):
+        # The item's own ISIN is its identity; a symbol root only where exactly
+        # one held fund has it (MATE.MI must not borrow a held Nasdaq MATE).
+        own = str(it.get("isin") or "").strip().upper()
+        if own:
+            return own
+        for key in (it.get("ticker"), it.get("category")):
             if not key:
                 continue
             k = str(key).strip().upper()
             if k in isin_of:
                 return isin_of[k]
-            if k.split(".")[0] in isin_of:
-                return isin_of[k.split(".")[0]]
+            owners = root_isins.get(k.split(".")[0], ())
+            if len(owners) == 1:
+                return next(iter(owners))
         return ""
 
     def trend_for(it, isin) -> Optional[list]:

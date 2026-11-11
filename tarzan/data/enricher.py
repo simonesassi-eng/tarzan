@@ -589,20 +589,30 @@ def _is_expandable_bare_ticker(ticker: str) -> bool:
     )
 
 
-def _bare_resolution_cache_key(ticker: str) -> str:
+def _bare_resolution_cache_key(ticker: str, isin: str = "") -> str:
+    """``TICKER:<root>``, or ``TICKER:<root>@<ISIN>`` when the catalog lists two
+    funds under that root (MATE): one fund's promoted listing must never be
+    replayed for the other. A shared root without an ISIN has no key ("")."""
+    from tarzan.models.instrument_key import normalize_isin
+
     bare = str(ticker or "").split(".", 1)[0].strip().upper()
+    if bare in cfg.catalog().shared:
+        clean = normalize_isin(isin)
+        return f"TICKER:{bare}@{clean}" if clean else ""
     return f"TICKER:{bare}"
 
 
-def _load_bare_resolution(ticker: str, *, include_expired: bool) -> str:
-    key = _bare_resolution_cache_key(ticker)
+def _load_bare_resolution(ticker: str, *, include_expired: bool, isin: str = "") -> str:
+    key = _bare_resolution_cache_key(ticker, isin)
+    if not key:
+        return ""
     cached = price_cache.load_resolution(key)
     if not cached and include_expired:
         try:
             cached = price_cache._load_resolution_map().get(key, {}).get("symbol")
         except Exception:  # noqa: BLE001 — corrupt cache degrades to miss
             cached = None
-    bare = key.removeprefix("TICKER:")
+    bare = key.removeprefix("TICKER:").split("@", 1)[0]
     if cached and str(cached).split(".", 1)[0].strip().upper() == bare:
         return str(cached)
     return ""
@@ -636,6 +646,7 @@ def _resolve_bare_ticker(
     cached = _load_bare_resolution(
         ticker,
         include_expired=not allows_live_transport,
+        isin=isin,
     )
     if cached and us_listing_only and "." in cached:
         cached = ""
@@ -681,10 +692,9 @@ def _resolve_bare_ticker(
         history = _fetch_history(candidate.symbol)
         if not _history_visible_at_boundary(history):
             continue
-        price_cache.store_resolution(
-            _bare_resolution_cache_key(bare),
-            candidate.symbol,
-        )
+        key = _bare_resolution_cache_key(bare, isin)
+        if key:
+            price_cache.store_resolution(key, candidate.symbol)
         return _annotate_ticker_data(
             {"info": candidate.info, "history": history},
             candidate.symbol,
@@ -1067,6 +1077,14 @@ def _resolve_isin(
             known_symbols = list(dict.fromkeys(
                 symbol for symbol in (promoted_hint, hint_ticker) if symbol
             ))
+        # A bare symbol whose root names two catalog funds is the provider's US
+        # listing (MATE is the Nasdaq fund); it identifies nothing for another
+        # ISIN, whose own listing (MATE.MI) must come from elsewhere.
+        if not clean_isin.upper().startswith("US"):
+            known_symbols = [
+                symbol for symbol in known_symbols
+                if "." in symbol or normalize_ticker(symbol) not in cfg.catalog().shared
+            ]
 
     # Fast path: a previously-resolved symbol is cached on disk. Live runs may
     # reuse it directly. Pinned runs additionally require that it agrees with
@@ -3699,6 +3717,18 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
                         "UNRESOLVED",
                         "No canonical ticker with boundary-visible market data was resolved for this ISIN.",
                     )
+            elif (is_valid_isin and not clean_isin.upper().startswith("US")
+                  and "." not in str(ticker)
+                  and normalize_ticker(ticker) in cfg.catalog().shared):
+                # The bare symbol of a root two catalog funds share is the US
+                # listing: fetching it would value this fund with the other's
+                # prices. The ISIN did not resolve, so the holding stays unpriced.
+                data = _annotate_ticker_data(
+                    {"info": {}, "history": pd.DataFrame()},
+                    "",
+                    "UNRESOLVED",
+                    "The ISIN did not resolve and the bare symbol names another fund.",
+                )
             else:
                 if _is_expandable_bare_ticker(ticker) and holding.name:
                     data = _fetch_ticker_data(
@@ -4295,23 +4325,17 @@ def _try_terrapin_fallback(holding: Holding, instrument_kind) -> None:
 # Enrichment + classification pipeline
 # ---------------------------------------------------------------------------
 
-def _apply_taxonomy_override(holding: Holding) -> bool:
-    """Pin category, role, and exact mechanics evidence from the taxonomy.
+def _catalog_identity(holding: Holding) -> Optional[tuple[Optional[str], str]]:
+    """``(isin, catalog key)`` of the ONE catalog row this holding is, or None.
 
-    Looks up by ISIN first, then bare ticker (suffix stripped). On a match,
-    sets ``asset_class``/``role`` and contributes the curated ``kind`` without
-    erasing other assertions. Conflicts therefore remain ambiguous in the type
-    gateway instead of being overwritten by taxonomy precedence.
+    Identities to try, strongest first: the holding's own (ISIN, ticker), then
+    the learned ISIN<->ticker xref, because a taxonomy row may carry only one of
+    the two while the holding knows only the other (a Fineco ISIN-only order vs
+    a ticker-only UEQC row). Each is read under the catalog's identity rule, so a
+    symbol never reaches a row whose ISIN contradicts the holding's. The curated
+    name breaks a tie. The returned pair names the row by its own identity, so
+    every per-row accessor (class, kind, name, breakdown) reads the SAME row.
     """
-    lut = cfg.instrument_taxonomy()
-    if not lut:
-        return False
-    # Identities to try, strongest first: the holding's own (ISIN, ticker),
-    # then the learned ISIN<->ticker xref, because a taxonomy row may carry
-    # only one of the two while the holding knows only the other (a Fineco
-    # ISIN-only order vs a ticker-only UEQC row). Each is read under the
-    # catalog's identity rule, so a symbol never reaches a row whose ISIN
-    # contradicts the holding's.
     identities = [(holding.isin, holding.ticker)]
     if holding.isin:
         xref_ticker = price_cache.load_ticker_isin_reverse(normalize_isin(holding.isin))
@@ -4321,42 +4345,63 @@ def _apply_taxonomy_override(holding: Holding) -> bool:
         xref_isin = price_cache.load_ticker_isin(holding.ticker)
         if xref_isin:
             identities.append((xref_isin, holding.ticker))
+    index = cfg.catalog()
     for isin_k, ticker_k in identities:
-        hit = cfg.catalog_lookup(lut, isin_k, ticker_k, holding.name)
-        if not hit:
-            continue
-        ac_str, role = hit
-        try:
-            holding.asset_class = AssetClass(ac_str)
-        except ValueError:
-            logger.warning(
-                "Curated asset_class '%s' for %s is not a valid AssetClass; ignoring override",
-                ac_str, k,
-            )
-            return False
-        holding.role = role
-        curated_kind = cfg.kind_for(holding.isin, holding.ticker)
-        if (
-            curated_kind
-            and curated_kind not in holding.instrument_kind_evidence
-        ):
-            holding.instrument_kind_evidence = (
-                *holding.instrument_kind_evidence,
-                curated_kind,
-            )
-        # Resilient display name: fall back to the curated taxonomy ``name``
-        # when enrichment produced none (yfinance unreachable / rate-limited)
-        # or left the bare ticker as the name — so a curated instrument always
-        # shows a real name, even offline and even when its taxonomy row is
-        # keyed only by ticker (no ISIN).
-        bare = normalize_ticker(holding.ticker)
-        if not holding.name or holding.name.strip().upper() in (
-                (holding.ticker or "").strip().upper(), bare):
-            tax_name = cfg.name_for(holding.isin, holding.ticker)
-            if tax_name:
-                holding.name = tax_name
-        return True
-    return False
+        row = index.row(isin_k or None, ticker_k or None, holding.name)
+        if row is not None:
+            return (index.isin_of(row) or None), index.key(row)
+    return None
+
+
+def _apply_taxonomy_override(holding: Holding) -> bool:
+    """Pin category, role, and exact mechanics evidence from the taxonomy.
+
+    Finds the holding's catalog row (:func:`_catalog_identity`). On a match,
+    sets ``asset_class``/``role`` and contributes the curated ``kind`` without
+    erasing other assertions. Conflicts therefore remain ambiguous in the type
+    gateway instead of being overwritten by taxonomy precedence.
+    """
+    lut = cfg.instrument_taxonomy()
+    if not lut:
+        return False
+    identity = _catalog_identity(holding)
+    if identity is None:
+        return False
+    row_isin, row_key = identity
+    hit = cfg.catalog_lookup(lut, row_isin, row_key)
+    if not hit:
+        return False
+    ac_str, role = hit
+    try:
+        holding.asset_class = AssetClass(ac_str)
+    except ValueError:
+        logger.warning(
+            "Curated asset_class '%s' for %s is not a valid AssetClass; ignoring override",
+            ac_str, row_key,
+        )
+        return False
+    holding.role = role
+    curated_kind = cfg.kind_for(row_isin, row_key)
+    if (
+        curated_kind
+        and curated_kind not in holding.instrument_kind_evidence
+    ):
+        holding.instrument_kind_evidence = (
+            *holding.instrument_kind_evidence,
+            curated_kind,
+        )
+    # Resilient display name: fall back to the curated taxonomy ``name``
+    # when enrichment produced none (yfinance unreachable / rate-limited)
+    # or left the bare ticker as the name — so a curated instrument always
+    # shows a real name, even offline and even when its taxonomy row is
+    # keyed only by ticker (no ISIN).
+    bare = normalize_ticker(holding.ticker)
+    if not holding.name or holding.name.strip().upper() in (
+            (holding.ticker or "").strip().upper(), bare):
+        tax_name = cfg.name_for(row_isin, row_key)
+        if tax_name:
+            holding.name = tax_name
+    return True
 
 
 def _enrich_and_classify(holding: Holding) -> Holding:
@@ -4434,14 +4479,17 @@ def _apply_class_breakdown(holding: Holding) -> None:
     capital-efficient instrument is flagged for an exp_* row rather than
     silently counted as a single class."""
     ac_val = holding.asset_class.value if holding.asset_class else None
+    # The same catalog row the taxonomy override matched, so the breakdown never
+    # comes from another row (or from none) than the class did.
+    row_isin, row_key = _catalog_identity(holding) or (holding.isin, holding.ticker)
     holding.class_breakdown = {
         AssetClass(k): v
-        for k, v in cfg.class_breakdown_for(holding.isin, holding.ticker, ac_val).items()
+        for k, v in cfg.class_breakdown_for(row_isin, row_key, ac_val).items()
         if _is_valid_asset_class(k)
     }
     # Nudge for likely-notional instruments missing an explicit override.
     lut = cfg.class_exposure_lookup()
-    keyed = cfg.catalog_lookup(lut, holding.isin, holding.ticker, holding.name) is not None
+    keyed = cfg.catalog_lookup(lut, row_isin, row_key) is not None
     if not keyed:
         hint_src = f"{holding.role or ''} {holding.name or ''}".lower()
         if (any(h in (holding.role or "").lower() for h in cfg._NOTIONAL_ROLE_HINTS)

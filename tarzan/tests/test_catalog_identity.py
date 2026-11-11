@@ -8,6 +8,7 @@ the other's name, class, fees, geography, listing or price series.
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from tarzan import config as cfg
@@ -152,7 +153,6 @@ def test_the_backtest_does_not_hand_a_ticker_only_row_either_isin(two_mates, tmp
     (tmp_path / "input").mkdir()
     (tmp_path / "input" / "instrument_taxonomy.csv").write_text(_CSV)
     monkeypatch.setattr(loader, "ROOT", tmp_path)
-    monkeypatch.setattr(loader, "_GEO_BY_KEY", None)
     sym_map = loader.build_symbol_map()
     assert sym_map["MATE"] == (None, "MATE")
     assert sym_map["ISAC"][0] == "IE00B6R52259"
@@ -177,3 +177,73 @@ def test_the_real_catalog_keys_every_row_once_and_finds_each_by_its_isin():
         if isin:
             assert index.row(isin, None) is row
     assert len(set(cfg.benchmarks().values())) == len(cfg.benchmarks())
+
+
+def test_a_target_whose_isin_contradicts_its_symbol_borrows_nothing(two_mates):
+    from tarzan.engine.target_derivation import derive_class_targets, plan_weights
+
+    plan, _ = plan_weights({"a": {"isin": "US0378331005", "ticker": "ISAC",
+                                  "target_portfolio": 10.0}})
+    assert plan == {"US0378331005": 10.0}               # not ISAC's row
+    classes, missing = derive_class_targets(plan)
+    assert not classes and missing
+
+
+def test_a_placeholder_isin_is_no_identity():
+    from tarzan.models.instrument_key import normalize_isin
+
+    for junk in ("N/A", "0", "NONE", "nan", "ISAC", "", None):
+        assert normalize_isin(junk) == ""
+    assert normalize_isin(" ie000bs31r00 ") == EU
+
+
+def test_the_learned_ticker_isin_map_keeps_each_listing_apart(two_mates, tmp_path, monkeypatch):
+    from tarzan.data import price_cache
+
+    monkeypatch.setenv("TARZAN_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(price_cache, "is_enabled", lambda: True)
+    monkeypatch.setattr(price_cache, "_ticker_isin_path", lambda: tmp_path / "xref.json")
+    price_cache.store_ticker_isin("MATE", US, observed_at="2026-01-01T00:00:00+00:00")
+    price_cache.store_ticker_isin("MATE.MI", EU, observed_at="2026-01-02T00:00:00+00:00")
+    assert price_cache.load_ticker_isin("MATE") == US
+    assert price_cache.load_ticker_isin("MATE.MI") == EU
+    assert price_cache.load_ticker_isin_reverse(US) == "MATE"
+    assert price_cache.load_ticker_isin_reverse(EU) == "MATE.MI"
+
+
+def test_a_promoted_listing_is_never_replayed_for_the_other_fund(two_mates):
+    from tarzan.data import enricher
+
+    us = enricher._bare_resolution_cache_key("MATE", US)
+    eu = enricher._bare_resolution_cache_key("MATE.MI", EU)
+    assert us != eu and US in us and EU in eu
+    assert enricher._bare_resolution_cache_key("MATE") == ""  # ambiguous: no key
+    assert enricher._bare_resolution_cache_key("ISAC.MI") == "TICKER:ISAC"
+
+
+def test_the_backtest_keeps_two_funds_in_two_sleeves_and_hedges_the_right_one(two_mates):
+    from tarzan.backtest.engine import is_currency_hedged
+    from tarzan.backtest.model import WhatIfItem
+
+    us = WhatIfItem("MATE", "MATE", US, 5.0, None, {}, {}, "")
+    eu = WhatIfItem("MATE", "MATE.MI", EU, 5.0, None, {}, {}, "")
+    isac = WhatIfItem("ISAC", "ISAC.MI", "IE00B6R52259", 5.0, None, {}, {}, "")
+    assert {us.key, eu.key, isac.key} == {f"MATE@{US}", f"MATE@{EU}", "ISAC"}
+    assert is_currency_hedged(eu) and not is_currency_hedged(us)
+
+
+def test_the_rebalance_bridge_matches_a_target_by_its_isin_not_its_root(two_mates):
+    from tarzan.export.newsletter._sections_alloc import _holding_bridge_rows
+
+    class _M:
+        holdings_df = pd.DataFrame([{"isin": US, "ticker": "MATE", "name": "Man Active Trend Enhanced",
+                                     "asset_class": "Equities"}])
+
+    class _Ctx:
+        metrics = _M()
+
+    items = [{"category": "UCITS", "ticker": "MATE.MI", "isin": EU, "actual_pct": 10.0, "target_pct": 10.0},
+             {"category": "US", "ticker": "MATE", "isin": US, "actual_pct": 0.0, "target_pct": 0.0}]
+    kept, new, sold = _holding_bridge_rows(_Ctx(), items, base=100.0, weights={US: 12.0},
+                                           series=None, series_key="isin")
+    assert len(new) == 1 and len(sold) == 1 and not kept

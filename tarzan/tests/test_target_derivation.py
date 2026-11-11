@@ -39,7 +39,7 @@ class TestThePlanIsDeduplicatedByInstrument:
         plan, notes = td.plan_weights(_rows(
             ("IE00AAAAAAA1", "CL2", 8.0),
             ("FR00BBBBBBB2", "CL2", 8.0),
-            ("IE00CCCCCCC3", "SGLD", 10.0),
+            ("IE00B579F325", "SGLD", 10.0),
         ))
         assert plan == {"CL2": 8.0, "SGLD": 10.0}
         assert notes == []
