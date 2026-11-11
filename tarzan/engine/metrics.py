@@ -2769,7 +2769,7 @@ class MetricsEngine:
             prices[key] = normalize_index(ph, drop_duplicates=True)
             if start is not None:
                 prices[key], note = target_backfill.extend(
-                    h, start, ctx.get("_benchmark_catalog"))
+                    h, start, ctx.get("_benchmark_catalog"), self.holdings)
                 if note:
                     modeled.append(note)
         if not weights:

@@ -20,6 +20,7 @@ sleeve is reported, so the chart can draw that stretch dashed and say what it is
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 import pandas as pd
@@ -35,45 +36,74 @@ def _is_eur_hedged(row) -> bool:
     return "eur hedged" in name
 
 
-def _twin_returns(holding, row, benchmark_catalog, start) -> tuple[Optional[pd.Series], str]:
-    """Daily returns of the sleeve's twin from ``start``, and its description."""
+_SHARE_CLASS_WORDS = frozenset({
+    "ucits", "etf", "acc", "dist", "r", "i", "h", "eur", "usd", "gbp", "chf",
+    "hedged", "hdg", "class", "share", "units",
+})
+
+
+def _strategy_name(name: str) -> str:
+    """A curated name without its share-class words: "iMGP DBi Managed Futures
+    R EUR" and "iMGP DBi Managed Futures (EUR Hedged)" are one strategy."""
+    words = re.sub(r"[()\[\],]", " ", str(name or "").casefold()).split()
+    return " ".join(w for w in words if w not in _SHARE_CLASS_WORDS)
+
+
+def _priced(benchmark_catalog, holdings):
+    """``(isin, currency, eur tape, native tape)`` for everything the run priced."""
+    for r in (benchmark_catalog or {}).values():
+        yield (getattr(r, "isin", ""), str(getattr(r, "currency", "") or "").upper(),
+               getattr(r, "history", None), getattr(r, "history_native", None))
+    for h in holdings or ():
+        yield (str(getattr(h, "isin", "") or ""),
+               str(getattr(h, "price_currency", "") or "").upper(),
+               getattr(h, "price_history", None), getattr(h, "price_history_native", None))
+
+
+def _twin_returns(holding, row, benchmark_catalog, start, holdings=()) -> tuple[Optional[pd.Series], str]:
+    """Daily returns of the sleeve's twin — another share class of the same
+    strategy that the run priced — in the sleeve's own currency treatment."""
     from tarzan import config as cfg
     from tarzan.data import proxy_data
     from tarzan.engine.stats import normalize_index
-    from tarzan.models.instrument_key import normalize_ticker
 
     index = cfg.catalog()
     own_isin = index.isin_of(row)
-    own_name = str(row.get("name") or "").casefold()
-    own_root = normalize_ticker(str(row.get("ticker") or ""))
-    twins = []
-    for other in index.rows:
-        if other is row or (own_isin and index.isin_of(other) == own_isin):
-            continue
-        name = str(other.get("name") or "").casefold()
-        same_root = own_root and normalize_ticker(str(other.get("ticker") or "")) == own_root
-        nested = len(name) >= 12 and len(own_name) >= 12 and (
-            own_name.startswith(name) or name.startswith(own_name))
-        if same_root and nested:
-            twins.append(other)
+    own_strategy = _strategy_name(row.get("name"))
+    if len(own_strategy) < 12:
+        return None, ""
+    twins = [other for other in index.rows
+             if other is not row and index.isin_of(other)
+             and index.isin_of(other) != own_isin
+             and _strategy_name(other.get("name")) == own_strategy]
+    priced = list(_priced(benchmark_catalog, holdings))
     for twin in twins:
-        record = next((r for r in (benchmark_catalog or {}).values()
-                       if index.isin_of(twin) and getattr(r, "isin", "") == index.isin_of(twin)), None)
-        if record is None:
+        found = next((p for p in priced if p[0] == index.isin_of(twin)), None)
+        if found is None:
             continue
-        hedged = _is_eur_hedged(row) and str(getattr(record, "currency", "") or "").upper() == "USD"
-        tape = record.history_native if hedged and record.history_native is not None else record.history
-        if tape is None or len(tape) < 2:
-            continue
-        tape = normalize_index(tape, drop_duplicates=True)
-        r = tape.pct_change().dropna()
-        label = f"its twin fund {twin.get('ticker')} ({getattr(record, 'currency', '') or 'native'}"
-        if hedged:
-            _fx, carry = proxy_data.currency_hedge_legs()
-            if carry is None:
+        _isin, currency, eur_tape, native_tape = found
+        sleeve_hedged, twin_hedged = _is_eur_hedged(row), _is_eur_hedged(twin)
+        label = f"its twin fund {twin.get('ticker')} ({currency or 'native'}"
+        if sleeve_hedged and not twin_hedged:
+            fx, carry = proxy_data.currency_hedge_legs()
+            if carry is None or fx is None:
                 continue  # a hedged class cannot borrow an unhedged path
+            if currency == "USD" and native_tape is not None and len(native_tape) > 1:
+                r = normalize_index(native_tape, drop_duplicates=True).pct_change().dropna()
+            elif eur_tape is not None and len(eur_tape) > 1:
+                # A EUR class of a dollar strategy carries EUR/USD: take it out.
+                r = normalize_index(eur_tape, drop_duplicates=True).pct_change().dropna()
+                fx_int = proxy_data._interval_fx_returns((1.0 + fx.fillna(0.0)).cumprod(), r.index)
+                r = (1.0 + r) / (1.0 + fx_int) - 1.0
+                label += ", currency move removed"
+            else:
+                continue
             r = (1.0 + r) * (1.0 + carry.reindex(r.index).ffill().fillna(0.0)) - 1.0
             label += ", EUR-hedged"
+        else:
+            if eur_tape is None or len(eur_tape) < 2:
+                continue
+            r = normalize_index(eur_tape, drop_duplicates=True).pct_change().dropna()
         return r.dropna(), label + ")"
     return None, ""
 
@@ -114,7 +144,7 @@ def _reconstructed_returns(holding) -> tuple[Optional[pd.Series], str]:
     return base, f"its composition ({legs}{', EUR-hedged' if hedge[0] is not None else ''})"
 
 
-def extend(holding, start, benchmark_catalog) -> tuple[pd.Series, Optional[dict]]:
+def extend(holding, start, benchmark_catalog, holdings=()) -> tuple[pd.Series, Optional[dict]]:
     """``(price level, modeled)`` for one target sleeve reaching back to ``start``.
 
     ``modeled`` is None when the real tape already reaches ``start``; otherwise
@@ -134,7 +164,7 @@ def extend(holding, start, benchmark_catalog) -> tuple[pd.Series, Optional[dict]
     row = cfg.catalog().row(holding.isin or None, holding.ticker or None)
     twin, twin_label = (None, "")
     if row is not None:
-        twin, twin_label = _twin_returns(holding, row, benchmark_catalog, start)
+        twin, twin_label = _twin_returns(holding, row, benchmark_catalog, start, holdings)
     spliced, source = None, ""
     if twin is not None:
         # Same strategy: the twin's returns stand in 1:1 where it has them.

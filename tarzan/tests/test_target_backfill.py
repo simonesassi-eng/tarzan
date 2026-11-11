@@ -15,6 +15,8 @@ US, EU = "US56164V3033", "IE000BS31R00"
 _CSV = """name,ticker,isin,kind,asset_class,role,watchlist,is_benchmark_alpha_beta,is_benchmark_geo,usa,emerging_markets,eurozone_emu,japan,dev_ex_usa_ex_emu_ex_jp,exp_equities,exp_fixed_income,exp_gold,exp_commodities,exp_alternative,exp_crypto,ter,description,updated
 Man Active Trend Enhanced,MATE,US56164V3033,etf,Equities,Trend Stacked,True,,,100.0,0.0,0.0,0.0,0.0,100.0,,,,100.0,,0.0097,US fund,1/1/26
 Man Active Trend Enhanced UCITS ETF EUR Hedged,MATE,IE000BS31R00,etf,Equities,Trend Stacked,True,,,72.0,0.0,9.0,6.0,13.0,100.0,,,,100.0,,0.0096,UCITS,1/1/26
+iMGP DBi Managed Futures R EUR,DBMFE,LU2951555403,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0095,EUR class,1/1/26
+iMGP DBi Managed Futures (EUR Hedged),MFEH,LU3359622902,etf,Alternative,Managed Futures,True,,,,,,,,,,,,,,0.0095,EUR hedged class,1/1/26
 """
 
 
@@ -43,7 +45,8 @@ def test_the_twin_fund_reaches_a_young_sleeve_back_and_the_real_tape_is_kept(cat
     record = SimpleNamespace(isin=US, currency="USD", history=twin_native * 0.9,
                              history_native=twin_native)
     carry = pd.Series(0.0001, index=pd.bdate_range("2024-01-01", "2027-01-01"))
-    monkeypatch.setattr(proxy_data, "currency_hedge_legs", lambda: (None, carry))
+    fx = pd.Series(0.0, index=carry.index)
+    monkeypatch.setattr(proxy_data, "currency_hedge_legs", lambda: (fx, carry))
     start = pd.Timestamp("2025-06-02")
     out, note = target_backfill.extend(sleeve, start, {"MATE": record})
 
@@ -78,3 +81,25 @@ def test_the_modeled_stretch_of_a_line_is_drawn_dashed_and_meets_the_real_one():
     assert 'stroke-dasharray="3,3"' in dashed and "stroke-dasharray" not in solid
     pts = lambda l: l.split('points="')[1].split('"')[0].split()
     assert pts(dashed)[-1] == pts(solid)[0]      # the two pieces meet
+
+
+def test_a_unhedged_eur_twin_has_its_currency_move_removed_for_a_hedged_sleeve(catalog, monkeypatch):
+    from tarzan.data import proxy_data
+
+    days = pd.bdate_range("2025-01-01", periods=480)
+    rng = np.random.default_rng(5)
+    usd_strategy = pd.Series(100 * np.cumprod(1 + rng.normal(0.0003, 0.008, len(days))), index=days)
+    eur_per_usd = pd.Series(0.9 * np.cumprod(1 + rng.normal(0, 0.005, len(days))), index=days)
+    dbmfe = SimpleNamespace(isin="LU2951555403", price_currency="EUR",
+                            price_history=usd_strategy * eur_per_usd, price_history_native=None)
+    carry = pd.Series(0.0, index=days)
+    monkeypatch.setattr(proxy_data, "currency_hedge_legs",
+                        lambda: (eur_per_usd.pct_change().fillna(0.0), carry))
+    mfeh = SimpleNamespace(ticker="MFEH.DE", isin="LU3359622902", target_portfolio=7.5,
+                           price_history=_tape("2026-10-01", 20, 6, scale=50.0))
+    out, note = target_backfill.extend(mfeh, pd.Timestamp("2025-03-03"), {}, [dbmfe])
+    assert "twin fund DBMFE" in note["source"] and "currency move removed" in note["source"]
+    modeled = out.loc[(out.index >= "2025-03-04") & (out.index < mfeh.price_history.index[0])]
+    got = modeled.pct_change().dropna()
+    expect = usd_strategy.pct_change().reindex(got.index)   # the dollar strategy, hedged
+    assert np.allclose(got.to_numpy(), expect.to_numpy(), atol=1e-10)
