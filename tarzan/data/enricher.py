@@ -357,6 +357,11 @@ def _normalize_minor_currency(
     return prices, currency
 
 
+def _percent_field(value) -> Optional[float]:
+    """A yfinance field documented in PERCENT (2.4 == 2.4%), as a fraction."""
+    return None if _as_fraction(value) is None else float(value) / 100.0
+
+
 def _as_fraction(value) -> Optional[float]:
     """Normalize a yield/TER to a FRACTION (0.021 == 2.1%), tolerant of
     yfinance's inconsistent fraction-vs-percent field conventions.
@@ -3905,9 +3910,13 @@ def _enrich_single(holding: Holding) -> tuple[Holding, dict]:
         _tax_ter = cfg.ter_for(holding.isin, holding.ticker)
         if _tax_ter is not None:
             holding.ter = _tax_ter
+        # The two percent-scaled fields are rescaled by their KNOWN unit, not by
+        # magnitude: a 0.41% dividendYield arrives as 0.41, which the >= 1.0
+        # heuristic would have read as 41%.
         holding.yield_pct = _first_fraction(
-            info.get("yield"), info.get("dividendYield"),
-            info.get("trailingAnnualDividendYield"), info.get("fiveYearAvgDividendYield"),
+            info.get("yield"), _percent_field(info.get("dividendYield")),
+            info.get("trailingAnnualDividendYield"),
+            _percent_field(info.get("fiveYearAvgDividendYield")),
         )
         if holding.sector is None:
             holding.sector = info.get("sector") or info.get("category")

@@ -341,7 +341,9 @@ def block_bootstrap(nav: pd.Series, *, n_sims: int = 2000, block_months: int = 1
     sharpes = np.empty(n_sims)
     mdds = np.empty(n_sims)
     for i in range(n_sims):
-        starts = rng.integers(0, max(1, n - block_months), size=n_blocks)
+        # Upper bound is exclusive: the last full block starts at n - block_months,
+        # so the most recent month can be drawn too.
+        starts = rng.integers(0, max(1, n - block_months + 1), size=n_blocks)
         path = np.concatenate([arr[s:s + block_months] for s in starts])[:horizon_months]
         price = np.cumprod(1.0 + path)
         total = price[-1] - 1.0

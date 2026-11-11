@@ -110,3 +110,10 @@ def test_a_usd_proxy_converted_to_eur_compounds_to_the_true_eur_ratio(monkeypatc
     got = float((1 + eur_ret).prod())
     eur_px = usd_px * eur_per_usd.reindex(asset_days)
     assert abs(got - float(eur_px.iloc[-1] / eur_px.iloc[0])) < 1e-9
+
+
+def test_a_percent_scaled_dividend_yield_under_one_percent_is_not_read_as_41_percent():
+    from tarzan.data.enricher import _first_fraction, _percent_field
+
+    assert abs(_first_fraction(None, _percent_field(0.41)) - 0.0041) < 1e-12
+    assert abs(_percent_field(2.4) - 0.024) < 1e-12
