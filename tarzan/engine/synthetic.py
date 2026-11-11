@@ -47,7 +47,7 @@ def splice_returns(long_ret: pd.Series, short_ret: pd.Series) -> pd.Series:
 def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
                       min_overlap: int = 252, min_overlap_months: int = 24,
                       beta_bounds=(0.2, 3.0),
-                      min_r2: float = 0.10) -> pd.Series:
+                      min_r2: float = 0.10, min_t: float = 2.0) -> pd.Series:
     """Beta/alpha-calibrated backfill: over the overlap window fit the real
     fund on its proxy basket (``short ≈ a + b·long`` by OLS), then reconstruct
     the pre-inception tail as ``a + b·long`` instead of assuming ``short = long``
@@ -102,6 +102,18 @@ def calibrated_splice(long_ret: pd.Series, short_ret: pd.Series, *,
     corr = float(np.corrcoef(x, y)[0, 1]) if len(x) > 1 else 0.0
     if not (beta_bounds[0] <= b <= beta_bounds[1]) or corr * corr < min_r2:
         return splice_returns(long_ret, short_ret)
+    # The intercept is extrapolated over the WHOLE backfill, often decades from
+    # a few years of overlap: a lucky overlap becomes fabricated drift. Keep it
+    # only when it is statistically distinguishable from zero (|t| >= min_t, as
+    # for the factor loadings); otherwise the tail carries beta alone.
+    n = len(x)
+    resid = y - a_month - b * x
+    sxx = float(((x - x.mean()) ** 2).sum())
+    if n > 2 and sxx > 0:
+        s_e = float(np.sqrt((resid ** 2).sum() / (n - 2)))
+        se_a = s_e * float(np.sqrt(1.0 / n + x.mean() ** 2 / sxx))
+        if se_a <= 0 or abs(a_month) / se_a < min_t:
+            a_month = 0.0
     a = a_month / (len(ov) / len(mo))       # monthly drift → per trading day
     backfill = a + b * pre
     return pd.concat([backfill, short_ret]).sort_index()

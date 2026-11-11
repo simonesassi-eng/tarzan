@@ -333,10 +333,47 @@ def _usd_returns_to_eur(usd_ret: pd.Series) -> pd.Series:
     eu = _eur_per_usd()
     if eu is None or eu.empty:
         return usd_ret
-    fx_ret = (eu.reindex(eu.index.union(usd_ret.index)).ffill()
-              .pct_change().reindex(usd_ret.index).fillna(0.0))
+    # The FX change over each ASSET interval (previous asset date → this one),
+    # not the day-on-day change reindexed: FX keeps quoting on the asset's
+    # holidays, and dropping those days' moves left converted proxies off the
+    # true EUR price ratio. The FX level is carried to each asset date first.
+    fx_ret = _interval_fx_returns(eu, usd_ret.index)
     out = (1.0 + usd_ret) * (1.0 + fx_ret) - 1.0
     return out.dropna()
+
+
+def _interval_fx_returns(level: pd.Series, dates: pd.DatetimeIndex) -> pd.Series:
+    """FX change over each interval between consecutive ``dates`` (the first
+    one from the last FX quote before it), with the level carried over gaps."""
+    full = level.reindex(level.index.union(dates)).ffill()
+    at = full.reindex(dates)
+    prev = at.shift(1)
+    if len(dates):
+        before = full.loc[full.index < dates[0]].dropna()
+        prev.iloc[0] = before.iloc[-1] if len(before) else at.iloc[0]
+    return (at / prev - 1.0).fillna(0.0)
+
+
+def eur_returns_to_target(eur_ret: Optional[pd.Series]) -> Optional[pd.Series]:
+    """A EUR daily-return series in the TARGET currency: unchanged in a EUR run,
+    converted to a USD investor's return in a USD one.
+
+    The real holdings' ``price_history`` is EUR-converted by the enricher, so a
+    USD-numeraire backtest that spliced USD proxies onto it mixed currencies
+    inside one instrument: EUR after the fund's inception, USD before.
+    """
+    if _TARGET_CCY != "USD" or eur_ret is None or eur_ret.empty:
+        return eur_ret
+    usd_per_eur = _fetch_max("EURUSD=X")
+    if usd_per_eur is None or usd_per_eur.empty:
+        return eur_ret
+    idx = pd.DatetimeIndex(usd_per_eur.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)  # keep the local market date, as the real legs do
+    usd_per_eur = pd.Series(usd_per_eur.to_numpy(), index=idx.normalize())
+    usd_per_eur = usd_per_eur[~usd_per_eur.index.duplicated(keep="last")].sort_index()
+    fx_ret = _interval_fx_returns(usd_per_eur, eur_ret.index)
+    return ((1.0 + eur_ret) * (1.0 + fx_ret) - 1.0).dropna()
 
 
 def _carry_returns(fin: Optional[pd.Series]) -> pd.Series:
@@ -811,9 +848,15 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
                        else f"BNPIF73P carry 2008+/cash{ccy}")
                 USED_PROXY[k] = (src, out[k].index.min())
         elif k in CASH_KEYS:
-            out[k] = _usd_returns_to_eur(fin) if fin is not None else pd.Series(dtype=float)
-            if fin is not None and not fin.empty:
-                USED_PROXY[k] = (f"{_FINANCING_SYMBOL} (cash){ccy}", fin.index.min())
+            # Cash earns the short rate of ITS OWN currency: the ECB rate in a
+            # EUR run, the T-bill in a USD one (``risk_free_daily``). Converting
+            # T-bills to EUR unhedged handed a EUR money-market sleeve the full
+            # EUR/USD volatility for its whole synthetic history.
+            cash = risk_free_daily()
+            out[k] = cash if cash is not None else pd.Series(dtype=float)
+            if cash is not None and not cash.empty:
+                label = _FINANCING_SYMBOL if _TARGET_CCY == "USD" else "ECB 3M/EONIA"
+                USED_PROXY[k] = (f"{label} (cash)", cash.index.min())
     # ``fin`` (the financing COST rate charged on leverage) is intentionally
     # returned in USD terms — the borrow is a USD short rate; EUR/USD short-rate
     # differences are a small second-order effect on the financed sleeve.

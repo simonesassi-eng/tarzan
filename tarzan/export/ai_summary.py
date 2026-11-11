@@ -602,10 +602,12 @@ def _pp(v) -> str:
 def _numbers_are_grounded(text: str, digest) -> bool:
     """Whether every figure ``text`` states is a number in ``digest``.
 
-    Checked: numbers carrying a unit (``%``, ``pp``) and bare two-decimal numbers
-    (the beta). Each must equal a digest value — or its magnitude, since prose says
-    "a 0.30pp drag" for -0.30 — to the precision the text printed it at. Bare
-    integers ("30-day", "6 sentences") carry no claim and are not checked.
+    Checked: numbers carrying a unit (``%``, ``pp``) and bare decimals (the
+    beta, "0.9" or "0.92"). Each must equal a digest value to the precision the
+    text printed it at. An UNSIGNED figure may match a value's magnitude, since
+    prose says "a 0.30pp drag" for -0.30; a SIGNED one must match with its sign,
+    or "+4.5pp ahead" would pass for a -4.5pp gap. Bare integers ("30-day",
+    "6 sentences") carry no claim and are not checked.
     """
     values: list[float] = []
 
@@ -624,17 +626,20 @@ def _numbers_are_grounded(text: str, digest) -> bool:
 
     _walk(digest)
     pattern = re.compile(
-        r"([+\-\u2212]?)(\d+(?:\.\d+)?)\s*(%|pp)|(?<![\d.])(\d+\.\d{2})(?![\d%])")
+        r"([+\-\u2212]?)(\d+(?:\.\d+)?)\s*(%|pp)|(?<![\d.])([+\-\u2212]?)(\d+\.\d{1,2})(?![\d%]|\.\d)")
     for m in pattern.finditer(text):
-        num = m.group(2) or m.group(4)
-        if m.group(4) is None and m.group(3) is None:
+        num = m.group(2) or m.group(5)
+        sign = m.group(1) if m.group(2) else m.group(4)
+        if num is None:
             continue
         x = float(num)
-        if m.group(1) in ("-", "\u2212"):
+        if sign in ("-", "\u2212"):
             x = -x
         decimals = len(num.split(".")[1]) if "." in num else 0
         tol = 0.5 * 10 ** -decimals + 1e-9
-        if not any(abs(x - v) <= tol or abs(abs(x) - abs(v)) <= tol for v in values):
+        signed = bool(sign)
+        if not any(abs(x - v) <= tol or (not signed and abs(abs(x) - abs(v)) <= tol)
+                   for v in values):
             return False
     return True
 

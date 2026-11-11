@@ -62,3 +62,51 @@ def test_a_buy_only_plan_never_opens_a_position_below_five_percent():
                                           params=rb.LSParams(n_restarts=2))
     opened = [a for a in actions if "SEED" in str(a.get("ticker") or a.get("name") or "")]
     assert not opened, actions
+
+
+def test_the_ai_note_cannot_flip_a_sign_and_still_pass_as_grounded():
+    from tarzan.export.ai_summary import _numbers_are_grounded as grounded
+
+    digest = {"gap_pp": -4.5, "portfolio_pct": 5.1, "beta": 0.92}
+    assert grounded("Behind by 4.5pp; portfolio +5.1%; beta 0.92.", digest)
+    assert not grounded("Ahead +4.5pp.", digest)
+    assert not grounded("Portfolio -5.1%.", digest)
+    assert not grounded("Beta 0.7.", digest)
+
+
+def test_calibrated_splice_does_not_extrapolate_an_insignificant_intercept():
+    import numpy as np
+    import pandas as pd
+    from tarzan.engine.synthetic import calibrated_splice
+
+    idx = pd.bdate_range("2000-01-03", "2025-12-31")
+    rng = np.random.default_rng(3)
+    long = pd.Series(rng.normal(0.0003, 0.01, len(idx)), index=idx)
+    real_idx = idx[idx >= "2023-01-01"]
+    # A lucky three-year overlap: +2.5%/yr over the proxy, buried in tracking
+    # noise far too large for it to be distinguishable from zero.
+    short = long.loc[real_idx] + rng.normal(0.0001, 0.01, len(real_idx))
+    out = calibrated_splice(long, short)
+    tail = out.loc[out.index < real_idx[0]]
+    _slope, intercept = np.polyfit(long.loc[tail.index].to_numpy(), tail.to_numpy(), 1)
+    drift = intercept * 252           # the tail is a + b*long: a is the extrapolated drift
+    assert abs(drift) < 0.005, drift   # not 23 years of fabricated drift
+
+
+def test_a_usd_proxy_converted_to_eur_compounds_to_the_true_eur_ratio(monkeypatch):
+    import numpy as np
+    import pandas as pd
+    from tarzan.data import proxy_data
+
+    days = pd.bdate_range("2024-01-01", periods=300)
+    holidays = days[::25]                              # the asset is shut, FX is not
+    asset_days = days.difference(holidays)
+    rng = np.random.default_rng(1)
+    usd_px = pd.Series(100 * np.cumprod(1 + rng.normal(0, 0.01, len(asset_days))), index=asset_days)
+    eur_per_usd = pd.Series(0.9 * np.cumprod(1 + rng.normal(0, 0.005, len(days))), index=days)
+    monkeypatch.setattr(proxy_data, "_eur_per_usd", lambda: eur_per_usd)
+    monkeypatch.setattr(proxy_data, "_TARGET_CCY", "EUR")
+    eur_ret = proxy_data._usd_returns_to_eur(usd_px.pct_change().dropna())
+    got = float((1 + eur_ret).prod())
+    eur_px = usd_px * eur_per_usd.reindex(asset_days)
+    assert abs(got - float(eur_px.iloc[-1] / eur_px.iloc[0])) < 1e-9

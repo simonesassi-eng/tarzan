@@ -174,7 +174,9 @@ def _real_daily_returns(holding) -> Optional[pd.Series]:
     idx = r.index
     r.index = (idx.tz_localize(None).normalize()
                if getattr(idx, "tz", None) is not None else idx.normalize())
-    return r[~r.index.duplicated(keep="last")]
+    # The tape is EUR (the enricher converted it); a USD-numeraire run needs it
+    # in USD like the proxies it is spliced onto.
+    return proxy_data.eur_returns_to_target(r[~r.index.duplicated(keep="last")])
 
 
 # A backfill drives most of a 20+ year line off a few years of real overlap, so
@@ -297,6 +299,12 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
         else:
             spliced = syn.splice_returns(base, real)
         if spliced is None or spliced.empty:
+            # Dropping a sleeve renormalizes the rest: a different portfolio is
+            # then backtested under this one's name. Say so.
+            logger.warning(
+                "Backtest %s: %s has no usable return series; its %.1f%% weight is "
+                "redistributed over the other sleeves", getattr(p, "name", "?"),
+                it.bare, it.weight)
             continue
         key = it.key or f"i{i}"
         _check_backfill_realism(key, spliced, real)
@@ -304,7 +312,11 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
         weights[key] = it.weight / 100.0
     if not cols:
         return pd.Series(dtype=float)
-    df = pd.DataFrame(cols).dropna(how="any")
+    # Align LEVELS on the union calendar and carry each sleeve over its own
+    # holidays before taking returns: inner-joining returns deleted every day any
+    # one venue was shut, and the other sleeves' moves on it.
+    levels = pd.DataFrame({k: (1.0 + v).cumprod() for k, v in cols.items()}).sort_index()
+    df = levels.ffill().dropna(how="any").pct_change().dropna(how="any")
     if df.empty:
         return pd.Series(dtype=float)
     # Keep the per-SLEEVE frame, not just the blended series. Resampling the
@@ -567,6 +579,10 @@ def run_backtest(weights_path: str | Path, *, currency: str = "eur",
     the CLI, the Excel export and the newsletter section.
     """
     proxy_data.set_target_currency(currency)
+    # Per-run disclosures: a previous run's entries would describe a backfill
+    # this run did not make.
+    BACKFILL_REALISM.clear()
+    _FACTOR_TILT.clear()
     raw = load_portfolios(Path(weights_path))
     if not raw:
         return []
