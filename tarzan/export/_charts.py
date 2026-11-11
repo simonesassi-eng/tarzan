@@ -308,7 +308,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
         runs, run = [], []
         for i, v in enumerate(s["values"]):
             if math.isfinite(v):
-                run.append((X(i), Y(v)))
+                run.append((X(i), Y(v), i))
             elif run:
                 runs.append(run)
                 run = []
@@ -316,6 +316,9 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
             runs.append(run)
         if not runs:
             continue
+        # ``dash_until``: the first N points rest on modeled data and are drawn
+        # dashed; the solid part starts on point N-1 so the two pieces meet.
+        cut = int(s.get("dash_until") or 0)
         # Thin solid lines so small variations read clearly. The benchmark is
         # distinguished by its grey colour, not a dash (dashes hide the very
         # wobble the reader is trying to compare); ``dash`` is still honoured if
@@ -326,10 +329,18 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
         # only saturated colour among greys.
         sw = float(s.get("width", 1.5))
         for r in runs:
-            line = " ".join(f"{x:.1f},{y:.1f}" for x, y in r)
-            out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{dash} stroke-linejoin="round"/>')
+            pieces = [(r, dash)]
+            if cut > 0:
+                modeled = [p for p in r if p[2] < cut]
+                real = [p for p in r if p[2] >= cut - 1]
+                pieces = [(modeled, ' stroke-dasharray="3,3"'), (real, dash)]
+            for piece, style in pieces:
+                if len(piece) < 2:
+                    continue
+                line = " ".join(f"{x:.1f},{y:.1f}" for x, y, _i in piece)
+                out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{style} stroke-linejoin="round"/>')
         # The dot and the end label sit on the last point that HAS an estimate.
-        lx, ly = runs[-1][-1]
+        lx, ly, _i = runs[-1][-1]
         out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" '
                    f'fill="{s["color"]}" stroke="{_P["card_alt"]}" '
                    f'stroke-width="1"/>')

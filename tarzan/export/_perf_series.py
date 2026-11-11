@@ -207,6 +207,21 @@ def _target_line(m: PortfolioMetrics, idx) -> "list | None":
     return _rebase_to_window(s, pd.DatetimeIndex(idx))
 
 
+def target_dash_until(m: PortfolioMetrics, dates) -> int:
+    """How many leading points of a target line over ``dates`` rest on MODELED
+    sleeve history (drawn dashed), 0 when the whole line is real."""
+    modeled = getattr(m, "target_history_modeled", None) or {}
+    real_from = modeled.get("real_from")
+    if real_from is None or not dates:
+        return 0
+    def _naive(t):
+        t = pd.Timestamp(t)
+        return t.tz_localize(None) if t.tz is not None else t
+
+    cut = _naive(real_from)
+    return sum(_naive(d) < cut for d in dates)
+
+
 def _perf_window(m: PortfolioMetrics, n_days: int = 30,
                  geo_name: Optional[str] = None,
                  bucket: str = "1m") -> Optional[dict]:
@@ -348,6 +363,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         "twr": twr,
         "acwi": acwi,
         "target": target,
+        "target_dash_until": target_dash_until(m, dates) if target else 0,
         "pnl_pct": pnl_pct,
         "unreal_pct": unreal_pct,
         "flows": _flow_list(m.external_flows, dates[0], dates[-1]),
@@ -550,6 +566,7 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         # Read through the same helper as the 30-day window rather than through
         # _perf_level_series' fixed 4-tuple, whose shape other callers depend on.
         "target": _target_line(m, list(idx)),
+        "target_dash_until": target_dash_until(m, list(idx)),
         # One XIRR solve per plotted point, so it is only paid for when a caller
         # asks for it -- see ``with_mwr``.
         "mwr": _mwr_line(m, list(idx)) if with_mwr else None,

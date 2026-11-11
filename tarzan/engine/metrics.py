@@ -2745,6 +2745,17 @@ class MetricsEngine:
         # whether it has a SESSION are different questions, and a consumer of one
         # must not inherit the other's verdict.
         ctx["target_weights"] = self._target_policy_weights()
+        # The charts reach back to the book's first day; a sleeve listed later
+        # (the UCITS MATE) is reached back with a MODELED stretch — its twin
+        # fund, else the backtest's reconstruction — reported per sleeve so the
+        # issue draws it dashed and names it. See ``target_backfill``.
+        from tarzan.engine import target_backfill
+        book = ctx.get("portfolio_history")
+        # Six weeks before it, so the target's 21-session rolling volatility has
+        # an estimate on the volatility chart's first day too.
+        start = (pd.Timestamp(book.index[0]) - pd.Timedelta(days=45)
+                 if book is not None and len(book) else None)
+        modeled: list[dict] = []
         for h in list(self.holdings) + list(self.rebalance_seeds):
             weight = float(getattr(h, "target_portfolio", 0.0) or 0.0)
             if weight <= 0:
@@ -2756,6 +2767,11 @@ class MetricsEngine:
                 continue
             weights[key] = weight
             prices[key] = normalize_index(ph, drop_duplicates=True)
+            if start is not None:
+                prices[key], note = target_backfill.extend(
+                    h, start, ctx.get("_benchmark_catalog"))
+                if note:
+                    modeled.append(note)
         if not weights:
             return
         if missing:
@@ -2777,6 +2793,11 @@ class MetricsEngine:
         ctx["target_history"] = pd.concat(
             [pd.Series([100.0], index=[rets.index[0] - pd.Timedelta(days=1)]), nav]
         )
+        # Every day before the LAST modeled sleeve turns real is partly modeled.
+        ctx["target_history_modeled"] = {
+            "real_from": max(n["real_from"] for n in modeled),
+            "sleeves": modeled,
+        } if modeled else None
 
     # ------------------------------------------------------------------
     # Historical risk profile (uncapped, per-instrument full history)
@@ -3024,6 +3045,7 @@ class MetricsEngine:
             intraday_evidence=ctx.get("intraday_evidence", {}),
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
+            target_history_modeled=ctx.get("target_history_modeled"),
             target_weights=ctx.get("target_weights") or {},
             ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),

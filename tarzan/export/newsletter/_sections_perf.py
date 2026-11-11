@@ -25,6 +25,7 @@ from tarzan.export._perf_series import (
     _window_money_pnl,
     _window_twr,
     market_snapshot,
+    target_dash_until,
 )
 from tarzan.export import _heat
 from tarzan.export.newsletter._constants import (
@@ -513,7 +514,9 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             values[key] = value
             labels[key] = label
             series.append({"values": line, "color": colour, "width": width,
-                           "end_label": label})
+                           "end_label": label,
+                           # the modeled stretch of the target is drawn dashed
+                           "dash_until": int(win.get(f"{key}_dash_until") or 0)})
             legend.append((colour, name))
         if series:
             win_audit[bucket] = {
@@ -594,7 +597,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             si_leg.append((PNL, "MWR"))
         if full.get("target") is not None:
             ssi.append({"values": full["target"], "color": TARGET,
-                        "end_label": _pct(full["target"][-1], signed=True)})
+                        "end_label": _pct(full["target"][-1], signed=True),
+                        "dash_until": int(full.get("target_dash_until") or 0)})
             si_leg.append((TARGET, "Target"))
         if full["acwi"] is not None:
             ssi.append({"values": full["acwi"], "color": BENCH,
@@ -650,7 +654,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if vs and vs.get("target"):
             series.append({"values": vs["target"], "color": TARGET,
                            "end_label": _pct(_last_estimate(vs["target"]),
-                                             signed=False)})
+                                             signed=False),
+                           "dash_until": target_dash_until(m, dates_ or [])})
         if vs and vs.get("acwi"):
             series.append({"values": vs["acwi"], "color": BENCH,
                            "end_label": _pct(_last_estimate(vs["acwi"]),
@@ -877,6 +882,18 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                     f'Volatility annualized. Line: rolling 21 sessions. '
                     f'Figures in its key: σ over the book’s whole life.</div>')
 
+        # The caveat the dashed stretch needs: which sleeves are modeled, and how.
+        modeled = getattr(m, "target_history_modeled", None) or {}
+        if (modeled.get("sleeves")
+                and "Target" in {name for _c, name in si_leg + ret_leg}):
+            since = pd.Timestamp(modeled["real_from"]).strftime("%d %b %Y")
+            what = "; ".join(f'{_display_ticker(n["ticker"])} {n["source"]}'
+                             for n in modeled["sleeves"])
+            life_row += (
+                f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:4px;">'
+                f'Target dashed before {_escaped_text(since)}, where it rests on '
+                f'modeled history: {_escaped_text(what)}.</div>')
+
         _rule = (f'<div style="margin-top:12px;padding-top:12px;'
                  f'border-top:1px solid {P["border"]};"></div>')
         _blocks = [b for b in (ret_grid, life_row) if b]
@@ -913,6 +930,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     drawn = {name for _c, name in si_leg + ret_leg}
     title = (_escaped_text(f"Vs target & {ctx.benchmark_geo or ''}")
              if "Target" in drawn else "Vs the market")
+
     return {"available": True,
             "matrix_html": matrix_card,
             "vs_market_html": "".join(parts),

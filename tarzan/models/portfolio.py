@@ -168,6 +168,9 @@ class PortfolioMetrics:
     # sleeve has a price. None when any sleeve lacks history, since a
     # renormalized subset would be a different portfolio under the same name.
     target_history: Optional[pd.Series] = None
+    # ``{"real_from": Timestamp, "sleeves": [{"ticker", "real_from", "source"}]}``
+    # when part of ``target_history`` rests on modeled sleeve history, else None.
+    target_history_modeled: Optional[dict] = None
     # The target ALLOCATION itself: ``{canonical ticker or ISIN: weight %}`` for
     # every instrument it names, seeds included, before any availability
     # filtering. ``target_history`` above is what that allocation DID over a daily
