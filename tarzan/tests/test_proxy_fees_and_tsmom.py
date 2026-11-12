@@ -102,3 +102,16 @@ def test_without_tsmom_the_tail_stays_cash(monkeypatch):
     s, label, _ = proxy_data._alt_series(fin)
     assert label.endswith("+/cash")
     assert (s[:"2006-12-29"] == 0.0001).all()
+
+
+def test_commodity_carry_is_a_dollar_nav_for_a_euro_holder(monkeypatch):
+    """The carry spread is currency-neutral but UEQC is a USD fund: a EUR holder
+    carries EUR/USD on its whole NAV. Unconverted, the sleeve had 0.4x the real
+    fund's EUR volatility."""
+    idx = pd.bdate_range("2010-01-01", periods=50)
+    lvl = pd.Series(np.linspace(100, 101, 50), index=idx)
+    monkeypatch.setattr(proxy_data, "_ueqc_bundled", lambda: lvl)
+    seen = []
+    monkeypatch.setattr(proxy_data, "_usd_returns_to_eur", lambda r: seen.append(r) or r * 0 + 1.0)
+    out = proxy_data._carry_returns(None)
+    assert seen and (out == 1.0).all()

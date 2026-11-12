@@ -89,12 +89,20 @@ here, with a test, and record it in this file.
 | NTSG | weekly regression on MSCI World (EUR) + Treasury excess | equity β 0.91, bond β 0.44–0.52, α ≈ 0 |
 | CL2 | monthly fit of 2× EUR return − ECB financing | corr 0.963, residual drag ≈ 1.4%/yr (engine charges ≈ 1.0%) |
 | MATE | US class vs S&P + trend − cash | 1.4–3.6%/yr below, TER included — stress MAET at +1/+2% |
-| Trend (DBMFE/MFEH) | realism ratio | 0.5–0.6× — proxy too smooth, flattered |
-| UEQC | realism ratio | ~0.4× — vendored carry index too smooth, flattered |
+| Trend proxy | monthly vol vs DBMF, in USD, 2019–2026 | 10.9% vs 11.0% — matches. The daily realism ratio (0.5–0.85×) compares different periods: 2025–26 was a volatile stretch for trend |
+| UEQC | monthly, in USD, Dec 2021–Nov 2026 | corr 0.86, vol 5.8% vs 7.6%, real ~1.6%/yr below. In EUR the realism ratio is ~0.6× (the Xetra tape is noisy day to day) |
 
 ## Known limitations
 
-- The managed-futures and commodity-carry proxies are about half as volatile as
-  the real funds. Allocations that lean on them are flattered.
+- The realism check is DAILY. For thinly traded listings (UEQC) and trend
+  funds it flags tape noise and regime differences as "too smooth". Read the
+  monthly comparison above before acting on such a flag.
+- Commodity carry (UEQC) is a dollar NAV. It is converted to EUR like any USD
+  fund; before 2026-11 it was not, and it showed 0.4× the real fund's EUR
+  volatility.
+- Cat bonds (CATB) have no long proxy in the engine. The role "Cat Bond" falls
+  into the Alternative bucket, which is the trend proxy, so do not backtest
+  CATB through the engine. The only usable real series is GAM Swiss Re Cat
+  Bond EUR, a hedged mutual fund with data from 2018.
 - Before 1990 there are no developed-market factor legs.
 - A EUR-hedged class held by a USD reporter is not modeled.

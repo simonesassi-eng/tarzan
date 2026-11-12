@@ -391,7 +391,12 @@ def _carry_returns(fin: Optional[pd.Series]) -> pd.Series:
         r = lvl.pct_change().dropna()
         if fin is not None and not fin.empty:      # carry = cash before 2001
             r = pd.concat([fin.loc[fin.index < r.index.min()], r]).sort_index()
-        return r
+        # The commodity SPREAD is currency-neutral, but the fund is a dollar
+        # NAV: its collateral and the spread's P&L are in USD, so a EUR holder
+        # carries EUR/USD on all of it. Left unconverted the sleeve had 0.4x the
+        # real fund's EUR volatility; in USD the index tracks the fund (monthly
+        # corr 0.86, vol 5.8% vs 7.6%, Dec 2021-Nov 2026).
+        return _usd_returns_to_eur(r)
     lvl = _clip_cached_to_as_of(manual_proxies.get_series("CRRYSIM"))
     if lvl is None or lvl.empty:
         return pd.Series(dtype=float)
