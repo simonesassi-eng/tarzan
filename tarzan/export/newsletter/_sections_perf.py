@@ -1736,7 +1736,7 @@ def _window_money(m, windows) -> dict:
 
 
 def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
-                     port_spark_inner: str = "", bench_name: str = "",
+                     bench_name: str = "",
                      money: Optional[dict] = None) -> str:
     """Portfolio and target KPIs as rows, the Returns windows as columns.
 
@@ -1784,8 +1784,8 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
             bg, fig = (_heat.heat(v, neg=sc[0], pos=sc[1]) if sc and v is not None
                        else (None, P["ink"] if v is not None else P["subtle"]))
             if b == "1d":
-                spark = who == "portfolio" and key == "return" and port_spark_inner
-                cells.append(uni_cell(port_spark_inner if spark else _fmt(v, key, unit),
+                # Figures only: the session chart lives in [03] Vs target.
+                cells.append(uni_cell(_fmt(v, key, unit),
                                       align="right", color=fig, weight=600, width=W_DAY,
                                       valign="middle", pad="5px 4px", bg=bg))
             else:
@@ -2015,29 +2015,6 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     # engine, so the snapshot groups exactly like every other instrument table.
     _tax = ctx.reference.taxonomy
 
-    # Portfolio (highlighted) row. The portfolio has no single ticker, but its
-    # holdings trade intraday, so build a value-weighted synthetic intraday
-    # path (reusing the already-fetched holdings intraday) for a real 1D
-    # sparkline; fall back to the dashed placeholder when unavailable.
-    _pf_series = _portfolio_intraday_series(
-        m, intraday_map=_snap_intraday, raw1d=_raw1d
-    )
-    # ``live`` here reaches ``_intraday_spark(in_progress=...)``, which asks whether
-    # the venue is TRADING right now -- an exchange-hours question, so it reads
-    # ``market_open`` rather than the tape-based ``1d_intraday``. The two are different
-    # facts and were the same value until the 09:12 send made the difference visible.
-    _pf_open = bool(port_full.get("market_open"))
-    if _pf_series is not None and len(_pf_series) >= 2:
-        _, port_inner = _perf_spark_cell(
-            port_full.get("1d"), _PF_INTRA_KEY, {_PF_INTRA_KEY: _pf_series},
-            live=_pf_open)
-    else:
-        _, port_inner = _perf_spark_cell(
-            port_full.get("1d"), "", {}, live=_pf_open)
-    portfolio = {"name": "Portfolio", "spark_inner": port_inner,
-                 "day_raw": port_full.get("1d"),
-                 "returns": _returns_dict(port_full, is_portfolio=True)}
-
     # Build one row per holding, then group via the SHARED engine (class → role,
     # ordered) so this table splits/colours instruments identically to Holdings
     # and the Optimizer.
@@ -2087,7 +2064,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             period_keys, None, groups, day_label=day_label) + unverified_note,
         "kpi_matrix_html": _kpi_matrix_html(
             getattr(m, "window_kpis", None) or {}, period_keys, day_label,
-            port_spark_inner=port_inner, bench_name=ab_bench_name,
+            bench_name=ab_bench_name,
             money=_window_money(m, ["1d", *period_keys])),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
