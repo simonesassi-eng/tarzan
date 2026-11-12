@@ -1628,6 +1628,14 @@ def _quote(dclose, intra, spark_points: int = 40,
     if prev is None:
         prev = fallback
     baseline = prev if spark_series is not None else spark[0]
+    if spark_series is None and current_session_day is not None \
+            and observed_day == current_session_day:
+        # The session is OPEN and the intraday feed has not yet two bars (the
+        # first minutes after the bell). The daily-close fallback would draw
+        # two months of closes against the first of them — an old close as the
+        # reference line, the row coloured against a level weeks back. Draw
+        # what is known instead: yesterday's close to the current level.
+        spark, baseline = [float(prev), float(cur)], float(prev)
     change = cur - prev
     pct = (change / prev * 100.0) if prev else 0.0
     return {"value": cur, "change": change, "pct": pct,

@@ -711,3 +711,17 @@ def test_a_closed_futures_session_is_still_its_weekend_chart(monkeypatch):
     monkeypatch.setattr(mq, "_intraday_reference_now",
                         lambda tzinfo=None: tuesday.astimezone(tzinfo or timezone.utc))
     assert mq._has_intraday(stale, "ES=F") is False
+
+
+def test_a_session_just_opened_draws_from_yesterdays_close_not_an_old_one():
+    """One intraday bar after the bell: the daily-close fallback drew two months
+    of closes against the first of them (KOSPI's reference read 6,909 on a
+    5,400 index) and coloured the row against it."""
+    import datetime as dt
+    days = pd.bdate_range("2026-09-01", "2026-11-12")
+    dclose = pd.Series(range(6900, 6900 - len(days), -1), index=days, dtype=float)
+    dclose.iloc[-1] = 5408.0
+    q = mq._quote(dclose, None, official_prev=5375.36,
+                  current_session_day=dt.date(2026, 11, 12), session_tz="Asia/Seoul")
+    assert q["baseline"] == 5375.36 and q["spark"] == [5375.36, 5408.0]
+    assert abs(q["pct"] - (5408.0 / 5375.36 - 1) * 100) < 1e-9
