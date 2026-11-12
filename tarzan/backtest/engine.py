@@ -122,6 +122,36 @@ def _is_long_duration(item: WhatIfItem) -> bool:
     return role.strip().lower() in _LONG_DURATION_ROLES
 
 
+# Equity funds whose leverage is a FUTURES overlay on top of the stock book
+# (see the taxonomy's stacked roles): only the overlay's P&L is in dollars.
+_FUTURES_OVERLAY_ROLES = frozenset({
+    "efficient core", "trend stacked", "gold stacked", "carry stacked"})
+
+
+def _is_futures_overlay(item: WhatIfItem) -> bool:
+    role = getattr(getattr(item, "holding", None), "role", None) or ""
+    return role.strip().lower() in _FUTURES_OVERLAY_ROLES
+
+
+def instrument_base_returns(item: WhatIfItem, proxies: dict, fin,
+                            hedge_legs=(None, None)) -> pd.Series:
+    """THE modeled daily return of one instrument from its composition — the
+    single reconstruction every simulated sleeve in Tarzan goes through (the
+    what-if backtest and the newsletter's target line alike; see
+    docs/BACKTEST_METHOD.md). Exposures on index proxies, financed leverage at
+    the short rate + 0.5%, futures-overlay currency treatment, EUR hedge for a
+    hedged class, then the TER as a daily drag."""
+    fx, carry = hedge_legs
+    hedged = is_currency_hedged(item)
+    base = syn.replicate_portfolio_returns(
+        instrument_exposures(item), proxies, financing_daily=fin, spread_annual=0.005,
+        hedge_fx=fx if hedged else None, hedge_carry=carry if hedged else None,
+        financed_fx=fx if _is_futures_overlay(item) else None)
+    if base is not None and not base.empty:
+        base = base - (instrument_ter(item) / 100.0) / TRADING_DAYS
+    return base
+
+
 def instrument_exposures(item: WhatIfItem) -> dict:
     """Per-instrument exposure (fraction of the instrument's own value).
 
@@ -196,6 +226,11 @@ _MIN_REAL_DAYS = 250          # under ~1 year the real vol is too noisy to judge
 # disclosed gap rather than for a reconstruction that misstates its risk.
 _REALISM_TAIL_YEARS = 5
 
+# ISIN → daily real returns of another share class of the same strategy, in this
+# class's currency treatment (target_backfill's twin rule). Populated per run by
+# run_backtest; read by portfolio_long_returns to extend a young fund's tape.
+TWIN_REAL: dict[str, pd.Series] = {}
+
 # ticker → {ratio, vol_synth_pct, vol_real_pct, n_synth, n_real}. Populated per
 # aligned-backtest run; read by callers that want to disclose it.
 BACKFILL_REALISM: dict[str, dict] = {}
@@ -258,13 +293,13 @@ def portfolio_long_returns(p: "Portfolio", proxies: dict, fin,
     cols: dict[str, pd.Series] = {}
     weights: dict[str, float] = {}
     for i, it in enumerate(p.items):
-        hf, hc = (hedge_legs if is_currency_hedged(it) else (None, None))
-        base = syn.replicate_portfolio_returns(
-            instrument_exposures(it), proxies, financing_daily=fin, spread_annual=0.005,
-            hedge_fx=hf, hedge_carry=hc)
-        if base is not None and not base.empty:
-            base = base - (instrument_ter(it) / 100.0) / TRADING_DAYS
+        base = instrument_base_returns(it, proxies, fin, hedge_legs)
         real = _real_daily_returns(it.holding)
+        twin = TWIN_REAL.get((it.isin or "").upper())
+        if twin is not None and not twin.empty:
+            # Another share class of the same strategy reaches further back:
+            # its real tape precedes this one's, exactly as on the target line.
+            real = twin if real is None or real.empty else syn.splice_returns(twin, real)
         eq_dominant = (it.comp_notional.get(EQ, 0.0) >= 50.0)
         curated_avail = curated_factor_loadings().get(it.bare.upper())
         curated_em = curated_em_factor_loadings().get(it.bare.upper())
@@ -569,6 +604,41 @@ def newsletter_portfolios(*, deterministic: bool = False):
         return None
 
 
+def _load_twins(universe: dict) -> None:
+    """Price each instrument's twin share class and record its real returns in
+    ``TWIN_REAL`` when it starts earlier than the instrument's own tape."""
+    from tarzan import config as cfg
+    from tarzan.data.enricher import enrich_holdings
+    from tarzan.engine import target_backfill as tb
+    from tarzan.models.holding import Holding
+
+    TWIN_REAL.clear()
+    index = cfg.catalog()
+    held = [h for h in universe.values() if h is not None]
+    known = {(h.isin or "").upper() for h in held}
+    pairs, extra = [], {}
+    for h in held:
+        row = index.row(h.isin or None, h.ticker or None)
+        if row is None:
+            continue
+        for twin in tb.twin_rows(row):
+            isin = (index.isin_of(twin) or "").upper()
+            if isin and isin not in known and isin not in extra:
+                extra[isin] = Holding(isin=isin, ticker=str(twin.get("ticker") or isin),
+                                      quantity=1.0, cost_basis_eur=0.0,
+                                      market_value_eur=0.0, currency="EUR")
+        pairs.append((h, row))
+    if extra:
+        enrich_holdings(list(extra.values()))
+    priced = held + list(extra.values())
+    for h, row in pairs:
+        r, label = tb._twin_returns(h, row, None, None, priced)
+        own = _real_daily_returns(h)
+        if r is not None and not r.empty and (own is None or own.empty or r.index[0] < own.index[0]):
+            TWIN_REAL[(h.isin or "").upper()] = r
+            logger.info("%s: real tape extended back to %s by %s", h.ticker, r.index[0].date(), label)
+
+
 def run_backtest(weights_path: str | Path, *, currency: str = "eur",
                  backfill: str = "factor", rebalance: str = "quarterly",
                  ) -> list["Portfolio"]:
@@ -588,6 +658,7 @@ def run_backtest(weights_path: str | Path, *, currency: str = "eur",
         return []
     sym_map = build_symbol_map()
     universe = enrich_universe(raw, sym_map)
+    _load_twins(universe)
     portfolios: list[Portfolio] = []
     for name, rows in raw:
         items = portfolio_items(rows, universe)

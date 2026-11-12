@@ -314,7 +314,8 @@ def factor_splice_monthly(long_ret: pd.Series, short_ret: pd.Series,
 def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
                                 financing_daily=None,
                                 spread_annual: float = 0.0,
-                                hedge_fx=None, hedge_carry=None) -> pd.Series:
+                                hedge_fx=None, hedge_carry=None,
+                                financed_fx=None) -> pd.Series:
     """Synthetic daily returns from exposure weights × proxy index returns.
 
     ``exposures`` maps a proxy key → exposure as a fraction of capital
@@ -332,6 +333,14 @@ def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
     underlying such as a USD trend strategy or an S&P 500 tracker and only
     approximate for a multi-currency one like a global aggregate bond fund, where
     the share already in the reporting currency was never exposed.
+
+    ``financed_fx`` (the daily FX return the proxies were converted with) marks
+    the financed notional as a FUTURES overlay: a future's notional is never
+    converted, only its P&L, so the fund carries currency on its NAV, not on its
+    gross. Without it a 90/60 efficient-core fund carried EUR/USD on 150% and a
+    EUR-hedged 100/100 stacked fund kept a full unhedged leg after its hedge.
+    A daily-leveraged swap ETF on a EUR-converted index (CL2) does lever the
+    currency, so it must not pass this.
     """
     keys = [k for k in exposures
             if k in proxy_returns and proxy_returns[k] is not None
@@ -352,6 +361,10 @@ def replicate_portfolio_returns(exposures: dict, proxy_returns: dict, *,
         else:
             fin = financing_daily.reindex(df.index).ffill().fillna(0.0)
         s = s - (gross - 1.0) * (fin + spread_annual / TRADING_DAYS)
+        if financed_fx is not None:
+            from tarzan.data.proxy_data import _interval_fx_returns
+            fxo = _interval_fx_returns((1.0 + financed_fx.fillna(0.0)).cumprod(), s.index)
+            s = (1.0 + s) / (1.0 + (gross - 1.0) * fxo) - 1.0
     if hedge_fx is not None and hedge_carry is not None:
         # Remove the FX change over each of the series' OWN intervals — the
         # same intervals the EUR conversion added it over — or a holiday's FX

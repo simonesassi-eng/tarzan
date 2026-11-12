@@ -60,6 +60,21 @@ def _priced(benchmark_catalog, holdings):
                getattr(h, "price_history", None), getattr(h, "price_history_native", None))
 
 
+def twin_rows(row) -> list:
+    """Other catalog share classes of the same strategy as ``row``."""
+    from tarzan import config as cfg
+
+    index = cfg.catalog()
+    own_isin = index.isin_of(row)
+    own_strategy = _strategy_name(row.get("name"))
+    if len(own_strategy) < 12:
+        return []
+    return [other for other in index.rows
+            if other is not row and index.isin_of(other)
+            and index.isin_of(other) != own_isin
+            and _strategy_name(other.get("name")) == own_strategy]
+
+
 def _twin_returns(holding, row, benchmark_catalog, start, holdings=()) -> tuple[Optional[pd.Series], str]:
     """Daily returns of the sleeve's twin — another share class of the same
     strategy that the run priced — in the sleeve's own currency treatment."""
@@ -68,14 +83,7 @@ def _twin_returns(holding, row, benchmark_catalog, start, holdings=()) -> tuple[
     from tarzan.engine.stats import normalize_index
 
     index = cfg.catalog()
-    own_isin = index.isin_of(row)
-    own_strategy = _strategy_name(row.get("name"))
-    if len(own_strategy) < 12:
-        return None, ""
-    twins = [other for other in index.rows
-             if other is not row and index.isin_of(other)
-             and index.isin_of(other) != own_isin
-             and _strategy_name(other.get("name")) == own_strategy]
+    twins = twin_rows(row)
     priced = list(_priced(benchmark_catalog, holdings))
     for twin in twins:
         found = next((p for p in priced if p[0] == index.isin_of(twin)), None)
@@ -110,12 +118,10 @@ def _twin_returns(holding, row, benchmark_catalog, start, holdings=()) -> tuple[
 
 def _reconstructed_returns(holding) -> tuple[Optional[pd.Series], str]:
     """The backtest's reconstruction of the sleeve from its composition."""
-    from tarzan.backtest.engine import instrument_exposures, is_currency_hedged
+    from tarzan.backtest.engine import (
+        instrument_base_returns, instrument_exposures, is_currency_hedged)
     from tarzan.backtest.model import WhatIfItem, composition_for
-    from tarzan.backtest.ter import instrument_ter
     from tarzan.data import proxy_data
-    from tarzan.engine import synthetic as syn
-    from tarzan.engine.stats import TRADING_DAYS
     from tarzan.models.instrument_key import normalize_ticker
 
     notl, cap, why = composition_for(holding)
@@ -126,13 +132,11 @@ def _reconstructed_returns(holding) -> tuple[Optional[pd.Series], str]:
     if not exposures:
         return None, ""
     proxies, fin = proxy_data.proxy_returns_for(set(exposures))
-    hedge = proxy_data.currency_hedge_legs() if is_currency_hedged(item) else (None, None)
-    base = syn.replicate_portfolio_returns(
-        exposures, proxies, financing_daily=fin, spread_annual=0.005,
-        hedge_fx=hedge[0], hedge_carry=hedge[1])
+    legs_fx = proxy_data.currency_hedge_legs()
+    hedge = legs_fx if is_currency_hedged(item) else (None, None)
+    base = instrument_base_returns(item, proxies, fin, legs_fx)
     if base is None or base.empty:
         return None, ""
-    base = base - (instrument_ter(item) / 100.0) / TRADING_DAYS
     names = {"Alternative": "trend index", "Fixed Income": "bonds",
              "Commodities": "commodities", "Gold": "gold"}
     grouped: dict[str, float] = {}
