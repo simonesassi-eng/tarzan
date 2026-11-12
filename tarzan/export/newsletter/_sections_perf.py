@@ -1695,6 +1695,86 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
                                 zebra=False, dense=True, radius=4,
                                 fixed_layout=True)
 
+#: The KPI matrix's rows: key, label, unit, tinted. Volatility is untinted:
+#: higher is neither good nor bad on its own, so a ramp would claim a verdict.
+_KPI_ROWS = (("return", "Return", "%", True),
+             ("vs_benchmark", "vs {bench}", "pp", True),
+             ("volatility", "Volatility", "%", False),
+             ("sharpe", "Sharpe", "", True),
+             ("max_drawdown", "Max drawdown", "%", True))
+
+
+def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
+                     port_spark_inner: str = "", bench_name: str = "") -> str:
+    """Portfolio and target KPIs as rows, the Returns windows as columns.
+
+    The same grid as Returns (``render_unified_table``, one fixed width per
+    window column), transposed: each row is one measure, so its tint is scaled
+    on that measure across both blocks rather than on a column that mixes
+    percent, points and ratios. Risk rows start at 1M (see
+    ``MetricsEngine._window_kpis``)."""
+    from tarzan.export import _charts
+    from tarzan.export.newsletter._constants import uni_name
+
+    if not kpis:
+        return ""
+    P = PALETTE
+    W_PERIOD, W_DAY = 52, 68
+    windows = ["1d", *period_keys]
+    bench = _esc(str(bench_name or "benchmark"))
+
+    def _fmt(v, key, unit):
+        if v is None:
+            return "\u2014"
+        if unit == "":
+            return f"{v:.2f}".replace("-", "\u2212")
+        text = _pct_compact(v, signed=key != "volatility")
+        return text if unit == "%" else text.replace("%", "\u202fpp")
+
+    scales = {}
+    for key, _label, _unit, tinted in _KPI_ROWS:
+        vals = [kpis.get(who, {}).get(b, {}).get(key) for who in kpis for b in windows]
+        scales[key] = _heat.column_scale(vals) if tinted else None
+
+    def _row(who, key, label, unit):
+        data = kpis.get(who, {})
+        cells = []
+        for b in windows:
+            v = data.get(b, {}).get(key)
+            sc = scales[key]
+            bg, fig = (_heat.heat(v, neg=sc[0], pos=sc[1]) if sc and v is not None
+                       else (None, P["ink"] if v is not None else P["subtle"]))
+            if b == "1d":
+                spark = who == "portfolio" and key == "return" and port_spark_inner
+                cells.append(uni_cell(port_spark_inner if spark else _fmt(v, key, unit),
+                                      align="right", color=fig, weight=600, width=W_DAY,
+                                      valign="middle", pad="5px 4px", bg=bg))
+            else:
+                cells.append(uni_cell(_fmt(v, key, unit), color=fig, weight=600,
+                                      bg=bg, width=W_PERIOD))
+        return {"name_html": uni_name(label.format(bench=bench), "", line_height=1.05),
+                "cells": cells}
+
+    groups = []
+    for who, title, colour in (("portfolio", "Portfolio", P["accent"]),
+                               ("target", "Target", _charts.TARGET)):
+        if who not in kpis:
+            continue
+        rows = [_row(who, k, lab, u) for k, lab, u, _t in _KPI_ROWS
+                if any(k in kpis[who].get(b, {}) for b in windows)]
+        groups.append((title, colour, [("", rows)]))
+    columns = ([(day_label, "right", W_DAY, True)]
+               + [(b.upper(), "right", W_PERIOD) for b in period_keys])
+    table = render_unified_table("KPI", columns, groups, compact=True,
+                                 first_col_width=148, separators=False, zebra=False,
+                                 dense=True, radius=4, fixed_layout=True)
+    note = (f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
+            f'Portfolio: time-weighted. Target: its weights held constant. '
+            f'Volatility annualized; Sharpe on the daily risk-free path; risk '
+            f'figures from 1M.</div>')
+    return f'<div style="margin-top:14px;">{table}{note}</div>'
+
+
 def _intraday_column(flags) -> bool:
     """Whether the session column's header may say "Intraday" rather than "1D".
 
@@ -1957,13 +2037,17 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         isin=lambda r: r["_isin"], ticker=lambda r: r["_ticker"], taxonomy=_tax)
 
     unverified_note = _unverified_note(perf_by_ticker, ["1d", *period_keys])
+    day_label = day_column_label(
+        m, live=_intraday_column([bool(port_full.get("1d_intraday"))] + row_intraday))
     return {
         "available": True,
+        # The portfolio has its own KPI matrix in the Portfolio section now, so
+        # Returns lists the holdings only.
         "table_html": _returns_table_html(
-            period_keys, portfolio, groups,
-            day_label=day_column_label(
-                m, live=_intraday_column(
-                    [bool(port_full.get("1d_intraday"))] + row_intraday))) + unverified_note,
+            period_keys, None, groups, day_label=day_label) + unverified_note,
+        "kpi_matrix_html": _kpi_matrix_html(
+            getattr(m, "window_kpis", None) or {}, period_keys, day_label,
+            port_spark_inner=port_inner, bench_name=ab_bench_name),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }
