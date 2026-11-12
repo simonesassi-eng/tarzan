@@ -1699,66 +1699,89 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
 #: higher is neither good nor bad on its own, so a ramp would claim a verdict.
 #: The money rows exist for the book only (the target has no euros).
 _KPI_ROWS = (("pnl_eur", "P&L \u20ac", "\u20ac", True),
-             ("pnl_pct", "P&L %", "%", True),
              ("unr_eur", "Unr. \u20ac", "\u20ac", True),
-             ("unr_pct", "Unr. %", "%", True),
              ("return", "TWR", "%", True),
-             ("vs_benchmark", "vs {bench}", "pp", True),
              ("volatility", "Volatility", "%", False),
              ("sharpe", "Sharpe", "", True),
              ("max_drawdown", "Max drawdown", "%", True))
 
+#: Shorter windows carry a return but no risk figure: a volatility or Sharpe
+#: from a handful of sessions is noise printed as a statistic.
+_KPI_RISK_WINDOWS = frozenset({"1m", "3m", "ytd", "1y", "3y", "5y"})
 
-_MONEY_PCT_WINDOWS = frozenset({"1d", "5d", "1m", "3m"})
 
+def _window_kpis(m, windows, geo_name) -> dict:
+    """``{"portfolio"|"target": {window: {...}}}`` for the KPI matrix, from the
+    SAME functions the rest of the issue prints with:
 
-def _window_money(m, windows) -> dict:
-    """``{window: {pnl_eur, pnl_pct, unr_eur, unr_pct}}`` from the order-derived
-    series, through the same ``_window_money_pnl`` the old window table used."""
-    if getattr(m, "pnl_series", None) is None or getattr(m, "actual_value_series", None) is None:
-        return {}
-    out = {}
+    * TWR and target returns — the endpoints of ``_perf_window``, the windows
+      the Vs-target charts draw and label, and for 1D ``_window_twr`` /
+      ``compute_period_return``, exactly as that section's session cell;
+    * volatility, Sharpe, max drawdown — ``risk_metric_row``, the risk block's
+      function, on each series over that same window, with the risk-free path
+      the risk block used;
+    * P&L and Unr. euros — ``_window_money_pnl``, the old window table's.
+    """
+    from tarzan.engine.stats import compute_period_return, risk_metric_row
+
+    nav = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
+    tgt = (_norm_series(m.target_history).dropna()
+           if getattr(m, "target_history", None) is not None else None)
+    rf = getattr(m, "risk_free_daily", None)
+    out: dict = {"portfolio": {}, "target": {}}
     for b in windows:
-        row = {}
-        for prefix, series in (("pnl", m.pnl_series), ("unr", getattr(m, "unrealized_series", None))):
-            eur, pct = _window_money_pnl(series, m.actual_value_series, b)
-            if eur is not None:
-                row[f"{prefix}_eur"] = eur
-            # Beyond a quarter the window's starting value predates most of the
-            # money in the book, so a % of it overstates the gain (YTD read +23%
-            # beside a +10% TWR). The euros stand; the time-weighted row is the
-            # long-window percentage.
-            if pct is not None and b in _MONEY_PCT_WINDOWS:
-                row[f"{prefix}_pct"] = pct
-        if row:
-            out[b] = row
-    return out
+        port, targ = {}, {}
+        if b == "1d":
+            if nav is not None and len(nav) >= 2:
+                v = _window_twr(nav, "1d")
+                if v is not None:
+                    port["return"] = v
+            if tgt is not None and len(tgt) >= 2:
+                v = compute_period_return(tgt, "1d")
+                if v is not None:
+                    targ["return"] = v
+        else:
+            win = _perf_window(m, 30, geo_name, bucket=b)
+            if win:
+                ends = win.get("endpoints") or {}
+                lo, hi = pd.Timestamp(win["window_start"]), pd.Timestamp(win["window_end"])
+                for row, key, series in ((port, "twr", nav), (targ, "target", tgt)):
+                    if ends.get(key) is None:
+                        continue
+                    row["return"] = float(ends[key])
+                    if b in _KPI_RISK_WINDOWS and series is not None:
+                        block = risk_metric_row(series[(series.index >= lo) & (series.index <= hi)], rf)
+                        for k in ("volatility", "sharpe", "max_drawdown"):
+                            if block.get(k) is not None and not pd.isna(block[k]):
+                                row[k] = float(block[k])
+        if getattr(m, "pnl_series", None) is not None and getattr(m, "actual_value_series", None) is not None:
+            for key, series in (("pnl_eur", m.pnl_series),
+                                ("unr_eur", getattr(m, "unrealized_series", None))):
+                eur, _pct = _window_money_pnl(series, m.actual_value_series, b)
+                if eur is not None:
+                    port[key] = eur
+        if port:
+            out["portfolio"][b] = port
+        if targ:
+            out["target"][b] = targ
+    return {k: v for k, v in out.items() if v}
 
 
-def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
-                     bench_name: str = "",
-                     money: Optional[dict] = None) -> str:
+def _kpi_matrix_html(kpis: dict, period_keys, day_label: str) -> str:
     """Portfolio and target KPIs as rows, the Returns windows as columns.
 
     The same grid as Returns (``render_unified_table``, one fixed width per
     window column), transposed: each row is one measure, so its tint is scaled
     on that measure across both blocks rather than on a column that mixes
-    percent, points and ratios. Risk rows start at 1M (see
-    ``MetricsEngine._window_kpis``)."""
+    percent, points and ratios. Figures from ``_window_kpis``."""
     from tarzan.export import _charts
     from tarzan.export.newsletter._constants import uni_name
 
-    money = money or {}
-    if not kpis and not money:
+    if not kpis:
         return ""
     P = PALETTE
     W_PERIOD, W_DAY = 52, 68
-    if money:
-        kpis = {"portfolio": {}, **kpis}
-        kpis = {**kpis, "portfolio": {b: {**kpis["portfolio"].get(b, {}), **money.get(b, {})}
-                                      for b in set(kpis["portfolio"]) | set(money)}}
     windows = ["1d", *period_keys]
-    bench = str(bench_name or "benchmark")   # uni_name escapes the label
 
     def _fmt(v, key, unit):
         if v is None:
@@ -1766,7 +1789,8 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
         if unit == "":
             return f"{v:.2f}".replace("-", "\u2212")
         if unit == "\u20ac":
-            return _eur_smart(v, signed=True)
+            # Thousands, one decimal, in every cell (synthetic: 1234.5 -> +€1.2k).
+            return f"{'+' if v >= 0 else '\u2212'}\u20ac{abs(v) / 1000:.1f}k"
         text = _pct_compact(v, signed=key != "volatility")
         return text if unit == "%" else text.replace("%", "\u202fpp")
 
@@ -1791,7 +1815,7 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
             else:
                 cells.append(uni_cell(_fmt(v, key, unit), color=fig, weight=600,
                                       bg=bg, width=W_PERIOD))
-        return {"name_html": uni_name(label.format(bench=bench), "", line_height=1.05),
+        return {"name_html": uni_name(label, "", line_height=1.05),
                 "cells": cells}
 
     groups = []
@@ -1808,8 +1832,8 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str, *,
                                  first_col_width=148, separators=False, zebra=False,
                                  dense=True, radius=4, fixed_layout=True)
     note = (f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
-            f'P&amp;L and Unr.: euros net of contributions in the window, % of '
-            f'its starting value up to 3M. TWR: time-weighted. Target: its weights held constant. '
+            f'P&amp;L and Unr.: euros net of contributions in the window. '
+            f'TWR: time-weighted, as in Vs target. Target: its weights held constant. '
             f'Volatility annualized; Sharpe on the daily risk-free path; risk '
             f'figures from 1M.</div>')
     return f'<div style="margin-top:14px;">{table}{note}</div>'
@@ -2063,9 +2087,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         "table_html": _returns_table_html(
             period_keys, None, groups, day_label=day_label) + unverified_note,
         "kpi_matrix_html": _kpi_matrix_html(
-            getattr(m, "window_kpis", None) or {}, period_keys, day_label,
-            bench_name=ab_bench_name,
-            money=_window_money(m, ["1d", *period_keys])),
+            _window_kpis(m, ["1d", *period_keys], ctx.benchmark_geo),
+            period_keys, day_label),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }

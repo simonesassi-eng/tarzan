@@ -58,9 +58,9 @@ class TestProperty1Identity:
         # order path to feed the newsletter Diversification sparklines.
         assert names[-1] == "_allocation_timeline"
         # Portfolio history precedes optional benchmark discovery. The order
-        # path keeps the 20-computer base, swaps the history provider in place,
+        # path keeps the 19-computer base, swaps the history provider in place,
         # then appends _returns and _allocation_timeline.
-        assert len(names) == 22
+        assert len(names) == 21
         # Holdings were already stamped by the data layer. Benchmarks receive
         # their current point after preprocessing and before metric consumers.
         assert "_current_prices" in names
@@ -68,8 +68,6 @@ class TestProperty1Identity:
         assert "_live_1d" in names
         # The historical-risk computer is part of the base pipeline.
         assert "_historical_risk" in names
-        # The Portfolio section's KPI matrix (portfolio and target, per window).
-        assert "_window_kpis" in names
         # The target-allocation NAV, which the "Vs target &" charts draw. Built
         # in the engine because this is the only scope holding both the book and
         # the rebalance seeds (not-held target instruments).

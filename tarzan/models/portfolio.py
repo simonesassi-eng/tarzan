@@ -171,10 +171,8 @@ class PortfolioMetrics:
     # ``{"real_from": Timestamp, "sleeves": [{"ticker", "real_from", "source"}]}``
     # when part of ``target_history`` rests on modeled sleeve history, else None.
     target_history_modeled: Optional[dict] = None
-    # ``{"portfolio"|"target": {window: {"return", "vs_benchmark", "volatility",
-    # "sharpe", "max_drawdown"}}}`` — the Portfolio section's KPI matrix. Risk
-    # keys appear only from 1M up; a window the series does not reach is absent.
-    window_kpis: dict = field(default_factory=dict)
+    # The daily risk-free path (fractions) the risk block used, or None.
+    risk_free_daily: Optional[pd.Series] = None
     # The target ALLOCATION itself: ``{canonical ticker or ISIN: weight %}`` for
     # every instrument it names, seeds included, before any availability
     # filtering. ``target_history`` above is what that allocation DID over a daily

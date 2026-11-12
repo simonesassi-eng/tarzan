@@ -284,7 +284,7 @@ class TestRender:
         # markup boundary in _build_hero._tile. Before that they arrived raw,
         # which is invalid HTML that mail clients happen to tolerate.
         assert "P&amp;L \u20ac" in html      # matrix row label
-        assert "Unr. %" in html              # matrix row label
+        assert "Unr. \u20ac" in html         # matrix row label
         assert "TWR" in html
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile

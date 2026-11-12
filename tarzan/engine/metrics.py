@@ -148,7 +148,6 @@ class MetricsEngine:
             self._holding_histories,
             self._target_history,
             self._historical_risk,
-            self._window_kpis,
         ]
         # Option Y: when an order list is supplied it becomes the single
         # source of truth for the historical value series. Swap the
@@ -2714,55 +2713,6 @@ class MetricsEngine:
     # ------------------------------------------------------------------
     # Target-portfolio NAV (the allocation the book is steering toward)
     # ------------------------------------------------------------------
-    #: Windows of the KPI matrix, the Returns table's columns.
-    KPI_WINDOWS = ("1d", "5d", "1m", "3m", "ytd", "1y", "3y", "5y")
-    #: Shorter windows than this carry a return but no risk figure: a volatility
-    #: or Sharpe from a handful of sessions is noise printed as a statistic.
-    _KPI_MIN_RISK_BUCKETS = frozenset({"1m", "3m", "ytd", "1y", "3y", "5y"})
-
-    def _window_kpis(self, ctx: dict) -> None:
-        """Return, volatility, Sharpe, max drawdown and excess over the α/β
-        benchmark, per Returns window, for the portfolio and for the target.
-
-        One block per series through ``risk_metric_row`` on the window's own
-        slice (anchored by ``window_anchor``, the edge every return uses), so
-        these figures are computed the way every other risk figure is. The
-        portfolio's returns are ``performance_full``'s, the Returns row they
-        replace, not a second computation of it."""
-        from tarzan.engine.stats import window_anchor
-
-        record = self._alpha_beta_benchmark(ctx)
-        bench = record.history.dropna() if record is not None else pd.Series(dtype=float)
-        # The path _risk already fetched, never a fetch of its own: a run that
-        # skipped _risk (no order history) must not reach for the network here.
-        rf = ctx.get("_rf_daily")
-        perf = ctx.get("performance_full") or {}
-        out: dict[str, dict] = {}
-        for name, series in (("portfolio", ctx.get("portfolio_history_full")),
-                             ("target", ctx.get("target_history"))):
-            if series is None or len(series) < 2:
-                continue
-            series = series.dropna()
-            rows: dict[str, dict] = {}
-            for b in self.KPI_WINDOWS:
-                ret = (perf.get(b) if name == "portfolio" else compute_period_return(series, b))
-                if ret is None or pd.isna(ret):
-                    continue
-                row = {"return": float(ret)}
-                bret = compute_period_return(bench, b) if not bench.empty else None
-                if bret is not None:
-                    row["vs_benchmark"] = float(ret) - float(bret)
-                anchor = window_anchor(series, b)
-                if b in self._KPI_MIN_RISK_BUCKETS and anchor is not None:
-                    block = risk_metric_row(series.loc[anchor:], rf)
-                    for k in ("volatility", "sharpe", "max_drawdown"):
-                        v = block.get(k)
-                        if v is not None and not pd.isna(v):
-                            row[k] = float(v)
-                rows[b] = row
-            out[name] = rows
-        ctx["window_kpis"] = out
-
     def _target_history(self, ctx: dict) -> None:
         """NAV of the TARGET portfolio: the per-instrument ``target_portfolio``
         weights held CONSTANT, every day, over their whole common window.
@@ -3096,7 +3046,9 @@ class MetricsEngine:
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
             target_history_modeled=ctx.get("target_history_modeled"),
-            window_kpis=ctx.get("window_kpis") or {},
+            # The daily risk-free path _risk used, so a consumer computing a
+            # Sharpe elsewhere (the newsletter's KPI matrix) uses the same one.
+            risk_free_daily=ctx.get("_rf_daily"),
             target_weights=ctx.get("target_weights") or {},
             ticker_resolutions=ticker_resolutions,
             historical_risk=ctx.get("historical_risk"),
