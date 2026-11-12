@@ -275,19 +275,17 @@ class TestRender:
         # "How your money moved" line was dropped because the heading plus the
         # matrix say it. Anchor on the matrix's own footer instead.
         assert ">Portfolio</span>" in html
-        # The matrix's own first column header. The "Annualized: TWR / XIRR"
-        # footer that used to be the anchor is gone: it repeated the captions of
-        # the TWR and MWR tiles in STATE.
-        assert ">Window<" in html
+        # The KPI matrix (measures as rows, the Returns windows as columns)
+        # replaced the window table; its first column header is the anchor.
+        assert ">KPI<" in html
         # Every ampersand reaches the document as an entity. The matrix writes
         # it itself; the tiles go through the template, where autoescape is off
         # because the filename ends in .j2 — so they are escaped at their own
         # markup boundary in _build_hero._tile. Before that they arrived raw,
         # which is invalid HTML that mail clients happen to tolerate.
-        assert "P&amp;L \u20ac" in html      # matrix column head
-        assert "Unrealized" in html
+        assert "P&amp;L \u20ac" in html      # matrix row label
+        assert "Unr. %" in html              # matrix row label
         assert "TWR" in html
-        assert "Since inception" in html     # matrix row label
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile
         # The green/red split is on TOTAL P&L about its own break-even, not on

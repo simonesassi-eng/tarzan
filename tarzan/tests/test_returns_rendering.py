@@ -61,12 +61,12 @@ class TestNewsletterReturns:
     def test_html_shows_perf_section_only_when_set(self):
         html_off = render_newsletter(_minimal_metrics(False), _config())
         html_on = render_newsletter(_minimal_metrics(True), _config())
-        # The window matrix renders only when the order-derived returns and daily
+        # The KPI matrix renders only when the order-derived returns and daily
         # series exist. Its first column header is the anchor: the section
         # heading above it is always present, because the PORTFOLIO section also
         # carries the value chart.
-        assert ">Window<" not in html_off
-        assert ">Window<" in html_on
+        assert ">KPI<" not in html_off
+        assert ">KPI<" in html_on
         assert "TWR" in html_on
 
     def test_no_decorative_em_dash_in_prose(self):
