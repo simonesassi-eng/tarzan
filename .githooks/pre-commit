@@ -15,6 +15,7 @@
 # Escape for a whole commit: git commit --no-verify
 
 . "$(dirname "$0")/_money.sh"
+. "$(dirname "$0")/_book.sh"
 
 status=0
 files=$(git diff --cached --name-only --diff-filter=d -- . \
@@ -26,10 +27,10 @@ for f in $files; do
 	hits=$(git diff --cached -U0 -- "$f" \
 		| grep '^+' | grep -v '^+++' \
 		| grep -vi 'synthetic' \
-		| grep -oE "$MONEY_PATTERN" | sort -u)
+		| grep -oE "$MONEY_PATTERN|$BOOK_PATTERN" | sort -u)
 	if [ -n "$hits" ]; then
 		if [ $status -eq 0 ]; then
-			echo "pre-commit: a real money figure is being added — this repo is public." >&2
+			echo "pre-commit: a real money figure, or a weight/return of the real book, is being added — this repo is public." >&2
 			status=1
 		fi
 		echo "  $f" >&2
