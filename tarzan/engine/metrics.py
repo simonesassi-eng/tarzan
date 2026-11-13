@@ -1378,7 +1378,7 @@ class MetricsEngine:
         # read as "measured, no risk" — the numeric-zero≠unavailable invariant.
         result = {"volatility": float("nan"), "sharpe": float("nan"), "max_drawdown": float("nan"),
                   "sortino": float("nan"), "var_95": float("nan"), "cvar_95": float("nan"),
-                  "beta": float("nan"), "alpha": float("nan")}
+                  "ulcer_index": float("nan"), "beta": float("nan"), "alpha": float("nan")}
         if ph.empty or len(ph) < 2:
             ctx["risk"] = result
             return
@@ -1398,6 +1398,7 @@ class MetricsEngine:
         result["sortino"] = block["sortino"]
         result["var_95"] = block["var_95"]
         result["cvar_95"] = block["cvar_95"]
+        result["ulcer_index"] = block["ulcer_index"]
         # Beta/Alpha use the same preprocessed full benchmark ticker/history
         # consumed by every other analytical and presentation stage.
         record = self._alpha_beta_benchmark(ctx)

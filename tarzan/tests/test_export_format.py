@@ -271,17 +271,13 @@ class TestRiskMetricsBecomeStateTiles:
                     "max_drawdown": mdd, "ulcer_index": ui, "var_95": var,
                     "cvar_95": cvar, "alpha": a, "beta": b}
 
+        import pandas as pd
+
         m = PortfolioMetrics()
-        m.historical_risk = {
-            "available": True,
-            "portfolio": {
-                "label": "Your portfolio", "ticker": None, "span_label": "3.0Y",
-                "note": None, "is_portfolio": True,
-                "metrics": _metrics(5.0, 12.0, 1.0, 1.2, -10.0, 6.0, -1.0, -1.5,
-                                    0.5, 0.9),
-            },
-            "instruments": [],
-        }
+        # The real book's risk block, the one the tiles read (synthetic figures).
+        m.risk = _metrics(5.0, 12.0, 1.0, 1.2, -10.0, 6.0, -1.0, -1.5, 0.5, 0.9)
+        m.portfolio_history = pd.Series(
+            [100.0, 101.0], index=pd.to_datetime(["2025-01-01", "2026-01-01"]))
         return m
 
     def _ctx(self, ab_name="MSCI World", geo_name="FTSE All-World"):
@@ -308,10 +304,10 @@ class TestRiskMetricsBecomeStateTiles:
 
     def test_no_second_cagr_tile(self):
         """STATE already carries a CAGR — the book's own annualized TWR — and the risk
-        block computes a DIFFERENT one, a backtest at today's weights. On the reference
-        book they read +15.68% and 24.27%. Two tiles labelled CAGR with different numbers
-        six tiles apart is worse than the backtest figure being absent, so it is absent;
-        Sharpe and Sortino still carry it as their numerator.
+        block computes a DIFFERENT one (a geometric annualisation of the NAV, not the
+        TWR's). Two tiles labelled CAGR with different numbers six tiles apart is worse
+        than one being absent, so it is absent; Sharpe and Sortino still carry it as
+        their numerator.
         """
         assert "CAGR" not in [t["label"] for t in self._tiles()]
         from tarzan.export.newsletter._risk_tiles import risk_legend
@@ -361,7 +357,7 @@ class TestRiskMetricsBecomeStateTiles:
         from tarzan.export.newsletter._risk_tiles import risk_tiles
 
         m = self._metrics_obj()
-        m.historical_risk = {"available": False}
+        m.risk = {}
         assert risk_tiles(m, self._tile) == []
 
     def test_the_legend_quotes_the_configured_bands_with_their_comparators(self):
@@ -375,21 +371,21 @@ class TestRiskMetricsBecomeStateTiles:
         assert rows["Volatility"]["weak"] == "> 18%"
 
     def test_the_notes_name_the_index_and_the_window(self):
-        """Deleting the section must not drop its terms: the metrics are a backtest at
-        today's weights over a common window, and alpha and beta are measured against a
-        specific index."""
+        """Deleting the section must not drop its terms: the metrics are the real
+        book's over its own life, and alpha and beta are measured against a specific
+        index."""
         from tarzan.export.newsletter._risk_tiles import risk_notes
 
         notes = risk_notes(self._ctx())
         assert "MSCI World" in notes["alpha_beta"]
-        assert "3.0Y" in notes["window"]
-        assert "today" in notes["window"]
+        assert "365 days" in notes["window"]
+        assert "since inception" in notes["window"]
 
     def test_no_risk_block_means_no_notes(self):
         from tarzan.export.newsletter._risk_tiles import risk_notes
 
         ctx = self._ctx()
-        ctx.metrics.historical_risk = {"available": False}
+        ctx.metrics.risk = {}
         assert risk_notes(ctx) == {"window": "", "alpha_beta": "", "backtest": ""}
 
 

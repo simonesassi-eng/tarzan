@@ -694,12 +694,8 @@ def _perf_vol_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
     # shared span it is 11.79%.
     #
     # The book's own figure is its whole life already, so it equals
-    # ``stats.risk_metric_row`` on the flow-adjusted NAV — which is NOT the figure
-    # the RISK section prints. That table renders ``historical_risk``, whose
-    # portfolio row is a current-weight static backtest over the common window of
-    # holdings with ≥1Y of history: a different construction over a different
-    # span, so the two volatilities differ slightly, by explicit design
-    # there. Two honest answers to two questions, not one number twice.
+    # ``stats.risk_metric_row`` on the flow-adjusted NAV, which is the Volatility
+    # tile in STATE: one number, printed twice.
     def _clipped_vol(full, lo, hi, floor: int):
         """σ of ``full`` over ``[lo, hi]``, annualized, or None when the clip holds
         too few returns to estimate one."""

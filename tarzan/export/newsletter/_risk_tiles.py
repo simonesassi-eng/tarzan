@@ -148,15 +148,18 @@ def risk_tiles(metrics, tile, ratings=None) -> list[dict]:
     are escaped and shaped by exactly the helper the rest of STATE uses; a second
     constructor here is how one tile ends up unescaped.
 
-    Returns ``[]`` when the historical-risk block is unavailable, so STATE simply ends
-    at the return measures rather than showing ten em-dashes.
+    The figures are the REAL book's: ``metrics.risk``, ``risk_metric_row`` on the
+    flow-adjusted NAV since inception, the same function and series as the
+    Portfolio section's KPI matrix and the volatility key in Vs target. They used
+    to be a backtest of today's weights held constant over a longer window, so
+    STATE printed a Sharpe twice the book's own beside figures that were the
+    book's own.
+
+    Returns ``[]`` when the risk block is unavailable, so STATE simply ends at the
+    return measures rather than showing nine em-dashes.
     """
-    hr = getattr(metrics, "historical_risk", None) or {}
-    if not hr.get("available"):
-        return []
-    port = hr.get("portfolio") or {}
-    values = port.get("metrics") or {}
-    if not values:
+    values = getattr(metrics, "risk", None) or {}
+    if all(is_missing(values.get(key)) for _l, key, _p, _n, _r in RISK_METRICS):
         return []
     if ratings is None:
         from tarzan.contracts.reference import reference_for
@@ -225,27 +228,27 @@ def risk_legend(ratings=None) -> list[dict]:
 def risk_notes(ctx) -> dict:
     """The three disclosures that used to travel with section [11].
 
-    They are not decoration: the metrics are a backtest at TODAY's weights over a
-    common window, alpha and beta are measured against a specific index, and the
-    backtest may have had to leave a holding out. Deleting the section without
+    They are not decoration: the metrics are measured on a stated span, and alpha
+    and beta are measured against a specific index. Deleting the section without
     rehousing these would have kept the figures and dropped their terms, so they sit
     with the legend at the foot of the issue.
 
     Empty strings where the engine has nothing to say, so the template renders nothing
     rather than a heading over a blank.
     """
-    hr = getattr(ctx.metrics, "historical_risk", None) or {}
-    port = hr.get("portfolio") or {}
-    if not hr.get("available"):
+    m = ctx.metrics
+    if not risk_tiles(m, lambda *a: a):
         return {"window": "", "alpha_beta": "", "backtest": ""}
+    ph = getattr(m, "portfolio_history", None)
+    days = (int((ph.index[-1] - ph.index[0]).days)
+            if ph is not None and len(ph) > 1 else None)
+    span = f" ({days} days)" if days else ""
     return {
         "window": (
-            f'Measured on the portfolio over {port.get("span_label") or "its"} of '
-            f'history: a backtest at today\u2019s weights held constant, over the '
-            f'longest window where every holding with a year or more of history '
-            f'overlaps.'),
+            f'Measured on the portfolio\u2019s own time-weighted NAV since '
+            f'inception{span}: the real book, with its flows taken out.'),
         "alpha_beta": (
             f'\u03b1 and \u03b2 are computed against '
             f'{ctx.benchmark_alpha_beta or "the market index"}.'),
-        "backtest": port.get("note") or "",
+        "backtest": "",
     }
