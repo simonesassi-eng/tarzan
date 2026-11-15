@@ -1698,75 +1698,157 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
 #: The money rows exist for the book only (the target has no euros).
 _KPI_ROWS = (("pnl_eur", "P&L \u20ac", "\u20ac", True),
              ("unr_eur", "Unr. \u20ac", "\u20ac", True),
-             ("return", "TWR", "%", True),
+             ("return", "Return", "%", True),
              ("volatility", "Volatility", "%", False),
              ("sharpe", "Sharpe", "", True),
-             ("max_drawdown", "Max drawdown", "%", True))
+             ("sortino", "Sortino", "", True),
+             ("max_drawdown", "Max drawdown", "%", True),
+             ("ulcer_index", "Ulcer", "%", False),
+             ("var_95", "VaR 95%", "%", False),
+             ("cvar_95", "CVaR 95%", "%", False),
+             ("alpha", "Alpha", "%", True),
+             ("beta", "Beta", "", False),
+             ("ter", "TER", "%", False))
 
 #: Shorter windows carry a return but no risk figure: a volatility or Sharpe
 #: from a handful of sessions is noise printed as a statistic.
-_KPI_RISK_WINDOWS = frozenset({"1m", "3m", "ytd", "1y", "3y", "5y"})
+_KPI_RISK_WINDOWS = frozenset({"1m", "3m", "ytd", "1y", "3y", "5y", "si"})
+
+#: The three universes of the matrix, in order: the book, its plan, the market.
+_KPI_WHO = ("portfolio", "target", "acwi")
 
 
 def _window_kpis(m, windows, geo_name) -> dict:
-    """``{"portfolio"|"target": {window: {...}}}`` for the KPI matrix, from the
-    SAME functions the rest of the issue prints with:
+    """``{"portfolio"|"target"|"acwi": {window: {...}}}`` for the KPI matrix,
+    from the SAME functions the rest of the issue prints with:
 
-    * TWR and target returns — the endpoints of ``_perf_window``, the windows
-      the Vs-target charts draw and label, and for 1D ``_window_twr`` /
-      ``compute_period_return``, exactly as that section's session cell;
-    * volatility, Sharpe, max drawdown — ``risk_metric_row``, the risk block's
-      function, on each series over that same window, with the risk-free path
-      the risk block used;
+    * returns — the endpoints of ``_perf_window`` (the windows the Vs-target
+      charts draw and label; "si" from ``_perf_full_series``, the since-inception
+      chart's), and for 1D ``_window_twr`` / ``compute_period_return``;
+    * risk figures — ``risk_metric_row``, the risk block's function, on each
+      series over that same window, with the risk-free path the risk block used;
+      alpha and beta — ``_compute_beta_alpha`` against the geo benchmark over the
+      window (the benchmark's own are 0 and 1 by definition);
+    * TER — the book's value-weighted TER averaged over the window (its lines
+      change), the plan's at its constant weights, the benchmark's own;
     * P&L and Unr. euros — ``_window_money_pnl``, the old window table's.
     """
-    from tarzan.engine.stats import compute_period_return, risk_metric_row
+    from tarzan import config as cfg
+    from tarzan.engine.stats import (
+        _compute_beta_alpha, compute_period_return, risk_metric_row,
+    )
+    from tarzan.export._perf_series import _perf_full_series
 
-    nav = _norm_series(m.portfolio_history) if m.portfolio_history is not None else None
+    def _clean(v):
+        return None if v is None or pd.isna(v) else float(v)
+
+    ph = getattr(m, "portfolio_history", None)
+    nav = _norm_series(ph) if ph is not None else None
     tgt = (_norm_series(m.target_history).dropna()
            if getattr(m, "target_history", None) is not None else None)
+    bench_raw = (_geo_benchmark_series(m, geo_name)
+                 if geo_name and getattr(m, "benchmark_histories", None) is not None else None)
+    bench = _norm_series(bench_raw).dropna() if bench_raw is not None else None
+    series = {"portfolio": nav, "target": tgt, "acwi": bench}
+    keys = {"portfolio": "twr", "target": "target", "acwi": "acwi"}
     rf = getattr(m, "risk_free_daily", None)
-    out: dict = {"portfolio": {}, "target": {}}
+    ter_tl = getattr(m, "ter_timeline", None)
+    bench_row = (cfg.catalog().row(None, None, geo_name) if geo_name else None)
+    bench_ter = (cfg.ter_for(cfg.catalog().isin_of(bench_row) or None, bench_row.get("ticker"))
+                 if bench_row is not None else None)
+    out: dict = {who: {} for who in _KPI_WHO}
+
+    def _window(b):
+        """``(lo, hi, endpoints)`` of one window, or None."""
+        if b == "si":
+            full = _perf_full_series(m, geo_name)
+            if not full or not full.get("dates"):
+                return None
+            ends = {k: (float(v[-1]) if v else None)
+                    for k, v in (("twr", full.get("twr")), ("target", full.get("target")),
+                                 ("acwi", full.get("acwi")))}
+            return pd.Timestamp(full["dates"][0]), pd.Timestamp(full["dates"][-1]), ends
+        win = _perf_window(m, 30, geo_name, bucket=b)
+        if not win:
+            return None
+        return (pd.Timestamp(win["window_start"]), pd.Timestamp(win["window_end"]),
+                dict(win.get("endpoints") or {}))
+
     for b in windows:
-        port, targ = {}, {}
+        rows = {who: {} for who in _KPI_WHO}
         if b == "1d":
             if nav is not None and len(nav) >= 2:
                 v = _window_twr(nav, "1d")
                 if v is not None:
-                    port["return"] = v
-            if tgt is not None and len(tgt) >= 2:
-                v = compute_period_return(tgt, "1d")
-                if v is not None:
-                    targ["return"] = v
+                    rows["portfolio"]["return"] = v
+            for who in ("target", "acwi"):
+                ser = series[who]
+                if ser is not None and len(ser) >= 2:
+                    v = compute_period_return(ser, "1d")
+                    if v is not None:
+                        rows[who]["return"] = v
+            lo = hi = None
         else:
-            win = _perf_window(m, 30, geo_name, bucket=b)
-            if win:
-                ends = win.get("endpoints") or {}
-                lo, hi = pd.Timestamp(win["window_start"]), pd.Timestamp(win["window_end"])
-                for row, key, series in ((port, "twr", nav), (targ, "target", tgt)):
-                    if ends.get(key) is None:
-                        continue
-                    row["return"] = float(ends[key])
-                    if b in _KPI_RISK_WINDOWS and series is not None:
-                        block = risk_metric_row(series[(series.index >= lo) & (series.index <= hi)], rf)
-                        for k in ("volatility", "sharpe", "max_drawdown"):
-                            if block.get(k) is not None and not pd.isna(block[k]):
-                                row[k] = float(block[k])
+            w = _window(b)
+            lo, hi, ends = (w if w else (None, None, {}))
+            for who in _KPI_WHO:
+                if ends.get(keys[who]) is None:
+                    continue
+                rows[who]["return"] = float(ends[keys[who]])
+                ser = series[who]
+                if b not in _KPI_RISK_WINDOWS or ser is None:
+                    continue
+                clip = ser[(ser.index >= lo) & (ser.index <= hi)]
+                block = risk_metric_row(clip, rf)
+                for k in ("volatility", "sharpe", "sortino", "max_drawdown",
+                          "ulcer_index", "var_95", "cvar_95"):
+                    if _clean(block.get(k)) is not None:
+                        rows[who][k] = _clean(block[k])
+                if who == "acwi":
+                    rows[who]["alpha"], rows[who]["beta"] = 0.0, 1.0  # by definition
+                elif bench is not None and len(clip) > 1:
+                    bwin = bench[(bench.index >= lo) & (bench.index <= hi)]
+                    if len(bwin) > 1:
+                        beta, alpha = _compute_beta_alpha(
+                            clip, bwin, 0.0, input_kind="prices",
+                            rf_daily=rf if isinstance(rf, pd.Series) else None)
+                        if _clean(alpha) is not None:
+                            rows[who]["alpha"] = _clean(alpha)
+                        if _clean(beta) is not None:
+                            rows[who]["beta"] = _clean(beta)
+        # TER: the book's over the window (its lines change), the plan's and the
+        # benchmark's own.
+        if ter_tl is not None and len(ter_tl):
+            tl = ter_tl if lo is None else ter_tl[(ter_tl.index >= lo) & (ter_tl.index <= hi)]
+            if not len(tl):
+                prior = ter_tl[ter_tl.index <= (hi if hi is not None else ter_tl.index[-1])]
+                tl = prior.iloc[-1:] if len(prior) else ter_tl.iloc[-1:]
+            rows["portfolio"]["ter"] = float(tl.mean())
+        if getattr(m, "target_ter", None) is not None and rows["target"]:
+            rows["target"]["ter"] = float(m.target_ter)
+        if bench_ter is not None and rows["acwi"]:
+            rows["acwi"]["ter"] = float(bench_ter) * 100.0
         if getattr(m, "pnl_series", None) is not None and getattr(m, "actual_value_series", None) is not None:
-            for key, series in (("pnl_eur", m.pnl_series),
-                                ("unr_eur", getattr(m, "unrealized_series", None))):
-                eur, _pct = _window_money_pnl(series, m.actual_value_series, b)
+            for key, money in (("pnl_eur", m.pnl_series),
+                               ("unr_eur", getattr(m, "unrealized_series", None))):
+                if b == "si":
+                    # Since inception: the cumulative series' own level today.
+                    level = money.dropna() if money is not None else None
+                    eur = float(level.iloc[-1]) if level is not None and len(level) else None
+                else:
+                    eur, _pct = _window_money_pnl(money, m.actual_value_series, b)
                 if eur is not None:
-                    port[key] = eur
-        if port:
-            out["portfolio"][b] = port
-        if targ:
-            out["target"][b] = targ
+                    rows["portfolio"][key] = eur
+        for who in _KPI_WHO:
+            if rows[who]:
+                out[who][b] = rows[who]
     return {k: v for k, v in out.items() if v}
 
 
-def _kpi_matrix_html(kpis: dict, period_keys, day_label: str) -> str:
-    """Portfolio and target KPIs as rows, the Returns windows as columns.
+def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
+                     bench_label: str = "Benchmark") -> str:
+    """Portfolio, target and benchmark KPIs as rows, the Returns windows plus
+    since inception (SI) as columns.
 
     The same grid as Returns (``render_unified_table``, one fixed width per
     window column), transposed: each row is one measure, so its tint is scaled
@@ -1778,18 +1860,23 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str) -> str:
     if not kpis:
         return ""
     P = PALETTE
-    W_PERIOD, W_DAY = 52, 68
-    windows = ["1d", *period_keys]
+    # Nine window columns now (SI added): narrower cells and name column keep
+    # the table inside the 620px card.
+    W_PERIOD, W_DAY = 48, 64
+    windows = ["1d", *period_keys, "si"]
+    unsigned = {"volatility", "ulcer_index", "ter"}
 
     def _fmt(v, key, unit):
         if v is None:
             return "\u2014"
+        if key == "ter":
+            return f"{v:.2f}%"
         if unit == "":
             return f"{v:.2f}".replace("-", "\u2212")
         if unit == "\u20ac":
             # Thousands, one decimal, in every cell (synthetic: 1234.5 -> +€1.2k).
             return f"{'+' if v >= 0 else '\u2212'}\u20ac{abs(v) / 1000:.1f}k"
-        text = _pct_compact(v, signed=key != "volatility")
+        text = _pct_compact(v, signed=key not in unsigned)
         return text if unit == "%" else text.replace("%", "\u202fpp")
 
     scales = {}
@@ -1818,22 +1905,26 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str) -> str:
 
     groups = []
     for who, title, colour in (("portfolio", "Portfolio", P["accent"]),
-                               ("target", "Target", _charts.TARGET)):
+                               ("target", "Target", _charts.TARGET),
+                               ("acwi", bench_label, _charts.BENCH)):
         if who not in kpis:
             continue
         rows = [_row(who, k, lab, u) for k, lab, u, _t in _KPI_ROWS
                 if any(k in kpis[who].get(b, {}) for b in windows)]
         groups.append((title, colour, [("", rows)]))
     columns = ([(day_label, "right", W_DAY, True)]
-               + [(b.upper(), "right", W_PERIOD) for b in period_keys])
+               + [(b.upper(), "right", W_PERIOD) for b in period_keys]
+               + [("SI", "right", W_PERIOD)])
     table = render_unified_table("KPI", columns, groups, compact=True,
-                                 first_col_width=148, separators=False, zebra=False,
+                                 first_col_width=112, separators=False, zebra=False,
                                  dense=True, radius=4, fixed_layout=True)
     note = (f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
             f'P&amp;L and Unr.: euros net of contributions in the window. '
-            f'TWR: time-weighted, as in Vs target. Target: its weights held constant. '
-            f'Volatility annualized; Sharpe on the daily risk-free path; risk '
-            f'figures from 1M.</div>')
+            f'Return: time-weighted, as in Vs target. Target: its weights held constant. '
+            f'SI: since the book\u2019s inception. Volatility annualized; Sharpe and '
+            f'Sortino on the daily risk-free path; risk figures from 1M. Alpha and beta '
+            f'against {_escaped_text(bench_label)} (its own: 0 and 1). TER: the book\u2019s '
+            f'value-weighted, averaged over the window as its lines changed.</div>')
     return f'<div style="margin-top:14px;">{table}{note}</div>'
 
 
@@ -2085,8 +2176,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         "table_html": _returns_table_html(
             period_keys, None, groups, day_label=day_label) + unverified_note,
         "kpi_matrix_html": _kpi_matrix_html(
-            _window_kpis(m, ["1d", *period_keys], ctx.benchmark_geo),
-            period_keys, day_label),
+            _window_kpis(m, ["1d", *period_keys, "si"], ctx.benchmark_geo),
+            period_keys, day_label, ctx.benchmark_geo or "Benchmark"),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }

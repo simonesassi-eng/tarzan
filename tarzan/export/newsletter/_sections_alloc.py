@@ -484,10 +484,17 @@ def _build_header(ctx: _NewsletterContext) -> dict:
 
 
 def _bench_short(name: Optional[str]) -> str:
-    """The benchmark's last word, upper-cased, for a label that has to fit a
-    status-bar cell: "iShares MSCI ACWI" -> "ACWI"."""
-    parts = [w for w in str(name or "").replace("-", " ").split() if w]
-    return (parts[-1] if parts else "BENCHMARK").upper()
+    """The benchmark's index word, upper-cased, for a label that has to fit a
+    status-bar cell: "iShares MSCI ACWI" -> "ACWI", "SPDR MSCI ACWI IMI Acc" ->
+    "ACWI IMI" (share-class words dropped; IMI kept with what it qualifies)."""
+    share_class = {"acc", "dist", "ucits", "etf", "eur", "usd", "hedged", "hdg"}
+    parts = [w for w in str(name or "").replace("-", " ").split()
+             if w and w.casefold() not in share_class]
+    if not parts:
+        return "BENCHMARK"
+    if parts[-1].upper() == "IMI" and len(parts) > 1:
+        return f"{parts[-2]} {parts[-1]}".upper()
+    return parts[-1].upper()
 
 def _build_hero(ctx: _NewsletterContext) -> dict:
     m = ctx.metrics
@@ -706,12 +713,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
             " \u00b7 ".join(parts), _tone(session_pct))
         session_tile["session_proof"] = session_receipt
         state_tiles.append(session_tile)
-    if m.avg_ter is not None:
-        # avg_ter arrives already in percent (metrics.py multiplies the stored
-        # fractions by 100), so it must not be scaled again here. The synthetic
-        # fixture has a zero TER, which hid this: a real run printed 23.106%.
-        state_tiles.append(_tile("TER", f"{float(m.avg_ter):.3f}%",
-                                 "weighted average, annual"))
+    # STATE ends with Session. TER and the risk figures live in the PORTFOLIO
+    # KPI matrix, per window and beside the target and the benchmark.
 
 
     # Dual-axis hero chart: 30-day portfolio value (€, left) + both P&L measures
@@ -833,15 +836,6 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         else:
             rebal_color, rebal_bg = PALETTE["amber"], PALETTE["amber_bg"]
 
-    # The ten risk figures close STATE. They were section [11] RISK, and the
-    # question they answer -- what shape was the ride -- is a property of the state
-    # rather than a topic of its own, so they sit with the value and the return
-    # measures instead of eleven sections later. The weak/fair/strong gauge that
-    # used to sit beside each figure is gone: the configured bands name themselves
-    # per metric, so the band is the caption and its colour is the figure's.
-    from tarzan.export.newsletter._risk_tiles import risk_tiles as _risk_tiles
-
-    state_tiles.extend(_risk_tiles(m, _tile, ctx.reference.metric_ratings))
 
     return {
         # Hero big number, rounded to whole euros (e.g. €XXX,XXX): decimals add

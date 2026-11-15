@@ -1298,6 +1298,47 @@ class MetricsEngine:
                     for _, r in by_geo.iterrows()
                 }
         ctx["allocation_timeline"] = tl
+        ctx["ter_timeline"] = self._ter_timeline(effective_orders, enriched, ctx)
+
+    @staticmethod
+    def _ter_timeline(orders, enriched: dict, ctx: dict) -> Optional[pd.Series]:
+        """The book's value-weighted TER (%), week by week since inception.
+
+        The book's lines change over time, so a window's TER is the average of
+        what was held THROUGH it, not today's mix. Same reconstruction as the
+        allocation timeline (held quantities at their EUR prices), over the whole
+        history; lines with no known TER are left out of both sides of the
+        weighting rather than counted as free.
+        """
+        from tarzan.engine.returns_builder import build_allocation_timeline
+
+        # The longest history the reconstruction can price: a stretch lacking
+        # causal price evidence voids the whole call, so shorter spans are tried
+        # in turn. ponytail: windows older than the span read its first value;
+        # a per-segment rebuild would lift that if a long window ever needs it.
+        tl = None
+        for months in (600, 12, 6, 3):
+            try:
+                tl = build_allocation_timeline(
+                    orders, enriched, months=months, today=ctx.get("_order_analysis_date"))
+            except Exception:  # noqa: BLE001 — a cost figure must never sink the run
+                tl = None
+            if tl:
+                break
+        if not tl or len(tl.get("dates", [])) < 1:
+            return None
+        values = []
+        for weights in tl.get("holding_invested", []):   # % of the invested book
+            num = den = 0.0
+            for isin, weight in (weights or {}).items():
+                ter = getattr(enriched.get(isin), "ter", None)
+                if ter is None:
+                    continue
+                num += float(weight) * float(ter) * 100.0
+                den += float(weight)
+            values.append(num / den if den > 0 else float("nan"))
+        series = pd.Series(values, index=pd.to_datetime(list(tl["dates"]))).dropna()
+        return series if len(series) else None
 
     # ------------------------------------------------------------------
     # Performance
@@ -2775,6 +2816,13 @@ class MetricsEngine:
                     modeled.append(note)
         if not weights:
             return
+        # The plan's TER: its weights held constant, lines with no known TER
+        # left out of both sides rather than counted as free.
+        ters = {str(h.ticker or h.isin): h.ter for h in list(self.holdings) + list(self.rebalance_seeds)
+                if getattr(h, "ter", None) is not None}
+        known = {k: w for k, w in weights.items() if k in ters}
+        ctx["target_ter"] = (sum(w * float(ters[k]) * 100.0 for k, w in known.items())
+                             / sum(known.values())) if known else None
         if missing:
             # Dropping a sleeve renormalizes the rest, which draws a DIFFERENT
             # portfolio under the target's name. Withhold the line instead.
@@ -3047,6 +3095,8 @@ class MetricsEngine:
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
             target_history_modeled=ctx.get("target_history_modeled"),
+            ter_timeline=ctx.get("ter_timeline"),
+            target_ter=ctx.get("target_ter"),
             # The daily risk-free path _risk used, so a consumer computing a
             # Sharpe elsewhere (the newsletter's KPI matrix) uses the same one.
             risk_free_daily=ctx.get("_rf_daily"),

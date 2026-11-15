@@ -171,6 +171,11 @@ class PortfolioMetrics:
     # ``{"real_from": Timestamp, "sleeves": [{"ticker", "real_from", "source"}]}``
     # when part of ``target_history`` rests on modeled sleeve history, else None.
     target_history_modeled: Optional[dict] = None
+    # The book's value-weighted TER (%) week by week since inception; a
+    # window's TER is its average over the window.
+    ter_timeline: Optional[pd.Series] = None
+    # The target plan's weighted TER (%), its weights held constant.
+    target_ter: Optional[float] = None
     # The daily risk-free path (fractions) the risk block used, or None.
     risk_free_daily: Optional[pd.Series] = None
     # The target ALLOCATION itself: ``{canonical ticker or ISIN: weight %}`` for

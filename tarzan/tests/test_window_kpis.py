@@ -43,7 +43,7 @@ def test_matrix_rows_and_euro_format():
                                  "volatility": 12.4, "sharpe": -1.8, "max_drawdown": -4.1}},
             "target": {"1m": {"return": -1.8, "sharpe": 0.5}}}
     html = sp._kpi_matrix_html(kpis, ["5d", "1m", "3m", "ytd", "1y", "3y", "5y"], "1D")
-    for text in ("Portfolio", "Target", "TWR", "Volatility", "Sharpe", "Max drawdown",
+    for text in ("Portfolio", "Target", "Return", "Volatility", "Sharpe", "Max drawdown", "SI",
                  "5Y", "−1.80", "−€0.3k", "+€2.0k", "−€1.4k"):  # synthetic
         assert text in html, text
     assert "vs " not in html and "P&amp;L %" not in html and "Unr. %" not in html
