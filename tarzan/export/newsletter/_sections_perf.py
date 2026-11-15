@@ -1819,10 +1819,13 @@ def _window_kpis(m, windows, geo_name) -> dict:
         # TER: the book's over the window (its lines change), the plan's and the
         # benchmark's own.
         if ter_tl is not None and len(ter_tl):
-            tl = ter_tl if lo is None else ter_tl[(ter_tl.index >= lo) & (ter_tl.index <= hi)]
-            if not len(tl):
-                prior = ter_tl[ter_tl.index <= (hi if hi is not None else ter_tl.index[-1])]
-                tl = prior.iloc[-1:] if len(prior) else ter_tl.iloc[-1:]
+            if lo is None:          # 1D: today's mix, not a lifetime average
+                tl = ter_tl.iloc[-1:]
+            else:
+                tl = ter_tl[(ter_tl.index >= lo) & (ter_tl.index <= hi)]
+                if not len(tl):     # a window inside one weekly step
+                    prior = ter_tl[ter_tl.index <= hi]
+                    tl = prior.iloc[-1:] if len(prior) else ter_tl.iloc[-1:]
             rows["portfolio"]["ter"] = float(tl.mean())
         if getattr(m, "target_ter", None) is not None and rows["target"]:
             rows["target"]["ter"] = float(m.target_ter)

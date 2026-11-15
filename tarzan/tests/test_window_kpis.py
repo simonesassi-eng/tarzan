@@ -47,3 +47,24 @@ def test_matrix_rows_and_euro_format():
                  "5Y", "−1.80", "−€0.3k", "+€2.0k", "−€1.4k"):  # synthetic
         assert text in html, text
     assert "vs " not in html and "P&amp;L %" not in html and "Unr. %" not in html
+
+
+def test_the_one_day_ter_is_todays_mix_not_a_lifetime_average():
+    """A synthetic book whose TER rose from 0.15% to 0.32%: 1D reads today's
+    0.32%, the since-inception column the average."""
+    import pandas as pd
+    from tarzan.export.newsletter import _sections_perf as sp
+
+    class M:
+        portfolio_history = None
+        target_history = None
+        benchmark_histories = None
+        risk_free_daily = None
+        pnl_series = None
+        actual_value_series = None
+        target_ter = None
+        ter_timeline = pd.Series([0.15, 0.20, 0.32],
+                                 index=pd.to_datetime(["2026-01-02", "2026-06-05", "2026-11-13"]))
+
+    k = sp._window_kpis(M(), ["1d"], None)
+    assert k["portfolio"]["1d"]["ter"] == 0.32

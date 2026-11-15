@@ -1312,19 +1312,15 @@ class MetricsEngine:
         """
         from tarzan.engine.returns_builder import build_allocation_timeline
 
-        # The longest history the reconstruction can price: a stretch lacking
-        # causal price evidence voids the whole call, so shorter spans are tried
-        # in turn. ponytail: windows older than the span read its first value;
-        # a per-segment rebuild would lift that if a long window ever needs it.
-        tl = None
-        for months in (600, 12, 6, 3):
-            try:
-                tl = build_allocation_timeline(
-                    orders, enriched, months=months, today=ctx.get("_order_analysis_date"))
-            except Exception:  # noqa: BLE001 — a cost figure must never sink the run
-                tl = None
-            if tl:
-                break
+        # Whole history. Weights only: a line sold earlier, which enrichment
+        # leaves unclassified, still weighs by its value (its class is not needed
+        # for a cost).
+        try:
+            tl = build_allocation_timeline(
+                orders, enriched, months=600, today=ctx.get("_order_analysis_date"),
+                require_classification=False)
+        except Exception:  # noqa: BLE001 — a cost figure must never sink the run
+            tl = None
         if not tl or len(tl.get("dates", [])) < 1:
             return None
         values = []

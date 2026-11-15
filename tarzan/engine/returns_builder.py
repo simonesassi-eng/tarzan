@@ -1584,8 +1584,16 @@ def build_allocation_timeline(
     *,
     months: int = 3,
     today: Optional[datetime.date] = None,
+    require_classification: bool = True,
 ) -> Optional[dict]:
     """Reconstruct the historical allocation mix over a recent window.
+
+    ``require_classification=False`` is for a caller that reads only the
+    per-holding weights of the invested book (``holding_invested``), such as the
+    TER timeline: a position the engine never classified — a line sold before
+    today, which enrichment leaves unclassified — still counts in its value
+    weight instead of voiding the whole history. The class and geo series of
+    such a call are not an allocation and must not be read as one.
 
     Returns weekly snapshots of the invested asset-class mix and the
     equity-geography mix over the last ``months`` months (clamped to the
@@ -1801,6 +1809,10 @@ def build_allocation_timeline(
         for isin, v in iso_val.items():
             bd = _breakdown_for(isin)
             if not bd:
+                if not require_classification:
+                    iso_ac[isin] = "_unclassified"
+                    invested += v
+                    continue
                 classification_unavailable = True
                 continue
             prim = max(bd, key=bd.get)
