@@ -811,14 +811,12 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 _ser, _w["dates"], include_zero=True, w=W_CELL, h=H_CELL,
                 min_day_ticks=0, end_gutter=G_CELL) if (_ser and _w) else "")
             if _chart:
-                # DAYS, not sessions. The plotted index comes from
-                # ``actual_value_series``, which is calendar-daily with weekends
-                # carried flat, so its length counts calendar days: a 1Y window
-                # measures 364 of them and about 252 sessions. Calling them
-                # sessions printed a figure 40% too high beside every window.
-                _span_days = (pd.Timestamp(_w["window_end"])
-                              - pd.Timestamp(_w["window_start"])).days
-                ret_cells.append(_cellcap(_label, f'{_span_days} days') + _chart)
+                # SESSIONS, the unit every returns table measures a window in
+                # (5D is five trading days back). ``_perf_window`` plots trading
+                # days only, so the points after the anchor are the sessions the
+                # window covers.
+                _sessions = max(len(_w["dates"]) - 1, 0)
+                ret_cells.append(_cellcap(_label, f'{_sessions} sessions') + _chart)
             else:
                 ret_cells.append(_empty_cell(_label, "not enough history"))
 
@@ -2358,17 +2356,33 @@ def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
                   if r["contrib"].get(key) is not None)
         return num / den if den else None
 
-    # The book's own figure is the portfolio's measured return, not a reweighting of
-    # its parts: the two differ by the cash and the lines with no market history, and
-    # the measured one is what every other section prints.
+    # Each universe's total is its MEASURED return from the one authority the KPI
+    # matrix and the Vs-target charts print (``_window_kpis``), never a
+    # re-weighting of its parts: those differ by the cash, by the lines with no
+    # history over the window (a young target sleeve, renormalised away) and by
+    # compounding — and the target once read -0.33% here beside -0.47% in the
+    # KPI table and on its chart (synthetic). Re-weighting only stands in when
+    # no measured figure exists.
+    measured = (_window_kpis(m, [key for key, _ in _MOVER_WINDOWS], ctx.benchmark_geo)
+                if getattr(m, "portfolio_history", None) is not None else {})
     port = getattr(m, "performance", None) or {}
-    book_totals = {}
-    for key, _ in _MOVER_WINDOWS:
-        value = port.get(key)
-        if value is None or (isinstance(value, float) and value != value):
-            value = _weighted(book, key)
-        book_totals[key] = None if value is None else float(value)
-    plan_totals = {key: _weighted(plan, key) for key, _ in _MOVER_WINDOWS}
+
+    def _missing(v):
+        return v is None or (isinstance(v, float) and v != v)
+
+    def _totals(who, universe):
+        out = {}
+        for key, _ in _MOVER_WINDOWS:
+            value = measured.get(who, {}).get(key, {}).get("return")
+            if _missing(value) and who == "portfolio":
+                value = port.get(key)
+            if _missing(value):
+                value = _weighted(universe, key)
+            out[key] = None if value is None else float(value)
+        return out
+
+    book_totals = _totals("portfolio", book)
+    plan_totals = _totals("target", plan)
 
     left = _mover_grid_html(book, "Portfolio", PALETTE["port"], book_totals) if book else ""
     right = _mover_grid_html(plan, "Target", PALETTE["target"], plan_totals) if plan else ""
@@ -2382,7 +2396,10 @@ def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
                 '</tr></table>')
     else:
         html = left or right
-    return {"available": True, "html": html}
+    # The totals the grids print, exposed so a check can hold them to the KPI
+    # matrix and the charts.
+    return {"available": True, "html": html,
+            "totals": {"portfolio": book_totals, "target": plan_totals}}
 
 
 def _build_movers(ctx: _NewsletterContext) -> dict:

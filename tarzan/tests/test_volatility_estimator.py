@@ -365,14 +365,14 @@ class TestTheSinceInceptionPanelIsRendered:
         assert html.count("Line: rolling 21 sessions") == 1
         assert "σ over the book" in html
 
-    def test_a_window_span_is_labelled_in_days_not_sessions(self):
-        """The plotted index is ``actual_value_series``, which is calendar-daily
-        with weekends carried flat. Its length counts DAYS, so calling them
-        sessions printed ~364 beside a 1Y window that holds about 252."""
+    def test_a_window_span_is_labelled_in_sessions_like_the_tables(self):
+        """A window is plotted on trading days only (weekends carried flat are
+        dropped), so its caption counts the sessions after the anchor — the
+        unit every returns table measures 5D in."""
         import re
         html = self._section()["vs_market_html"]
-        assert "sessions</span>" not in html.split("Volatility", 1)[0]
-        spans = re.findall(r'letter-spacing:0;"> · (\d+) days</span>', html)
+        assert " days</span>" not in html.split("Volatility", 1)[0]
+        spans = re.findall(r'letter-spacing:0;"> · (\d+) sessions</span>', html)
         assert spans, html[:400]
         # Monotonic: a longer window spans more days than a shorter one.
         assert spans == sorted(spans, key=int), spans

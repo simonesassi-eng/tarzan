@@ -312,6 +312,14 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         if bucket != "1m" and val_all.index[0] > start + pd.Timedelta(days=7):
             return None
     val = val_all[(val_all.index >= start) & (val_all.index <= common_end)]
+    # Trading days only. The value series is calendar-daily with weekends
+    # carried flat, so a 5D panel drew seven points, two of them a flat
+    # weekend, under a "7 days" caption — while every returns table counts the
+    # same window as five sessions. Weekend points carry no move; dropping them
+    # changes no endpoint.
+    trading = val[val.index.dayofweek < 5]
+    if len(trading) >= 2:    # a weekly-stamped series keeps its own points
+        val = trading
     if len(val) < 2:
         return None
     idx = val.index
