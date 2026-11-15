@@ -63,3 +63,19 @@ def test_every_section_prints_one_return_per_window(analysed):
             assert listed == pytest.approx(kpi, abs=1e-9), (who, b, "movers", listed, kpi)
             checked += 1
     assert checked >= 4, checked
+
+
+def test_the_volatility_chart_states_the_kpi_matrix_volatility(analysed):
+    """The volatility panel's key computes its σ itself; it must print the KPI
+    matrix's since-inception figure (the risk engine's), not a lookalike."""
+    from tarzan.export.newsletter._sections_perf import _window_kpis
+    from tarzan.export._perf_series import _perf_vol_series
+
+    m, _config = analysed
+    kpis = _window_kpis(m, ["si"], None)
+    vs = _perf_vol_series(m, None)
+    assert vs is not None
+    for who, key in (("portfolio", "port"), ("target", "target")):
+        kpi = kpis.get(who, {}).get("si", {}).get("volatility")
+        if kpi is not None and vs["span"].get(key) is not None:
+            assert vs["span"][key] == pytest.approx(kpi, rel=1e-9), (who, vs["span"][key], kpi)
