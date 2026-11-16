@@ -1947,15 +1947,19 @@ _KPI_BASIS = {"volatility": "ann.", "sharpe": "ann.", "sortino": "ann.", "alpha"
 
 
 def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
-                     bench_label: str = "Benchmark", si_sessions=None) -> str:
-    """Two tables under the value chart.
+                     bench_label: str = "Benchmark", si_sessions=None,
+                     part: str = "all") -> str:
+    """The Performance figures, in up to three tables; ``part`` selects
+    ``"ledger"``, ``"compare"`` or ``"all"`` (both, for tests).
+
+    LEDGER, above the value chart it belongs to: the book's euros by window
+    (P&L and Unrealized, net of flows), the rows carrying the chart's own
+    swatches, coloured by sign as in State and never tinted, because nothing
+    compares with them.
 
     RETURNS, by window: the three universes (Portfolio, Target, benchmark) as
     rows over 1D · 5D · 1M · 3M · YTD · SI, tinted per window by rank (best
-    green, worst red, fainter the closer the three are); then, under a rule,
-    the book's euros for the same windows (P&L and Unrealized, net of flows),
-    coloured by sign as in State and never tinted, because nothing compares
-    with them.
+    green, worst red, fainter the closer the three are).
 
     RISK, once: the ten risk measures over the book's whole life (the plan and
     the index clipped to the same span), one column per universe, tinted per
@@ -2056,19 +2060,41 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                            weight=700 if b == "si" else 600)
             body += (f'<tr>{_label_td(_swatch(col) + f"<span style=\"color:{P["ink"]};\">{_esc(name)}</span>", last=last)}'
                      f'{tds}</tr>')
-        # The book's euros, under the rule: sign-coloured, never tinted.
+        colgroup = ('<colgroup><col>' + "".join(f'<col style="width:{colw}px;">' for _ in windows)
+                    + '</colgroup>')
+        return _table(colgroup, head, body)
+
+    # ── LEDGER: the book's euros by window, the rows wearing the chart's swatches ──
+    def _ledger(windows, day):
+        colw = 46
         book = kpis.get("portfolio", {})
-        for key in ("pnl_eur", "unr_eur"):
-            if not any(key in book.get(b, {}) for b in windows):
-                continue
+        rows = [k for k in ("pnl_eur", "unr_eur") if any(k in book.get(b, {}) for b in windows)]
+        if not rows:
+            return ""
+        # The value chart under this table draws Total P&L green above its open
+        # and red below, and Unrealized in violet: the same marks lead the rows.
+        split = (f'<span style="display:inline-block;width:4px;height:7px;border-radius:2px 0 0 2px;'
+                 f'background:{P["green"]};vertical-align:1px;"></span>'
+                 f'<span style="display:inline-block;width:4px;height:7px;border-radius:0 2px 2px 0;'
+                 f'background:{P["red"]};vertical-align:1px;margin-right:5px;"></span>')
+        marks = {"pnl_eur": split, "unr_eur": _swatch(P["unreal"])}
+        title = ('Portfolio<br><span style="font-weight:400;letter-spacing:0;text-transform:none;'
+                 f'font-size:{TYPE_PX["label"]}px;color:{P["faint"]};">\u20ac net of flows</span>')
+        head = ('<tr>' + _th(title, align="left", first=True)
+                + "".join(_th(_esc(day if b == "1d" else b.upper()), width=colw) for b in windows)
+                + '</tr>')
+        body = ""
+        for i, key in enumerate(rows):
             lab, unit, _t = labels[key]
+            last = i == len(rows) - 1
             tds = ""
             for b in windows:
                 v = book.get(b, {}).get(key)
                 colour = (P["faint"] if v is None else P["ink"] if abs(float(v)) < 0.5
                           else P["green"] if v > 0 else P["red"])
-                tds += _td(_fmt(v, key, unit), colour=colour, weight=700 if b == "si" else 600)
-            body += (f'<tr>{_label_td(f"<span style=\"color:{P["muted"]};\">{_esc(lab)}</span>" + _unit_html(unit))}'
+                tds += _td(_fmt(v, key, unit), colour=colour, weight=700 if b == "si" else 600,
+                           last=last)
+            body += (f'<tr>{_label_td(marks[key] + f"<span style=\"color:{P["ink"]};\">{_esc(lab)}</span>" + _unit_html(unit), last=last)}'
                      f'{tds}</tr>')
         colgroup = ('<colgroup><col>' + "".join(f'<col style="width:{colw}px;">' for _ in windows)
                     + '</colgroup>')
@@ -2118,7 +2144,11 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                     + '</colgroup>')
         return f'<div style="margin-top:14px;">{_table(colgroup, head, body)}</div>'
 
-    out = [_returns(short_w, day_label)]
+    ledger = _ledger(short_w, day_label)
+    if part == "ledger":
+        return f'<div style="margin-top:12px;">{ledger}</div>' if ledger else ""
+    out = [] if part == "compare" else [ledger]
+    out.append(_returns(short_w, day_label))
     has_long = any(kpis.get(who, {}).get(b, {}).get("return") is not None
                    for who in kpis for b in long_w)
     if has_long:
@@ -2128,9 +2158,9 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
         long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
     out.append(_risk())
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'Return: TWR; Target: weights held fixed; SI: since inception. P&amp;L, Unrealized: '
-            f'\u20ac net of flows. Risk over the book\u2019s whole life, plan and index clipped to '
-            f'the same span; Max DD and Ulcer are of the span, VaR and CVaR the worst 5% of days. '
+            f'Return: TWR; Target: weights held fixed; SI: since inception. '
+            f'Risk over the book\u2019s whole life, plan and index clipped to the same span; '
+            f'Max DD and Ulcer are of the span, VaR and CVaR the worst 5% of days. '
             f'\u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} (its own 0 and 1). '
             f'TER: value-weighted. Tint: best (green) and worst (red) of the three, fainter when '
             f'they are close; volatility and \u03b2 untinted.</div>')
@@ -2410,16 +2440,18 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
     unverified_note = _unverified_note(perf_by_ticker, ["1d", *period_keys])
     day_label = day_column_label(
         m, live=_intraday_column([bool(port_full.get("1d_intraday"))] + row_intraday))
+    kpis = _window_kpis(m, ["1d", *period_keys, "si"], ctx.benchmark_geo)
     return {
         "available": True,
         # The portfolio has its own KPI matrix in the Portfolio section now, so
         # Returns lists the holdings only.
         "table_html": _returns_table_html(
             period_keys, None, groups, day_label=day_label) + unverified_note,
+        "kpi_ledger_html": _kpi_matrix_html(
+            kpis, period_keys, day_label, ctx.benchmark_geo or "Benchmark", part="ledger"),
         "kpi_matrix_html": _kpi_matrix_html(
-            _window_kpis(m, ["1d", *period_keys, "si"], ctx.benchmark_geo),
-            period_keys, day_label, ctx.benchmark_geo or "Benchmark",
-            si_sessions=_si_sessions(m, ctx.benchmark_geo)),
+            kpis, period_keys, day_label, ctx.benchmark_geo or "Benchmark",
+            si_sessions=_si_sessions(m, ctx.benchmark_geo), part="compare"),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }

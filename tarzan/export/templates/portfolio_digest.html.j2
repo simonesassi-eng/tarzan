@@ -108,6 +108,9 @@
             {{ gutter(secn) }}
             <td style="padding:18px 13px 0 8px;">
               {{ kick("Performance") }}
+              {# The book's euros by window lead: the value chart beneath draws
+                 the same two P&L lines. #}
+              {% if returns_snapshot and returns_snapshot.kpi_ledger_html %}{{ returns_snapshot.kpi_ledger_html|safe }}{% endif %}
               {% if hero.value_chart %}
               <div style="margin-top:12px;">{{ hero.value_chart|safe }}</div>
               {% if hero.value_chart_legend %}{{ hero.value_chart_legend|safe }}{% endif %}
