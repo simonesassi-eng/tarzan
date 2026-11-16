@@ -517,6 +517,7 @@ class TestTheReturnsTablePrintsTheEngine:
                           + re.escape(PALETTE["page"]) + r';[^"]*">(.*?)</td>', re.S)
         for i, t in enumerate(tickers):
             chunk = sec[t.end():tickers[i + 1].start() if i + 1 < len(tickers) else len(sec)]
+            # The unverified mark is a small span; its "?" survives the strip.
             cells = [re.sub(r"<[^>]+>", "", c).strip() for c in seam.findall(chunk)]
             if header and len(cells) >= len(header) - 1:
                 rows[t.group(1)] = [""] + cells[:len(header) - 1]

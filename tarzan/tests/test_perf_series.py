@@ -263,7 +263,7 @@ def test_chart_grid_density():
             list(long_idx), include_zero=False, month_ticks=True, w=w)
 
     def _labels(svg):
-        return re.findall(r'>([A-Z][a-z]{2}(?: \d{2})?)<', svg)
+        return re.findall(r'>([A-Z][a-z]{2}(?: \u2019\d{2})?)<', svg)
 
     narrow, wide = _svg(264), _svg(544)
     n_narrow, n_wide = len(_labels(narrow)), len(_labels(wide))
@@ -283,7 +283,7 @@ def test_chart_grid_density():
     # The axis still ends on the current month, and the first label carries the
     # year so the reader can place the window.
     assert _labels(narrow)[-1].startswith("Jul")
-    assert _labels(narrow)[0] == "Nov 25"
+    assert _labels(narrow)[0] == "Nov \u201925"
 
     short_idx = pd.date_range("2026-06-13", periods=23, freq="D")
     svg_r = chart_pct_compact([{"values": list(range(23)), "color": "#000"}],

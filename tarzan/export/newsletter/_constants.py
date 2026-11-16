@@ -583,10 +583,11 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
 
     out = []
     since_header = header_every
+    headed = False          # the grid has printed its window header at least once
     if portfolio_row is not None:
         out.append(f'<div style="margin-top:8px;">{_grid_open(GRID_W)}{_grid_header_row(day_label, wins)}'
                    f'{_grid_instrument_rows(portfolio_row, ncol, last=True)}</table></div>')
-        since_header = 0
+        since_header, headed = 0, True
     inner_w = GRID_W - GRID_RAIL_W - GRID_RAIL_GAP
     for cls, col, role_list in groups:
         for role, rows in role_list:
@@ -603,9 +604,11 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
             # not a table border, which the collapsed-border model drops) beside
             # the rows.
             body = []
-            if since_header >= header_every:
+            # The window header leads the first band; it repeats when due, but
+            # not over a one-row band, where it read as that band's own header.
+            if since_header >= header_every and (len(rows) > 1 or not headed):
                 body.append(_grid_header_row(day_label, wins))
-                since_header = 0
+                since_header, headed = 0, True
             for i, row in enumerate(rows):
                 since_header += 1
                 body.append(_grid_instrument_rows(row, ncol, last=(i == len(rows) - 1)))

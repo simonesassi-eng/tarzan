@@ -59,7 +59,7 @@
                     {% if st.mwr %}
                     <div style="{{ type.label }}color:{{ palette.muted }};">MWR · since inception</div>
                     <div style="margin-top:2px;{{ type.figure }}color:{{ sign_color(st.mwr.tone) }};white-space:nowrap;font-variant-numeric:tabular-nums;">{{ st.mwr.si }}</div>
-                    <div style="margin-top:2px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{% if st.mwr.ann %}<span style="color:{{ sign_color(st.mwr.tone) }};">{{ st.mwr.ann }}</span> annualized{% endif %}{% if st.mwr.net %} · {{ st.mwr.net }} net of tax{% endif %}</div>
+                    <div style="margin-top:2px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{% if st.mwr.ann %}<span style="color:{{ sign_color(st.mwr.tone) }};">{{ st.mwr.ann }}</span> annualized{% endif %}{% if st.mwr.net %} · <span style="white-space:nowrap;">{{ st.mwr.net }} net of tax</span>{% endif %}</div>
                     {% else %}&nbsp;{% endif %}
                   </td>
                 </tr>

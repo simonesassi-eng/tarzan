@@ -218,8 +218,9 @@
                 <span style="{{ type.title }}letter-spacing:0.06em;color:{{ palette.ink }};">{{ plan.label|e }}</span>
                 {# ACTIVE selects a modeled proposal. Funding/model checks are
                    not an assertion that a broker can execute these orders. #}
-                <span style="display:inline-block;margin-left:6px;padding:1px 5px;border-radius:2px;background:{{ palette.accent_bg }};color:{{ palette.ink if plan.active else palette.muted }};font-size:9.5px;font-weight:700;letter-spacing:0.06em;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span>
-                <span data-tarzan-funding-badge="true" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:2px;background:{{ palette.green_bg if plan.executable else palette.red_bg if plan.execution_status == 'NON_EXECUTABLE' else palette.amber_bg }};color:{{ palette.green if plan.executable else palette.red if plan.execution_status == 'NON_EXECUTABLE' else palette.amber }};font-size:9.5px;font-weight:700;letter-spacing:0.06em;vertical-align:middle;">{{ 'CHECKS PASSED' if plan.executable else 'NOT EXECUTABLE · DRAFT' if plan.execution_status == 'NON_EXECUTABLE' else 'UNKNOWN · DRAFT' }}</span>
+                {# Both badges in one unbreakable run: when the line is short
+                   they wrap together under the title, never one alone. #}
+                <span style="white-space:nowrap;"><span style="display:inline-block;margin-left:6px;padding:1px 5px;border-radius:2px;background:{{ palette.accent_bg }};color:{{ palette.ink if plan.active else palette.muted }};font-size:9.5px;font-weight:700;letter-spacing:0.06em;vertical-align:middle;">{{ 'ACTIVE' if plan.active else 'ALTERNATIVE' }}</span><span data-tarzan-funding-badge="true" style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:2px;background:{{ palette.green_bg if plan.executable else palette.red_bg if plan.execution_status == 'NON_EXECUTABLE' else palette.amber_bg }};color:{{ palette.green if plan.executable else palette.red if plan.execution_status == 'NON_EXECUTABLE' else palette.amber }};font-size:9.5px;font-weight:700;letter-spacing:0.06em;vertical-align:middle;">{{ 'CHECKS PASSED' if plan.executable else 'NOT EXECUTABLE · DRAFT' if plan.execution_status == 'NON_EXECUTABLE' else 'UNKNOWN · DRAFT' }}</span></span>
               </div>
               {# The scope disclaimer, inside each plan: the semantic gate checks
                  its exact words per plan, so it is a note here and not a
@@ -299,11 +300,14 @@
               {% endif %}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;">
                 {% for r in risk_legend %}
-                <tr>
-                  <td style="padding:6px 0 1px 0;{{ type.prose }}font-weight:700;color:{{ palette.ink }};white-space:nowrap;width:70px;">{{ r.label }}</td>
-                  <td align="right" style="padding:6px 0 1px 0;"><span style="display:inline-block;padding:1px 5px;border-radius:2px;background:{{ palette.green_bg }};color:{{ palette.green }};font-size:9.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-variant-numeric:tabular-nums;">{{ r.strong_label }} {{ r.strong }}</span><span style="display:inline-block;margin-left:3px;padding:1px 5px;border-radius:2px;background:{{ palette.amber_bg }};color:{{ palette.amber }};font-size:9.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-variant-numeric:tabular-nums;">{{ r.fair_label }} {{ r.fair }}</span><span style="display:inline-block;margin-left:3px;padding:1px 5px;border-radius:2px;background:{{ palette.red_bg }};color:{{ palette.red }};font-size:9.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-variant-numeric:tabular-nums;">{{ r.weak_label }} {{ r.weak }}</span></td>
-                </tr>
-                <tr><td colspan="2" style="padding:0 0 6px 0;border-bottom:1px solid {{ palette.row_rule }};{{ type.note }}color:{{ palette.muted }};">{{ r.description }}</td></tr>
+                <tr><td style="padding:7px 0 0 0;{{ type.prose }}font-weight:700;color:{{ palette.ink }};">{{ r.label }} <span style="font-weight:400;color:{{ palette.muted }};">{{ r.description }}</span></td></tr>
+                <tr><td style="padding:4px 0 7px 0;border-bottom:1px solid {{ palette.row_rule }};">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;"><tr>
+                    {% for bg, fg, lab, val in [(palette.green_bg, palette.green, r.strong_label, r.strong), (palette.amber_bg, palette.amber, r.fair_label, r.fair), (palette.red_bg, palette.red, r.weak_label, r.weak)] %}
+                    <td style="padding:0 {{ '0' if loop.last else '3px' }} 0 0;"><div style="padding:2px 5px;border-radius:2px;background:{{ bg }};color:{{ fg }};font-size:9.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ lab }} {{ val }}</div></td>
+                    {% endfor %}
+                  </tr></table>
+                </td></tr>
                 {% endfor %}
               </table>
               {% if risk_alpha_beta_note %}

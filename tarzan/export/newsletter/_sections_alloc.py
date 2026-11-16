@@ -554,6 +554,9 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
     # Each tile is (label, value, caption, tone). ``tone`` is 'pos'/'neg'/'flat'
     # and the template maps it to a colour, so no palette lookup leaks in here.
     def _tone(value) -> str:
+        # A move that prints as 0.00% is flat, not a gain.
+        if value is not None and not is_missing(value) and abs(round(float(value), 2)) < 1e-9:
+            return "flat"
         if value is None:
             return "flat"
         return "pos" if float(value) >= 0 else "neg"
@@ -1921,9 +1924,11 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             c_now = float(cash.get("cash_actual_eur") or 0.0)
             c_tgt = float(cash.get("cash_target_eur") or 0.0)
             c_ok = abs(c_now - c_tgt) <= rel / 100.0 * c_tgt + 1e-9
+            # To the euro: rounded to thousands, both sides printed the same
+            # figure and the gap beside them read as a contradiction.
             tail.append({"name": "Strategic reserve", "move": "", "now_pc": "",
-                         "now_eur": _eur_smart(c_now), "plan_pc": "",
-                         "plan_eur": _eur_smart(c_tgt), "gap": _signed_eur(c_now - c_tgt),
+                         "now_eur": _eur(c_now, 0), "plan_pc": "",
+                         "plan_eur": _eur(c_tgt, 0), "gap": _signed_eur(c_now - c_tgt),
                          "colour": P["green"] if c_ok else P["red"]})
         levered = max(tn, tt) > 100.5
         note = [f"Notional, % of invested capital ({_eur_smart(invested_base)})."]
@@ -2003,9 +2008,9 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         html.append(_bridge_card(_bridge_svg(
             sp["left"], sp["right"], cfg, two=sp["two"], tail=sp.get("tail") or (),
             aria=sp["aria"])))
-        # The last card's caption carries the legend, which every card shares.
-        last = i == len(specs) - 1
-        text = f'{sp["note"]} {legend}' if last else sp["note"]
+        # The first block's caption carries the legend every block shares: the
+        # reader meets the red/green gaps there first.
+        text = f'{sp["note"]} {legend}' if i == 0 else sp["note"]
         html.append(_alloc_note(text))
     return {"available": True, "html": "".join(html)}
 
@@ -2169,10 +2174,11 @@ def _trade_rows_html(actions: list) -> str:
             f'color:{a["_dir_color"]};white-space:nowrap;font-variant-numeric:tabular-nums;">'
             f'{a["_trade"]}</td></tr></table>'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'style="margin-top:2px;{TYPE["data"]}font-weight:400;color:{P["muted"]};'
-            f'font-variant-numeric:tabular-nums;"><tr>'
+            f'style="margin-top:2px;table-layout:fixed;{TYPE["data"]}font-weight:400;color:{P["muted"]};'
+            f'font-variant-numeric:tabular-nums;"><colgroup><col style="width:33%;"><col style="width:37%;">'
+            f'<col style="width:30%;"></colgroup><tr>'
             f'<td style="padding:0;white-space:nowrap;">now {_pe(a["_now"], P["ink"])}</td>'
-            f'<td align="center" style="padding:0;white-space:nowrap;">\u2192 after {_pe(a["_after"], P["ink"])}</td>'
+            f'<td style="padding:0;white-space:nowrap;">\u2192 after {_pe(a["_after"], P["ink"])}</td>'
             f'<td align="right" style="padding:0;white-space:nowrap;">target {_pe(a["_target"], P["ink"])}</td>'
             f'</tr></table></div>')
     return f'<div style="margin-top:6px;">{"".join(rows)}</div>'

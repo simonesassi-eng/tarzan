@@ -272,7 +272,9 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
             if k not in _labelled:
                 continue
             t = ts[k]
-            label = (t.strftime("%b %y")
+            # "Jan \u201926", not "Jan 26": on a statement the bare form reads as
+            # the 26th of January.
+            label = (t.strftime("%b \u2019%y")
                      if (prev_year != t.year or prev_year is None)
                      else t.strftime("%b"))
             prev_year = t.year

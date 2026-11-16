@@ -65,6 +65,12 @@ from tarzan.export.newsletter._charts import (
 
 logger = logging.getLogger(__name__)
 
+#: Board names that do not fit a half column beside their flag and move.
+_MARKET_SHORT = {"Nasdaq Composite": "Nasdaq Comp.", "SSE Composite": "SSE Comp.",
+                 "MSCI Emerging Mkts": "MSCI EM", "FTSE China A50": "China A50",
+                 "BTP\u2013Bund 10Y": "BTP\u2013Bund"}
+
+
 def _nowrap_parts(parts: list, *, lead: bool = False) -> str:
     """Parts of a small caption joined by " · ", each unbreakable inside, so a
     half-column breaks "00:00–23:00 · Op. Mon" between the hours and the
@@ -230,7 +236,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         # The "(FUT)" MARKETS carries keeps a future's name unique from its cash
         # index; on the board the "Futures" heading says it, and a commodity
         # is a futures price by nature, so neither shows the tag.
-        name = name.removesuffix(" (FUT)")
+        name = _MARKET_SHORT.get(name.removesuffix(" (FUT)"), name.removesuffix(" (FUT)"))
         flag = MARKET_FLAGS.get(d.get("symbol", ""))
         label = f"{flag} {_esc(name)}" if flag else _esc(name)
         if unit == "yield":
@@ -238,8 +244,10 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         elif unit == "spread":
             level, move = f'{d["value"]:.0f} bp', f'{_signed(delta, 1)} bp'
         else:
+            # A currency pair at four decimals: at two, a day's move is invisible.
+            fx = str(d.get("category", "")).lower().startswith("currenc")
             level = (f'{d["value"]:,.0f}' if abs(d["value"]) >= 1000
-                     else f'{d["value"]:,.2f}')
+                     else f'{d["value"]:,.4f}' if fx else f'{d["value"]:,.2f}')
             move = f'{_signed(delta, 2)}%'
         if d.get("verdict") == "disputed":
             move += _UNVERIFIED_MARK
@@ -375,7 +383,12 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         sub = (sub + " \u00b7 " if sub else "") + _esc(common_note) + (
             " unless stated" if (note_others or any(not re.search(r'data-spark-note=', _spark_for(d))
                                                      for _c, d in entries)) else "")
-    sub = (sub + " \u00b7 " if sub else "") + "\u25cf open"
+    # The dot key is HTML (a green dot), so it heads the board rather than the
+    # subtitle, which the template prints as text.
+    key = (f'<div style="margin-top:6px;{TYPE["note"]}color:{P["muted"]};">'
+           f'<span style="color:{P["green"]};">\u25cf</span> open \u00b7 '
+           f'<span style="color:{P["faint"]};">\u25cf</span> closed</div>')
+    grid = key + grid
     return {"available": True, "html": grid, "sub": sub}
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
@@ -1720,9 +1733,14 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
 
     def _figure(text, raw) -> str:
-        """The cell's figure without its unit (the band header carries the %),
-        keeping its marks (the unverified "?")."""
-        return str(text if text is not None else "\u2014").replace("%", "")
+        """The cell's figure without its unit (the band header carries the %).
+        The unverified mark ("?") is set small so a six-glyph figure and its
+        mark still fit the cell."""
+        text = str(text if text is not None else "\u2014").replace("%", "")
+        if text.endswith(_UNVERIFIED_MARK):
+            text = (text[:-len(_UNVERIFIED_MARK)]
+                    + f'<span style="font-size:8px;vertical-align:top;">{_UNVERIFIED_MARK}</span>')
+        return text
 
     def _row(inst, *, weight=400):
         parts = inst.get("day_parts") or {}
@@ -1766,8 +1784,8 @@ _KPI_ROWS = (("pnl_eur", "P&L", "\u20ac", True),
              ("sortino", "Sortino", "", True),
              ("max_drawdown", "Max DD", "%", True),
              ("ulcer_index", "Ulcer", "%", False),
-             ("var_95", "VaR 95", "%", False),
-             ("cvar_95", "CVaR 95", "%", False),
+             ("var_95", "VaR 95", "%", True),
+             ("cvar_95", "CVaR 95", "%", True),
              ("alpha", "Alpha", "%", True),
              ("beta", "Beta", "", False),
              ("ter", "TER", "%", False))
@@ -2395,7 +2413,7 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
     # widest ticker (five capitals, 38px). Without a plan the book's bank alone
     # takes the column.
     has_plan = bool(plan)
-    cw, bw, tw = (34, 19, 44) if has_plan else (66, 26, 60)
+    cw, bw, tw = (34, 17, 48) if has_plan else (66, 26, 60)
     colgroup = (f'<colgroup><col style="width:{tw}px;"><col style="width:{bw}px;">'
                 + f'<col style="width:{cw}px;">' * 4
                 + ((f'<col style="width:{bw}px;">' + f'<col style="width:{cw}px;">' * 4) if has_plan else "")
@@ -2424,9 +2442,9 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
     def _side(r, marks, left):
         lb = "" if left else f"border-left:1px solid {P['border']};"
         if r is None:
+            # Not in this universe: the side stays blank (the note says so).
             return (f'<td style="{lb}"></td>'
-                    + "".join(f'<td align="right" style="padding:4px 0 4px 2px;{TYPE["data"]}'
-                              f'color:{P["faint"]};">&middot;</td>' for _ in _MOVER_WINDOWS))
+                    + "".join(f'<td style="padding:4px 0 4px 2px;"></td>' for _ in _MOVER_WINDOWS))
         fill = max(2, int(round(r["weight"] / heaviest * 17)))
         tds = (f'<td style="padding:4px 0 4px 2px;{lb}vertical-align:middle;">'
                f'<div style="width:{fill}px;height:6px;background:{P["blue"]};border-radius:1px;'
@@ -2440,7 +2458,9 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
             colour = P["green"] if value >= 0 else P["red"]
             tint = _mover_tint(colour, P["page"], min(1.0, abs(value) / scale[key]) * _MOVER_TINT_MAX)
             extreme = marks.get(r["ticker"], {}).get(key)
-            tds += (f'<td align="right" style="background:{tint};{TYPE["data"]}font-size:{GRID_CELL_PX}px;'
+            # 10px: a five-glyph figure is 31px, which leaves a 2px gutter in a
+            # 34px cell; at 10.5px two neighbours ran into one string.
+            tds += (f'<td align="right" style="background:{tint};{TYPE["data"]}font-size:10px;'
                     f'border-left:1px solid {P["page"]};'
                     f'font-weight:{"600" if extreme else "400"};'
                     f'color:{P["ink"] if extreme else P["subtle"]};'
@@ -2477,8 +2497,9 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
             f'<div style="{TYPE["note"]}color:{P["muted"]};margin-top:6px;">Points of contribution '
             f'(weight × return) where the line was in the window\u2019s top or bottom three; '
             f'· = not in either'
-            + ('; a blank side = not in that universe. All: the whole book\u2019s '
-               '(plan\u2019s) return in %.' if has_plan else '. All: the whole book\u2019s return in %.')
+            + ('; the tint alone carries the others; a blank side = not in that universe. '
+               'All: the whole book\u2019s (plan\u2019s) return in %.'
+               if has_plan else '; the tint alone carries the others. All: the whole book\u2019s return in %.')
             + '</div>')
 
 
