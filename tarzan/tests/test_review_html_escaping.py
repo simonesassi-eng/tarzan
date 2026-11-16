@@ -127,7 +127,10 @@ def test_ampersands_remain_single_escaped_and_the_css_font_literal_remains_css(r
     assert ">Total P&amp;L<" in html
     assert "Total P&amp;amp;L" not in html
     style = html.split("<style>", 1)[1].split("</style>", 1)[0]
-    assert "'Liberation Mono'" in style
+    # The stack's quoted family name reaches the stylesheet as CSS, not as an
+    # HTML entity (the template marks the literal safe).
+    assert '"Helvetica Neue"' in style
+    assert "&#34;" not in style and "&quot;" not in style
     assert "&#39;" not in style and "&#x27;" not in style
 
 

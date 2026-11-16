@@ -271,7 +271,7 @@ class TestEveryReturnsRowCarriesItsMarker:
         replaced the dict rather than extending it would blank the numbers."""
         html = self._snapshot([("XDEQ.MI", "Xtr Quality", "EUR")])
         assert "[€]" in html
-        assert "+1.00%" in html
+        assert ">+1.00</td>" in html     # the grid prints bare figures; "%" is in the band
 
 
 @pytest.mark.usefixtures("unavailable_justetf")

@@ -645,8 +645,10 @@ class TestStripSparklineAtTheOpen:
         ctx = _NewsletterContext(metrics=PortfolioMetrics(market_quotes=(dict(quote),)),
                                  config=InvestorConfig())
         # _build_markets closes over its own _spark_for; drive it through the
-        # section with a single-row snapshot rather than reaching inside.
-        return sp._build_markets(ctx)["html"]
+        # section with a single-row snapshot rather than reaching inside. A
+        # caption every row shares (here: the only row's) moves to the subtitle.
+        out = sp._build_markets(ctx)
+        return out["html"] + " " + out["sub"]
 
     def _quote(self, **kw):
         base = {"name": "FTSE 100", "symbol": "^FTSE", "category": "Europe",
@@ -723,9 +725,10 @@ class TestChartExtentIsTradedExtent:
         ser = _bars([50.0, 50.2, 50.1], "2026-08-13", "09:00", "Europe/Berlin")
         quote = {"intraday_series": ser, "intraday_baseline": 50.0,
                  "intraday_source_ticker": "IS39.MU"}
-        _cell, inner = _perf_spark_cell(0.2, "IS39", {"IS39": quote}, live=False)
+        _cell, inner, _parts = _perf_spark_cell(0.2, "IS39", {"IS39": quote}, live=False)
         xs = _poly_xs(inner)
-        # 09:00→09:30 of Munich's 08:00–22:00 quoting day.
+        # 09:00→09:30 of Munich's 08:00–22:00 quoting day, in the sparkline's
+        # own 62-unit coordinate space (the cell scales it to its column).
         assert max(xs) < 62 * 0.15
 
     def test_an_unmodelled_venue_keeps_the_elapsed_time_axis(self, monkeypatch):

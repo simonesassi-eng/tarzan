@@ -35,20 +35,23 @@ import pandas as pd
 # Re-picking any hue here means re-running the six checks in display order, not
 # eyeballing the swatch.
 ASSET_CLASS_COLORS: dict[str, str] = {
-    "Equities": "2563EB",
-    "Fixed Income": "0D9488",
-    "Cash & Cash Equivalents": "15803D",
-    "Gold": "CA8A04",
-    "Commodities": "C2410C",
-    "Crypto": "7C3AED",
-    # A light violet, not slate: on the dark card slate read as "no colour", and
-    # Alternative's lines in the Allocation bridge looked like greyed-out rows. The
-    # deepest violet that keeps ΔE ≥ 15 from Crypto in full colour and ΔE ≥ 10
-    # from every class under protan/deutan/tritan simulation; Crypto's own violet
-    # would have collided with it.
-    "Alternative": "A180F9",
+    # Re-derived for the statement's near-black ground (#0B1017), where the
+    # Excel-era hues (2563EB, 0D9488, CA8A04...) drew at 3-5:1 and read as dark
+    # smudges in a 2px rail. Every hue clears 4:1 on the ground; adjacent pairs
+    # in display order (Equities, Fixed Income, Gold, Commodities, Crypto,
+    # Alternative, Cash) sit at ΔE >= 15 -- see test_export_format.
+    "Equities": "6E9BFF",
+    "Fixed Income": "2DD4BF",
+    "Cash & Cash Equivalents": "8FD17E",
+    # A lemon rather than an ochre gold: the ochre sat ΔE 11 from Commodities'
+    # orange, two held classes on adjacent rows of every allocation table.
+    "Gold": "EFD04C",
+    "Commodities": "F28C4B",
+    # Magenta, not violet: the deep violet that Crypto held collapsed to ΔE 3
+    # against Alternative's light violet once both were lifted for the dark ground.
+    "Crypto": "C026D3",
+    "Alternative": "B48CF2",
 }
-
 # Soft background tints for asset-class chips/rows in the newsletter.
 GEO_COLORS: dict[str, str] = {
     "USA": "2563EB",

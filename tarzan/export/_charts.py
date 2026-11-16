@@ -141,15 +141,16 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
     # Dense-label modes tilt the x-axis labels so many of them don't collide;
     # that needs more room below the plot, so grow the canvas + bottom margin
     # (keeps the plot area itself the same height as the non-rotated charts).
-    _rotate = bool(month_ticks or min_day_ticks)
-    if _rotate:
-        h = h + 12
+    # Statement charts: horizontal tick labels only (a rotated label at 10px in
+    # a 172px cell was the least legible text in the issue), a hairline
+    # horizontal grid, no vertical grid; the dashed zero line stays.
+    _rotate = False
     # ``end_gutter`` reserves room to the right of the plot for a label at the
     # end of each line, which replaces a legend underneath: a legend makes the
     # reader match a colour swatch to a line, while a label at the line's own end
     # needs no matching -- and it costs no vertical space, which across a
     # three-panel section is a whole row of height.
-    ml, mr, mt, mb = 30, (8 + max(0, int(end_gutter))), 10, (32 if _rotate else 20)
+    ml, mr, mt, mb = 32, (6 + max(0, int(end_gutter))), 8, 21
     pw, ph = w - ml - mr, h - mt - mb
     # Finite points only. ``min``/``max`` over a list holding a NaN is silently
     # ORDER-DEPENDENT — a leading NaN propagates because every comparison against
@@ -196,17 +197,17 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
         if t < vmin - 1e-9 or t > vmax + 1e-9:
             continue
         y = Y(t)
-        out.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml + pw}" y2="{y:.1f}" stroke="{BORDER}" stroke-width="1"/>')
-        out.append(f'<text x="{ml - 5}" y="{y + 3:.1f}" text-anchor="end" font-size="{fs}" fill="{SUBTLE}">{fmt_pct_tick(t, (ticks[1] - ticks[0]) if len(ticks) > 1 else None)}</text>')
+        out.append(f'<line x1="{ml}" y1="{y:.1f}" x2="{ml + pw}" y2="{y:.1f}" stroke="{_P["row_rule"]}" stroke-width="0.8"/>')
+        out.append(f'<text x="{ml - 5}" y="{y + 3.5:.1f}" text-anchor="end" font-size="{fs}" fill="{MUTED}">{fmt_pct_tick(t, (ticks[1] - ticks[0]) if len(ticks) > 1 else None)}</text>')
     if include_zero and vmin < 0 < vmax:
         y0 = Y(0.0)
         out.append(f'<line x1="{ml}" y1="{y0:.1f}" x2="{ml + pw}" y2="{y0:.1f}" stroke="{MUTED}" stroke-width="1" stroke-dasharray="2,3"/>')
 
     # ── X-axis ticks + light vertical gridlines ──
     def _vgrid(k: int) -> None:
-        x = X(k)
-        out.append(f'<line x1="{x:.1f}" y1="{mt}" x2="{x:.1f}" y2="{mt + ph}" '
-                   f'stroke="{BORDER}" stroke-width="1"/>')
+        return None  # the statement charts carry no vertical grid
+
+    _placed_x: list = []
 
     def _xlabel(k: int, text: str) -> None:
         x = X(k)
@@ -218,9 +219,20 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
                        f'font-size="{fs}" fill="{SUBTLE}" '
                        f'transform="rotate(-35 {x:.1f} {y:.1f})">{text}</text>')
         else:
-            anc = "start" if k == 0 else ("end" if k == n - 1 else "middle")
-            out.append(f'<text x="{x:.1f}" y="{h - 7}" text-anchor="{anc}" font-size="{fs}" '
-                       f'fill="{SUBTLE}">{text}</text>')
+            # Clamp into the plot so the first and last labels never run past
+            # the axis; skip a label that would overlap the one before it.
+            est = len(text) * fs * 0.56
+            anc = "middle"
+            if x - est / 2 < ml:
+                anc, x = "start", ml
+            elif x + est / 2 > ml + pw:
+                anc, x = "end", ml + pw
+            x0 = x if anc == "start" else (x - est if anc == "end" else x - est / 2)
+            if any(x0 < b + 4 and x0 + est > a - 4 for a, b in _placed_x):
+                return
+            _placed_x.append((x0, x0 + est))
+            out.append(f'<text x="{x:.1f}" y="{h - 6}" text-anchor="{anc}" font-size="{fs}" '
+                       f'fill="{MUTED}">{text}</text>')
 
     if month_ticks and n > 1:
         ts = [pd.Timestamp(d) for d in dates]
@@ -285,12 +297,11 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
             _end_x = ml + pw
             _end_txt = pd.Timestamp(x_span[1]).strftime(date_fmt)
             out.append(f'<line x1="{_end_x:.1f}" y1="{mt}" x2="{_end_x:.1f}" '
-                       f'y2="{mt + ph}" stroke="{BORDER}" stroke-width="1"/>')
-            _ey = mt + ph + 10
-            out.append(f'<text x="{_end_x:.1f}" y="{_ey:.1f}" text-anchor="end" '
-                       f'font-size="{fs}" fill="{SUBTLE}" '
-                       f'transform="rotate(-35 {_end_x:.1f} {_ey:.1f})">'
-                       f'{_end_txt}</text>')
+                       f'y2="{mt + ph}" stroke="{_P["row_rule"]}" stroke-width="1"/>')
+            est = len(_end_txt) * fs * 0.56
+            if not any((_end_x - est) < b + 4 for a, b in _placed_x):
+                out.append(f'<text x="{_end_x:.1f}" y="{h - 6}" text-anchor="end" '
+                           f'font-size="{fs}" fill="{MUTED}">{_end_txt}</text>')
         except Exception:  # noqa: BLE001 — an unformattable span simply gets no label
             pass
     _end_labels: list[tuple] = []
@@ -341,9 +352,9 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
                 out.append(f'<polyline points="{line}" fill="none" stroke="{s["color"]}" stroke-width="{sw}"{style} stroke-linejoin="round"/>')
         # The dot and the end label sit on the last point that HAS an estimate.
         lx, ly, _i = runs[-1][-1]
-        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.4" '
-                   f'fill="{s["color"]}" stroke="{_P["card_alt"]}" '
-                   f'stroke-width="1"/>')
+        out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.6" '
+                   f'fill="{s["color"]}" stroke="{_P["page"]}" '
+                   f'stroke-width="1.2"/>')
         label = s.get("end_label")
         if label and end_gutter:
             _end_labels.append((lx, ly, s["color"], label))
@@ -356,7 +367,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
     # its dot. Ordering by endpoint keeps the labels in the same top-to-bottom
     # order as the lines, and a hair-line leader ties a nudged label to its dot.
     if _end_labels:
-        GAP = 11.0
+        GAP = 12.5
         order = sorted(range(len(_end_labels)), key=lambda i: _end_labels[i][1])
         targets = [_end_labels[i][1] + 3.2 for i in order]
         placed, prev = [], None
@@ -381,7 +392,7 @@ def chart_pct_compact(series, dates, include_zero=True, w=256, h=150,
                            f'stroke="{color}" stroke-width="0.75" '
                            f'stroke-opacity="0.5"/>')
             out.append(f'<text x="{lx + 6:.1f}" y="{ey:.1f}" '
-                       f'text-anchor="start" font-size="{TYPE_PX["label"]}" font-weight="700" '
+                       f'text-anchor="start" font-size="{TYPE_PX["data"]}" font-weight="700" '
                        f'fill="{color}">{label}</text>')
     out.append("</svg>")
     return "".join(out)

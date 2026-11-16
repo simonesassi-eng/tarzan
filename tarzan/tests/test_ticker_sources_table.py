@@ -126,19 +126,19 @@ class TestFeeds:
 
 
 def test_the_template_reads_exactly_the_keys_the_builder_emits(monkeypatch):
-    """The section renders from the context dict, so a renamed key fails silently
-    (Jinja prints "—" for an undefined attribute)."""
+    """The table is built in Python from the row dicts (``_sources_table_html``),
+    so a renamed key fails silently (``dict.get`` prints "—" for a missing one).
+    Every key the builder reads must be one the rows carry."""
+    import inspect
     import re
-    from pathlib import Path
+    from tarzan.export.newsletter import _sections_alloc as sa
 
     _, rows = _rows(monkeypatch,
                     [_record("CL2.MI", "XX0000000001", "Current + Historical")])
-    template = Path("tarzan/export/templates/portfolio_digest.html.j2").read_text()
-    block = template[template.index("INSTRUMENT DATA SOURCES"):]
-    block = block[:block.index("</table>")]
-    used = set(re.findall(r"row\.([a-z_]+)", block))
-    assert used, "the section stopped reading any row field"
-    assert used <= set(rows[0]), f"template reads unknown row keys: {used - set(rows[0])}"
+    source = inspect.getsource(sa._sources_table_html)
+    used = set(re.findall(r'r\.get\("([a-z_]+)"\)', source)) | set(re.findall(r'r\["([a-z_]+)"\]', source))
+    assert used, "the table stopped reading any row field"
+    assert used <= set(rows[0]), f"table reads unknown row keys: {used - set(rows[0])}"
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from html import escape as _esc
 from typing import Optional
 
@@ -40,12 +41,18 @@ from tarzan.export.newsletter._constants import (
     group_by_class_role,
     render_unified_table,
     uni_cell,
+    grid_cell,
+    render_statement_grid,
+    FONT_STACK,
+    GRID_CELL_PX,
 )
 from tarzan.export.newsletter._format import (
     _display_ticker,
     _escaped_text,
+    _eur,
     _pct,
     _pct_compact,
+    _pct_grid,
     _signed,
     is_missing,
 )
@@ -58,6 +65,20 @@ from tarzan.export.newsletter._charts import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _nowrap_parts(parts: list, *, lead: bool = False) -> str:
+    """Parts of a small caption joined by " · ", each unbreakable inside, so a
+    half-column breaks "00:00–23:00 · Op. Mon" between the hours and the
+    status, never inside a time range. A comma keeps its break: a future's
+    two sessions are two parts of one caption. The dot travels with the part
+    it introduces; ``lead`` puts one before the first part too."""
+    out = []
+    for i, part in enumerate(parts):
+        segs = [_esc(seg).replace(" ", "&nbsp;") for seg in str(part).split(", ")]
+        body = ", ".join(segs)
+        out.append(f"&middot;&nbsp;{body}" if (i or lead) else body)
+    return " ".join(out)
+
 
 def _build_markets(ctx: _NewsletterContext) -> dict:
     """Markets strip (yfinance-style): roomy, neutral 5-column cards — level,
@@ -185,19 +206,21 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             cap = cap.removesuffix(zone)
         return cap, is_open, day
 
-    def _sub_line(d: dict) -> str:
-        """The small line under a name: hours, then Op./Cl. and its day, kept
-        together so a narrow column wraps the hours, never the status."""
+    def _status_word(d: dict) -> str:
         cap, is_open, day = _status(d)
         if is_open is None:
-            text = _esc(cap)
-        else:
-            status = ("Op." if is_open else "Cl.") + (f"&nbsp;{day}" if day else "")
-            text = f"{_esc(cap)}&nbsp;&middot;&nbsp;{status}" if cap else status
-        if not text:
             return ""
-        return (f'<div style="font-size:7.5px;font-weight:500;line-height:1.1;'
-                f'color:{P["subtle"]};margin:1px 0 0 12px;">{text}</div>')
+        return ("Op." if is_open else "Cl.") + (f" {day}" if day else "")
+
+    def _sub_text(d: dict, majority: str) -> str:
+        """The small line under a name: the hours, then Op./Cl. and its day
+        unless that is the status the subtitle already states for every row."""
+        cap, is_open, day = _status(d)
+        word = _status_word(d)
+        parts = [cap] if cap else []
+        if word and word != majority:
+            parts.append(word)
+        return _nowrap_parts(parts)
 
     def _row(d: dict) -> str:
         unit = d.get("unit", "index")
@@ -222,31 +245,47 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         if d.get("verdict") == "disputed":
             move += _UNVERIFIED_MARK
         is_open = _status(d)[1]
-        dot = (f'<span style="color:{P["green"] if is_open else P["subtle"]};'
-               f'font-size:8px;">&#9679;</span>')
-        td = (f'padding:3px 4px;border-bottom:1px solid {P["row_rule"]};'
-              f'font-variant-numeric:tabular-nums;')
+        dot = (f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;'
+               f'background:{P["green"] if is_open else P["faint"]};margin-right:5px;'
+               f'vertical-align:1px;"></span>')
+        # Two lines in a half column: the name with its change, then the hours
+        # with the session path and the level. The hours may wrap (futures carry
+        # two sessions); the path and level are pinned to the right. The minus
+        # SIGN as everywhere else in the issue (``_signed``), never a hyphen.
+        spark = _spark_for(d)
+        # The sparkline's caption ("no intraday", "Fri close") moves to the hours
+        # line; when every row carries the same one the subtitle says it once.
+        note_m = re.search(r'<div data-spark-note="([^"]*)"[^>]*>.*?</div>', spark, re.S)
+        note = note_m.group(1) if note_m else ""
+        if note_m:
+            spark = spark[:note_m.start()] + spark[note_m.end():]
+        sub = _sub_text(d, majority)
+        if note and note != common_note:
+            sub = f"{sub} {_nowrap_parts([note], lead=True)}" if sub else _nowrap_parts([note])
         return (
-            f'<tr>'
-            f'<td style="{td}{TYPE["data"]}color:{P["ink"]};line-height:1.15;">'
-            # A name longer than its column is cut with an ellipsis rather than
-            # running under the line beside it.
-            f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-            f'{dot} {label}</div>{_sub_line(d)}</td>'
-            f'<td style="{td}padding-left:2px;padding-right:2px;">{_spark_for(d)}</td>'
-            f'<td align="right" style="{td}{TYPE["data"]}color:{P["muted"]};'
-            f'white-space:nowrap;">{level}</td>'
-            # The minus SIGN, as everywhere else in the issue: Python's "+"
-            # format flag emits an ASCII hyphen, so this strip was the one table
-            # drawing negatives with a different, shorter glyph than the
-            # thirty-odd other tables around it.
-            f'<td align="right" style="{td}{TYPE["data"]}font-weight:700;'
-            f'color:{col};white-space:nowrap;">{move}</td>'
-            f'</tr>')
+            f'<tr><td colspan="2" style="padding:4px 0 0 0;">'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="table-layout:fixed;"><colgroup><col><col style="width:56px;"></colgroup><tr>'
+            f'<td style="padding:0;{TYPE["data"]}font-size:11.5px;color:{P["ink"]};'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{dot}{label}</td>'
+            f'<td align="right" style="padding:0;{TYPE["data"]}font-size:11.5px;font-weight:700;'
+            f'color:{col};white-space:nowrap;font-variant-numeric:tabular-nums;">{move}</td>'
+            f'</tr></table></td></tr>'
+            f'<tr><td style="padding:1px 0 4px 0;border-bottom:1px solid {P["row_rule"]};'
+            f'vertical-align:top;font-size:9.5px;line-height:1.3;color:{P["faint"]};'
+            f'font-variant-numeric:tabular-nums;">{sub}</td>'
+            f'<td align="right" style="padding:1px 0 4px 0;border-bottom:1px solid {P["row_rule"]};'
+            f'vertical-align:middle;white-space:nowrap;">'
+            f'<table role="presentation" align="right" cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td style="padding:0 5px 0 0;width:{_SPARK_W}px;vertical-align:middle;">'
+            f'<div style="width:{_SPARK_W}px;">{spark}</div></td>'
+            f'<td style="padding:0;{TYPE["data"]}font-weight:400;color:{P["muted"]};'
+            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{level}</td>'
+            f'</tr></table></td></tr>')
 
     def _region_head(cat: str) -> str:
-        return (f'<tr><td colspan="4" style="padding:8px 4px 3px;{TYPE["label"]}'
-                f'color:{_rc(cat)};">{_esc(str(cat))}</td></tr>')
+        return (f'<tr><td colspan="2" style="padding:10px 0 3px;border-bottom:1px solid {P["border"]};'
+                f'{TYPE["label"]}color:{P["muted"]};">{_esc(str(cat))}</td></tr>')
 
     def _table(entries: list) -> str:
         """One column of the board: region heads interleaved with their rows.
@@ -262,8 +301,8 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             body.append(_row(d))
         return ('<table role="presentation" width="100%" cellpadding="0" '
                 'cellspacing="0" border="0" style="table-layout:fixed;">'
-                f'<colgroup><col><col width="{_SPARK_W + 4}"><col width="50">'
-                '<col width="56"></colgroup>' + "".join(body) + '</table>')
+                f'<colgroup><col><col style="width:{_SPARK_W + 56}px;"></colgroup>'
+                + "".join(body) + '</table>')
 
     # Region order: the configured order first, then any category the snapshot
     # carries that the configuration does not know about, so nothing is dropped.
@@ -280,20 +319,40 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     # indices cost roughly half the height, and this section is the backdrop a
     # reader glances at, not the subject of the issue. The split lands on a
     # region boundary so neither column starts mid-region.
-    half = len(entries) // 2
-    cut = next((i for i in range(half, len(entries))
-                if entries[i][0] != entries[i - 1][0]), half)
-    left, right = entries[:cut], entries[cut:]
+    # The status most rows share is said once in the subtitle and dropped from
+    # those rows; a row with another status (a venue open, a yield's print
+    # time) keeps its own.
+    from collections import Counter
+    words = Counter(w for w in (_status_word(d) for _c, d in entries) if w)
+    majority = words.most_common(1)[0][0] if words else ""
+    n_other = sum(1 for _c, d in entries if _status_word(d) and _status_word(d) != majority)
+    # The sparkline caption every row shares, said once.
+    _notes = Counter(m_.group(1) for _c, d in entries
+                     for m_ in [re.search(r'data-spark-note="([^"]*)"', _spark_for(d))] if m_)
+    common_note = (_notes.most_common(1)[0][0]
+                   if _notes and _notes.most_common(1)[0][1] * 2 >= len(entries) else "")
+    note_others = sum(_notes.values()) - (_notes[common_note] if common_note else 0)
+    # Two columns of whole regions, balanced by row count.
+    left, right, hl, hr = [], [], 0, 0
+    for cat in order:
+        rows = [(c, d) for c, d in entries if c == cat]
+        if not rows:
+            continue
+        if hl <= hr:
+            left += rows; hl += len(rows)
+        else:
+            right += rows; hr += len(rows)
     if right:
         grid = ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0" style="margin-top:4px;">'
+                'cellspacing="0" border="0" style="margin-top:2px;table-layout:fixed;">'
+                '<colgroup><col style="width:170px;"><col style="width:14px;"><col style="width:170px;"></colgroup>'
                 '<tr>'
-                f'<td width="49%" valign="top">{_table(left)}</td>'
-                '<td width="2%"></td>'
-                f'<td width="49%" valign="top">{_table(right)}</td>'
+                f'<td valign="top">{_table(left)}</td>'
+                '<td></td>'
+                f'<td valign="top">{_table(right)}</td>'
                 '</tr></table>')
     else:
-        grid = f'<div style="margin-top:4px;">{_table(left)}</div>'
+        grid = f'<div style="margin-top:2px;">{_table(left)}</div>'
     grid += _feed_note(snap)
     # Section subtitle: when this live snapshot was captured, in the reader's
     # timezone (Europe/Rome) with a DST-aware label (CEST/CET) -- the anchor
@@ -310,6 +369,14 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         sub = f"As of {_cap:%H:%M %Z} \u00b7 session hours in {_cap:%Z}"
     except Exception:  # noqa: BLE001
         sub = ""
+    if majority:
+        sub = (sub + " \u00b7 " if sub else "") + (
+            f"{majority} unless stated" if n_other else f"all {majority}")
+    if common_note:
+        sub = (sub + " \u00b7 " if sub else "") + _esc(common_note) + (
+            " unless stated" if (note_others or any(not re.search(r'data-spark-note=', _spark_for(d))
+                                                     for _c, d in entries)) else "")
+    sub = (sub + " \u00b7 " if sub else "") + "\u25cf open"
     return {"available": True, "html": grid, "sub": sub}
 
 def _build_performance30(ctx: _NewsletterContext) -> dict:
@@ -443,8 +510,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         """Panel caption, in the concept's form: the label tier in subtle, not
         a title in ink. At ink weight it competed with the section heading
         above it for the same job."""
-        return (f'<div style="{TYPE["label"]}color:{P["subtle"]};'
-                f'margin-bottom:5px;">{t}</div>')
+        return (f'<div style="margin-top:16px;padding-bottom:4px;border-bottom:1px solid '
+                f'{P["border"]};{TYPE["label"]}color:{P["muted"]};">{t}</div>')
 
     def _mini_legend(items: list) -> str:
         """A one-line colour key under a chart: a small swatch and a name per
@@ -459,14 +526,15 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if not items:
             return ""
         parts = [
-            (f'<span style="display:inline-block;width:7px;height:7px;'
+            (f'<span style="display:inline-block;white-space:nowrap;margin-right:12px;">'
+             f'<span style="display:inline-block;width:7px;height:7px;'
              f'border-radius:2px;background:{color};vertical-align:baseline;'
              f'margin-right:4px;"></span>'
-             f'<span style="color:{P["muted"]};">{label}</span>')
+             f'<span style="color:{P["muted"]};">{label}</span></span>')
             for color, label in items
         ]
-        return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
-                + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
+        return (f'<div style="{TYPE["data"]}font-weight:400;margin:6px 0 0;line-height:1.6;">'
+                + "".join(parts) + "</div>")
 
     # ── The six standard windows, the vocabulary a broker's app prints ────────
     # One per panel, in this order. 1D is deliberately NOT a chart: from daily
@@ -627,13 +695,13 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # of padding either side of each cell leaves 182px per plot; these are passed
     # explicitly because the SVG carries its own width — putting a chart in a
     # wider table cell does not make the chart wider.
-    W_CELL, H_CELL = 182, 116
+    W_CELL, H_CELL = 172, 118  # two per row at phone width
     # The volatility pair sits two-up: 580px content box less the 8px gutter either
     # side of the divider leaves 282px each.
-    W_HALF, H_HALF = 282, 138
+    W_HALF, H_HALF = 354, 168  # since-inception pair, full width, stacked
     # Room for the end labels: bare signed percentages, three of them stacked at
     # the line ends, so ~46px at cell width and 52px at half width.
-    G_CELL, G_HALF = 46, 52
+    G_CELL, G_HALF = 0, 58  # window end values go under the chart
     def _last_estimate(values):
         """The last FINITE value of a line, or None when it has none.
 
@@ -697,6 +765,23 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         return out
 
     # ── Grid plumbing ─────────────────────────────────────────────────────────
+    def _end_values(series: list) -> str:
+        """The end value of every line, coloured by line, in one row under the
+        chart: top line first, so the row reads in the order the eye meets the
+        lines at the right edge."""
+        items = [(s_.get("end_label"), s_["color"], _last_estimate(s_.get("values")))
+                 for s_ in series if s_.get("end_label")]
+        if not items:
+            return ""
+        items.sort(key=lambda t: (t[2] if t[2] is not None else float("-inf")), reverse=True)
+        return ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                'style="margin-top:2px;"><tr>'
+                + "".join(f'<td align="{"left" if i == 0 else ("right" if i == len(items) - 1 else "center")}" '
+                          f'style="padding:0;{TYPE["data"]}font-weight:700;color:{c};'
+                          f'font-variant-numeric:tabular-nums;">{lab}</td>'
+                          for i, (lab, c, _v) in enumerate(items))
+                + '</tr></table>')
+
     def _cellcap(label: str, note: str = "") -> str:
         """A grid cell's own heading: the window in ink, its span beside it.
 
@@ -705,11 +790,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         the axes. So this is the one caption in the section at ink weight;
         ``_colcap`` stays subtle for the grid titles above.
         """
-        return (f'<div style="{TYPE["label"]}color:{P["ink"]};'
-                f'font-weight:600;letter-spacing:.04em;margin-bottom:3px;">'
+        return (f'<div style="{TYPE["label"]}color:{P["muted"]};'
+                f'font-size:9.5px;padding:8px 0 2px;">'
                 f'{label}'
-                + (f'<span style="color:{P["subtle"]};font-weight:400;'
-                   f'letter-spacing:0;"> · {note}</span>' if note else "")
+                + (f'<span style="color:{P["faint"]};font-weight:400;'
+                   f'letter-spacing:0;text-transform:none;"> · {note}</span>' if note else "")
                 + '</div>')
 
     def _empty_cell(label: str, why: str) -> str:
@@ -729,11 +814,14 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         """Six cells, three per row. Fixed columns, so a cell that cannot be drawn
         keeps its slot and the windows stay in their reading order."""
         out = []
-        for i in range(0, len(cells), 3):
+        for i in range(0, len(cells), 2):
+            pair = cells[i:i + 2]
             tds = "".join(
-                f'<td width="33.3%" valign="top" '
-                f'style="padding:0 6px 12px 6px;">{c}</td>'
-                for c in cells[i:i + 3])
+                f'<td width="50%" valign="top" '
+                f'style="padding:0 {"5px" if j == 0 else "0"} 6px {"0" if j == 0 else "5px"};">{c}</td>'
+                for j, c in enumerate(pair))
+            if len(pair) == 1:
+                tds += '<td width="50%"></td>'
             out.append(f'<tr>{tds}</tr>')
         return ('<table role="presentation" width="100%" cellpadding="0" '
                 'cellspacing="0" border="0" style="table-layout:fixed;">'
@@ -762,7 +850,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                     date_fmt="%H:%M", min_day_ticks=2, end_gutter=G_CELL,
                     x_span=win1d.get("session_span"))
                 if chart:
-                    return _cellcap("1D", "session") + chart
+                    return _cellcap("1D", "session") + chart + _end_values(ser)
 
         # No bars at all -- a closed market whose vendor exposes no session, a
         # pinned/point-in-time run, or an offline one. The figures still exist and
@@ -780,18 +868,19 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         if all(v is None for _c, _n, v in rows):
             return _empty_cell("1D", "no completed session")
         body = "".join(
-            f'<tr><td style="padding:2px 0;"><span style="display:inline-block;'
+            f'<tr><td style="padding:4px 0;border-bottom:1px solid {P["row_rule"]};">'
+            f'<span style="display:inline-block;'
             f'width:7px;height:7px;border-radius:2px;background:{c};'
             f'margin-right:5px;"></span>'
-            f'<span style="{TYPE["data"]}color:{P["muted"]};">{n}</span></td>'
-            f'<td align="right" style="padding:2px 0;{TYPE["figure"]}'
+            f'<span style="{TYPE["data"]}font-weight:400;color:{P["muted"]};">{n}</span></td>'
+            f'<td align="right" style="padding:4px 0;border-bottom:1px solid {P["row_rule"]};'
+            f'{TYPE["data"]}font-weight:700;'
             f'color:{_sgn(v)};font-variant-numeric:tabular-nums;">'
             f'{_pct(v, signed=True) if v is not None else "—"}</td></tr>'
             for c, n, v in rows)
         return (_cellcap("1D", "session · closes")
                 + f'<table role="presentation" width="100%" cellpadding="0" '
-                  f'cellspacing="0" border="0" style="margin-top:'
-                  f'{max(0, (H_CELL // 2) - 26)}px;">{body}</table>')
+                  f'cellspacing="0" border="0" style="margin-top:6px;">{body}</table>')
 
     parts = []
     if any(panels.get(b, ([], []))[0] for b, _l in WINDOWS) or ssi:
@@ -816,7 +905,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 # days only, so the points after the anchor are the sessions the
                 # window covers.
                 _sessions = max(len(_w["dates"]) - 1, 0)
-                ret_cells.append(_cellcap(_label, f'{_sessions} sessions') + _chart)
+                ret_cells.append(_cellcap(_label, f'{_sessions} sessions') + _chart
+                                 + _end_values(_ser))
             else:
                 ret_cells.append(_empty_cell(_label, "not enough history"))
 
@@ -825,7 +915,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # colours, a key per cell would print the same three swatches six times.
         _ret_leg_all = next((lg for _b, _l in WINDOWS
                              for lg in [panels.get(_b, ([], []))[1]] if lg), [])
-        ret_grid = (_colcap("Return · by window") + _grid(ret_cells)
+        ret_grid = (_colcap("Return · by window")
+                    + f'<div style="margin-top:4px;">{_grid(ret_cells)}</div>'
                     + _mini_legend(_ret_leg_all))
 
         # The whole life, on month ticks, beside the volatility over the same span.
@@ -839,7 +930,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             ssi, si_dates, include_zero=False, w=W_HALF, h=H_HALF,
             month_ticks=True, end_gutter=G_HALF) if ssi else ""
         si_panel = (_colcap("Return · since inception")
-                    + _si_chart + _mini_legend(si_leg)) if _si_chart else ""
+                    + f'<div style="margin-top:8px;">{_si_chart}</div>'
+                    + _mini_legend(si_leg)) if _si_chart else ""
 
         # ── Volatility: one panel ─────────────────────────────────────────────
         # The by-window grid went first: six volatility plots restated one fact the
@@ -859,24 +951,17 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             # NOT the line's endpoint (that is one 21-session window, drawn at the
             # line's end) — the note under the row says which is which.
             vol_si_panel = (_colcap("Volatility · since inception")
-                            + vol_si_panel
+                            + f'<div style="margin-top:8px;">{vol_si_panel}</div>'
                             + _mini_legend(_vol_legend(vol_si, with_span=True)))
         # Return and volatility over the book's whole life, two-up. One note under
         # the pair rather than a caption each: at half width the estimator's
         # description does not fit beside the panel's name.
         life_row = ""
         if si_panel or vol_si_panel:
-            life_row = (
-                f'<table role="presentation" width="100%" cellpadding="0" '
-                f'cellspacing="0" border="0"><tr>'
-                f'<td width="50%" valign="top" style="padding:0 8px 0 0;">'
-                f'{si_panel}</td>'
-                f'<td width="50%" valign="top" style="padding:0 0 0 8px;'
-                f'border-left:1px solid {P["border"]};">{vol_si_panel}</td>'
-                f'</tr></table>')
+            life_row = si_panel + vol_si_panel
             if vol_si_panel:
                 life_row += (
-                    f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
+                    f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">'
                     f'Volatility annualized. Line: rolling 21 sessions. '
                     f'Figures in its key: σ over the book’s whole life.</div>')
 
@@ -888,14 +973,11 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
             what = "; ".join(f'{_display_ticker(n["ticker"])} {n["source"]}'
                              for n in modeled["sleeves"])
             life_row += (
-                f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:4px;">'
+                f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:4px;">'
                 f'Target dashed before {_escaped_text(since)}, where it rests on '
                 f'modeled history: {_escaped_text(what)}.</div>')
 
-        _rule = (f'<div style="margin-top:12px;padding-top:12px;'
-                 f'border-top:1px solid {P["border"]};"></div>')
-        _blocks = [b for b in (ret_grid, life_row) if b]
-        charts_tbl = f'<div style="margin-top:12px;">{_rule.join(_blocks)}</div>'
+        charts_tbl = "".join(b for b in (ret_grid, life_row) if b)
         # No "why you're diverging" block. The concept does not carry one, and
         # it restated the section: the gap is in the heading's subtitle, the
         # three lines are on the chart with their end values, and the beta is a
@@ -906,12 +988,7 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
         # the template's heading carries both. Nested inside the performance
         # card it needed its own title; as a section it would print two
         # headings for one block.
-        parts.append(
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-            f'style="background:{P["card_alt"]};border:1px solid {P["border"]};'
-            f'border-radius:12px;border-collapse:separate;border-spacing:0;">'
-            f'<tr><td style="padding:14px 16px;">{charts_tbl}{divergence_html}</td></tr></table>'
-        )
+        parts.append(charts_tbl + divergence_html)
     # Two blocks, two sections. The window matrix belongs with the portfolio's
     # own value chart; the benchmark comparison answers a different question and
     # gets its own heading, as in the concept. Returned separately so the
@@ -1352,6 +1429,9 @@ def _bar_session_span(quote, raw_ticker: str):
 #: colour: the cell's colour already carries the heat ramp, and a mark survives a
 #: plain-text client.
 _UNVERIFIED_MARK = "?"
+#: The 1D cell's sparkline box in the statement grid (CSS px; the sparkline's
+#: 62x22 viewBox is stretched to it).
+_DAY_SPARK_W, _DAY_SPARK_H = 26, 13
 
 # The Markets board's inline line: context beside the figures, not a chart.
 _SPARK_W, _SPARK_H = 40, 13
@@ -1456,7 +1536,6 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
         pill_col = P["green"] if up else P["red"]
         pill_bg = P["green_bg"] if up else P["red_bg"]
     pill = (f'<span style="{TYPE["data"]}color:{pill_col};'
-            f'background:{pill_bg};padding:1px 6px;border-radius:999px;'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{pill_txt}</span>')
 
     quote = intraday_map.get(raw_ticker) if raw_ticker else None
@@ -1499,9 +1578,16 @@ def _perf_spark_cell(day_val, raw_ticker: str, intraday_map: dict, *,
     # "\u25cf LIVE" or "PREV. DAY" badge on each of seventeen rows repeated one
     # fact seventeen times, in the width the figure needed. The column HEADER
     # says it once: "Intraday" while a session is open, "1D" once it has closed.
-    inner = f'<div>{pill}</div><div style="margin-top:3px;">{spark}</div>'
-    cell = f'<td width="96" align="center" style="padding:6px 8px;{bgc}">{inner}</td>'
-    return cell, inner
+    # Statement grid: the session path beside its figure, on one line, so the 1D
+    # cell is as tall as every other cell in the row. The sparkline keeps its
+    # 62x22 viewBox and is stretched into a 30x13 box.
+    spark = spark.replace('height="22"', f'height="{_DAY_SPARK_H}"', 1)
+    inner = (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right">'
+             f'<tr><td style="padding:0 5px 0 0;width:{_DAY_SPARK_W}px;vertical-align:middle;">'
+             f'<div style="width:{_DAY_SPARK_W}px;">{spark}</div></td>'
+             f'<td style="padding:0;vertical-align:middle;">{pill}</td></tr></table>')
+    cell = f'<td width="96" align="right" style="padding:6px 8px;{bgc}">{inner}</td>'
+    return cell, inner, {"text": pill_txt, "spark": spark}
 
 def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
                                raw1d: Optional[dict] = None):
@@ -1588,124 +1674,105 @@ def _portfolio_intraday_series(m, intraday_map: Optional[dict] = None,
     port_pct = agg / wsum
     return (1.0 + port_pct / 100.0) * 100.0
 
+def _book_right_html(h) -> str:
+    """The holding's book figures for the name line: value (one decimal, in
+    thousands), gain since purchase in % and in €. Missing gains print as —."""
+    P = PALETTE
+    value = h.get("current_value")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return ""
+    gain_pct = h.get("gain_pct")
+    gain_eur = h.get("gain_eur")
+    has_pct = gain_pct is not None and not pd.isna(gain_pct)
+    has_eur = gain_eur is not None and not pd.isna(gain_eur)
+    lead = gain_pct if has_pct else (gain_eur if has_eur else None)
+    gc = P["muted"] if lead is None else (P["green"] if float(lead) >= 0 else P["red"])
+    short = f"\u20ac{value / 1000:.1f}k" if value >= 1000 else _eur(value, 0)
+    parts = [f'<b style="color:{P["ink"]};">{short}</b>',
+             f'<span style="color:{gc};">{_pct(gain_pct, signed=True) if has_pct else "\u2014"}</span>',
+             f'<span style="color:{gc};">{_eur_smart(gain_eur, signed=True) if has_eur else "\u2014"}</span>']
+    return (f'<span style="{TYPE["data"]}font-weight:400;color:{P["muted"]};'
+            f'font-variant-numeric:tabular-nums;">{" \u00b7 ".join(parts)}</span>')
+
+
 def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
                         *, day_label: str = "1D") -> str:
-    """Shared renderer for the grouped per-instrument returns tables.
-
-    Used by both the Performance ("How markets moved") and the Returns
-    snapshot sections so their font sizes, spacing, alternating-row
-    backgrounds and asset-class · role grouping are identical by
-    construction.
+    """The grouped per-instrument returns grid (Holdings, Target instruments,
+    Watchlist), rendered through :func:`render_statement_grid`.
 
     Args:
-        period_cols: ordered numeric column keys (e.g. 1w…5y); 1D is always
-            the dedicated sparkline column before them.
-        portfolio: ``{name, spark_inner, returns}`` where ``returns`` maps
-            each period key to ``{value, color}``. ``spark_inner`` is the
-            pill+sparkline inner HTML from ``_perf_spark_cell``.
-        groups: ordered ``[(class_name, class_color, [(role_name, [row])])]``
-            where each ``row`` is ``{name_html, spark_inner, returns}``.
+        period_cols: ordered numeric column keys (5d…5y); 1D is always the
+            dedicated session column before them.
+        portfolio: optional ``{name, day_parts, day_raw, returns}`` row set first.
+        groups: ``[(class_name, class_color, [(role_name, [row])])]`` where each
+            ``row`` is ``{name_html, day_parts, day_raw, returns, right_html?}``.
+    Conditional formatting is scaled on each column's own extremes across the
+    rows THIS grid renders (see tarzan.export._heat). The session column is
+    damped because it also carries the sparkline.
     """
     P = PALETTE
-
-    # Conditional formatting, scaled on each column's own extremes across the
-    # rows THIS table renders (see tarzan.export._heat for why per column and
-    # per table). Collected before any cell is built, since a cell cannot know
-    # its column's range.
     every_row = (([portfolio] if portfolio else [])
                  + [inst for _c, _col, role_list in groups
                     for _r, insts in role_list for inst in insts])
-    scales = {}
-    for p in period_cols:
-        scales[p] = _heat.column_scale(
-            row.get("returns", {}).get(p, {}).get("raw") for row in every_row)
-
-    # The 1D column is a window like any other and is tinted like any other. It
-    # was the one column left uncoloured, so it was the only cell in the row a
-    # reader had to evaluate by reading the number. Its scale is damped, because
-    # the cell also carries the session sparkline and a saturated background
-    # competes with the line drawn on it.
+    scales = {p: _heat.column_scale(row.get("returns", {}).get(p, {}).get("raw")
+                                    for row in every_row) for p in period_cols}
     dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
-    # One width for every window column, so the tinted blocks form an even grid
-    # rather than columns sized by whatever their widest figure happened to be.
-    # Only the session column is wider, because it carries a chart. These are
-    # HARD widths under fixed_layout (see the render call): name 148 + day 68 +
-    # 7×52 = 580px, the exact content width of the 620px card less its 20px
-    # gutters, so nothing is scaled and a five-figure return (+199.9%) still
-    # fits its 52px column without spilling into the next.
-    W_PERIOD, W_DAY = 52, 68
 
-    def _cells(returns_dict, spark_inner, *, weight, day_raw=None):
-        # 1D sparkline pulled hard left (left-aligned, minimal left padding) so
-        # the gap after the name closes and the period columns get that width.
-        cells = [uni_cell(spark_inner, align="right", width=W_DAY,
-                          valign="middle", pad="5px 4px",
-                          bg=_heat.heat_bg(day_raw, neg=dneg, pos=dpos,
-                                           damp=_heat.DAY_DAMP))]
+    def _figure(text, raw) -> str:
+        """The cell's figure at the grid's precision (:func:`_pct_grid`), from
+        the raw value; the text keeps only its marks (the unverified "?")."""
+        text = str(text if text is not None else "\u2014")
+        if raw is None or is_missing(raw):
+            return text.replace("%", "")
+        mark = _UNVERIFIED_MARK if text.endswith(_UNVERIFIED_MARK) else ""
+        return _pct_grid(float(raw), signed=True) + mark
+
+    def _row(inst, *, weight=600):
+        parts = inst.get("day_parts") or {}
+        bg, fig = _heat.heat(inst.get("day_raw"), neg=dneg, pos=dpos, damp=_heat.DAY_DAMP)
+        text = _figure(parts.get("text", "\u2014"), inst.get("day_raw"))
+        day_html = (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right">'
+                    f'<tr><td style="padding:0 4px 0 0;width:{_DAY_SPARK_W}px;vertical-align:middle;">'
+                    f'<div style="width:{_DAY_SPARK_W}px;">{parts.get("spark", "")}</div></td>'
+                    f'<td style="padding:0;vertical-align:middle;{TYPE["data"]}font-size:{GRID_CELL_PX}px;'
+                    f'font-weight:{weight};font-variant-numeric:tabular-nums;'
+                    f'color:{fig};white-space:nowrap;">{text}</td></tr></table>')
+        cells = []
         for p in period_cols:
-            r = returns_dict.get(p, {"value": "\u2014", "color": P["muted"]})
+            r = inst.get("returns", {}).get(p, {"value": "\u2014", "color": P["muted"]})
             neg, pos = scales[p]
-            raw = r.get("raw")
-            # Background AND figure colour from the one ramp. The figure used to
-            # be sign-coloured, so the grid stated the sign twice and its text
-            # colour changed from row to row for a reason unrelated to the tint.
-            bg, fig = _heat.heat(raw, neg=neg, pos=pos)
-            cells.append(uni_cell(r["value"], color=fig, weight=weight,
-                                  bg=bg, width=W_PERIOD))
-        return cells
+            cbg, cfig = _heat.heat(r.get("raw"), neg=neg, pos=pos)
+            cells.append(grid_cell(_figure(r["value"], r.get("raw")), color=cfig,
+                                   weight=weight, bg=cbg))
+        return {"name_html": inst["name_html"], "right_html": inst.get("right_html", ""),
+                "day_html": day_html, "day_bg": bg, "cells": cells}
 
-    # 1D column carries no_sep (True) \u2014 it reads with the name block, not the
-    # ruled period grid.
-    columns = ([(day_label, "right", W_DAY, True)]
-               + [(p.upper(), "right", W_PERIOD) for p in period_cols])
-    portfolio_row = {
-        "name_html": (f'<span style="color:{P["accent"]};font-weight:700;'
-                      f'font-size:{TYPE_PX["data"]}px;">'
-                      f'\u2605 {portfolio["name"]}</span>'),
-        "cells": _cells(portfolio["returns"], portfolio.get("spark_inner", ""),
-                        weight=700, day_raw=portfolio.get("day_raw")),
-    } if portfolio else None
-    uni_groups = [
-        (cls, col, [(role, [{"name_html": inst["name_html"],
-                             "cells": _cells(inst["returns"],
-                                             inst.get("spark_inner", ""),
-                                             weight=600,
-                                             day_raw=inst.get("day_raw"))}
-                            for inst in insts])
-                    for role, insts in role_list])
-        for cls, col, role_list in groups]
-    # Compact numeric cells + a capped name column (so it can't hoard width and
-    # leave a gap before the sparkline) + faint vertical separators so a reader
-    # can tell 5D from 1M from 1Y at a glance. Role lives in the group header
-    # and the ticker trails the name, so names wrap cleanly.
-    # ``zebra=False``: the alternating row stripe fights the heat. Under a tinted
-    # matrix an uncoloured cell has to be ONE surface, or the eye reads the
-    # stripe as a signal too. ``dense``: 9.5px on 5px/4px padding, so the tint
-    # fills its column instead of floating in it.
-    # ``fixed_layout``: the Returns and Watchlist tables share a container
-    # width, so pinning every column to the width declared here makes the two
-    # grids align — same sparkline start, same 5D/1M/… x positions — instead of
-    # each sizing its columns from its own content (short tickers/small % vs
-    # long names/large %), which drifted them apart.
-    return render_unified_table("Instrument", columns, uni_groups,
-                                portfolio_row=portfolio_row, compact=True,
-                                first_col_width=148, separators=False,
-                                zebra=False, dense=True, radius=4,
-                                fixed_layout=True)
+    columns = [day_label] + [p.upper() for p in period_cols]
+    prow = None
+    if portfolio:
+        prow = _row(portfolio, weight=700)
+        prow["name_html"] = (f'<span style="color:{P["ink"]};font-weight:700;'
+                             f'font-size:{TYPE_PX["prose"]}px;">\u2605 {portfolio["name"]}</span>')
+    uni_groups = [(cls, col, [(role, [_row(inst) for inst in insts]) for role, insts in role_list])
+                  for cls, col, role_list in groups]
+    return render_statement_grid(columns, uni_groups, portfolio_row=prow)
+
 
 #: The KPI matrix's rows: key, label, unit, tinted. Volatility is untinted:
 #: higher is neither good nor bad on its own, so a ramp would claim a verdict.
 #: The money rows exist for the book only (the target has no euros).
-_KPI_ROWS = (("pnl_eur", "P&L \u20ac", "\u20ac", True),
-             ("unr_eur", "Unr. \u20ac", "\u20ac", True),
+_KPI_ROWS = (("pnl_eur", "P&L", "\u20ac", True),
+             ("unr_eur", "Unrealized", "\u20ac", True),
              ("return", "Return", "%", True),
              ("volatility", "Volatility", "%", False),
              ("sharpe", "Sharpe", "", True),
              ("sortino", "Sortino", "", True),
-             ("max_drawdown", "Max drawdown", "%", True),
+             ("max_drawdown", "Max DD", "%", True),
              ("ulcer_index", "Ulcer", "%", False),
-             ("var_95", "VaR 95%", "%", False),
-             ("cvar_95", "CVaR 95%", "%", False),
+             ("var_95", "VaR 95", "%", False),
+             ("cvar_95", "CVaR 95", "%", False),
              ("alpha", "Alpha", "%", True),
              ("beta", "Beta", "", False),
              ("ter", "TER", "%", False))
@@ -1850,85 +1917,113 @@ def _window_kpis(m, windows, geo_name) -> dict:
 
 def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                      bench_label: str = "Benchmark") -> str:
-    """Portfolio, target and benchmark KPIs as rows, the Returns windows plus
-    since inception (SI) as columns.
+    """Portfolio, target and benchmark KPIs, one ledger per universe: rows are
+    measures, columns the windows 1D · 5D · 1M · 3M · YTD · SI. The long
+    windows (1Y · 3Y · 5Y) join as a second column bank the moment the book
+    has lived one of them; until then one line says so, instead of three
+    columns of dashes squeezing the six that carry figures.
 
-    The same grid as Returns (``render_unified_table``, one fixed width per
-    window column), transposed: each row is one measure, so its tint is scaled
-    on that measure across both blocks rather than on a column that mixes
-    percent, points and ratios. Figures from ``_window_kpis``."""
+    Tints come from one ramp per measure, scaled across every universe and
+    window of that measure, so a Sharpe cell is comparable to any other Sharpe
+    cell in the matrix. Figures from ``_window_kpis``."""
     from tarzan.export import _charts
-    from tarzan.export.newsletter._constants import uni_name
+    from tarzan.export.newsletter._constants import bench_short
 
     if not kpis:
         return ""
     P = PALETTE
-    # Nine window columns now (SI added): narrower cells and name column keep
-    # the table inside the 620px card.
-    W_PERIOD, W_DAY = 48, 64
-    windows = ["1d", *period_keys, "si"]
+    short_w = ["1d", *[k for k in period_keys if k in ("5d", "1m", "3m", "ytd")], "si"]
+    long_w = [k for k in period_keys if k in ("1y", "3y", "5y")]
     unsigned = {"volatility", "ulcer_index", "ter"}
 
     def _fmt(v, key, unit):
+        """The bare figure: its unit stands in the row label (the grid's
+        notation), so "+14.92" under "Return %" and "+16.5k" under "P&L €"."""
         if v is None:
             return "\u2014"
         if key == "ter":
-            return f"{v:.2f}%"
+            return f"{v:.2f}"
         if unit == "":
             return f"{v:.2f}".replace("-", "\u2212")
         if unit == "\u20ac":
-            # Thousands, one decimal, in every cell (synthetic: 1234.5 -> +€1.2k).
-            return f"{'+' if v >= 0 else '\u2212'}\u20ac{abs(v) / 1000:.1f}k"
-        text = _pct_compact(v, signed=key not in unsigned)
-        return text if unit == "%" else text.replace("%", "\u202fpp")
+            return f"{'+' if v >= 0 else '\u2212'}{abs(v) / 1000:.1f}k"
+        # Six windows leave 46px a cell, room for two decimals ("+14.92" is
+        # 36px); the eight-window grids taper earlier (:func:`_pct_grid`).
+        return _pct_compact(v, signed=key not in unsigned).replace("%", "")
+
+    def _row_label(key, label, unit):
+        if not unit:
+            return _esc(label)
+        return (f'{_esc(label)} <span style="color:{P["faint"]};font-size:{TYPE_PX["label"]}px;">'
+                f'{_esc(unit)}</span>')
+
+    def _has(w_list):
+        # TER alone does not open the long windows: the book's fee is defined
+        # over any span, so it would print three columns of the same figure
+        # under a heading that promises a year the book has not lived.
+        return any(kpis.get(who, {}).get(b, {}).get(k) is not None
+                   for who in kpis for b in w_list for k, *_ in _KPI_ROWS if k != "ter")
 
     scales = {}
     for key, _label, _unit, tinted in _KPI_ROWS:
-        vals = [kpis.get(who, {}).get(b, {}).get(key) for who in kpis for b in windows]
+        vals = [kpis.get(who, {}).get(b, {}).get(key) for who in kpis for b in short_w + long_w]
         scales[key] = _heat.column_scale(vals) if tinted else None
 
-    def _row(who, key, label, unit):
+    def _table(who, title, colour, windows, day):
         data = kpis.get(who, {})
-        cells = []
-        for b in windows:
-            v = data.get(b, {}).get(key)
-            sc = scales[key]
-            bg, fig = (_heat.heat(v, neg=sc[0], pos=sc[1]) if sc and v is not None
-                       else (None, P["ink"] if v is not None else P["subtle"]))
-            if b == "1d":
-                # Figures only: the session chart lives in [03] Vs target.
-                cells.append(uni_cell(_fmt(v, key, unit),
-                                      align="right", color=fig, weight=600, width=W_DAY,
-                                      valign="middle", pad="5px 4px", bg=bg))
-            else:
-                cells.append(uni_cell(_fmt(v, key, unit), color=fig, weight=600,
-                                      bg=bg, width=W_PERIOD))
-        return {"name_html": uni_name(label, "", line_height=1.05),
-                "cells": cells}
+        rows = [(k, lab, u) for k, lab, u, _t in _KPI_ROWS if any(k in data.get(b, {}) for b in windows)]
+        if not rows:
+            return ""
+        colw = 46
+        head = (f'<tr><th align="left" style="padding:12px 0 4px 0;border-bottom:1px solid {P["border"]};'
+                f'{TYPE["label"]}color:{colour};white-space:nowrap;">'
+                f'<span style="display:inline-block;width:8px;height:8px;border-radius:1px;background:{colour};'
+                f'margin-right:6px;vertical-align:1px;"></span>{_esc(title)}</th>'
+                + "".join(f'<th align="right" style="padding:12px 0 4px 4px;border-bottom:1px solid {P["border"]};'
+                          f'{TYPE["label"]}color:{P["muted"]};width:{colw}px;">'
+                          f'{_esc(day if b == "1d" else b.upper())}</th>' for b in windows)
+                + '</tr>')
+        body = ""
+        for key, label, unit in rows:
+            tds = ""
+            for b in windows:
+                v = data.get(b, {}).get(key)
+                sc = scales[key]
+                bg, fig = (_heat.heat(v, neg=sc[0], pos=sc[1]) if sc and v is not None
+                           else (None, P["ink"] if v is not None else P["faint"]))
+                tds += (f'<td align="right" style="padding:5px 3px 5px 0;border-bottom:1px solid {P["row_rule"]};'
+                        f'border-left:1px solid {P["page"]};'
+                        f'{f"background:{bg};" if bg else ""}{TYPE["data"]}font-size:{GRID_CELL_PX}px;'
+                        f'font-weight:{700 if b == "si" else 600};color:{fig};white-space:nowrap;">'
+                        f'{_fmt(v, key, unit)}</td>')
+            body += (f'<tr><td style="padding:5px 0;border-bottom:1px solid {P["row_rule"]};'
+                     f'{TYPE["data"]}font-weight:400;color:{P["muted"]};white-space:nowrap;">'
+                     f'{_row_label(key, label, unit)}</td>{tds}</tr>')
+        return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                f'style="table-layout:fixed;border-collapse:collapse;font-family:{FONT_STACK};'
+                f'font-variant-numeric:tabular-nums;"><colgroup><col>'
+                + "".join(f'<col style="width:{colw}px;">' for _ in windows)
+                + f'</colgroup>{head}{body}</table>')
 
-    groups = []
-    for who, title, colour in (("portfolio", "Portfolio", P["accent"]),
-                               ("target", "Target", _charts.TARGET),
-                               ("acwi", bench_label, _charts.BENCH)):
-        if who not in kpis:
-            continue
-        rows = [_row(who, k, lab, u) for k, lab, u, _t in _KPI_ROWS
-                if any(k in kpis[who].get(b, {}) for b in windows)]
-        groups.append((title, colour, [("", rows)]))
-    columns = ([(day_label, "right", W_DAY, True)]
-               + [(b.upper(), "right", W_PERIOD) for b in period_keys]
-               + [("SI", "right", W_PERIOD)])
-    table = render_unified_table("KPI", columns, groups, compact=True,
-                                 first_col_width=112, separators=False, zebra=False,
-                                 dense=True, radius=4, fixed_layout=True)
-    note = (f'<div style="{TYPE["data"]}color:{P["subtle"]};margin-top:6px;">'
-            f'P&amp;L and Unr.: euros net of contributions in the window. '
-            f'Return: time-weighted, as in Vs target. Target: its weights held constant. '
+    universes = (("portfolio", "Portfolio", P["ink"]),
+                 ("target", "Target", _charts.TARGET),
+                 ("acwi", bench_short(bench_label), _charts.BENCH))
+    out = [_table(who, t, c, short_w, day_label) for who, t, c in universes if who in kpis]
+    if _has(long_w):
+        out += [_table(who, f"{t} \u00b7 long windows", c, long_w, day_label)
+                for who, t, c in universes if who in kpis]
+        long_note = ""
+    else:
+        long_note = ("1Y \u00b7 3Y \u00b7 5Y: not enough history yet; the columns return "
+                     "when the book has lived them. ")
+    note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
+            f'P&amp;L and Unrealized: euros net of contributions in the window. '
+            f'Return: time-weighted, as in the charts below. Target: its weights held constant. '
             f'SI: since the book\u2019s inception. Volatility annualized; Sharpe and '
             f'Sortino on the daily risk-free path; risk figures from 1M. Alpha and beta '
             f'against {_escaped_text(bench_label)} (its own: 0 and 1). TER: the book\u2019s '
             f'value-weighted, averaged over the window as its lines changed.</div>')
-    return f'<div style="margin-top:14px;">{table}{note}</div>'
+    return f'<div style="margin-top:12px;">{"".join(out)}{note}</div>'
 
 
 def _intraday_column(flags) -> bool:
@@ -2145,7 +2240,7 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
         raw_name = str(h.get("name", "") or ticker)
         display_tk = _display_ticker(ticker) or ""
         row_intraday.append(bool(_intraday.get(ticker, False)))
-        _, inner = _perf_spark_cell(
+        _, inner, day_parts = _perf_spark_cell(
             _raw1d.get(ticker), ticker, _snap_intraday,
             live=bool(_live1d.get(ticker, False)),
             unverified=(((perf_by_ticker.get(ticker, {}).get("_xc") or {})
@@ -2162,8 +2257,13 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
                 display_tk, [],
                 perf_by_ticker.get(ticker, {}).get("currency")),
             "spark_inner": inner,
+            "day_parts": day_parts,
             "day_raw": _raw1d.get(ticker),
             "returns": _returns_dict(perf_by_ticker.get(ticker, {}), is_portfolio=False),
+            # The book figures ride on the name line of the same row: value,
+            # gain since purchase in % and €. The Book was a second table of
+            # the same seventeen names five thousand pixels further down.
+            "right_html": _book_right_html(h),
         })
     groups = group_by_class_role(
         row_items, asset_class=lambda r: r["_ac"],
@@ -2209,10 +2309,9 @@ def _mover_pp(value: Optional[float]) -> str:
     """
     if value is None:
         return ""
-    decimals = 3 if abs(value) < 0.1 else 2
-    shown = round(float(value), decimals) + 0.0  # sign of the printed figure: no "−0.000"
+    shown = round(float(value), 2) + 0.0  # sign of the printed figure: no "−0.00"
     sign = "+" if shown >= 0 else "−"
-    return f"{sign}{abs(shown):.{decimals}f}"
+    return f"{sign}{abs(shown):.2f}"
 
 
 def _mover_tint(fg: str, bg: str, alpha: float) -> str:
@@ -2257,128 +2356,133 @@ def _mover_universe(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _mover_grid_html(universe: list[dict], label: str, swatch: str,
-                     total_by_window: dict) -> str:
-    """One half of the movers section: a grid of ticker x window.
+def _movers_merged_html(book: list[dict], plan: list[dict],
+                        book_totals: dict, plan_totals: dict) -> str:
+    """Book and plan on ONE list of instruments, side by side: ticker, then for
+    each universe its weight bar and the four windows. An instrument held in
+    both appears once; one held in only one universe leaves the other side
+    blank. The two grids used to repeat nine tickers.
 
-    Only the lines that reached a top-three or bottom-three in some window are shown.
-    The alternative — every line, with the quiet ones tinted faintly — was rejected as
-    too busy: it printed twenty-five rows to say something about eleven of them.
-
-    The figure prints only where a line WAS an extreme. The tint carries the magnitude
-    of everything else, which is what it is for; filling all fifty-six cells with
-    numbers made them compete with each other and the tint stopped reading at all.
+    A figure prints where the line reached a top or bottom three in that window
+    (the ranking is per universe); the tint carries the magnitude of every cell
+    on one ramp per window across both universes, so a cell on the left is
+    comparable to the same window on the right.
     """
-    marks: dict[str, dict[str, int]] = {}
-    scale: dict[str, float] = {}
-    for key, _ in _MOVER_WINDOWS:
-        ahead, behind = _mover_rows(universe, key)
-        for r in ahead:
-            marks.setdefault(r["ticker"], {})[key] = 1
-        for r in behind:
-            marks.setdefault(r["ticker"], {})[key] = -1
-        magnitudes = [abs(r["contrib"][key]) for r in universe
-                      if r["contrib"].get(key) is not None]
-        scale[key] = max(magnitudes) if magnitudes else 1.0
-    shown = sorted((r for r in universe if r["ticker"] in marks),
-                   key=lambda r: -r["weight"])
-    if not shown:
+    P = PALETTE
+    def _marks(universe):
+        marks: dict[str, dict[str, int]] = {}
+        for key, _ in _MOVER_WINDOWS:
+            ahead, behind = _mover_rows(universe, key)
+            for r in ahead:
+                marks.setdefault(r["ticker"], {})[key] = 1
+            for r in behind:
+                marks.setdefault(r["ticker"], {})[key] = -1
+        return marks
+    bm, pm = _marks(book), _marks(plan)
+    B = {r["ticker"]: r for r in book}
+    Pm = {r["ticker"]: r for r in plan}
+    shown_b = {t for t in bm}
+    shown_p = {t for t in pm}
+    order = [r["ticker"] for r in sorted(book, key=lambda r: -r["weight"]) if r["ticker"] in shown_b]
+    order += [r["ticker"] for r in sorted(plan, key=lambda r: -r["weight"])
+              if r["ticker"] in shown_p and r["ticker"] not in order]
+    if not order:
         return ""
-    dropped = len(universe) - len(shown)
-    heaviest = max(r["weight"] for r in universe)
-
-    # The house table idiom, so the grid reads as part of the issue rather than as a
-    # widget dropped into it: a header band on ``head_bg``, zebra rows, the 10px data
-    # font every other table uses, figures right-aligned on tabular numerals, and the
-    # whole thing at 100% width. The first pass used a bare 9px grid sized to its
-    # content, which left its half-column short of the margin and looked foreign.
-    head = (f'<tr style="background:{PALETTE["head_bg"]};">'
-            f'<td style="{TYPE["label"]}color:{PALETTE["muted"]};'
-            f'padding:5px 6px;">Ticker</td>'
-            f'<td align="right" style="{TYPE["label"]}color:{PALETTE["muted"]};'
-            f'padding:5px 6px;">Wt</td>')
-    for _, column in _MOVER_WINDOWS:
-        head += (f'<td align="right" style="{TYPE["label"]}'
-                 f'color:{PALETTE["muted"]};padding:5px 6px;">{column}</td>')
-    head += "</tr>"
-
-    body = ""
-    for i, r in enumerate(shown):
-        fill = max(2, int(round(r["weight"] / heaviest * 30)))
-        zebra = PALETTE["zebra"] if i % 2 else PALETTE["card"]
-        body += (
-            f'<tr><td style="{TYPE["data"]}color:{PALETTE["ink"]};'
-            f'background:{zebra};padding:4px 6px;white-space:nowrap;'
-            f'border-top:1px solid {PALETTE["row_rule"]};">{_esc(r["bare"])}</td>'
-            f'<td align="right" style="background:{zebra};padding:4px 6px;'
-            f'white-space:nowrap;border-top:1px solid {PALETTE["row_rule"]};">'
-            f'<table role="presentation" align="right" cellpadding="0" '
-            f'cellspacing="0" border="0" style="width:30px;'
-            f'background:{PALETTE["group_bg"]};border-radius:2px;">'
-            f'<tr><td style="width:{fill}px;height:6px;'
-            f'background:{PALETTE["accent"]};border-radius:2px;font-size:0;'
-            f'line-height:0;">&nbsp;</td>'
-            f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table></td>')
+    bare = {**{r["ticker"]: r["bare"] for r in plan}, **{r["ticker"]: r["bare"] for r in book}}
+    heaviest = max([r["weight"] for r in book + plan] or [1.0])
+    scale = {}
+    for key, _ in _MOVER_WINDOWS:
+        mags = [abs(r["contrib"][key]) for r in book + plan if r["contrib"].get(key) is not None]
+        scale[key] = max(mags) if mags else 1.0
+    # Window cell, weight bar cell, ticker cell: 42 + 2 x 18 + 8 x 34 = 350.
+    # A five-glyph figure is 31px at 10.5px; the cell keeps a 1px seam and 2px
+    # of air. The widest ticker (five capitals) is 38px. Without a plan the
+    # book's bank alone takes the column.
+    has_plan = bool(plan)
+    cw, bw, tw = (34, 18, 42) if has_plan else (66, 26, 60)
+    colgroup = (f'<colgroup><col style="width:{tw}px;"><col style="width:{bw}px;">'
+                + f'<col style="width:{cw}px;">' * 4
+                + ((f'<col style="width:{bw}px;">' + f'<col style="width:{cw}px;">' * 4) if has_plan else "")
+                + '</colgroup>')
+    def _title(label, colour, universe, marks, left):
+        # "12 of 17": the note under the grid says what the other five are.
+        note = f"{len(marks)} of {len(universe)}"
+        return (f'<th colspan="5" align="left" style="padding:0 0 4px {"6px" if not left else "0"};'
+                f'{"border-left:1px solid " + P["border"] + ";" if not left else ""}'
+                f'{TYPE["label"]}color:{colour};white-space:nowrap;overflow:hidden;">'
+                f'{_esc(label)} <span style="font-weight:400;letter-spacing:0;text-transform:none;'
+                f'color:{P["faint"]};">{note}</span></th>')
+    head1 = (f'<tr><th></th>{_title("Portfolio", P["ink"], book, bm, True)}'
+             f'{_title("Target", P["target"], plan, pm, False) if has_plan else ""}</tr>')
+    def _wh(left):
+        # The plan's "wt" sits left in its cell, off the book's "3M" at the seam.
+        return (f'<th align="{"right" if left else "left"}" style="padding:3px 0 3px {"0" if left else "3px"};'
+                f'border-bottom:1px solid {P["border"]};'
+                f'{"border-left:1px solid " + P["border"] + ";" if not left else ""}'
+                f'{TYPE["label"]}font-size:9.5px;color:{P["faint"]};">wt</th>'
+                + "".join(f'<th align="right" style="padding:3px 0 3px 2px;border-bottom:1px solid {P["border"]};'
+                          f'{TYPE["label"]}font-size:9.5px;color:{P["faint"]};">{col}</th>'
+                          for _k, col in _MOVER_WINDOWS))
+    head2 = (f'<tr><th style="border-bottom:1px solid {P["border"]};"></th>{_wh(True)}'
+             f'{_wh(False) if has_plan else ""}</tr>')
+    def _side(r, marks, left):
+        lb = "" if left else f"border-left:1px solid {P['border']};"
+        if r is None:
+            return (f'<td style="{lb}"></td>'
+                    + "".join(f'<td align="right" style="padding:4px 0 4px 2px;{TYPE["data"]}'
+                              f'color:{P["faint"]};">&middot;</td>' for _ in _MOVER_WINDOWS))
+        fill = max(2, int(round(r["weight"] / heaviest * 14)))
+        tds = (f'<td style="padding:4px 0 4px 2px;{lb}vertical-align:middle;">'
+               f'<div style="width:{fill}px;height:6px;background:{P["blue"]};border-radius:1px;'
+               f'font-size:0;line-height:0;">&nbsp;</div></td>')
         for key, _ in _MOVER_WINDOWS:
             value = r["contrib"].get(key)
             if value is None:
-                body += (f'<td align="right" style="{TYPE["data"]}'
-                         f'background:{PALETTE["card"]};'
-                         f'color:{PALETTE["subtle"]};padding:4px 6px;'
-                         f'border-top:1px solid {PALETTE["row_rule"]};">'
-                         f'&middot;</td>')
+                tds += (f'<td align="right" style="padding:4px 0 4px 2px;{TYPE["data"]}'
+                        f'color:{P["faint"]};">&middot;</td>')
                 continue
-            colour = PALETTE["green"] if value >= 0 else PALETTE["red"]
-            # Over ONE base, not the zebra: two things varying the same background
-            # (row parity and magnitude) read as noise, and the tint is the one
-            # carrying information. Capped well below opaque so it stays a wash a
-            # figure can be read through -- at 0.75 the cells read as filled blocks
-            # and competed with the numbers printed in them.
-            tint = _mover_tint(colour, PALETTE["card"],
-                               min(1.0, abs(value) / scale[key]) * _MOVER_TINT_MAX)
+            colour = P["green"] if value >= 0 else P["red"]
+            tint = _mover_tint(colour, P["page"], min(1.0, abs(value) / scale[key]) * _MOVER_TINT_MAX)
             extreme = marks.get(r["ticker"], {}).get(key)
-            body += (
-                f'<td align="right" style="background:{tint};{TYPE["data"]}'
-                f'font-weight:{"700" if extreme else "400"};'
-                f'color:{PALETTE["ink"] if extreme else PALETTE["subtle"]};'
-                f'font-variant-numeric:tabular-nums;padding:4px 6px;'
-                f'border-top:1px solid {PALETTE["row_rule"]};white-space:nowrap;">'
-                f'{_mover_pp(value) if extreme else "&nbsp;"}</td>')
-        body += "</tr>"
-
-    foot = (f'<tr style="background:{PALETTE["group_bg"]};">'
-            f'<td colspan="2" style="{TYPE["label"]}color:{PALETTE["muted"]};'
-            f'padding:5px 6px;white-space:nowrap;'
-            f'border-top:1px solid {PALETTE["border"]};">All</td>')
-    for key, _ in _MOVER_WINDOWS:
-        total = total_by_window.get(key)
-        colour = (PALETTE["subtle"] if total is None
-                  else PALETTE["green"] if total >= 0 else PALETTE["red"])
-        foot += (f'<td align="right" style="{TYPE["data"]}color:{colour};'
-                 f'font-variant-numeric:tabular-nums;padding:5px 6px;'
-                 f'white-space:nowrap;border-top:1px solid {PALETTE["border"]};">'
-                 f'{"—" if total is None else _pct(total, signed=True)}</td>')
-    foot += "</tr>"
-
-    note = f"{len(shown)} of {len(universe)}"
-    if dropped:
-        note += f" · {dropped} not top three"
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'border="0"><tr>'
-        f'<td style="padding:0 0 5px 0;border-bottom:1px solid '
-        f'{PALETTE["border"]};white-space:nowrap;">'
-        f'<span style="display:inline-block;width:7px;height:7px;'
-        f'background:{swatch};border-radius:2px;"></span>'
-        f'<span style="{TYPE["label"]}color:{PALETTE["ink"]};padding-left:6px;">'
-        f'{_esc(label)}</span>'
-        f'<span style="{TYPE["prose"]}color:{PALETTE["subtle"]};padding-left:7px;">'
-        f'{note}</span></td></tr></table>'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'border="0" style="width:100%;margin-top:8px;table-layout:fixed;'
-        f'border:1px solid {PALETTE["border"]};border-radius:8px;'
-        'border-collapse:separate;border-spacing:0;overflow:hidden;">'
-        f'{head}{body}{foot}</table>')
+            tds += (f'<td align="right" style="background:{tint};{TYPE["data"]}font-size:{GRID_CELL_PX}px;'
+                    f'border-left:1px solid {P["page"]};'
+                    f'font-weight:{"600" if extreme else "400"};'
+                    f'color:{P["ink"] if extreme else P["subtle"]};'
+                    f'font-variant-numeric:tabular-nums;padding:4px 2px 4px 0;white-space:nowrap;">'
+                    f'{_mover_pp(value) if extreme else "&nbsp;"}</td>')
+        return tds
+    body = ""
+    for i, tk in enumerate(order):
+        body += (f'<tr style="border-bottom:1px solid {P["row_rule"]};">'
+                 f'<td style="padding:4px 0;{TYPE["data"]}font-weight:700;color:{P["ink"]};'
+                 f'white-space:nowrap;overflow:hidden;">{_esc(bare.get(tk, tk))}</td>'
+                 f'{_side(B.get(tk), bm, True)}'
+                 f'{_side(Pm.get(tk), pm, False) if has_plan else ""}</tr>')
+    def _tot(totals, left):
+        lb = "" if left else f"border-left:1px solid {P['border']};"
+        out = f'<td style="{lb}"></td>'
+        for key, _ in _MOVER_WINDOWS:
+            total = totals.get(key)
+            colour = (P["faint"] if total is None else P["green"] if total >= 0 else P["red"])
+            out += (f'<td align="right" style="{TYPE["data"]}font-size:{GRID_CELL_PX}px;font-weight:600;color:{colour};'
+                    f'font-variant-numeric:tabular-nums;padding:6px 2px 4px 0;white-space:nowrap;">'
+                    f'{"\u2014" if total is None else _pct(total, signed=True).replace("%", "")}</td>')
+        return out
+    foot = (f'<tr><td style="padding:6px 0 4px 0;border-top:3px double {P["border"]};{TYPE["data"]}'
+            f'font-weight:700;color:{P["ink"]};white-space:nowrap;">All <span style="font-weight:400;'
+            f'color:{P["faint"]};">%</span></td>'
+            + "".join(c.replace('style="', f'style="border-top:3px double {P["border"]};', 1)
+                      for c in ([_tot(book_totals, True)]
+                                + ([_tot(plan_totals, False)] if has_plan else []))) + '</tr>')
+    return ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="table-layout:fixed;border-collapse:collapse;font-family:{FONT_STACK};">'
+            f'{colgroup}{head1}{head2}{body}{foot}</table>'
+            f'<div style="{TYPE["note"]}color:{P["muted"]};margin-top:6px;">Points of contribution '
+            f'(weight × return) where the line was in the window\u2019s top or bottom three; '
+            f'· = not in either'
+            + ('; a blank side = not in that universe. All: the whole book\u2019s '
+               '(plan\u2019s) return in %.' if has_plan else '. All: the whole book\u2019s return in %.')
+            + '</div>')
 
 
 def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
@@ -2478,18 +2582,9 @@ def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
     book_totals = _totals("portfolio", book)
     plan_totals = _totals("target", plan)
 
-    left = _mover_grid_html(book, "Portfolio", PALETTE["port"], book_totals) if book else ""
-    right = _mover_grid_html(plan, "Target", PALETTE["target"], plan_totals) if plan else ""
-    if not left and not right:
+    html = _movers_merged_html(book, plan, book_totals, plan_totals)
+    if not html:
         return {"available": False}
-    if left and right:
-        html = ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0"><tr>'
-                f'<td width="50%" valign="top" style="padding:0 8px 0 0;">{left}</td>'
-                f'<td width="50%" valign="top" style="padding:0 0 0 8px;">{right}</td>'
-                '</tr></table>')
-    else:
-        html = left or right
     # The totals the grids print, exposed so a check can hold them to the KPI
     # matrix and the charts.
     return {"available": True, "html": html,
@@ -2908,7 +3003,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
             for role, grp_rows in role_list:
                 insts = []
                 for r in grp_rows:
-                    _, inner = _perf_spark_cell(
+                    _, inner, day_parts = _perf_spark_cell(
                         r.get("d1"), r.get("raw_ticker"), intraday_map,
                         live=bool(r.get("live")))
                     insts.append({
@@ -2921,6 +3016,7 @@ def _build_performance(ctx: _NewsletterContext) -> dict:
                                                      r.get("tags"),
                                                      r.get("currency")),
                         "spark_inner": inner,
+                        "day_parts": day_parts,
                         "day_raw": r.get("d1"),
                         "returns": r["returns"],
                     })

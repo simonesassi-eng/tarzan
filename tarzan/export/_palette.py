@@ -25,80 +25,64 @@ follow the palette at all.
 from __future__ import annotations
 
 PALETTE = {
-    # Terminal palette: dark surfaces, monospace-friendly contrast. Roles are
-    # unchanged from the light set, so nothing at the ~140 call sites moved.
-    "accent": "#6E9BFF",
-    "ink": "#E6EDF6",
-    "muted": "#8FA3BC",
-    # Fine print. Lightened from #66798F, which sat at 3.9:1 on card_alt and
-    # 4.2:1 on card, under the 4.5:1 WCAG AA floor for text this small; this
-    # value clears 4.5:1 on every surface it is set on, accent_bg included.
-    "subtle": "#7C8EA2",
-    "page": "#05090D",
-    "card": "#0C131B",
-    "card_alt": "#111A24",
-    # Table furniture, distinct from ``card_alt``. The alternating row stripe
-    # used ``card_alt``, which is also the surface of every card, so a striped
-    # row read as a nested panel; and the group header row used ``card``, so it
-    # was invisible against the row below it.
-    "zebra": "#0F1720",
-    "head_bg": "#16212D",
-    "group_bg": "#0F1821",
-    "border": "#22303F",
-    "row_rule": "#1A2531",
-    "col_rule": "#16212D",
-    "green": "#2FBF71",
+    # The Securities Statement (Nov 2026): one dark ground, no card surfaces.
+    # Every "surface" role resolves to the page so tables sit on the ground like
+    # ledger rows; ``head_bg``/``group_bg`` are the one shade used for header
+    # bands. Signal colours are spent on signs, gaps and the market stamp only.
+    "accent": "#EEF2F7",
+    "blue": "#6E9BFF",
+    "ink": "#EEF2F7",
+    "muted": "#93A0B4",
+    "subtle": "#7D8CA0",
+    "faint": "#6E7D95",   # 4.6:1 on the ground: the floor for 9.5px labels
+    "page": "#0B1017",
+    "card": "#0B1017",
+    "card_alt": "#0B1017",
+    "zebra": "#0B1017",
+    "head_bg": "#131C27",
+    "group_bg": "#131C27",
+    "shade": "#131C27",
+    "border": "#2A3442",
+    "row_rule": "#1B2330",
+    "col_rule": "#1B2330",
+    "green": "#3DBF7F",
     "amber": "#E5A038",
-    "red": "#FF5F52",
+    "red": "#E4573D",
     "green_bg": "#0F2A1D",
     "green_border": "#1B4332",
-    # Whole-row BUY/SELL tints in the Optimizer: a shade off the card rather
-    # than a wash, which on a dark surface would swamp the text.
     "green_tint": "#0E1F18",
     "red_tint": "#1E1211",
     "amber_bg": "#2A1F0C",
     "red_bg": "#2C1210",
-    "accent_bg": "#132038",
-    # ── Chart series roles ───────────────────────────────────────────────────
-    # These five (``port``, ``pnl``, ``unreal``, ``target``, ``bench``) are ONE
-    # categorical set: all five are drawn in the same plot on the Performance
-    # charts, so they are validated against each other over ALL pairs, not just
-    # adjacent ones, on the card_alt surface a chart sits on:
-    #
-    #   node validate_palette.js "#E6EDF6,#38BDF8,#A855F7,#F472B6,#64748B" \
-    #        --mode dark --surface "#111A24" --pairs all
-    #
-    # Two of them had to move to make that pass. ``bench`` was #8FA3BC, which is
-    # ``muted`` — one lightness step from ``target``'s pink, so under deuteranopia
-    # the two were ΔE 3.7 apart and the volatility panel drew its target and its
-    # benchmark in what is effectively the same colour. ``unreal`` was #A78BFA,
-    # ΔE 5.2 from ``pnl``'s cyan under the same simulation. Both are below the
-    # floor that direct labels are allowed to rescue.
-    #
-    # ``bench`` stays deliberately the least chromatic of the five: it is the
-    # reference the eye should find last.
-    "bench": "#64748B",
-    "pnl": "#38BDF8",
-    # Unrealized P&L sits beside Total P&L on every return chart, so it needs a
-    # hue that reads as its sibling without being confusable with it: purple
-    # against the cyan of ``pnl``, and far from green/red (which mean sign, not
-    # series) and from the grey of ``bench``.
+    "accent_bg": "#15202E",
+    "bench": "#8A98AB",
+    "pnl": "#38C8FF",
     "unreal": "#A855F7",
-    # The portfolio's own line. Ink, not green: green, red and amber MEAN
-    # something in this document — the sign of a figure, a semaphore state, a
-    # bar's direction in the waterfall — and TWR spending the positive colour
-    # on mere identity is what made "green" ambiguous across the issue. Ink also
-    # matches the hero, where the portfolio's value line is already neutral, so
-    # one colour means "you" on every chart. Drawn a hair thicker than the
-    # references it is compared against, which is the emphasis the hue used to do.
-    "port": "#E6EDF6",
-    # The target allocation's reference line. It has to stay legible against the
-    # other four return lines (green / cyan / violet / grey) AND against the
-    # volatility panel's amber-brown, and pink is the only hue free on both. Not
-    # dashed: the reader is comparing this line's wobble against the portfolio's,
-    # which is exactly what a dash hides.
+    "port": "#EEF2F7",
     "target": "#F472B6",
 }
+
+# Asset-class hues, from the one source every surface reads
+# (``tarzan.export._format.ASSET_CLASS_COLORS``), as CSS colours. Used
+# identically everywhere a class is named: the group band (at 20%), the 2px
+# rail beside its rows, the dot before its name and the bridge slices.
+from tarzan.export._format import ASSET_CLASS_COLORS as _ASSET_CLASS_COLORS
+
+CLASS_COLOURS = {k: f"#{v}" for k, v in _ASSET_CLASS_COLORS.items()}
+
+
+def mix(base: str, target: str, t: float) -> str:
+    """Linear mix of two #RRGGBB colours, ``t`` of the way from base to target."""
+    def ch(s, i):
+        return int(s[1 + 2 * i:3 + 2 * i], 16)
+    return "#{:02X}{:02X}{:02X}".format(*(round(ch(base, i) + t * (ch(target, i) - ch(base, i)))
+                                          for i in range(3)))
+
+
+def class_band(cls: str, t: float = 0.20) -> str:
+    """The faint band behind a class header: the class hue over the ground."""
+    c = CLASS_COLOURS.get(cls)
+    return mix(PALETTE["page"], c, t) if c else PALETTE["shade"]
 
 # The one type stack. Declared at EVERY text-bearing element, not inherited from
 # ``<body>``: the clients that drop body/``<style>`` font rules (Outlook's Word
@@ -106,7 +90,9 @@ PALETTE = {
 # monospace and everything else in Times, splitting one document across two
 # typefaces. Three inconsistent mono stacks and a sans-serif one used to be
 # inline in the charts and tables; a stack change had to be made in four places.
-FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace"
+FONT_STACK = '-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif'
+# Codes only: ISINs, feed tickers in the appendix. Never running text or figures.
+MONO_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
 
 # Five sizes (22/13/11/10/9), six roles, named by ROLE like the palette
 # keys above.
@@ -131,20 +117,14 @@ FONT_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monos
 # Running text at 400 against data at 600 and labels at 700 does that job with
 # one size each.
 TYPE = {
-    "display": "font-size:22px;font-weight:700;line-height:1.15;",
-    "figure": "font-size:13px;font-weight:700;line-height:1.25;",
-    "title": "font-size:13px;font-weight:700;letter-spacing:0.06em;"
+    "display": "font-size:34px;font-weight:700;line-height:1.05;letter-spacing:-0.01em;",
+    "figure": "font-size:19px;font-weight:700;line-height:1.1;",
+    "title": "font-size:12.5px;font-weight:700;letter-spacing:0.12em;"
              "text-transform:uppercase;",
-    # ALL running text outside the tables: the narrative, section subtitles,
-    # callouts, methodology sentences, captions, legends, disclaimers, the
-    # footer. There is deliberately no second prose size -- a subtitle and the
-    # caption three lines below it are the same kind of sentence, and setting
-    # one 2px larger than the other read as two typefaces sharing a section.
-    # What separates them is COLOUR: ink for a callout, muted for a subtitle,
-    # subtle for fine print.
-    "prose": "font-size:11px;font-weight:400;line-height:1.5;",
-    "data": "font-size:10px;font-weight:600;line-height:1.25;",
-    "label": "font-size:9px;font-weight:700;letter-spacing:0.06em;"
+    "prose": "font-size:12px;font-weight:400;line-height:1.45;",
+    "note": "font-size:10.5px;font-weight:400;line-height:1.4;",
+    "data": "font-size:11px;font-weight:600;line-height:1.25;",
+    "label": "font-size:10px;font-weight:700;letter-spacing:0.08em;"
              "text-transform:uppercase;",
 }
 
@@ -156,10 +136,11 @@ TYPE = {
 # ``preserveAspectRatio="none"``, so a font-size in one is neither px nor square
 # — which is why no sparkline draws text.
 TYPE_PX = {
-    "display": 22,
-    "figure": 13,
-    "title": 13,
-    "prose": 11,
-    "data": 10,
-    "label": 9,
+    "display": 34,
+    "figure": 19,
+    "title": 12.5,
+    "prose": 12,
+    "note": 10.5,
+    "data": 11,
+    "label": 10,
 }

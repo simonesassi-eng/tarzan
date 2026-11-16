@@ -196,7 +196,10 @@ def _hero_value_chart(values, unreal_eur, dates, flows, w: int = 580, h: int = 1
         return ""
     if total_eur is not None and len(total_eur) != n:
         total_eur = None
-    ML, MR, MT, MB = 52, 48, 12, 26
+    # Margins sized for the phone column: the euro ticks at 10px need ~34px on
+    # each side (a six-figure value left, a five-figure P&L right); 7 ticks
+    # over a 190px plot.
+    ML, MR, MT, MB = 38, 34, 10, 22
     PW, PH = w - ML - MR, h - MT - MB
     base = values[0]
     from tarzan.export import _charts as _ch
@@ -379,10 +382,12 @@ def _hero_chart_legend(*, has_total: bool) -> str:
         items.append((_split_swatch(),
                       "Total P&amp;L (€, right): green up, red down"))
     items.append((_swatch(P["unreal"]), "Unreal. P&amp;L (€, right)"))
-    parts = [f'{swatch}<span style="color:{P["muted"]};">{label}</span>'
+    # Each item one unbreakable run, so a wrap never parts a swatch from its name.
+    parts = [f'<span style="display:inline-block;white-space:nowrap;margin-right:12px;">'
+             f'{swatch}<span style="color:{P["muted"]};">{label}</span></span>'
              for swatch, label in items]
-    return (f'<div style="{TYPE["data"]}margin:7px 0 0;">'
-            + "&nbsp;&nbsp;&nbsp;".join(parts) + "</div>")
+    return (f'<div style="{TYPE["data"]}margin:7px 0 0;line-height:1.6;">'
+            + "".join(parts) + "</div>")
 
 
 def _hero_flow_chips(flows) -> str:
@@ -589,7 +594,7 @@ def spark_note(text: str) -> str:
     wrapped onto a second line and took the row's height with it. ``nowrap``
     holds it on one line at any mono advance.
     """
-    return (f'<div style="font-size:{TYPE_PX["label"]}px;font-weight:600;'
+    return (f'<div data-spark-note="{text}" style="font-size:{TYPE_PX["label"]}px;font-weight:600;'
             f'line-height:1.25;white-space:nowrap;color:{PALETTE["subtle"]};'
             f'margin-top:1px;">{text}</div>' if text else "")
 

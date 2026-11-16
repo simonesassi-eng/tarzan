@@ -51,10 +51,13 @@ def test_cash_index_shows_hours_open_badge_and_day():
          mock.patch.object(mq, "_intraday_reference_now", lambda tzinfo=None: winter), \
          mock.patch.object(mq, "market_status",
                            return_value=(True, "Tue")):
-        html = _build_markets(_ctx())["html"]
+        out = _build_markets(_ctx())
     # New York's session on the reader's clock (the zone is named once, in the
-    # section subtitle), then the status and its day.
-    assert "15:30\u201322:00&nbsp;&middot;&nbsp;Op.&nbsp;Tue" in html
+    # section subtitle). The status and its day are said once in the subtitle
+    # when every row shares them, and on the row only when its own differs.
+    assert "15:30\u201322:00" in out["html"]
+    assert "all Op. Tue" in out["sub"]
+    assert "Op.&nbsp;Tue" not in out["html"]
 
 
 def test_cash_index_shows_closed_badge_and_day():
@@ -62,8 +65,8 @@ def test_cash_index_shows_closed_badge_and_day():
     with mock.patch.object(mq, "fetch_market_quotes", return_value=_SAMPLE), \
          mock.patch.object(mq, "market_status",
                            return_value=(False, "Fri")):
-        html = _build_markets(_ctx())["html"]
-    assert "&middot;&nbsp;Cl.&nbsp;Fri" in html
+        out = _build_markets(_ctx())
+    assert "all Cl. Fri" in out["sub"]
 
 
 def test_chg_column_shows_only_percent_not_the_absolute_value():
@@ -90,8 +93,10 @@ def test_futures_show_open_status_and_day_not_the_cash_hours():
     # day/status, not the cash index's hours or its day; the board shows no
     # "(FUT)" tag (the heading says it).
     fut_pos = html.rindex("S&amp;P 500")
-    fut_chunk = html[fut_pos:fut_pos + 400]
-    assert "\u201323:00&nbsp;" in fut_chunk or "\u201322:00&nbsp;" in fut_chunk  # Globex, reader's clock
+    fut_chunk = html[fut_pos:fut_pos + 500]
+    assert "\u201323:00" in fut_chunk or "\u201322:00" in fut_chunk  # Globex, reader's clock
+    # The cash index's "Op. Tue" is the status the subtitle states; the future's
+    # own day differs, so its row says so.
     assert "Op.&nbsp;Mon" in fut_chunk
     assert "15:30" not in fut_chunk  # not the cash index's hours
     assert "(FUT)" not in html
@@ -104,10 +109,10 @@ def test_futures_show_closed_with_day_over_the_weekend():
                            side_effect=lambda sym, now=None: (
                                (False, "Fri") if sym == "ES=F"
                                else (False, "Fri"))):
-        html = _build_markets(_ctx())["html"]
-    fut_pos = html.rindex("S&amp;P 500")
-    fut_chunk = html[fut_pos:fut_pos + 400]
-    assert "Cl.&nbsp;Fri" in fut_chunk
+        out = _build_markets(_ctx())
+    # Both rows closed since Friday: said once, for the board.
+    assert "all Cl. Fri" in out["sub"]
+    assert "Cl.&nbsp;Fri" not in out["html"]
 
 
 def test_daily_close_fallback_chart_is_labelled_no_intraday():
@@ -127,9 +132,11 @@ def test_daily_close_fallback_chart_is_labelled_no_intraday():
     mq._memo = None
     with mock.patch.object(mq, "fetch_market_quotes", return_value=sample), \
          mock.patch.object(mq, "market_status", return_value=(False, "Mon")):
-        html = _build_markets(_ctx(sample))["html"]
-    assert "<polyline" in html      # the daily-closes chart really is drawn
-    assert "no intraday" in html    # and it says what those closes are
+        out = _build_markets(_ctx(sample))
+    assert "<polyline" in out["html"]      # the daily-closes chart really is drawn
+    # ...and it says what those closes are: on the row, or once in the subtitle
+    # when every row (here the only one) carries the same caption.
+    assert "no intraday" in out["html"] + out["sub"]
 
 
 def test_real_intraday_chart_is_not_labelled_no_intraday():
@@ -353,7 +360,8 @@ def test_the_board_declares_its_column_widths_so_a_long_name_cannot_push_the_lin
     mq._memo = None
     with mock.patch.object(mq, "market_status", return_value=(False, "Fri")):
         html = _build_markets(_ctx(long_name))["html"]
-    assert "table-layout:fixed;" in html and '<colgroup><col><col width="44">' in html
+    assert "table-layout:fixed;" in html
+    assert re.search(r'<colgroup><col><col style="width:\d+px;"></colgroup>', html)
     assert "text-overflow:ellipsis" in html
 
 

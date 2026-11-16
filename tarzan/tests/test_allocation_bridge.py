@@ -129,18 +129,27 @@ class TestLabelsSitOnTheirPills:
                       r'<tspan')
 
     def _check(self, svg: str) -> None:
+        """A card's labels are one line (ticker, weight, euros and gap level with
+        the pill's centre, baseline 3.5 below it) or two (the name line 2.0
+        above the centre, the figures 9.5 below), as :func:`_bridge_layout`
+        decides from the room the phone column leaves between the stacks."""
+        from tarzan.export.newsletter import _sections_alloc as sa
         pills: dict = {}
         for px, py, ph in self._PILL.findall(svg):
             pills.setdefault(float(px), []).append(float(py) + float(ph) / 2)
         left_x, right_x = min(pills), max(pills)
         tags = self._TAG.findall(svg)
-        left = [float(y) - 3.5 for _, y, a in tags if a == "end"]
-        right = [float(y) - 3.5 for _, y, a in tags if a == "start"]
-        assert len(left) == len(pills[left_x]) and len(right) == len(pills[right_x])
-        for centres, labels in ((pills[left_x], left), (pills[right_x], right)):
+        left_y = [float(y) for _, y, a in tags if a == "end"]
+        right_y = [float(y) for _, y, a in tags if a == "start"]
+        assert len(left_y) == len(pills[left_x]) and len(right_y) == len(pills[right_x])
+        # Which mode the card is in: the offset that puts the first label on its pill.
+        first_c, first_y = pills[left_x][0], left_y[0]
+        two = abs(first_c - (first_y + 2.0)) < abs(first_c - (first_y - 3.5))
+        offset, pitch = ((2.0, sa._ROW2) if two else (-3.5, sa._ROW))
+        for centres, labels in ((pills[left_x], left_y), (pills[right_x], right_y)):
             for c, y in zip(centres, labels):
-                assert abs(c - y) < 0.2, (c, y)
-            assert all(b - a >= 15.0 - 0.2 for a, b in zip(centres, centres[1:])), centres
+                assert abs(c - (y + offset)) < 0.2, (c, y, two)
+            assert all(b - a >= pitch - 0.2 for a, b in zip(centres, centres[1:])), centres
         # Bands are filled paths; a stroke tying a label to its pill was an unfilled one.
         assert not re.search(r'<path[^>]*fill="none"', svg), "a leader stroke is back"
 

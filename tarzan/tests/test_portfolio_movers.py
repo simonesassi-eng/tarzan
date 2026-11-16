@@ -74,8 +74,10 @@ class TestWhatTheGridPrints:
 
     @pytest.fixture
     def html(self, universe):
-        return sp._mover_grid_html(universe, "Portfolio", "#E6EDF6",
-                                   {"1d": -0.1, "5d": 0.1, "1m": 0.2, "3m": 0.3})
+        # The merged grid: the book and the plan side by side on one list of
+        # tickers; here the plan is empty, so only the book's side prints.
+        totals = {"1d": -0.1, "5d": 0.1, "1m": 0.2, "3m": 0.3}
+        return sp._movers_merged_html(universe, [], totals, {})
 
     def test_it_names_the_bare_ticker(self, html):
         """A truncated instrument name printed "Xtr. MSCI Wrld" for two different
@@ -89,8 +91,9 @@ class TestWhatTheGridPrints:
         assert len(shown) < 8
         assert "T0" in shown and "T7" in shown
 
-    def test_the_header_says_how_many_were_dropped(self, html):
-        assert "not top three" in html
+    def test_the_header_says_how_many_are_shown(self, html):
+        """The count; the note under the grid says what the others are."""
+        assert re.search(r">\d of 8<", html)
 
     def test_a_figure_is_printed_exactly_on_the_extremes(self, universe, html):
         """The tint carries the magnitude of the rest.
@@ -104,10 +107,10 @@ class TestWhatTheGridPrints:
         for key, _ in sp._MOVER_WINDOWS:
             ahead, behind = sp._mover_rows(universe, key)
             expected += len({r["ticker"] for r in ahead} | {r["ticker"] for r in behind})
-        # Contributions print bare; the totals row prints percentages, so the trailing
-        # "%" is what tells the two apart.
-        printed = re.findall(r">([+−]\d+\.\d{2,3})</td>", html)
-        assert len(printed) == expected, printed
+        # The totals row prints the same shape (its label carries the "%"), one
+        # figure per window on the book's side; the empty plan prints dashes.
+        printed = re.findall(r">([+−]\d+\.\d{2})</td>", html)
+        assert len(printed) == expected + len(sp._MOVER_WINDOWS), printed
 
     def test_the_universe_total_is_the_last_row(self, html):
         assert html.rindex("All") > html.rindex("T0")
@@ -147,8 +150,8 @@ class TestTheSectionOnRealisticMetrics:
     def test_both_universes_are_rendered(self, ctx):
         out = sp._build_portfolio_movers(ctx)
         assert out["available"] is True
-        assert ">Portfolio</span>" in out["html"]
-        assert ">Target</span>" in out["html"]
+        assert ">Portfolio <" in out["html"]
+        assert ">Target <" in out["html"]
 
     def test_a_line_held_and_planned_appears_at_both_its_weights(self, ctx):
         """AAA is 60% of the book and 50% of the plan, so its contribution differs
@@ -162,7 +165,8 @@ class TestTheSectionOnRealisticMetrics:
         +0.20% only by coincidence of this fixture — what matters is that the figure
         comes from ``performance``, which every other section prints."""
         ctx.metrics.performance = {"1d": 9.99, "5d": 0.4, "1m": 0.6, "3m": 0.8}
-        assert "+9.99%" in sp._build_portfolio_movers(ctx)["html"]
+        # The totals row prints bare figures; its label carries the "%".
+        assert ">+9.99</td>" in sp._build_portfolio_movers(ctx)["html"]
 
     def test_no_holding_performance_means_no_section(self, ctx):
         ctx.metrics.holding_performance = pd.DataFrame()
@@ -172,14 +176,16 @@ class TestTheSectionOnRealisticMetrics:
         ctx.metrics.target_weights = {}
         out = sp._build_portfolio_movers(ctx)
         assert out["available"] is True
-        assert ">Target</span>" not in out["html"]
+        assert ">Target <" not in out["html"]
 
 
 class TestTheFigureFormat:
-    def test_a_small_contribution_keeps_three_decimals(self):
-        """Two decimals round a whole 1D column to 0.00 and the ranking stops being
-        legible; the issue tapers precision the same way for percentages."""
-        assert sp._mover_pp(-0.0962) == "−0.096"
+    def test_every_contribution_prints_two_decimals(self):
+        """Ten cells share the phone column at 34px each; a six-glyph "−0.096" is
+        36px in the system font and ran into its neighbour. Two decimals keep a
+        one-day column legible (0.04 / 0.05 / 0.10) inside the cell."""
+        assert sp._mover_pp(-0.0962) == "−0.10"
+        assert sp._mover_pp(0.0421) == "+0.04"
 
     def test_a_large_one_takes_two(self):
         assert sp._mover_pp(0.7867) == "+0.79"

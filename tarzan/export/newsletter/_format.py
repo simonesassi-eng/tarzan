@@ -109,6 +109,29 @@ def _pct_compact(value: Optional[float], signed: bool = True) -> str:
         return f"{_sign_for(v, decimals)}{av:.{decimals}f}%"
     return f"{v:.{decimals}f}%"
 
+def _pct_grid(value: Optional[float], signed: bool = True) -> str:
+    """A percentage for the statement grids, WITHOUT its sign of unit: the band
+    header says "%" once for the whole table.
+    Eight windows share 288px on the phone, 36px a cell; the figure has to fit
+    with a 1px seam and 3px of air at 10.5px. Measured in the system font, a
+    five-glyph figure ("+16.5", "−0.28") is 31px and a six-glyph one ("+16.46")
+    35px, so precision tapers by magnitude one step earlier than
+    :func:`_pct_compact`:
+        |v| < 10    → 2 decimals   (+8.59, −0.28)
+        |v| < 100   → 1 decimal    (+16.5, −47.9)
+        |v| >= 100  → 0 decimals   (+102)
+    A tenth of a point on a double-digit return is the precision a reader can
+    act on; the second decimal was never the news.
+    """
+    if is_missing(value):
+        return "—"
+    v = float(value)
+    av = abs(v)
+    decimals = 2 if av < 10 else (1 if av < 100 else 0)
+    if signed:
+        return f"{_sign_for(v, decimals)}{av:.{decimals}f}"
+    sign = "\u2212" if _sign_for(v, decimals) == "\u2212" else ""
+    return f"{sign}{av:.{decimals}f}"
 def _pct_smart(value: Optional[float], max_decimals: int = 1, signed: bool = False) -> str:
     """Format a percentage with adaptive precision: drop the decimal
     digits when the value is already integer (saves horizontal space).

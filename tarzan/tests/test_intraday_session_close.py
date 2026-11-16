@@ -340,14 +340,14 @@ class TestASessionChartDrawsOnlyTheElapsedSession:
         """The old behaviour, kept for every other panel: a month of closes SHOULD
         span its plot. This is the contrast the next test is measured against."""
         svg, _ = self._svg()
-        plot_right = 182 - 46 - 8          # w - end_gutter - right margin
+        plot_right = 182 - 46 - 6          # w - end_gutter - right margin (6)
         assert self._last_x(svg) >= plot_right - 1
 
     def test_with_a_span_the_line_stops_where_the_day_has_got_to(self):
         svg, _ = self._svg(x_span=self._span())
-        plot_right = 182 - 46 - 8
+        plot_right = 182 - 46 - 6
         # 09:00 -> 13:00 of an 09:00-17:30 session is 4h of 8.5h.
-        expected = 30 + (4 / 8.5) * (plot_right - 30)
+        expected = 32 + (4 / 8.5) * (plot_right - 32)   # left margin 32
         assert self._last_x(svg) == pytest.approx(expected, abs=1.0)
         assert self._last_x(svg) < plot_right - 20
 
@@ -372,7 +372,7 @@ class TestASessionChartDrawsOnlyTheElapsedSession:
             series, dates, w=182, h=116, date_fmt="%H:%M", end_gutter=46,
             x_span=self._span())
 
-        plot_right = 182 - 46 - 8
+        plot_right = 182 - 46 - 6
         assert self._last_x(svg) == pytest.approx(plot_right, abs=0.5)
 
     def test_a_degenerate_span_falls_back_to_the_even_spread(self):
@@ -382,7 +382,7 @@ class TestASessionChartDrawsOnlyTheElapsedSession:
 
         one = pd.Timestamp(self.OPEN, tz="Europe/Rome")
         svg, _ = self._svg(x_span=(one, one))
-        plot_right = 182 - 46 - 8
+        plot_right = 182 - 46 - 6
         assert self._last_x(svg) >= plot_right - 1
 
 

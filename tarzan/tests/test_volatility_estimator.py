@@ -291,8 +291,8 @@ class TestTheThreeLinesAreComparedOverOnePeriod:
         html = TestTheSinceInceptionPanelIsRendered._section()["vs_market_html"]
         # Third and last key: return grid, lifetime return, lifetime volatility —
         # and only the volatility one carries the span figures.
-        si_key = re.findall(r'margin:7px 0 0;">(.*?)</div>', html, re.S)[2]
-        names = re.findall(r'<span style="color:#8FA3BC;">([^<]+)</span>', si_key)
+        si_key = re.findall(r'margin:6px 0 0;line-height:1.6;">(.*?)</div>', html, re.S)[2]
+        names = re.findall(r'<span style="color:#93A0B4;">([^<]+)</span>', si_key)
         assert len(names) == 3
         for n in names:
             assert re.search(r'\d+\.\d+%$', n), f"{n!r} carries no span figure"
@@ -306,7 +306,7 @@ class TestTheThreeLinesAreComparedOverOnePeriod:
         """
         import re
         html = TestTheSinceInceptionPanelIsRendered._section()["vs_market_html"]
-        keys = re.findall(r'margin:7px 0 0;">(.*?)</div>', html, re.S)
+        keys = re.findall(r'margin:6px 0 0;line-height:1.6;">(.*?)</div>', html, re.S)
         # keys[-1] is the volatility panel's; every earlier key belongs to a return
         # panel and must not carry the "name σ%" shape the volatility key uses.
         assert len(keys) >= 2, keys
@@ -345,7 +345,7 @@ class TestTheSinceInceptionPanelIsRendered:
         """
         import re
         html = self._section()["vs_market_html"]
-        caps = re.findall(r'margin-bottom:5px;">([^<]+)</div>', html)
+        caps = re.findall(r'border-bottom:1px solid #2A3442;[^"]*">([^<]+)</div>', html)
         assert caps == ["Return · by window", "Return · since inception",
                         "Volatility · since inception"], caps
 
@@ -354,7 +354,7 @@ class TestTheSinceInceptionPanelIsRendered:
         import re
         html = self._section()["vs_market_html"]
         cells = re.findall(
-            r'letter-spacing:.04em;margin-bottom:3px;">([^<]*)', html)
+            r'font-size:9.5px;padding:8px 0 2px;">([^<]*)', html)
         assert cells == ["1D", "5D", "1M", "3M", "YTD", "1Y"], cells
 
     def test_the_lifetime_row_carries_one_note_under_the_pair(self):
@@ -372,7 +372,7 @@ class TestTheSinceInceptionPanelIsRendered:
         import re
         html = self._section()["vs_market_html"]
         assert " days</span>" not in html.split("Volatility", 1)[0]
-        spans = re.findall(r'letter-spacing:0;"> · (\d+) sessions</span>', html)
+        spans = re.findall(r'text-transform:none;"> · (\d+) sessions</span>', html)
         assert spans, html[:400]
         # Monotonic: a longer window spans more days than a shorter one.
         assert spans == sorted(spans, key=int), spans
@@ -383,25 +383,22 @@ class TestTheSinceInceptionPanelIsRendered:
         import re
         html = self._section()["vs_market_html"]
         order = [m.group(1) for m in re.finditer(
-            r'margin-bottom:5px;">([^<]+)</div>', html)]
+            r'border-bottom:1px solid #2A3442;[^"]*">([^<]+)</div>', html)]
         assert (order.index("Volatility · since inception")
                 > order.index("Return · since inception")), order
 
     def test_two_widths_one_per_role(self):
-        """Grid cells at 182px, and the lifetime pair two-up at 282px.
-
-        There is no 580px plot any more: the lifetime return gave up full width to sit
-        beside the lifetime volatility, so return and roughness over the same span are
-        read together.
+        """Window cells two-up at 172px, and the lifetime pair stacked at the
+        column's full 354px: on a phone two plots side by side are too small to
+        read a year of history on, so return and volatility over the same span
+        sit one under the other instead.
         """
         import re
         html = self._section()["vs_market_html"]
         widths = re.findall(r'<svg width="100%" viewBox="0 0 (\d+) ', html)
-        assert widths.count("182") == 5, widths      # 1D is figures, not a plot
-        assert widths.count("282") == 2, widths      # return | volatility
-        assert widths.count("580") == 0, widths
+        assert widths.count("172") == 5, widths      # 1D is figures, not a plot
+        assert widths.count("354") == 2, widths      # return, then volatility
         assert len(widths) == 7, widths
-
     def test_the_note_separates_the_line_from_the_key(self):
         """Two different figures sit on the volatility panel and a reader cannot tell
         them apart from the picture: the LINE is a rolling 21-session estimate, the

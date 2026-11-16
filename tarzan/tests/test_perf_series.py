@@ -245,13 +245,13 @@ def test_perf_vol_series_full_and_window():
 
 
 def test_chart_grid_density():
-    """Every month boundary gets a gridline; the LABELS are thinned to what the
-    width can hold.
+    """The month LABELS are thinned to what the width can hold.
 
-    Labelling all of them was the old contract, and it printed the first two on
-    top of each other on a half-width panel, because a rotated label needs about
-    30px of horizontal room. The gridlines still mark every month, so no
-    information is lost -- only the text that had nowhere to go.
+    Labelling every boundary was the old contract, and it printed the first two
+    on top of each other on a half-width panel, because a label needs about 30px
+    of horizontal room. The statement charts draw no vertical grid (a hairline
+    horizontal grid and the dashed zero line are the only rules), so the labels
+    are the axis: the first carries the year, the last names the current month.
     """
     import re
     from tarzan.export._charts import chart_pct_compact
@@ -268,13 +268,17 @@ def test_chart_grid_density():
     narrow, wide = _svg(264), _svg(544)
     n_narrow, n_wide = len(_labels(narrow)), len(_labels(wide))
 
-    # 9 month boundaries in the range, each with its own gridline on both panels.
+    # No vertical gridlines on either panel: every <line> is horizontal.
     for svg in (narrow, wide):
-        assert svg.count('stroke-width="1"/>') >= 9
+        for x1, x2 in re.findall(r'<line x1="([\d.]+)" y1="[\d.]+" x2="([\d.]+)"', svg):
+            assert x1 != x2, "a vertical gridline is back"
 
-    # The narrow panel thins its labels; the wide one has room for every month.
-    assert 3 <= n_narrow < 9, n_narrow
-    assert n_wide == 9, n_wide
+    # The narrow panel thins its labels; the wide one has room for every month
+    # bar one: the start-of-history label ("Nov 25") and the December boundary
+    # sit 16 days apart, which is 34px at 544px, and a horizontal label needs
+    # that much on its own, so one of the two gives way even there.
+    assert 3 <= n_narrow < 8, n_narrow
+    assert 8 <= n_wide <= 9, n_wide
 
     # The axis still ends on the current month, and the first label carries the
     # year so the reader can place the window.
@@ -286,7 +290,11 @@ def test_chart_grid_density():
                               list(short_idx), include_zero=True,
                               min_day_ticks=12)
     days = re.findall(r'>([A-Z][a-z]{2} \d{2})<', svg_r)
-    assert len(days) >= 12
+    # ``min_day_ticks`` is the request; horizontal labels take what the width
+    # holds (a "Jun 13" is ~34px, so a 218px plot seats five or six), and the
+    # axis still opens on the first session.
+    assert 4 <= len(days) <= 12, days
+    assert days[0] == "Jun 13"
 
 
 # ── An absent P&L series must read as NO LINE, never as a NaN line ───────────

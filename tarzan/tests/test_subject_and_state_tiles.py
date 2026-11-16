@@ -212,10 +212,10 @@ class TestTheRenderedTileMarkup:
         type carries the euro amount in the actual document."""
         from tarzan.tests.test_newsletter_golden_html import GOLDEN_PATH
         html = GOLDEN_PATH.read_text()
-        block = html.split("Total P&amp;L")[1][:600]
-        # The display-type div comes first, then the prose caption.
-        big = re.search(r'font-size:22px[^>]*>([^<]+)</div>', block)
-        small = re.search(r'line-height:1\.5[^>]*>([^<]+)</div>', block)
+        block = html.split("Total P&amp;L")[1][:700]
+        # The figure-type div comes first, then the note with the percentage.
+        big = re.search(r'font-size:19px[^>]*>([^<]+)</div>', block)
+        small = re.search(r'font-size:10\.5px[^>]*>(.*?)</div>', block, re.S)
         assert big and "€" in big.group(1), block[:300]
         assert small and "%" in small.group(1), block[:300]
 

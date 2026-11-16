@@ -270,21 +270,17 @@ class TestRender:
         html = render_newsletter(_metrics(with_order_returns=True), _config())
         # Lean hero: the portfolio value band (scoreboard + mountain removed).
         assert "Portfolio" in html
-        # The window matrix sits in the PORTFOLIO section now, under the value
-        # chart, and the section heading is the only title it has -- the
-        # "How your money moved" line was dropped because the heading plus the
-        # matrix say it. Anchor on the matrix's own footer instead.
-        assert ">Portfolio</span>" in html
-        # The KPI matrix (measures as rows, the Returns windows as columns)
-        # replaced the window table; its first column header is the anchor.
-        assert ">KPI<" in html
+        # The KPI matrix sits in the PERFORMANCE section, under the value chart:
+        # one ledger per universe, the universe's name in its head.
+        assert "></span>Portfolio</th>" in html
         # Every ampersand reaches the document as an entity. The matrix writes
         # it itself; the tiles go through the template, where autoescape is off
         # because the filename ends in .j2 — so they are escaped at their own
         # markup boundary in _build_hero._tile. Before that they arrived raw,
         # which is invalid HTML that mail clients happen to tolerate.
-        assert "P&amp;L \u20ac" in html      # matrix row label
-        assert "Unr. \u20ac" in html         # matrix row label
+        # Matrix row labels: the unit stands beside the measure's name.
+        assert re.search(r"P&amp;L <span[^>]*>\u20ac</span>", html)
+        assert re.search(r"Unrealized <span[^>]*>\u20ac</span>", html)
         assert "TWR" in html
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile
@@ -362,7 +358,7 @@ class TestTheSplitIsAgainstTheWindowOpen:
             ["2026-08-03", "2026-08-10", "2026-08-17", "2026-08-24"], [],
             total_eur=total,
         )
-        ML, MT, MB, w, h = 52, 12, 26, 580, 196
+        ML, MT, MB, w, h = 38, 10, 22, 580, 196     # _hero_value_chart's margins
         ph = h - MT - MB
         ticks = _right_axis_ticks(svg)
         plo, phi = min(ticks), max(ticks)
@@ -371,7 +367,7 @@ class TestTheSplitIsAgainstTheWindowOpen:
             return MT + (1 - (v - plo) / ((phi - plo) or 1)) * ph
 
         dashed = float(re.search(
-            r'<line x1="52" y1="([\d.]+)"[^>]*stroke-dasharray="3,3"', svg).group(1))
+            rf'<line x1="{ML}" y1="([\d.]+)"[^>]*stroke-dasharray="3,3"', svg).group(1))
         assert abs(dashed - y_of(total[0])) < 0.15, (
             f"boundary at y={dashed}, window open is y={y_of(total[0]):.1f}, "
             f"zero is y={y_of(0.0):.1f}"

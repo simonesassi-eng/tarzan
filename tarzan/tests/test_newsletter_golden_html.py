@@ -31,6 +31,21 @@ from tarzan.export.newsletter import render_newsletter
 # gates: a data change that moves a number also moves this markup.
 from tarzan.tests.test_golden_master import _AS_OF, _ORDERS_CSV, _stub_enrich
 
+
+def _section_labels(html: str) -> list[str]:
+    """The section kickers, in order: the label cell of each ``kick()`` row."""
+    return re.findall(
+        r'<td style="white-space:nowrap;padding-left:12px;[^"]*">([^<]+)</td>', html)
+
+
+def _section_span(html: str, label: str) -> tuple[int, int]:
+    """``(start, end)`` of one section's markup: from its kicker to the next."""
+    pat = r'<td style="white-space:nowrap;padding-left:12px;[^"]*">%s</td>'
+    m = re.search(pat % re.escape(label), html)
+    assert m, f"no {label} section in the issue"
+    nxt = re.search(pat % r"[^<]+", html[m.end():])
+    return m.end(), (m.end() + nxt.start()) if nxt else len(html)
+
 GOLDEN_PATH = Path(__file__).parent / "golden" / "newsletter.html"
 
 
@@ -120,11 +135,11 @@ class TestNewsletterGoldenHtml:
         html, _m, _c = rendered
         # Optimizer is absent on this fixture (no rebalance suggestions), so it
         # is not part of the floor; the ordering test covers it when present.
-        for label in ("State", "Portfolio", "Allocation", "The book",
-                      "Returns", "Watchlist", "Portfolio movers",
-                      "Appendix"):
-            assert f">{label}</span>" in html, (
-                f"section {label!r} vanished from the render")
+        labels = _section_labels(html)
+        for label in ("State", "Performance", "Allocation", "Holdings",
+                      "Watchlist", "Portfolio movers", "Appendix"):
+            assert label in labels, (
+                f"section {label!r} vanished from the render: {labels}")
 
     def test_section_ordinals_match_the_concept_order(self, rendered):
         """The order is the argument the document makes: what the portfolio is,
@@ -133,11 +148,13 @@ class TestNewsletterGoldenHtml:
         whoever edits the template next.
         """
         html, _m, _c = rendered
-        labels = re.findall(
-            r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>([^<]+)</span>', html)
-        expected = ["State", "Portfolio", "Vs the market", "Portfolio movers",
-                    "Markets", "Allocation", "Returns", "Watchlist", "The book",
-                    "Optimizer", "Strategy", "Appendix"]
+        labels = _section_labels(html)
+        # The statement's sequence: what the book is, what it did, what moved
+        # it, the backdrop, how it is placed against the plan, then the lines
+        # themselves (held, planned, watched), the modeled trades, the notes.
+        expected = ["State", "Performance", "Portfolio movers", "Markets",
+                    "Allocation", "Holdings", "Target instruments", "Watchlist",
+                    "Optimizer", "Appendix"]
         # Sections the deterministic fixture cannot fill are absent, not
         # reordered, so compare as a subsequence of the intended order.
         assert labels == [x for x in expected if x in labels], labels
@@ -152,14 +169,13 @@ class TestNewsletterGoldenHtml:
         assert not re.search(r'@import|<link[^>]+stylesheet', html, re.I)
 
     def test_kpi_tiles_never_collapse_to_one_column(self, rendered):
-        """The STATE grid must hold three columns at every width it is actually
+        """The STATE grid must hold its columns at every width it is actually
         read at, with no narrow-viewport rule collapsing it further.
-
         A narrow-pane fallback used to stack the tiles one per line below
         520px — meant for a pane narrower than the card, but every phone
         viewport is narrower than that, so it fired unconditionally on the
         one device this mail is read on: nine tiles, one per line, every
-        time. Three 33.33% columns hold their structure at any width down
+        time. Fixed-width ledger cells hold their structure at any width down
         to an iPhone SE, so no such rule should exist any more.
         """
         html, _m, _c = rendered
@@ -176,30 +192,29 @@ class TestNewsletterGoldenHtml:
         assert len(reflow) == 1, breakpoints.keys()
 
     def test_state_grid_does_not_depend_on_the_breakpoint_alone(self, rendered):
-        """The tiles must hold three columns even where media queries do not run.
-
-        Fixed table layout (declared widths are authoritative) and
-        text-size-adjust:100% (declared font sizes are the rendered ones)
-        both keep a client from auto-sizing a column to an inflated
-        monospace value and overflowing the row — independent of whether
-        any media query in the document runs at all.
+        """The STATE ledger cells must hold two columns even where media queries
+        do not run. Fixed table layout (declared widths are authoritative) and
+        text-size-adjust:100% (declared font sizes are the rendered ones) both
+        keep a client from auto-sizing a column to an inflated value and
+        overflowing the row — independent of whether any media query in the
+        document runs at all.
         """
         html, _m, _c = rendered
         assert "-webkit-text-size-adjust: 100%" in html, (
             "without this Apple Mail inflates the tile values and overflows the row"
         )
-        # Every STATE tile row is a fixed-layout table with explicit cell widths.
-        rows = re.findall(
-            r'<table[^>]*style="table-layout:fixed;[^"]*"[^>]*>\s*<tr>(.*?)</tr>',
+        # Every STATE ledger row is a fixed-layout table with explicit cell widths.
+        tables = re.findall(
+            r'<table[^>]*style="[^"]*table-layout:fixed;[^"]*"[^>]*>(.*?)</table>',
             html, re.S,
         )
-        tile_rows = [r for r in rows if 'width="33.33%"' in r]
-        assert tile_rows, "the STATE grid must use a fixed table layout"
-        for row in tile_rows:
-            cells = re.findall(r'<td[^>]*style="width:([0-9.]+)%', row)
-            assert len(cells) >= 1, "each tile cell needs an explicit CSS width"
-            assert all(abs(float(c) - 33.33) < 0.01 for c in cells), cells
-
+        ledgers = [t for t in tables if 'width="50%"' in t and "Total P&amp;L" in t]
+        assert ledgers, "the STATE grid must use a fixed table layout"
+        for ledger in ledgers:
+            for row in re.findall(r"<tr>(.*?)</tr>", ledger, re.S):
+                cells = re.findall(r'<td[^>]*style="width:([0-9.]+)%', row)
+                assert len(cells) == 2, "each ledger row needs two cells with a CSS width"
+                assert all(abs(float(c) - 50.0) < 0.01 for c in cells), cells
 
 class TestSectionNumbering:
     """Section ordinals must run 1..N over the sections actually rendered.
@@ -212,8 +227,9 @@ class TestSectionNumbering:
 
     @staticmethod
     def _ordinals(html: str) -> list[int]:
+        # The ordinal sits in the left rail, boxed, before each section's row.
         return [int(n) for n in re.findall(
-            r'\[(\d\d)\]</span>&nbsp;&nbsp;', html)]
+            r'font-variant-numeric:tabular-nums;">(\d\d)</div></td>', html)]
 
     def test_sequence_has_no_holes_without_optional_blocks(self, rendered):
         html, _m, _c = rendered
@@ -342,12 +358,11 @@ class TestReturnsHeat:
         """The zebra stripe fights the heat: under a tinted matrix an uncoloured
         cell has to be one surface, or the stripe reads as a signal too."""
         html, _m, _c = rendered
-        start = html.find(">Returns</span>")
-        end = html.find(">Watchlist</span>")
-        assert start != -1 and end > start
+        start, end = _section_span(html, "Holdings")
         from tarzan.export._palette import PALETTE
-        assert PALETTE["zebra"] not in html[start:end]
-
+        # The ground is one colour by design; no row surface may differ from it
+        # inside the grid.
+        assert PALETTE["zebra"] == PALETTE["page"] or PALETTE["zebra"] not in html[start:end]
 
 class TestNoRaggedTables:
     """Every row of every table must span the same number of columns.
@@ -473,49 +488,61 @@ class TestTheReturnsTablePrintsTheEngine:
     issue.
     """
 
-    _SECTION = r'\[\d\d\]</span>&nbsp;&nbsp;<span[^>]*>Returns</span>'
     _KEY = {"intraday": "1d", "1d": "1d", "5d": "5d", "1m": "1m", "3m": "3m",
             "ytd": "ytd", "1y": "1y", "3y": "3y", "5y": "5y"}
 
     def _table(self, html):
+        """The Holdings grid as ``(header, {ticker: [cell, ...]})``.
+        Each instrument is two rows: its name row (the ticker in bold ink, then
+        the name) and its window row (the session cell, then one cell per
+        window); the window header is a row of short labels."""
         import re
-
-        m = re.search(self._SECTION, html)
-        assert m, "no Returns section in the issue"
-        rest = html[m.end():]
-        nxt = re.search(r'\[\d\d\]</span>&nbsp;&nbsp;<span', rest)
-        sec = rest[:nxt.start()] if nxt else rest
-        header, rows = [], {}
-        for tr in re.findall(r"<tr>.*?</tr>", sec, re.S):
+        start, end = _section_span(html, "Holdings")
+        sec = html[start:end]
+        header = []
+        for tr in re.findall(r"<tr>(?:(?!<tr>).)*?</tr>", sec, re.S):
             cells = [re.sub(r"<[^>]+>", "", c).strip()
-                     for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
-            if cells and cells[0].lower().startswith("instrument"):
-                header = [self._KEY.get(c.lower(), c.lower()) for c in cells[1:]]
-            elif len([c for c in cells if c]) >= 3:
-                rows[cells[0]] = cells[1:]
+                     for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+            keys = [self._KEY.get(c.lower()) for c in cells]
+            if cells and all(keys) and len(cells) >= 4:
+                header = keys
+                break
+        rows = {}
+        tickers = list(re.finditer(
+            r'font-weight:700;color:#EEF2F7;">([A-Z0-9.]{2,12})</span>', sec))
+        from tarzan.export._palette import PALETTE
+        # The window cells after the session cell: each carries the 1px seam
+        # in the page colour; the session cell (a nested table) does not.
+        seam = re.compile(r'<td align="right" style="padding:3px 3px 3px 0;[^"]*border-left:1px solid '
+                          + re.escape(PALETTE["page"]) + r';[^"]*">(.*?)</td>', re.S)
+        for i, t in enumerate(tickers):
+            chunk = sec[t.end():tickers[i + 1].start() if i + 1 < len(tickers) else len(sec)]
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in seam.findall(chunk)]
+            if header and len(cells) >= len(header) - 1:
+                rows[t.group(1)] = [""] + cells[:len(header) - 1]
         return header, rows
 
     def test_every_printed_cell_is_the_engine_figure(self, rendered):
-        from tarzan.export.newsletter._format import _pct_compact
-
+        from tarzan.export.newsletter._format import _pct_grid
         html, metrics, _config = rendered
         hp = metrics.holding_performance
         held = hp[hp["type"] == "In portfolio"]
         header, rows = self._table(html)
-        assert header, "the Returns header was not found"
+        assert header, "the Holdings window header was not found"
         checked = 0
         for _i, row in held.iterrows():
             bare = str(row["ticker"]).split(".")[0].upper()
-            printed = next((v for k, v in rows.items() if k.upper().startswith(bare)), None)
-            assert printed is not None, f"{row['ticker']} has no row in Returns"
+            printed = rows.get(bare)
+            assert printed is not None, f"{row['ticker']} has no row in Holdings: {sorted(rows)}"
             for key, cell in zip(header, printed):
                 if key == "1d" or key not in hp.columns:
-                    continue      # the 1D cell is a pill + sparkline, checked elsewhere
+                    continue      # the 1D cell is a figure + sparkline, checked elsewhere
                 value = row.get(key)
                 if value is None or value != value:
                     assert cell in ("—", ""), f"{bare} {key}: engine has none, printed {cell!r}"
                     continue
-                assert cell.rstrip("?") == _pct_compact(float(value)), (
+                # Bare figures at the grid's precision; the band header carries "%".
+                assert cell.rstrip("?") == _pct_grid(float(value)), (
                     f"{bare} {key}: printed {cell!r}, engine {float(value):+.4f}%")
                 checked += 1
         # Zero comparisons is a broken check, not a clean bill of health: the oracle's

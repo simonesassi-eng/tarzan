@@ -5,6 +5,7 @@ Shared presentation leaf with explicitly prepared reference facts.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from html import escape
 from typing import Optional
@@ -26,14 +27,19 @@ from tarzan.export._format import (
 # The palette lives in a leaf module so tarzan.export._charts can read the
 # same colours without closing an import cycle through this package.
 from tarzan.export._palette import (  # noqa: E402 (re-exported)
+    CLASS_COLOURS,
     FONT_STACK,
+    MONO_STACK,
     PALETTE,
     TYPE,
     TYPE_PX,
+    class_band,
 )
 
 
-ASSET_COLORS = {k: css(v) for k, v in ASSET_CLASS_COLORS.items()}
+# The class hues, from the one source every surface reads (``ASSET_CLASS_COLORS``
+# in tarzan.export._format); ``CLASS_COLOURS`` is the same table as CSS colours.
+ASSET_COLORS = {k: CLASS_COLOURS.get(k, css(v)) for k, v in ASSET_CLASS_COLORS.items()}
 
 GEO_COLORS = {k: css(v) for k, v in _GEO_COLORS.items()}
 
@@ -222,15 +228,16 @@ def uni_name(name, ticker="", *, tags=(), pill="", span="", line_height=None):
     # 500", "L&G Multi-Strategy", the Return Stacked family), which reached the
     # document as a bare &. This builder owns the text-to-HTML boundary:
     # complete section HTML is intentionally passed through |safe later.
-    name_html = (f'<span style="color:{P["muted"]};">{escape(str(name))}</span>'
+    name_html = (f'<span style="color:{P["muted"]};font-weight:400;">{escape(str(name))}</span>'
                  if name else "")
     inner = f'{pill}{tk}{name_html}{tag_html}{span_html}'
     # The row takes the DATA role's leading unless a caller sets its own. The
     # only reason to override it is a name allowed to wrap onto a second line,
     # where tight leading is what keeps the row the same height as its
     # neighbours -- not a preference about how the first line looks.
-    lh = f"line-height:{line_height};" if line_height else ""
-    return f'<div style="{TYPE["data"]}{lh}color:{P["ink"]};">{inner}</div>'
+    lh = f"line-height:{line_height};" if line_height else "line-height:1.3;"
+    return (f'<div style="font-size:{TYPE_PX["prose"]}px;{lh}color:{P["ink"]};'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{inner}</div>')
 
 
 def ticker_span(ticker: str) -> str:
@@ -245,9 +252,9 @@ def ticker_span(ticker: str) -> str:
     """
     if not ticker:
         return ""
-    return (f'<span style="font-family:{FONT_STACK};{TYPE["data"]}'
-            f'color:{PALETTE["accent"]};">{escape(str(ticker))}</span>'
-            f'<span style="padding-left:7px;"></span>')
+    return (f'<span style="font-family:{FONT_STACK};font-size:{TYPE_PX["prose"]}px;'
+            f'font-weight:700;color:{PALETTE["ink"]};">{escape(str(ticker))}</span>'
+            f'<span style="padding-left:5px;"></span>')
 
 
 def uni_cell(html, *, align="right", color=None, weight=600, sub=None,
@@ -458,6 +465,147 @@ def render_unified_table(first_col_label, columns, groups, *,
                     f'{row["name_html"]}</td>'
                     + _cells_html(row["cells"], rbg) + '</tr>')
     out.append("</table>")
+    return "".join(out)
+
+
+def bench_short(name) -> str:
+    """The benchmark's index word for a narrow header: "SPDR MSCI ACWI IMI Acc" ->
+    "ACWI IMI", "iShares MSCI ACWI" -> "ACWI" (share-class words dropped; IMI
+    kept with what it qualifies)."""
+    drop = {"acc", "dist", "ucits", "etf", "eur", "usd", "hedged", "hdg"}
+    parts = [w for w in str(name or "").replace("-", " ").split() if w.casefold() not in drop]
+    if not parts:
+        return "Benchmark"
+    if parts[-1].upper() == "IMI" and len(parts) > 1:
+        return f"{parts[-2]} {parts[-1]}".upper()
+    return parts[-1].upper()
+
+
+# ── The statement grid ───────────────────────────────────────────────────────
+# Holdings, Target instruments and Watchlist at phone width (358px). One table
+# per asset class · role block, carrying the class band and a 2px rail in the
+# class hue; each instrument is two rows: the name row (ticker, name, and an
+# optional right-hand block such as the book figures) and the window row (the
+# 1D cell with its session sparkline, then one cell per window). Column widths
+# are hard under ``table-layout:fixed`` so every grid in the issue lands its
+# windows on the same x positions. The budget, measured in the system font:
+# eight windows at 36px take 288px; the session column keeps 64px for a 26px
+# sparkline, 4px of air and a five-glyph figure (31px at 10.5px). A figure sits
+# in its cell with a 1px seam on the left and 3px of air on the right, so two
+# tinted neighbours never read as one band.
+GRID_W = 354
+GRID_DAY_W = 64
+GRID_CELL_PX = 10.5
+
+
+def grid_cell(html, *, bg=None, color=None, weight=600, align="right"):
+    """One window cell of the statement grid."""
+    return {"html": html, "bg": bg, "color": color or PALETTE["ink"],
+            "weight": weight, "align": align}
+
+
+def _grid_header_row(day_label, wins):
+    P = PALETTE
+    style = (f'padding:4px 3px 3px 0;{TYPE["label"]}font-size:9.5px;'
+             f'color:{P["faint"]};')
+    tds = f'<td align="right" style="{style}">{escape(str(day_label))}</td>'
+    tds += "".join(f'<td align="right" style="{style}">{escape(str(w))}</td>' for w in wins)
+    return f"<tr>{tds}</tr>"
+
+
+def _grid_instrument_rows(row, ncol, *, last):
+    P = PALETTE
+    right = row.get("right_html") or ""
+    # Fixed layout so the name truncates with an ellipsis instead of pushing the
+    # figures off the column; the right column is sized from its own text
+    # (11px tabular figures run ~6.2px per glyph).
+    rtext = re.sub(r"<[^>]+>", "", right)
+    rw = int(len(rtext) * 6.2 + 10) if right else 0
+    name_td = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+               'border="0" style="table-layout:fixed;">'
+               + (f'<colgroup><col><col style="width:{rw}px;"></colgroup>' if right else "")
+               + '<tr>'
+               f'<td style="padding:0;vertical-align:baseline;overflow:hidden;">{row["name_html"]}</td>'
+               + (f'<td align="right" style="padding:0 0 0 6px;white-space:nowrap;'
+                  f'vertical-align:baseline;">{right}</td>' if right else "")
+               + '</tr></table>')
+    out = f'<tr><td colspan="{ncol}" style="padding:5px 0 1px 0;">{name_td}</td></tr>'
+    day_bg = f'background:{row["day_bg"]};' if row.get("day_bg") else ""
+    tds = (f'<td align="right" style="padding:2px 3px 2px 0;{day_bg}white-space:nowrap;'
+           f'font-variant-numeric:tabular-nums;">{row.get("day_html", "")}</td>')
+    for c in row["cells"]:
+        bg = f'background:{c["bg"]};' if c.get("bg") else ""
+        tds += (f'<td align="{c["align"]}" style="padding:3px 3px 3px 0;{bg}'
+                f'border-left:1px solid {P["page"]};'
+                f'font-variant-numeric:tabular-nums;font-size:{GRID_CELL_PX}px;'
+                f'font-weight:{c["weight"]};color:{c["color"]};white-space:nowrap;">'
+                f'{c["html"]}</td>')
+    rule = "" if last else f'border-bottom:1px solid {P["row_rule"]};'
+    out += (f'<tr>{tds}</tr>'
+            f'<tr><td colspan="{ncol}" style="padding:0;height:3px;font-size:0;'
+            f'line-height:0;{rule}">&nbsp;</td></tr>')
+    return out
+
+
+def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=None,
+                          unit_label="%"):
+    """Render grouped instrument rows as the statement grid.
+
+    Args:
+        columns: ordered window labels; the first is the day column's label
+            ("1D" / "Intraday"), the rest the windows after it.
+        groups: ``[(class_name, class_color, [(role_name, [row, ...]), ...]), ...]``
+            where each ``row`` has ``name_html`` (from :func:`uni_name`),
+            optional ``right_html`` (set beside the name, right-aligned),
+            ``day_html`` (the 1D cell's inner HTML: sparkline + figure) with an
+            optional ``day_bg``, and ``cells`` (one :func:`grid_cell` per window
+            after the day column).
+        header_every: repeat the window header at the next class header once
+            this many instrument rows have passed since the last one.
+        portfolio_row: an optional emphasised row rendered first, same shape.
+        unit_label: the unit printed at the right of every class band.
+    """
+    P = PALETTE
+    ncol = len(columns)
+    day_label, wins = columns[0], columns[1:]
+    win_w = (GRID_W - GRID_DAY_W) // max(len(wins), 1)
+    colgroup = (f'<colgroup><col style="width:{GRID_DAY_W}px;">'
+                + "".join(f'<col style="width:{win_w}px;">' for _ in wins) + '</colgroup>')
+    table_open = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                  'border="0" style="table-layout:fixed;border-collapse:collapse;'
+                  f'margin-top:8px;font-family:{FONT_STACK};')
+    out = []
+    since_header = header_every
+    if portfolio_row is not None:
+        out.append(f'{table_open}">{colgroup}{_grid_header_row(day_label, wins)}'
+                   f'{_grid_instrument_rows(portfolio_row, ncol, last=True)}</table>')
+        since_header = 0
+    for cls, col, role_list in groups:
+        for role, rows in role_list:
+            has_role = bool(role and role != "\u2014")
+            band = class_band(cls) if cls else P["shade"]
+            label = (f'<span style="display:inline-block;width:8px;height:8px;'
+                     f'border-radius:1px;background:{col};margin-right:6px;'
+                     f'vertical-align:1px;"></span>'
+                     f'<span style="color:{P["ink"]};">{escape(str(cls or ""))}</span>'
+                     + (f' <span style="color:{P["muted"]};font-weight:400;letter-spacing:0;'
+                        f'text-transform:none;">\u00b7 {escape(str(role))}</span>'
+                        if has_role else ""))
+            out.append(
+                f'{table_open}border-left:2px solid {col};">{colgroup}'
+                f'<tr><td colspan="{ncol}" style="padding:5px 6px 4px 6px;background:{band};'
+                f'border-radius:0 3px 3px 0;">'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+                f'<tr><td style="padding:0;{TYPE["label"]}">{label}</td>'
+                f'<td align="right" style="padding:0;font-size:{TYPE_PX["label"]}px;'
+                f'color:{P["muted"]};">{escape(str(unit_label))}</td></tr></table></td></tr>')
+            if since_header >= header_every:
+                out.append(_grid_header_row(day_label, wins))
+                since_header = 0
+            for i, row in enumerate(rows):
+                since_header += 1
+                out.append(_grid_instrument_rows(row, ncol, last=(i == len(rows) - 1)))
+            out.append("</table>")
     return "".join(out)
 
 

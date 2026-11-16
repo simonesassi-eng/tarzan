@@ -1,93 +1,85 @@
-{# [01] STATE — the figures the rest of the issue elaborates on.
-   Rows of three: what the portfolio is worth and the profit in it, the three
-   return measures, the context each is judged against, and then the ten risk
-   metrics that used to be section [11]. Each tile carries its own one-line
-   caption; the definitions live in the appendix.
-
-   A tile's tone is its VERDICT, and there are three of them, not two. The return
-   tiles are judged by sign — up is green, down is red — while a risk metric is
-   judged against its configured band, whose middle is neither: amber. Beta draws
-   neutral ink on purpose, because its bands describe market exposure rather than
-   score it.
-
-   The value chart and the cash-flow chips used to sit in this block. They moved
-   to [02] PORTFOLIO, next to the window matrix, because a chart of the value
-   over time and a table of returns over windows answer the same question and
-   belong under one heading. #}
+{# [01] STATE — the balance line and the four ledger cells.
+   The portfolio value at display size with the session pill beside it (return,
+   euros, which session); invested capital top right; then, under a double rule,
+   Total P&L and Unrealized P&L over TWR and MWR, each cell a headline figure
+   with its twin beneath. The nine tiles this replaces said the same things
+   across three rows and repeated the masthead's status bar.
+   Tones are verdicts by sign: green up, red down, ink for a figure with no
+   sign to judge. The session cell carries the engine's proof as data-
+   attributes, as the old tile did. #}
+          {% set st = hero.state %}
           <tr>
-            <td class="px-32" style="padding:20px 20px 0 20px;">
-              {{ sec(secn, "State") }}
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;background:{{ palette.card_alt }};border:1px solid {{ palette.border }};border-radius:12px;border-collapse:separate;border-spacing:0;">
+            {{ gutter(secn) }}
+            <td style="padding:18px 13px 0 8px;">
+              {{ kick("State") }}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:10px;"><tr>
+                <td style="{{ type.label }}color:{{ palette.muted }};white-space:nowrap;">Portfolio value{% if st.days %} · {{ st.days }} days{% endif %}</td>
+                <td align="right" style="{{ type.prose }}color:{{ palette.muted }};white-space:nowrap;font-variant-numeric:tabular-nums;"><b style="color:{{ palette.ink }};">{{ st.invested }}</b> invested</td>
+              </tr></table>
+              {# The session evidence element wraps the pill and its caption, so the
+                 semantic gate finds both inside the one marker. #}
+              <div{% if st.session %} data-tarzan-session-move="true"{% if st.session.proof %} data-tarzan-session-availability="{{ st.session.proof.availability }}" data-tarzan-session-return="{{ st.session.proof.percent }}" data-tarzan-session-profit="{{ st.session.proof.profit }}" data-tarzan-session-basis="{{ st.session.proof.basis }}" data-tarzan-session-anchor="{{ st.session.proof.anchor }}" data-tarzan-session-end="{{ st.session.proof.end }}" data-tarzan-session-source-anchor="{{ st.session.proof.source_anchor }}" data-tarzan-session-source-end="{{ st.session.proof.source_end }}"{% endif %}{% endif %}>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:2px;"><tr>
+                <td style="{{ type.display }}color:{{ palette.ink }};white-space:nowrap;font-variant-numeric:tabular-nums;vertical-align:middle;">{{ st.value }}</td>
+                {% if st.session %}
+                {% set sc = sign_color(st.session.tone) %}
+                {% set sbg = palette.green_bg if st.session.tone == 'pos' else palette.red_bg if st.session.tone == 'neg' else palette.accent_bg %}
+                <td style="padding-left:10px;vertical-align:middle;">
+                  <span style="display:inline-block;padding:3px 9px;border-radius:999px;background:{{ sbg }};color:{{ sc }};font-size:12.5px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;"><span data-tarzan-session-percent="true">{{ st.session.pct }}</span>{% if st.session.day %} <span style="font-weight:400;">· {{ st.session.day }}</span>{% endif %}</span>
+                </td>
+                {% endif %}
+              </tr></table>
+              {% if st.session %}
+              {# The session's proof line as the engine states it: the euros to the
+                 cent, the basis, the window. #}
+              <div style="margin-top:3px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;"><span style="color:{{ sign_color(st.session.tone) }};">session</span> <span data-tarzan-session-caption="true">{{ st.session.caption }}</span></div>
+              {% endif %}
+              </div>
+              {# The four ledger cells. ``table-layout:fixed`` with two 50%
+                 columns: the grid holds at any width. #}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-top:3px double {{ palette.border }};table-layout:fixed;">
                 <tr>
-                  <td style="padding:16px 18px;">
-                    {# Optional tiles are absent from hero.tiles rather than
-                       blank, and the grid closes the row it is on, so a short
-                       list never leaves an empty box. #}
-                    {# Three columns, no narrow-viewport collapse: the
-                       narrow-pane fallback that used to kick in here
-                       (.kpi-cell: display:block; width:100%) fired on every
-                       phone, since every phone viewport is narrower than its
-                       520px trigger — the grid never actually rendered as a
-                       grid for its one reader. Fixed table layout (below)
-                       keeps the three 33.33% columns structurally intact at
-                       any width; the widest tile value ("€XXX,XXX" at 22px
-                       monospace, ~120px) wraps to a second line inside its
-                       own cell on the narrowest phones rather than breaking
-                       the grid — that is the accepted tradeoff for holding
-                       three columns everywhere. #}
-                    {# ``table-layout:fixed`` makes the three declared 33.33%
-                       columns authoritative. Without it the client is free to
-                       auto-size columns to their content, and a long monospace
-                       value (€XXX,XXX / −3.05pp) pushes a tile past its third,
-                       overflows the row, and gets stacked one per line — the
-                       Apple Mail symptom. Fixed layout clips or wraps inside the
-                       cell instead of reflowing the grid. #}
-                    {% for row in hero.tiles|batch(3) %}
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;width:100%;{% if not loop.first %}margin-top:14px;{% endif %}">
-                      <tr>
-                        {% for t in row %}
-                        <td width="33.33%" style="width:33.33%;vertical-align:top;padding-right:10px;"{% if t.session_proof %} data-tarzan-session-move="true" data-tarzan-session-availability="{{ t.session_proof.availability }}" data-tarzan-session-return="{{ t.session_proof.percent }}" data-tarzan-session-profit="{{ t.session_proof.profit }}" data-tarzan-session-basis="{{ t.session_proof.basis }}" data-tarzan-session-anchor="{{ t.session_proof.anchor }}" data-tarzan-session-end="{{ t.session_proof.end }}" data-tarzan-session-source-anchor="{{ t.session_proof.source_anchor }}" data-tarzan-session-source-end="{{ t.session_proof.source_end }}"{% endif %}>
-                          <div style="{{ type.label }}color:{{ palette.muted }};">{{ t.label }}</div>
-                          {# nowrap: a figure is one token. In a pane narrower
-                             than the tables a signed P&L (synthetic: "+€12.3k")
-                             broke after the sign and left a "+" alone on its
-                             own line. #}
-                          <div style="margin-top:3px;{{ type.display }}white-space:nowrap;color:{% if t.tone == 'pos' %}{{ palette.green }}{% elif t.tone == 'warn' %}{{ palette.amber }}{% elif t.tone == 'neg' %}{{ palette.red }}{% else %}{{ palette.ink }}{% endif %};"{% if t.session_proof %} data-tarzan-session-percent="true"{% endif %}>{{ t.value }}</div>
-                          <div style="margin-top:2px;{{ type.prose }}color:{{ palette.muted }};"{% if t.session_proof %} data-tarzan-session-caption="true"{% endif %}>{{ t.caption }}</div>
-                        </td>
-                        {% endfor %}
-                        {% for _ in range(3 - row|length) %}
-                        <td width="33.33%" style="width:33.33%;">&nbsp;</td>
-                        {% endfor %}
-                      </tr>
-                    </table>
-                    {% endfor %}
+                  {% for cell in [
+                    {"label": "Total P&L", "value": st.pnl.eur or st.pnl.pct, "tone": st.pnl.tone, "sub_fig": (st.pnl.pct if st.pnl.eur else None), "sub": st.pnl.caption},
+                    {"label": "Unrealized P&L", "value": st.unrealized.eur or st.unrealized.pct, "tone": st.unrealized.tone, "sub_fig": (st.unrealized.pct if st.unrealized.eur else None), "sub": st.unrealized.caption},
+                  ] %}
+                  <td width="50%" style="width:50%;padding:8px {{ '14px' if loop.first else '0' }} 7px {{ '0' if loop.first else '14px' }};border-bottom:1px solid {{ palette.row_rule }};vertical-align:top;">
+                    <div style="{{ type.label }}color:{{ palette.muted }};">{{ cell.label }}</div>
+                    <div style="margin-top:2px;{{ type.figure }}color:{{ sign_color(cell.tone) }};white-space:nowrap;font-variant-numeric:tabular-nums;">{{ cell.value or "—" }}</div>
+                    <div style="margin-top:2px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{% if cell.sub_fig %}<span style="color:{{ sign_color(cell.tone) }};">{{ cell.sub_fig }}</span> {% endif %}{{ cell.sub }}</div>
+                  </td>
+                  {% endfor %}
+                </tr>
+                <tr>
+                  <td width="50%" style="width:50%;padding:8px 14px 7px 0;border-bottom:1px solid {{ palette.row_rule }};vertical-align:top;">
+                    {% if st.twr %}
+                    <div style="{{ type.label }}color:{{ palette.muted }};">TWR · since inception</div>
+                    <div style="margin-top:2px;{{ type.figure }}color:{{ sign_color(st.twr.tone) }};white-space:nowrap;font-variant-numeric:tabular-nums;">{{ st.twr.si }}</div>
+                    <div style="margin-top:2px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{% if st.twr.ann %}<span style="color:{{ sign_color(st.twr.tone) }};">{{ st.twr.ann }}</span> annualized{% elif st.twr.cagr %}<span style="color:{{ sign_color(st.twr.tone) }};">{{ st.twr.cagr }}</span> CAGR{% else %}time-weighted{% endif %}</div>
+                    {% else %}&nbsp;{% endif %}
+                  </td>
+                  <td width="50%" style="width:50%;padding:8px 0 7px 14px;border-bottom:1px solid {{ palette.row_rule }};vertical-align:top;">
+                    {% if st.mwr %}
+                    <div style="{{ type.label }}color:{{ palette.muted }};">MWR · since inception</div>
+                    <div style="margin-top:2px;{{ type.figure }}color:{{ sign_color(st.mwr.tone) }};white-space:nowrap;font-variant-numeric:tabular-nums;">{{ st.mwr.si }}</div>
+                    <div style="margin-top:2px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;">{% if st.mwr.ann %}<span style="color:{{ sign_color(st.mwr.tone) }};">{{ st.mwr.ann }}</span> annualized{% endif %}{% if st.mwr.net %} · {{ st.mwr.net }} net of tax{% endif %}</div>
+                    {% else %}&nbsp;{% endif %}
                   </td>
                 </tr>
               </table>
-
-              {% if hero.return_basis_note %}
-              <div style="margin-top:10px;{{ type.prose }}color:{{ palette.subtle }};">{{ hero.return_basis_note }}</div>
-              {% endif %}
-
-              {# Data-quality note: current snapshot provenance is kept
-                 separate from historical order-price reconstruction. #}
-              {% if performance.returns %}
-              <div style="margin-top:10px;{{ type.prose }}color:{{ palette.subtle }};">
-                {% if performance.returns.current_fallback_count %}
-                Current portfolio: {{ performance.returns.current_fallback_count }} identifier{{ 's' if performance.returns.current_fallback_count != 1 else '' }} priced by order-price fallback.
-                {% else %}
-                Current portfolio: 100% market-priced.
-                {% endif %}
+              {# The engine's disclosures on what the figures rest on, one block:
+                 the return basis, then the pricing provenance of the snapshot,
+                 kept separate from historical order-price reconstruction. #}
+              {% if hero.return_basis_note or performance.returns %}
+              <div style="margin-top:6px;{{ type.note }}color:{{ palette.muted }};">
+                {% if hero.return_basis_note %}{{ hero.return_basis_note }} {% endif %}
+                {% if performance.returns %}
+                {% if performance.returns.current_fallback_count %}Current portfolio: {{ performance.returns.current_fallback_count }} identifier{{ 's' if performance.returns.current_fallback_count != 1 else '' }} priced by order-price fallback.{% else %}Current portfolio: 100% market-priced.{% endif %}
                 {% if performance.returns.historical_closed_fallback_count %} Historical reconstruction used order-price fallback for {{ performance.returns.historical_closed_fallback_count }} closed identifier{{ 's' if performance.returns.historical_closed_fallback_count != 1 else '' }}.{% endif %}
                 {% if performance.returns.excluded_count %} {{ performance.returns.excluded_count }} historical identifier{{ 's' if performance.returns.excluded_count != 1 else '' }} excluded from return reconstruction.{% endif %}
                 {% if performance.returns.coverage %} Return-series coverage: {{ performance.returns.coverage }}.{% endif %}
+                {% endif %}
               </div>
               {% endif %}
-
-              {# No rebalance banner. It duplicated the optimizer section it
-                 pointed at, and the concept does not carry one: a reader who
-                 needs to know there are trades to make finds them under
-                 OPTIMIZER, with the funding proof beside them. #}
             </td>
           </tr>

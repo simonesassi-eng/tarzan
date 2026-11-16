@@ -288,14 +288,18 @@ def test_the_strip_prints_yields_in_bp_and_names_a_dispute():
         config=InvestorConfig(), issue_number=1,
         benchmark_alpha_beta="S&P 500", benchmark_geo="MSCI ACWI")
     with mock.patch.object(mq, "market_status", return_value=(True, "Mon")):
-        html = _build_markets(ctx)["html"]
+        out = _build_markets(ctx)
+        html = out["html"]
     assert "3.294%" in html and "−3.1 bp" in html
     assert "112 bp" in html
     assert "+4.3 bp?" in html
     assert "Bonos 2Y: TradingView +4.3 bp (shown); MarketWatch −0.3 bp" in html
     assert "CNBC n/a" not in html
     assert "\U0001F1EE\U0001F1F9\U0001F1E9\U0001F1EA BTP" in html
-    assert "upd 17:00&nbsp;&middot;&nbsp;Op." in html   # a bond: the print's time on the reader's clock
+    # A bond: the print's time on the reader's clock, unbreakable on its row;
+    # the status every row shares is said once, in the subtitle.
+    assert "upd&nbsp;17:00" in html
+    assert "all Op." in out["sub"]
 
 
 def test_the_chart_axis_covers_every_bar(serve):

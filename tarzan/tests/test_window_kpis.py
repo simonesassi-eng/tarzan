@@ -43,10 +43,15 @@ def test_matrix_rows_and_euro_format():
                                  "volatility": 12.4, "sharpe": -1.8, "max_drawdown": -4.1}},
             "target": {"1m": {"return": -1.8, "sharpe": 0.5}}}
     html = sp._kpi_matrix_html(kpis, ["5d", "1m", "3m", "ytd", "1y", "3y", "5y"], "1D")
-    for text in ("Portfolio", "Target", "Return", "Volatility", "Sharpe", "Max drawdown", "SI",
-                 "5Y", "−1.80", "−€0.3k", "+€2.0k", "−€1.4k"):  # synthetic
+    # The unit stands in the row label (the grid's notation); cells print bare
+    # figures, euros in thousands.
+    for text in ("Portfolio", "Target", "Return", "Volatility", "Sharpe", "Max DD", "SI",
+                 "−1.80", "−0.3k", "+2.0k", "−1.4k"):  # synthetic
         assert text in html, text
     assert "vs " not in html and "P&amp;L %" not in html and "Unr. %" not in html
+    # 1Y · 3Y · 5Y open as columns only once the book has lived one of them;
+    # until then one line says so.
+    assert ">5Y<" not in html and "not enough history yet" in html
 
 
 def test_the_one_day_ter_is_todays_mix_not_a_lifetime_average():
