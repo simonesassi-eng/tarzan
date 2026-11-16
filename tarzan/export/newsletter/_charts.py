@@ -447,7 +447,7 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
                     w: int = 62, h: int = 22,
                     in_progress: Optional[bool] = None,
                     session_hours: Optional[float] = None,
-                    span: Optional[tuple] = None) -> str:
+                    span: Optional[tuple] = None, invert: bool = False) -> str:
     """Intraday sparkline on a full-session time axis.
 
     Unlike the stretched ``_day_spark`` (which spreads N points across the
@@ -540,9 +540,13 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
     _day_spark_uid += 1
     gid, rid = f"pg{_day_spark_uid}", f"pr{_day_spark_uid}"
     yb_c = max(0.0, min(yb, h))
+    # Above the baseline is green for a price and red for a yield (``invert``):
+    # a yield that rises is a loss for the holder of the bond.
+    above, below = ((PALETTE["red"], PALETTE["green"]) if invert
+                    else (PALETTE["green"], PALETTE["red"]))
     # Endpoint dot, colored by sign vs the previous close (baseline): anchors
     # the eye to the current level and its up/down direction for the day.
-    dot_col = PALETTE["green"] if vals[-1] >= baseline else PALETTE["red"]
+    dot_col = above if vals[-1] >= baseline else below
     dot = (f'<circle cx="{x_last:.1f}" cy="{y_last:.1f}" r="1.8" fill="{dot_col}"/>')
     return (
         f'<svg width="100%" height="{h}" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
@@ -551,13 +555,13 @@ def _intraday_spark(intra: "pd.Series", baseline: float,
         f'<clipPath id="{gid}"><rect x="0" y="0" width="{w}" height="{yb_c:.1f}"/></clipPath>'
         f'<clipPath id="{rid}"><rect x="0" y="{yb_c:.1f}" width="{w}" height="{h - yb_c:.1f}"/></clipPath>'
         f'</defs>'
-        f'<polygon points="{poly}" fill="{PALETTE["green"]}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
-        f'<polygon points="{poly}" fill="{PALETTE["red"]}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
+        f'<polygon points="{poly}" fill="{above}" fill-opacity="0.22" clip-path="url(#{gid})"/>'
+        f'<polygon points="{poly}" fill="{below}" fill-opacity="0.22" clip-path="url(#{rid})"/>'
         f'<line x1="0" y1="{yb:.1f}" x2="{w}" y2="{yb:.1f}" stroke="{PALETTE["subtle"]}" '
         f'stroke-width="0.75" stroke-dasharray="2,2"/>'
-        f'<polyline points="{line}" fill="none" stroke="{PALETTE["green"]}" stroke-width="1.5" '
+        f'<polyline points="{line}" fill="none" stroke="{above}" stroke-width="1.5" '
         f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{gid})"/>'
-        f'<polyline points="{line}" fill="none" stroke="{PALETTE["red"]}" stroke-width="1.5" '
+        f'<polyline points="{line}" fill="none" stroke="{below}" stroke-width="1.5" '
         f'stroke-linejoin="round" stroke-linecap="round" clip-path="url(#{rid})"/>'
         f'{dot}'
         f'</svg>'

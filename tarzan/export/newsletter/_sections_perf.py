@@ -41,6 +41,7 @@ from tarzan.export.newsletter._constants import (
     group_by_class_role,
     render_unified_table,
     uni_cell,
+    bench_short,
     grid_cell,
     render_statement_grid,
     FONT_STACK,
@@ -138,7 +139,8 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             if ss is not None and len(ss) >= 2:
                 return _intraday_spark(ss, d["baseline"], w=_SPARK_W, h=_SPARK_H,
                                        span=d.get("span"), in_progress=trading,
-                                       session_hours=d.get("session_hours"))
+                                       session_hours=d.get("session_hours"),
+                                       invert=d.get("unit") in ("yield", "spread"))
         else:
             # ONE answer to "is this venue trading right now", for every
             # instrument kind: market_status resolves the futures/FX weekly
@@ -231,7 +233,10 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         unit = d.get("unit", "index")
         delta = d["bp"] if unit in ("yield", "spread") else d["pct"]
         up = delta >= 0
-        col = P["green"] if up else P["red"]
+        # A rising yield or spread is the bad direction for the bondholder, so
+        # its colour is inverted: green when it falls.
+        good = (not up) if unit in ("yield", "spread") else up
+        col = P["green"] if good else P["red"]
         name = d["name"]
         # The "(FUT)" MARKETS carries keeps a future's name unique from its cash
         # index; on the board the "Futures" heading says it, and a commodity
@@ -286,7 +291,7 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'<table role="presentation" align="right" cellpadding="0" cellspacing="0" border="0"><tr>'
             f'<td style="padding:0 5px 0 0;width:{_SPARK_W}px;vertical-align:middle;">'
             f'<div style="width:{_SPARK_W}px;">{spark}</div></td>'
-            f'<td style="padding:0;{TYPE["data"]}font-weight:400;color:{P["muted"]};'
+            f'<td style="padding:0;{TYPE["data"]}font-weight:600;color:{P["ink"]};'
             f'font-variant-numeric:tabular-nums;white-space:nowrap;">{level}</td>'
             f'</tr></table></td></tr>')
 
@@ -516,7 +521,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
     # Every legend label on this section is pre-escaped markup ("Total P&amp;L"),
     # and the benchmark's name is configured text, so it escapes once here rather
     # than at each of the three legends and the heading that reuse it.
-    bench_label = _esc(str(ctx.benchmark_geo or ""))
+    # The index word ("ACWI IMI"), the one name the issue uses for the series.
+    bench_label = _esc(bench_short(str(ctx.benchmark_geo or "")))
 
     def _colcap(t: str) -> str:
         """Panel caption, in the concept's form: the label tier in subtle, not
@@ -2033,7 +2039,7 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
             f'Return: time-weighted, as in the charts below. Target: its weights held constant. '
             f'SI: since the book\u2019s inception. Volatility annualized; Sharpe and '
             f'Sortino on the daily risk-free path; risk figures from 1M. Alpha and beta '
-            f'against {_escaped_text(bench_label)} (its own: 0 and 1). TER: the book\u2019s '
+            f'against {_escaped_text(bench_short(bench_label))} (its own: 0 and 1). TER: the book\u2019s '
             f'value-weighted, averaged over the window as its lines changed.</div>')
     return f'<div style="margin-top:12px;">{"".join(out)}{note}</div>'
 
