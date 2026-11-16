@@ -16,8 +16,8 @@
                 <td style="{{ type.label }}color:{{ palette.muted }};white-space:nowrap;">Portfolio value{% if st.days %} · {{ st.days }} days{% endif %}</td>
                 <td align="right" style="{{ type.prose }}color:{{ palette.muted }};white-space:nowrap;font-variant-numeric:tabular-nums;"><b style="color:{{ palette.ink }};">{{ st.invested }}</b> invested</td>
               </tr></table>
-              {# The session evidence element wraps the pill and its caption, so the
-                 semantic gate finds both inside the one marker. #}
+              {# The session evidence element wraps the pill; its caption stands in
+                 the Appendix and the semantic gate pairs the two. #}
               <div{% if st.session %} data-tarzan-session-move="true"{% if st.session.proof %} data-tarzan-session-availability="{{ st.session.proof.availability }}" data-tarzan-session-return="{{ st.session.proof.percent }}" data-tarzan-session-profit="{{ st.session.proof.profit }}" data-tarzan-session-basis="{{ st.session.proof.basis }}" data-tarzan-session-anchor="{{ st.session.proof.anchor }}" data-tarzan-session-end="{{ st.session.proof.end }}" data-tarzan-session-source-anchor="{{ st.session.proof.source_anchor }}" data-tarzan-session-source-end="{{ st.session.proof.source_end }}"{% endif %}{% endif %}>
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:2px;"><tr>
                 <td style="{{ type.display }}color:{{ palette.ink }};white-space:nowrap;font-variant-numeric:tabular-nums;vertical-align:middle;">{{ st.value }}</td>
@@ -29,12 +29,9 @@
                 </td>
                 {% endif %}
               </tr></table>
-              {% if st.session %}
-              {# The session's proof line as the engine states it: the euros to the
-                 cent, the basis, the window. #}
-              <div style="margin-top:3px;{{ type.note }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;"><span style="color:{{ sign_color(st.session.tone) }};">session</span> <span data-tarzan-session-caption="true">{{ st.session.caption }}</span></div>
-              {% endif %}
               </div>
+              {# The session's proof line (euros to the cent, basis, window) is in
+                 the Appendix: the owner wants State to carry the pill alone. #}
               {# The four ledger cells. ``table-layout:fixed`` with two 50%
                  columns: the grid holds at any width. #}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;border-top:3px double {{ palette.border }};table-layout:fixed;">

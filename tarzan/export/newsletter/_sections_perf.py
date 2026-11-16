@@ -1430,7 +1430,7 @@ def _bar_session_span(quote, raw_ticker: str):
 _UNVERIFIED_MARK = "?"
 #: The 1D cell's sparkline box in the statement grid (CSS px; the sparkline's
 #: 62x22 viewBox is stretched to it).
-_DAY_SPARK_W, _DAY_SPARK_H = 26, 13
+_DAY_SPARK_W, _DAY_SPARK_H = 24, 13
 
 # The Markets board's inline line: context beside the figures, not a chart.
 _SPARK_W, _SPARK_H = 40, 13
@@ -1689,7 +1689,7 @@ def _book_right_html(h) -> str:
     lead = gain_pct if has_pct else (gain_eur if has_eur else None)
     gc = P["muted"] if lead is None else (P["green"] if float(lead) >= 0 else P["red"])
     short = f"\u20ac{value / 1000:.1f}k" if value >= 1000 else _eur(value, 0)
-    parts = [f'<b style="color:{P["ink"]};">{short}</b>',
+    parts = [f'<span style="color:{P["ink"]};">{short}</span>',
              f'<span style="color:{gc};">{_pct(gain_pct, signed=True) if has_pct else "\u2014"}</span>',
              f'<span style="color:{gc};">{_eur_smart(gain_eur, signed=True) if has_eur else "\u2014"}</span>']
     return (f'<span style="{TYPE["data"]}font-weight:400;color:{P["muted"]};'
@@ -1724,7 +1724,7 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
         keeping its marks (the unverified "?")."""
         return str(text if text is not None else "\u2014").replace("%", "")
 
-    def _row(inst, *, weight=600):
+    def _row(inst, *, weight=400):
         parts = inst.get("day_parts") or {}
         bg, fig = _heat.heat(inst.get("day_raw"), neg=dneg, pos=dpos, damp=_heat.DAY_DAMP)
         text = _figure(parts.get("text", "\u2014"), inst.get("day_raw"))
@@ -1747,7 +1747,7 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     columns = [day_label] + [p.upper() for p in period_cols]
     prow = None
     if portfolio:
-        prow = _row(portfolio, weight=700)
+        prow = _row(portfolio, weight=600)
         prow["name_html"] = (f'<span style="color:{P["ink"]};font-weight:700;'
                              f'font-size:{TYPE_PX["prose"]}px;">\u2605 {portfolio["name"]}</span>')
     uni_groups = [(cls, col, [(role, [_row(inst) for inst in insts]) for role, insts in role_list])

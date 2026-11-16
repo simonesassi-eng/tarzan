@@ -128,9 +128,9 @@ def test_ampersands_remain_single_escaped_and_the_css_font_literal_remains_css(r
     assert "Total P&amp;amp;L" not in html
     style = html.split("<style>", 1)[1].split("</style>", 1)[0]
     # The stack's quoted family name reaches the stylesheet as CSS, not as an
-    # HTML entity (the template marks the literal safe).
-    assert '"Helvetica Neue"' in style
-    assert "&#34;" not in style and "&quot;" not in style
+    # HTML entity (the template marks the literal safe). Single quotes: the
+    # same stack sits inside double-quoted style attributes everywhere else.
+    assert "'Helvetica Neue'" in style
     assert "&#39;" not in style and "&#x27;" not in style
 
 
@@ -150,3 +150,16 @@ def test_escaping_change_preserves_the_decoded_golden_document(rendered):
     baseline_errors = validate_newsletter_semantics(metrics, audit, original)
     assert any("critical benchmark(s) did not resolve" in error for error in baseline_errors)
     assert validate_newsletter_semantics(metrics, audit, html) == baseline_errors
+
+
+def test_no_style_or_svg_attribute_is_cut_by_a_quote_in_the_font_stack(rendered):
+    """A double quote inside a double-quoted attribute ends it: 187 ``style``
+    attributes and 3 SVG ``font-family`` attributes once lost every declaration
+    after "BlinkMacSystemFont," (sizes, weights, colours), which read as a
+    slightly different font and unbolded tickers across the issue."""
+    html, _, _ = rendered
+    import re
+    for m in re.finditer(r'(?:style|font-family)="([^"]*)"', html):
+        value = m.group(1)
+        assert not value.rstrip().endswith(","), value
+        assert "BlinkMacSystemFont" not in value or "sans-serif" in value, value

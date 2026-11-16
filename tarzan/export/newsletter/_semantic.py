@@ -333,7 +333,9 @@ def _validate_funding_markup(metrics, document: str) -> list[str]:
 
 
 class _SessionMarkup(HTMLParser):
-    """Inspect the actual session tile, not a renderer's context audit."""
+    """Inspect the actual session markup, not a renderer's context audit: the
+    pill (percent) inside the evidence element, and its caption, which may
+    stand later in the document (the Appendix)."""
 
     def __init__(self, document):
         super().__init__(convert_charrefs=True)
@@ -348,6 +350,10 @@ class _SessionMarkup(HTMLParser):
             record = {"attrs": attrs, "components": {}, "duplicate_attrs": len(attrs) != len(attributes)}
             self.records.append(record)
             component = None
+        if record is None and "data-tarzan-session-caption" in attrs and self.records:
+            # The caption may stand apart from the pill (it is printed in the
+            # Appendix); it belongs to the one session record already seen.
+            record = self.records[-1]
         if record is not None:
             for kind in ("percent", "caption"):
                 if f"data-tarzan-session-{kind}" in attrs:

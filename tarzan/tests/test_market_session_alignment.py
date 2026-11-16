@@ -630,7 +630,7 @@ class TestIntradayColumnHeader:
     def test_the_header_word_follows(self):
         from tarzan.export.newsletter._charts import day_column_label
         assert day_column_label(None, live=False) == "1D"
-        assert day_column_label(None, live=True) == "Intraday"
+        assert day_column_label(None, live=True) == "Intr."
 
 
 class TestStripSparklineAtTheOpen:

@@ -283,6 +283,12 @@
             {{ gutter(secn) }}
             <td style="padding:18px 13px 0 8px;">
               {{ kick("Appendix") }}
+              {% if hero.state and hero.state.session %}
+              {# The session move's proof, as the engine states it: euros to the
+                 cent, the basis, the window. The semantic gate checks these words
+                 against the evidence before anything is sent. #}
+              <div style="margin-top:12px;{{ type.prose }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;"><b style="color:{{ palette.ink }};">Session move</b> <span data-tarzan-session-caption="true">{{ hero.state.session.caption }}</span></div>
+              {% endif %}
               {% if tax_note.available %}
               <div style="margin-top:10px;">{{ tax_note.html|safe }}</div>
               {% endif %}

@@ -386,7 +386,7 @@ def _hero_chart_legend(*, has_total: bool) -> str:
     parts = [f'<span style="display:inline-block;white-space:nowrap;margin-right:12px;">'
              f'{swatch}<span style="color:{P["muted"]};">{label}</span></span>'
              for swatch, label in items]
-    return (f'<div style="{TYPE["data"]}margin:7px 0 0;line-height:1.6;">'
+    return (f'<div style="{TYPE["data"]}font-weight:400;margin:7px 0 0;line-height:1.6;">'
             + "".join(parts) + "</div>")
 
 
@@ -656,7 +656,7 @@ def _prev_session_label(m, fmt: str = "%d/%m") -> str:
 
 
 def day_column_label(m, *, live: bool) -> str:
-    """Header for the session column: ``Intraday`` or ``1D``.
+    """Header for the session column: ``Intr.`` (intraday) or ``1D``.
 
     One word, because the header is the only place the basis needs saying. While
     a session is open the column carries the live move against the previous
@@ -667,9 +667,10 @@ def day_column_label(m, *, live: bool) -> str:
 
     Which close the closed-market figure is measured against is in the masthead
     stamp ("Mon, 27 Jul 2026 · close 24 Jul · market CLOSED"), so it is not lost
-    by keeping this to a word.
+    by keeping this to a word. Abbreviated: the header sits over a 59px column
+    in the eight-window grids, and "INTRADAY" in small caps overran it.
     """
-    return "Intraday" if live else "1D"
+    return "Intr." if live else "1D"
 
 
 

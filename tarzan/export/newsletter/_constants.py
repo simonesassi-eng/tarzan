@@ -26,7 +26,8 @@ from tarzan.export._format import (
 
 # The palette lives in a leaf module so tarzan.export._charts can read the
 # same colours without closing an import cycle through this package.
-from tarzan.export._palette import (  # noqa: E402 (re-exported)
+from tarzan.export._palette import (
+    text_width,  # noqa: E402 (re-exported)
     CLASS_COLOURS,
     FONT_STACK,
     MONO_STACK,
@@ -490,17 +491,19 @@ def bench_short(name) -> str:
 # are hard under ``table-layout:fixed`` so every grid in the issue lands its
 # windows on the same x positions. The budget, measured in the system font:
 # the rows of a group sit right of a 2px rail in the class hue and 6px of air,
-# so they share 346px; the session column keeps 64px for a 26px sparkline, 4px
-# of air and a figure, and the seven windows after it 40px each, which holds a
-# six-glyph figure ("+16.46" is 36px at 10.5px) with a 1px seam on the left and
-# 3px of air on the right, so two tinted neighbours never read as one band.
+# so they share 346px; the session column keeps 59px for a 24px sparkline, 4px
+# of air and a figure, and the seven windows after it 41px each, which holds a
+# six-glyph figure ("+16.46" is 34px at 11px regular) with a 1px seam on the
+# left and 2px of air on the right, so two tinted neighbours never read as one
+# band. Cells are the data size at REGULAR weight: bold figures in a tinted
+# cell read as a second signal and ate the width the names needed.
 GRID_W = 354
 GRID_RAIL_W, GRID_RAIL_GAP = 2, 6
-GRID_DAY_W = 64
-GRID_CELL_PX = 10.5
+GRID_DAY_W = 59
+GRID_CELL_PX = TYPE_PX["data"]
 
 
-def grid_cell(html, *, bg=None, color=None, weight=600, align="right"):
+def grid_cell(html, *, bg=None, color=None, weight=400, align="right"):
     """One window cell of the statement grid."""
     return {"html": html, "bg": bg, "color": color or PALETTE["ink"],
             "weight": weight, "align": align}
@@ -521,8 +524,8 @@ def _grid_instrument_rows(row, ncol, *, last):
     # Fixed layout so the name truncates with an ellipsis instead of pushing the
     # figures off the column; the right column is sized from its own text
     # (11px tabular figures run ~6.2px per glyph).
-    rtext = re.sub(r"<[^>]+>", "", right)
-    rw = int(len(rtext) * 6.2 + 10) if right else 0
+    rtext = re.sub(r"<[^>]+>", "", right).replace("&nbsp;", " ")
+    rw = int(text_width(rtext, TYPE_PX["data"]) + 8) if right else 0
     name_td = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                'border="0" style="table-layout:fixed;">'
                + (f'<colgroup><col><col style="width:{rw}px;"></colgroup>' if right else "")
@@ -537,7 +540,7 @@ def _grid_instrument_rows(row, ncol, *, last):
            f'font-variant-numeric:tabular-nums;">{row.get("day_html", "")}</td>')
     for c in row["cells"]:
         bg = f'background:{c["bg"]};' if c.get("bg") else ""
-        tds += (f'<td align="{c["align"]}" style="padding:3px 3px 3px 0;{bg}'
+        tds += (f'<td align="{c["align"]}" style="padding:3px 2px 3px 0;{bg}'
                 f'border-left:1px solid {P["page"]};'
                 f'font-variant-numeric:tabular-nums;font-size:{GRID_CELL_PX}px;'
                 f'font-weight:{c["weight"]};color:{c["color"]};white-space:nowrap;">'

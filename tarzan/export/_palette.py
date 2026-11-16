@@ -71,6 +71,38 @@ from tarzan.export._format import ASSET_CLASS_COLORS as _ASSET_CLASS_COLORS
 CLASS_COLOURS = {k: f"#{v}" for k, v in _ASSET_CLASS_COLORS.items()}
 
 
+# Glyph advances of the system grotesk, in em, measured in Chrome at the text
+# size (SF Pro Text, 11px, tabular figures; Segoe and Roboto run within a few
+# percent). SF is an optical-size font: 100px advances run a tenth narrower
+# than 11px ones, and an average 0.54em/char clipped labels at every edge.
+# Weight 400 is the table; 600/700 run ~4-6% wider.
+GLYPH_W_400 = {"0": 0.636, "1": 0.470, "2": 0.609, "3": 0.633, "4": 0.649, "5": 0.624,
+               "6": 0.643, "7": 0.593, "8": 0.645, "9": 0.643,
+               ".": 0.303, ",": 0.303, ":": 0.303, "\u00b7": 0.303, " ": 0.287, "%": 0.931,
+               "(": 0.388, ")": 0.388, "+": 0.636, "\u2212": 0.636, "\u20ac": 0.636, "-": 0.478,
+               "/": 0.311, "&": 0.717, "?": 0.56, "[": 0.30, "]": 0.30,
+               "A": 0.680, "B": 0.663, "C": 0.722, "D": 0.732, "E": 0.602, "F": 0.578, "G": 0.752,
+               "H": 0.748, "I": 0.273, "J": 0.544, "K": 0.665, "L": 0.574, "M": 0.880, "N": 0.748,
+               "O": 0.777, "P": 0.641, "Q": 0.777, "R": 0.659, "S": 0.643, "T": 0.640, "U": 0.743,
+               "V": 0.680, "W": 0.974, "X": 0.685, "Y": 0.661, "Z": 0.667,
+               "a": 0.558, "b": 0.620, "c": 0.565, "d": 0.620, "e": 0.577, "f": 0.368, "g": 0.615,
+               "h": 0.594, "i": 0.253, "j": 0.252, "k": 0.549, "l": 0.259, "m": 0.876, "n": 0.589,
+               "o": 0.597, "p": 0.616, "q": 0.615, "r": 0.396, "s": 0.521, "t": 0.369, "u": 0.589,
+               "v": 0.548, "w": 0.780, "x": 0.530, "y": 0.549, "z": 0.545}
+_GLYPH_DEFAULT = 0.65
+_WEIGHT_FACTOR = {400: 1.0, 500: 1.02, 600: 1.045, 700: 1.06}
+
+
+def text_width(s: str, size: float, weight: int = 400, *, tracking: float = 0.0) -> float:
+    """Width in px of ``s`` set in the stack at ``size`` and ``weight``, from the
+    measured advances; ``tracking`` is letter-spacing in em. Size a fixed
+    column on this, never on an average character width."""
+    s = str(s)
+    w = sum(GLYPH_W_400.get(ch, _GLYPH_DEFAULT) for ch in s) * size
+    w *= _WEIGHT_FACTOR.get(weight, 1.045 if weight >= 600 else 1.0)
+    return w + tracking * size * max(len(s) - 1, 0)
+
+
 def mix(base: str, target: str, t: float) -> str:
     """Linear mix of two #RRGGBB colours, ``t`` of the way from base to target."""
     def ch(s, i):
@@ -90,7 +122,11 @@ def class_band(cls: str, t: float = 0.20) -> str:
 # monospace and everything else in Times, splitting one document across two
 # typefaces. Three inconsistent mono stacks and a sans-serif one used to be
 # inline in the charts and tables; a stack change had to be made in four places.
-FONT_STACK = '-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif'
+# SINGLE quotes around the two-word family: the stack is interpolated into
+# ``style="..."`` and SVG ``font-family="..."`` attributes by 190 builders, and a
+# double quote inside one ended the attribute at "BlinkMacSystemFont," -- every
+# size, weight and colour declared after it was silently dropped.
+FONT_STACK = "-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif"
 # Codes only: ISINs, feed tickers in the appendix. Never running text or figures.
 MONO_STACK = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
 

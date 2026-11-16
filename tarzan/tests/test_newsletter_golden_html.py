@@ -513,7 +513,7 @@ class TestTheReturnsTablePrintsTheEngine:
         from tarzan.export._palette import PALETTE
         # The window cells after the session cell: each carries the 1px seam
         # in the page colour; the session cell (a nested table) does not.
-        seam = re.compile(r'<td align="right" style="padding:3px 3px 3px 0;[^"]*border-left:1px solid '
+        seam = re.compile(r'<td align="right" style="padding:3px 2px 3px 0;[^"]*border-left:1px solid '
                           + re.escape(PALETTE["page"]) + r';[^"]*">(.*?)</td>', re.S)
         for i, t in enumerate(tickers):
             chunk = sec[t.end():tickers[i + 1].start() if i + 1 < len(tickers) else len(sec)]
