@@ -44,9 +44,9 @@ def test_matrix_rows_and_euro_format():
             "target": {"1m": {"return": -1.8, "sharpe": 0.5}}}
     html = sp._kpi_matrix_html(kpis, ["5d", "1m", "3m", "ytd", "1y", "3y", "5y"], "1D")
     # The unit stands in the row label (the grid's notation); cells print bare
-    # figures, euros in thousands.
+    # figures, euros whole under a thousand and in thousands above.
     for text in ("Portfolio", "Target", "Return", "Volatility", "Sharpe", "Max DD", "SI",
-                 "−1.80", "−0.3k", "+2.0k", "−1.4k"):  # synthetic
+                 "−1.80", "−310", "+2.0k", "−1.4k"):  # synthetic
         assert text in html, text
     assert ">vs <" not in html and "P&amp;L %" not in html and "Unr. %" not in html
     # 1Y · 3Y · 5Y open as columns only once the book has lived one of them;

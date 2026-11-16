@@ -1940,25 +1940,31 @@ _KPI_BETTER = {"return": True, "sharpe": True, "sortino": True, "alpha": True,
                "max_drawdown": True, "var_95": True, "cvar_95": True,   # less negative
                "ulcer_index": False, "ter": False}
 
+#: How a risk measure is stated, beside its unit: annualised, a daily figure,
+#: or a property of the whole span. Said in the label so the note need not.
+_KPI_BASIS = {"volatility": "ann.", "sharpe": "ann.", "sortino": "ann.", "alpha": "ann.",
+              "var_95": "daily", "cvar_95": "daily"}
+
 
 def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
-                     bench_label: str = "Benchmark") -> str:
-    """The book's euros by window, then the measures of book, plan and market
-    side by side.
+                     bench_label: str = "Benchmark", si_sessions=None) -> str:
+    """Two tables under the value chart.
 
-    Two blocks, because they answer two questions. The P&L ledger (Total and
-    Unrealized, € net of flows) is the book alone: nothing to compare it with,
-    so its figures are coloured by sign, as in State, and carry no tint. The
-    matrix below is the comparison: each measure is a block of up to three
-    rows (Portfolio, Target, benchmark) over the windows 1D · 5D · 1M · 3M ·
-    YTD · SI, and in every window the best of the three is tinted green and
-    the worst red (``_heat.rank_tint``, direction per measure in
-    ``_KPI_BETTER``), fainter the closer the three are. Three values cannot
-    carry a gradient, so the tint is a rank weighted by the spread, and the
-    figures stay in ink. Volatility and beta are untinted.
+    RETURNS, by window: the three universes (Portfolio, Target, benchmark) as
+    rows over 1D · 5D · 1M · 3M · YTD · SI, tinted per window by rank (best
+    green, worst red, fainter the closer the three are); then, under a rule,
+    the book's euros for the same windows (P&L and Unrealized, net of flows),
+    coloured by sign as in State and never tinted, because nothing compares
+    with them.
 
-    The long windows (1Y · 3Y · 5Y) join as a second bank the moment the book
-    has lived one of them; until then one line says so. Figures from
+    RISK, once: the ten risk measures over the book's whole life (the plan and
+    the index clipped to the same span), one column per universe, tinted per
+    row by rank. A risk figure per window was eleven rows of six cells the
+    reader never compared across windows; the one span he does read is the
+    book's own, and the volatility chart below carries its rolling path.
+
+    The long return windows (1Y · 3Y · 5Y) join as a second bank the moment the
+    book has lived one of them; until then one line says so. Figures from
     ``_window_kpis``."""
     from tarzan.export import _charts
     from tarzan.export.newsletter._constants import bench_short
@@ -1969,15 +1975,15 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
     short_w = ["1d", *[k for k in period_keys if k in ("5d", "1m", "3m", "ytd")], "si"]
     long_w = [k for k in period_keys if k in ("1y", "3y", "5y")]
     unsigned = {"volatility", "ulcer_index", "ter"}
-    colw = 46
     universes = [("portfolio", "Portfolio", P["ink"]),
                  ("target", "Target", _charts.TARGET),
                  ("acwi", bench_short(bench_label), _charts.BENCH)]
     universes = [u for u in universes if u[0] in kpis]
+    labels = {k: (lab, u, t) for k, lab, u, t in _KPI_ROWS}
 
     def _fmt(v, key, unit):
-        """The bare figure: its unit stands in the row label (the grid's
-        notation), so "+14.92" under "Return %" and "+16.5k" under "P&L €"."""
+        """The bare figure: its unit stands in the row label, so "+14.92" under
+        "Return %" and "+16.5k" under "P&L €"."""
         if v is None:
             return "\u2014"
         if key == "ter":
@@ -1985,147 +1991,177 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
         if unit == "":
             return f"{v:.2f}".replace("-", "\u2212")
         if unit == "\u20ac":
-            return f"{'+' if v >= 0 else '\u2212'}{abs(v) / 1000:.1f}k"
-        # Six windows leave 46px a cell, room for two decimals ("+14.92" is 36px).
+            # Under a thousand the euros print whole ("+7", "\u2212312"): "+0.0k"
+            # said nothing while State said +\u20ac7.
+            sign = "+" if v >= 0 else "\u2212"
+            return (f"{sign}{abs(v):.0f}" if abs(v) < 1000
+                    else f"{sign}{abs(v) / 1000:.1f}k")
         return _pct_compact(v, signed=key not in unsigned).replace("%", "")
 
-    def _row_label(label, unit, colour=None):
-        text = f'<span style="color:{colour or P["ink"]};">{_esc(label)}</span>'
-        if not unit:
-            return text
-        return (f'{text} <span style="color:{P["faint"]};font-size:{TYPE_PX["label"]}px;">'
-                f'{_esc(unit)}</span>')
-
-    def _dot(colour):
+    def _swatch(colour):
         return (f'<span style="display:inline-block;width:7px;height:7px;border-radius:2px;'
-                f'background:{colour};vertical-align:1px;"></span>')
+                f'background:{colour};margin-right:5px;vertical-align:1px;"></span>')
 
-    def _head(first, windows, day):
-        return (f'<tr><th colspan="2" align="left" style="padding:10px 0 4px 0;border-bottom:1px solid {P["border"]};'
-                f'{TYPE["label"]}color:{P["muted"]};white-space:nowrap;overflow:hidden;">{first}</th>'
-                + "".join(f'<th align="right" style="padding:10px 0 4px 4px;border-bottom:1px solid {P["border"]};'
-                          f'{TYPE["label"]}color:{P["muted"]};width:{colw}px;">'
-                          f'{_esc(day if b == "1d" else b.upper())}</th>' for b in windows)
-                + '</tr>')
+    def _unit_html(unit, basis=""):
+        bits = [b for b in (unit, basis) if b]
+        if not bits:
+            return ""
+        return (f' <span style="color:{P["faint"]};font-size:{TYPE_PX["label"]}px;">'
+                f'{_esc(" ".join(bits))}</span>')
 
-    def _table(head, body):
-        return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-                f'data-tarzan-kpi="true" '
-                f'style="table-layout:fixed;border-collapse:collapse;font-family:{FONT_STACK};'
-                f'font-variant-numeric:tabular-nums;"><colgroup><col><col style="width:12px;">'
-                + "".join(f'<col style="width:{colw}px;">' for _ in range(len(body[1])))
-                + f'</colgroup>{head}{body[0]}</table>')
+    def _th(text, *, align="right", width=None, colour=None, first=False):
+        w = f"width:{width}px;" if width else ""
+        pad = "10px 0 4px 0" if first else "10px 0 4px 4px"
+        return (f'<th align="{align}" valign="bottom" style="padding:{pad};border-bottom:1px solid {P["border"]};'
+                f'{TYPE["label"]}color:{colour or P["muted"]};white-space:nowrap;{w}">{text}</th>')
 
-    def _cell(text, *, bg=None, colour=None, weight=600, rule=True):
+    def _td(text, *, bg=None, colour=None, weight=600, last=False):
         return (f'<td align="right" style="padding:5px 3px 5px 0;'
-                f'{f"border-bottom:1px solid {P['row_rule']};" if rule else ""}'
+                f'border-bottom:1px solid {P["row_rule"] if not last else P["border"]};'
                 f'border-left:1px solid {P["page"]};{f"background:{bg};" if bg else ""}'
                 f'{TYPE["data"]}font-size:{GRID_CELL_PX}px;font-weight:{weight};'
                 f'color:{colour or P["ink"]};white-space:nowrap;">{text}</td>')
 
-    # ── The book's euros, by window: sign-coloured, no tint ──
-    def _pnl_ledger(windows, day):
-        data = kpis.get("portfolio", {})
-        rows = [(k, lab, u) for k, lab, u, _t in _KPI_ROWS
-                if u == "\u20ac" and any(k in data.get(b, {}) for b in windows)]
-        if not rows:
-            return ""
-        body = ""
-        for key, label, unit in rows:
-            tds = ""
-            for b in windows:
-                v = data.get(b, {}).get(key)
-                col = (P["faint"] if v is None else P["ink"] if abs(float(v)) < 0.5
-                       else P["green"] if v > 0 else P["red"])
-                tds += _cell(_fmt(v, key, unit), colour=col, weight=700 if b == "si" else 600)
-            body += (f'<tr><td colspan="2" style="padding:5px 0;border-bottom:1px solid {P["row_rule"]};'
-                     f'{TYPE["data"]}font-weight:400;white-space:nowrap;">'
-                     f'{_row_label(label, unit, P["muted"])}</td>{tds}</tr>')
-        return _table(_head("Portfolio", windows, day), (body, windows))
+    def _label_td(html, *, last=False):
+        return (f'<td style="padding:5px 0;border-bottom:1px solid '
+                f'{P["row_rule"] if not last else P["border"]};{TYPE["data"]}font-weight:400;'
+                f'white-space:nowrap;overflow:hidden;">{html}</td>')
 
-    # ── The measures: one row each, the three universes stacked in every cell ──
-    def _matrix(windows, day, title):
-        """Eleven rows, not thirty-three: a cell holds the three figures one under
-        the other in the universes' own colours (Portfolio ink, Target pink,
-        benchmark grey), always in that order, so a column reads as a column of
-        small ledgers. The tint is the BOOK's place among the three: green when
-        it leads, red when it trails, nothing in the middle, fainter the closer
-        the three are. A measure with no short-window figures (the risk
-        measures start at 1M) lets its label run into the empty 1D·5D cells."""
-        body = ""
-        for key, label, unit, tinted in _KPI_ROWS:
-            if unit == "\u20ac":
-                continue
-            present = [(who, name, col) for who, name, col in universes
-                       if any(key in kpis[who].get(b, {}) for b in windows)]
-            if not present:
-                continue
-            better = _KPI_BETTER.get(key) if tinted or key == "ter" else None
-            live = [b for b in windows if any(kpis[who].get(b, {}).get(key) is not None
-                                              for who, _n, _c in present)]
-            # Leading windows with no figure at all: the label takes their room.
-            lead = 0
-            for b in windows:
-                if b in live:
-                    break
-                lead += 1
-            span = 1 + lead
-            tds = ""
-            for b in windows[lead:]:
-                column = [kpis[who].get(b, {}).get(key) for who, _n, _c in present]
-                pv = kpis.get("portfolio", {}).get(b, {}).get(key)
-                bg = (_heat.rank_tint(pv, column, higher_is_better=better, cap=0.6)
-                      if better is not None and pv is not None else None)
-                lines = ""
-                for i, ((who, _name, col), v) in enumerate(zip(present, column)):
-                    size = GRID_CELL_PX if i == 0 else TYPE_PX["label"] - 0.5
-                    weight = 600 if i == 0 else 400
-                    colour = P["faint"] if v is None else col
-                    lines += (f'<div style="font-size:{size:g}px;font-weight:{weight};line-height:1.2;'
-                              f'color:{colour};">{_fmt(v, key, unit)}</div>')
-                tds += (f'<td align="right" style="padding:4px 3px 4px 0;border-bottom:1px solid {P["row_rule"]};'
-                        f'border-left:1px solid {P["page"]};{f"background:{bg};" if bg else ""}'
-                        f'{TYPE["data"]}white-space:nowrap;vertical-align:top;">{lines}</td>')
-            body += (f'<tr><td colspan="{span}" style="padding:4px 0;border-bottom:1px solid {P["row_rule"]};'
-                     f'{TYPE["data"]}font-weight:400;white-space:nowrap;vertical-align:top;">'
-                     f'{_row_label(label, unit)}</td>{tds}</tr>')
-        if not body:
-            return ""
-        head = (f'<tr><th align="left" style="padding:10px 0 4px 0;border-bottom:1px solid {P["border"]};'
-                f'{TYPE["label"]}color:{P["muted"]};white-space:nowrap;">{title}</th>'
-                + "".join(f'<th align="right" style="padding:10px 0 4px 4px;border-bottom:1px solid {P["border"]};'
-                          f'{TYPE["label"]}color:{P["muted"]};width:{colw}px;">'
-                          f'{_esc(day if b == "1d" else b.upper())}</th>' for b in windows)
-                + '</tr>')
+    def _table(colgroup, head, body):
         return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
                 f'data-tarzan-kpi="true" '
                 f'style="table-layout:fixed;border-collapse:collapse;font-family:{FONT_STACK};'
-                f'font-variant-numeric:tabular-nums;"><colgroup><col>'
-                + "".join(f'<col style="width:{colw}px;">' for _ in windows)
-                + f'</colgroup>{head}{body}</table>')
+                f'font-variant-numeric:tabular-nums;">{colgroup}{head}{body}</table>')
 
-    # The key to the stacked cells: the order and the colours, said once.
-    legend = (f'<div style="{TYPE["data"]}font-weight:400;margin:10px 0 0;line-height:1.6;color:{P["muted"]};">'
-              f'Each cell, top to bottom: '
-              + " \u00b7 ".join(f'<span style="white-space:nowrap;color:{c};">{_esc(n)}</span>'
-                                for _w, n, c in universes)
-              + '</div>')
-    out = [_pnl_ledger(short_w, day_label), legend, _matrix(short_w, day_label, "Measure")]
-    has_long = any(kpis.get(who, {}).get(b, {}).get(k) is not None
-                   for who in kpis for b in long_w for k, *_ in _KPI_ROWS if k != "ter")
+    # ── RETURNS by window: three rows ranked per window, then the book's euros ──
+    def _returns(windows, day):
+        colw = 46
+        rows = [(who, name, col) for who, name, col in universes
+                if any("return" in kpis[who].get(b, {}) for b in windows)]
+        if not rows:
+            return ""
+        head = ('<tr>' + _th('Return' + _unit_html("%"), align="left", first=True)
+                + "".join(_th(_esc(day if b == "1d" else b.upper()), width=colw) for b in windows)
+                + '</tr>')
+        body = ""
+        for i, (who, name, col) in enumerate(rows):
+            last = i == len(rows) - 1
+            tds = ""
+            for b in windows:
+                column = [kpis[w].get(b, {}).get("return") for w, _n, _c in rows]
+                v = kpis[who].get(b, {}).get("return")
+                bg = _heat.rank_tint(v, column, higher_is_better=True) if v is not None else None
+                tds += _td(_fmt(v, "return", "%"), bg=bg, last=last,
+                           colour=P["faint"] if v is None else P["ink"],
+                           weight=700 if b == "si" else 600)
+            body += (f'<tr>{_label_td(_swatch(col) + f"<span style=\"color:{P["ink"]};\">{_esc(name)}</span>", last=last)}'
+                     f'{tds}</tr>')
+        # The book's euros, under the rule: sign-coloured, never tinted.
+        book = kpis.get("portfolio", {})
+        for key in ("pnl_eur", "unr_eur"):
+            if not any(key in book.get(b, {}) for b in windows):
+                continue
+            lab, unit, _t = labels[key]
+            tds = ""
+            for b in windows:
+                v = book.get(b, {}).get(key)
+                colour = (P["faint"] if v is None else P["ink"] if abs(float(v)) < 0.5
+                          else P["green"] if v > 0 else P["red"])
+                tds += _td(_fmt(v, key, unit), colour=colour, weight=700 if b == "si" else 600)
+            body += (f'<tr>{_label_td(f"<span style=\"color:{P["muted"]};\">{_esc(lab)}</span>" + _unit_html(unit))}'
+                     f'{tds}</tr>')
+        colgroup = ('<colgroup><col>' + "".join(f'<col style="width:{colw}px;">' for _ in windows)
+                    + '</colgroup>')
+        return _table(colgroup, head, body)
+
+    # ── RISK, once: the measures as rows, the universes as columns ──
+    def _risk():
+        risk_keys = [k for k, lab, u, t in _KPI_ROWS if u != "\u20ac" and k != "return"]
+        # The span: since inception when any universe has a risk figure there,
+        # else the longest window that carries one.
+        window = next((b for b in ["si", *reversed(short_w[1:-1])]
+                       if any(kpis[who].get(b, {}).get(k) is not None
+                              for who, _n, _c in universes for k in risk_keys)), None)
+        if window is None:
+            return ""
+        cols = [(who, name, col) for who, name, col in universes
+                if any(k in kpis[who].get(window, {}) for k in risk_keys)]
+        if not cols:
+            return ""
+        colw = 80
+        # The span under the title, on its own line: the first column is 114px.
+        span = "SI" if window == "si" else window.upper()
+        if window == "si" and si_sessions:
+            span += f" \u00b7 {si_sessions} sessions"
+        title = ('Risk<br><span style="font-weight:400;letter-spacing:0;text-transform:none;'
+                 f'font-size:{TYPE_PX["label"]}px;color:{P["faint"]};">{_esc(span)}</span>')
+        head = ('<tr>' + _th(title, align="left", first=True)
+                + "".join(_th(_swatch(col) + _esc(name), width=colw) for _w, name, col in cols)
+                + '</tr>')
+        body = ""
+        present = [k for k in risk_keys
+                   if any(kpis[who].get(window, {}).get(k) is not None for who, _n, _c in cols)]
+        for i, key in enumerate(present):
+            lab, unit, tinted = labels[key]
+            better = _KPI_BETTER.get(key) if tinted or key == "ter" else None
+            column = [kpis[who].get(window, {}).get(key) for who, _n, _c in cols]
+            last = i == len(present) - 1
+            tds = ""
+            for (who, _n, _c), v in zip(cols, column):
+                bg = (_heat.rank_tint(v, column, higher_is_better=better)
+                      if better is not None and v is not None else None)
+                tds += _td(_fmt(v, key, unit), bg=bg, last=last,
+                           colour=P["faint"] if v is None else P["ink"])
+            body += (f'<tr>{_label_td(f"<span style=\"color:{P["ink"]};\">{_esc(lab)}</span>" + _unit_html(unit, _KPI_BASIS.get(key, "")), last=last)}'
+                     f'{tds}</tr>')
+        colgroup = ('<colgroup><col>' + "".join(f'<col style="width:{colw}px;">' for _ in cols)
+                    + '</colgroup>')
+        return f'<div style="margin-top:14px;">{_table(colgroup, head, body)}</div>'
+
+    out = [_returns(short_w, day_label)]
+    has_long = any(kpis.get(who, {}).get(b, {}).get("return") is not None
+                   for who in kpis for b in long_w)
     if has_long:
-        out += [_matrix(long_w, day_label, "Long windows")]
+        out.append(f'<div style="margin-top:14px;">{_returns(long_w, day_label)}</div>')
         long_note = ""
     else:
         long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
+    out.append(_risk())
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'P&amp;L, Unrealized: \u20ac net of flows. Tint: the book\u2019s place among the three, '
-            f'green when it leads, red when it trails, fainter when they are close; volatility and \u03b2 untinted. '
-            f'Return: TWR. Target: weights held fixed. SI: since inception. Volatility annualized; '
-            f'Sharpe, Sortino vs the daily risk-free rate; risk figures from 1M on. '
+            f'Return: TWR; Target: weights held fixed; SI: since inception. P&amp;L, Unrealized: '
+            f'\u20ac net of flows. Risk over the book\u2019s whole life, plan and index clipped to '
+            f'the same span; Max DD and Ulcer are of the span, VaR and CVaR the worst 5% of days. '
             f'\u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} (its own 0 and 1). '
-            f'TER: value-weighted over the window.</div>')
+            f'TER: value-weighted. Tint: best (green) and worst (red) of the three, fainter when '
+            f'they are close; volatility and \u03b2 untinted.</div>')
     return f'<div style="margin-top:12px;">{"".join(out)}{note}</div>'
+
+
+def _si_sessions(m, geo_name):
+    """How many sessions the since-inception span covers (the risk table's
+    caption), or None. Counted on the NAV itself: the chart series is
+    downsampled to 180 points and would understate a longer life."""
+    try:
+        full = _perf_full_series(m, geo_name)
+        if not full or not full.get("dates"):
+            return None
+        lo, hi = pd.Timestamp(full["dates"][0]), pd.Timestamp(full["dates"][-1])
+        nav = getattr(m, "portfolio_history", None)
+        if nav is None or len(nav) < 2:
+            return None
+        idx = pd.DatetimeIndex(nav.dropna().index)
+        try:
+            idx = idx.tz_localize(None)
+        except (TypeError, AttributeError):
+            pass
+        idx = idx.normalize()
+        # Trading days only, as the window captions count them: weekends the
+        # NAV carries flat are not sessions.
+        inside = idx[(idx >= lo.normalize()) & (idx <= hi.normalize())]
+        n = int(sum(1 for d in inside if d.weekday() < 5))
+        return max(n - 1, 0) or None
+    except Exception:  # noqa: BLE001 -- a caption, never a reason to fail the issue
+        return None
 
 
 def _intraday_column(flags) -> bool:
@@ -2382,7 +2418,8 @@ def _build_returns_snapshot(ctx: _NewsletterContext) -> dict:
             period_keys, None, groups, day_label=day_label) + unverified_note,
         "kpi_matrix_html": _kpi_matrix_html(
             _window_kpis(m, ["1d", *period_keys, "si"], ctx.benchmark_geo),
-            period_keys, day_label, ctx.benchmark_geo or "Benchmark"),
+            period_keys, day_label, ctx.benchmark_geo or "Benchmark",
+            si_sessions=_si_sessions(m, ctx.benchmark_geo)),
         "history_label": history_label,
         "benchmark_alpha_beta": ab_bench_name,
     }
