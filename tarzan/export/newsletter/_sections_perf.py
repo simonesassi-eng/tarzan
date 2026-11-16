@@ -2043,8 +2043,15 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                      f'{_row_label(label, unit, P["muted"])}</td>{tds}</tr>')
         return _table(_head("Portfolio", windows, day), (body, windows))
 
-    # ── The measures, each a block of the three universes, ranked per window ──
+    # ── The measures: one row each, the three universes stacked in every cell ──
     def _matrix(windows, day, title):
+        """Eleven rows, not thirty-three: a cell holds the three figures one under
+        the other in the universes' own colours (Portfolio ink, Target pink,
+        benchmark grey), always in that order, so a column reads as a column of
+        small ledgers. The tint is the BOOK's place among the three: green when
+        it leads, red when it trails, nothing in the middle, fainter the closer
+        the three are. A measure with no short-window figures (the risk
+        measures start at 1M) lets its label run into the empty 1D·5D cells."""
         body = ""
         for key, label, unit, tinted in _KPI_ROWS:
             if unit == "\u20ac":
@@ -2054,30 +2061,54 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
             if not present:
                 continue
             better = _KPI_BETTER.get(key) if tinted or key == "ter" else None
-            column = {b: [kpis[who].get(b, {}).get(key) for who, _n, _c in present] for b in windows}
-            for i, (who, name, col) in enumerate(present):
-                last = i == len(present) - 1
-                tds = ""
-                for b in windows:
-                    v = kpis[who].get(b, {}).get(key)
-                    bg = (_heat.rank_tint(v, column[b], higher_is_better=better)
-                          if better is not None else None)
-                    tds += _cell(_fmt(v, key, unit), bg=bg, rule=last,
-                                 colour=P["faint"] if v is None else P["ink"],
-                                 weight=700 if b == "si" else 600)
-                rule = f'border-bottom:1px solid {P["row_rule"]};' if last else ""
-                label_td = (f'<td style="padding:5px 0;{rule}{TYPE["data"]}font-weight:400;white-space:nowrap;">'
-                            + (_row_label(label, unit) if i == 0 else "") + '</td>')
-                dot_td = (f'<td style="padding:0 4px 0 0;{rule}vertical-align:middle;" title="{_esc(name)}">'
-                          f'{_dot(col)}</td>')
-                body += f'<tr>{label_td}{dot_td}{tds}</tr>'
+            live = [b for b in windows if any(kpis[who].get(b, {}).get(key) is not None
+                                              for who, _n, _c in present)]
+            # Leading windows with no figure at all: the label takes their room.
+            lead = 0
+            for b in windows:
+                if b in live:
+                    break
+                lead += 1
+            span = 1 + lead
+            tds = ""
+            for b in windows[lead:]:
+                column = [kpis[who].get(b, {}).get(key) for who, _n, _c in present]
+                pv = kpis.get("portfolio", {}).get(b, {}).get(key)
+                bg = (_heat.rank_tint(pv, column, higher_is_better=better, cap=0.6)
+                      if better is not None and pv is not None else None)
+                lines = ""
+                for i, ((who, _name, col), v) in enumerate(zip(present, column)):
+                    size = GRID_CELL_PX if i == 0 else TYPE_PX["label"] - 0.5
+                    weight = 600 if i == 0 else 400
+                    colour = P["faint"] if v is None else col
+                    lines += (f'<div style="font-size:{size:g}px;font-weight:{weight};line-height:1.2;'
+                              f'color:{colour};">{_fmt(v, key, unit)}</div>')
+                tds += (f'<td align="right" style="padding:4px 3px 4px 0;border-bottom:1px solid {P["row_rule"]};'
+                        f'border-left:1px solid {P["page"]};{f"background:{bg};" if bg else ""}'
+                        f'{TYPE["data"]}white-space:nowrap;vertical-align:top;">{lines}</td>')
+            body += (f'<tr><td colspan="{span}" style="padding:4px 0;border-bottom:1px solid {P["row_rule"]};'
+                     f'{TYPE["data"]}font-weight:400;white-space:nowrap;vertical-align:top;">'
+                     f'{_row_label(label, unit)}</td>{tds}</tr>')
         if not body:
             return ""
-        return _table(_head(title, windows, day), (body, windows))
+        head = (f'<tr><th align="left" style="padding:10px 0 4px 0;border-bottom:1px solid {P["border"]};'
+                f'{TYPE["label"]}color:{P["muted"]};white-space:nowrap;">{title}</th>'
+                + "".join(f'<th align="right" style="padding:10px 0 4px 4px;border-bottom:1px solid {P["border"]};'
+                          f'{TYPE["label"]}color:{P["muted"]};width:{colw}px;">'
+                          f'{_esc(day if b == "1d" else b.upper())}</th>' for b in windows)
+                + '</tr>')
+        return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                f'data-tarzan-kpi="true" '
+                f'style="table-layout:fixed;border-collapse:collapse;font-family:{FONT_STACK};'
+                f'font-variant-numeric:tabular-nums;"><colgroup><col>'
+                + "".join(f'<col style="width:{colw}px;">' for _ in windows)
+                + f'</colgroup>{head}{body}</table>')
 
+    # The key to the stacked cells: the order and the colours, said once.
     legend = (f'<div style="{TYPE["data"]}font-weight:400;margin:10px 0 0;line-height:1.6;color:{P["muted"]};">'
-              + "".join(f'<span style="display:inline-block;white-space:nowrap;margin-right:12px;">'
-                        f'{_dot(c)} <span>{_esc(n)}</span></span>' for _w, n, c in universes)
+              f'Each cell, top to bottom: '
+              + " \u00b7 ".join(f'<span style="white-space:nowrap;color:{c};">{_esc(n)}</span>'
+                                for _w, n, c in universes)
               + '</div>')
     out = [_pnl_ledger(short_w, day_label), legend, _matrix(short_w, day_label, "Measure")]
     has_long = any(kpis.get(who, {}).get(b, {}).get(k) is not None
@@ -2088,8 +2119,8 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
     else:
         long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'P&amp;L, Unrealized: \u20ac net of flows. Tint: best (green) and worst (red) of the '
-            f'three in each window, fainter when they are close; volatility and \u03b2 untinted. '
+            f'P&amp;L, Unrealized: \u20ac net of flows. Tint: the book\u2019s place among the three, '
+            f'green when it leads, red when it trails, fainter when they are close; volatility and \u03b2 untinted. '
             f'Return: TWR. Target: weights held fixed. SI: since inception. Volatility annualized; '
             f'Sharpe, Sortino vs the daily risk-free rate; risk figures from 1M on. '
             f'\u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} (its own 0 and 1). '
