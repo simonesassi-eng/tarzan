@@ -76,14 +76,15 @@ def test_geo_euro_uses_the_notional_sleeve_not_the_market_value():
     html = _build_diversification(ctx)["html"]
 
     # The Emerging Markets row's euro today must be at least what the sole EM
-    # holding is worth — the invariant the bug violated. In the geography card a
-    # label line reads 1M, euros, weight, name, so it is the last euro before the
-    # name.
+    # holding is worth — the invariant the bug violated. In the geography block
+    # a TODAY label is two lines: "Emerging 9.1%" then "move · €…", so the euro
+    # is the first one after the name.
     geo = html[html.index('aria-label="Equity geography'):]
     geo = geo[:geo.index("</svg>")]
-    euros = re.findall(r">€([\d.,]+k?)<", geo[:geo.index(">Emerging<")])
+    after = geo[geo.index(">Emerging</tspan>"):]
+    euros = re.findall(r"\u20ac([\d.,]+k?)<", after)
     assert euros, "no Emerging Markets euro rendered"
-    em_eur = _eur_to_float(euros[-1])
+    em_eur = _eur_to_float(euros[0])
     assert em_eur >= 20000.0 - 500.0, (
         f"Emerging Markets shows €{em_eur:.0f}, below the €20k its only "
         f"holding (XMME) is worth — the notional share was applied to the "
@@ -106,7 +107,9 @@ def test_the_plan_side_is_sized_on_the_plans_own_sleeve():
     html = _build_diversification(ctx)["html"]
     geo = html[html.index('aria-label="Equity geography'):]
     geo = geo[:geo.index("</svg>")]
-    plan_side = geo[geo.index(">USA<", geo.index(">Emerging<")):]   # right-hand labels
-    euros = [_eur_to_float(e) for e in re.findall(r">€([\d.,]+k?)<", plan_side)]
+    # The PLAN labels start left-anchored at the plan's name column; the first
+    # euro after the plan's USA name is its plan sleeve share.
+    plan_side = geo[geo.index(">USA</tspan>", geo.index(">Emerging</tspan>")):]
+    euros = [_eur_to_float(e) for e in re.findall(r"\u20ac([\d.,]+k?)<", plan_side)]
     assert euros and abs(euros[0] - 90000.0) < 1000.0, euros
     assert "€220k notional today, €180k in the plan" in html   # synthetic

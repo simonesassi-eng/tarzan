@@ -741,7 +741,8 @@ def _build_hero(ctx: _NewsletterContext) -> dict:
         "days": span_days,
         "session": None if session_pct is None else {
             "pct": _pct(session_pct, signed=True),
-            "eur": _fig(session_eur, _eur, signed=True),
+            # Whole euros in the pill; the caption beneath states the cents.
+            "eur": _fig(session_eur, _eur, decimals=0, signed=True),
             "day": session_day,
             "tone": _tone(session_pct),
             "proof": session_receipt,
@@ -1378,77 +1379,38 @@ def _signed_eur(value) -> str:
 
 # ── Allocation: the bridge ───────────────────────────────────────────────────
 #
-# Each block is a card in the issue's table shell (a rounded border) holding its
-# name and one SVG: two stacks of pill bars, today and the plan, a pill per line,
-# each pill joined to itself by a band in the line's colour. The column labels
-# stand once, above the first card. A band that widens is weight to add, one that
+# Each block is one SVG on the ground: two stacked columns, today and the plan,
+# one contiguous slice per line, each slice joined to itself by a translucent
+# band in the line's colour. A band that widens is weight to add, one that
 # narrows is weight to take out; the bands the plan sells narrow into one point,
 # the sale, and the lines it buys from nothing widen out of it.
 #
-# The bands are opaque, in the line's own colour, and keep half their pill's
-# height. Drawn translucent over the near-black card they came out as a dull
-# grey-blue; drawn opaque, at full height and the issue's full chroma, they made
-# the section the loudest thing in the digest. Every hue shares one lightness and
-# one chroma, a step darker than the class swatches, and the lines the plan sells
-# share one calm red.
+# A slice is as tall as its weight and never thinner than one label row, so
+# every label sits level with its own slice and nothing has to tie the two
+# together. Class and region names take two label lines (the name with its
+# weight, then the month's move and the euros); tickers take one, in columns:
 #
-# A line is named at both ends with its weight in parentheses against the bar,
-# "NTSG (14.6%)" today and "(35.0%) NTSG" in the plan, and every label sits level
-# with its own pill. A pill is as tall as its weight; a thin one gets the room its
-# label line needs around it, so no label is pushed off its pill and nothing has
-# to tie the two together.
+#   1M · € · NAME %  ‖stack · bands · stack‖  % NAME · € · GAP
 #
-# Drawn at the issue's own scale: a 580-unit viewBox, the content column every chart
-# in the digest is drawn for, at width:100% and with the TYPE_PX sizes, so its text
-# matches the tables and charts around it at whatever width the column ends up.
+# A dashed tick marks where a stack passes 100% (futures overlay). The totals
+# and the strategic reserve follow as a small table under the figure.
 #
-# The columns, the same in every card:
-#   1M (sparkline, move) · today € · name (today %) ‖pill ··· pill‖ (plan %) name ·
-#   plan € · gap
-# Every column stands at the same x in all three cards.
+# This is the composition the owner approved on the full-issue prototype
+# (output/redesign-2026-11-15/proto/render3.py::bridge), ported to the
+# engine's rows.
 
 _BW = 354.0                      # the content column every chart is drawn for (phone)
-_PAD = 0.0                       # the bridges sit on the ground, no card inset
-_FD, _FL = TYPE_PX["data"], TYPE_PX["label"]
-#: Glyph advances of the system grotesk at weight 600 and the data size, in em,
-#: measured in Chrome (SF Pro Text at 11px; Segoe and Roboto run within a few
-#: percent). Measured at the TEXT size on purpose: SF is an optical-size font
-#: and its 100px advances run a tenth narrower than its 11px ones, which is
-#: how "Commodities (4.6%)" came to be clipped at the left edge. Sizing on an
-#: average advance was worse still: capitals and digits run at 0.67em, not 0.54.
-_GLYPH_W = {"0": 0.672, "1": 0.501, "2": 0.636, "3": 0.661, "4": 0.678, "5": 0.654,
-            "6": 0.674, "7": 0.616, "8": 0.681, "9": 0.674,
-            ".": 0.336, ",": 0.336, ":": 0.336, "\u00b7": 0.336, " ": 0.271, "%": 1.005,
-            "(": 0.419, ")": 0.419, "+": 0.664, "\u2212": 0.664, "-": 0.486, "\u20ac": 0.683,
-            "/": 0.331, "&": 0.739,
-            "A": 0.719, "B": 0.687, "C": 0.739, "D": 0.746, "E": 0.619, "F": 0.595, "G": 0.762,
-            "H": 0.775, "I": 0.307, "J": 0.586, "K": 0.698, "L": 0.592, "M": 0.901, "N": 0.765,
-            "O": 0.787, "P": 0.667, "Q": 0.787, "R": 0.687, "S": 0.668, "T": 0.657, "U": 0.758,
-            "V": 0.711, "W": 1.001, "X": 0.718, "Y": 0.696, "Z": 0.677,
-            "a": 0.583, "b": 0.645, "c": 0.584, "d": 0.645, "e": 0.597, "f": 0.401, "g": 0.639,
-            "h": 0.624, "i": 0.280, "j": 0.279, "k": 0.588, "l": 0.287, "m": 0.917, "n": 0.619,
-            "o": 0.616, "p": 0.641, "q": 0.641, "r": 0.429, "s": 0.549, "t": 0.405, "u": 0.619,
-            "v": 0.575, "w": 0.829, "x": 0.568, "y": 0.585, "z": 0.563}
-_GLYPH_DEFAULT = 0.68
-_TOP = 10.0                      # where the stacks start, under the column labels
-_ROW = 14.5                      # one label line: the least distance between pill centres
-_ROW2 = 24.0                     # two label lines (name and weight, then move and euros)
-_TAIL = 16.0                     # one total row under the stacks
-_BAR, _LEAD, _COLGAP = 8.0, 5.0, 8.0
-_SPK_W, _SPK_H, _SPK_GAP = 24.0, 9.0, 4.0    # the month's sparkline in the 1M column
-_GAP_1M = 10.0                   # the 1M column stands apart from today's figures
-_GAP = 2.5                       # the least space between two pills
-_MIN_FLOW = 44.0                 # the least width the bands between the stacks may have
-_BAR_RX = 3.0                    # a pill bar's corner
-_BAND = 0.45                     # the share of its pill's height a band keeps
-#: OKLCH lightness and chroma shared by every hue. At 0.72 the pills and bands were
-#: the brightest thing in the issue: large light areas on a near-black card.
-_BRIDGE_L, _BRIDGE_C = 0.62, 0.085
-_SEAM = 1.5                      # card between a pill and its band
-#: Lightness steps for the successive lines of one class, at the class's own hue
-#: and chroma, so two names of a class stay apart and keep its colour. Mixing toward
-#: the card greyed them; mixing toward white turned them pastel.
-_SHADE_DL = (0.0, -0.07, 0.06, -0.12, 0.03)
+_XL, _XR, _SW = 146.0, 200.0, 10.0   # the two stacks: left edge of each, and their width
+_C1M, _CEUR = 24.0, 64.0         # one-line mode: right edges of the 1M and € columns
+_CNAME = _XL - 7.0               # right edge of the TODAY label
+_RNAME = _XR + _SW + 6.0         # left edge of the PLAN label
+_REUR, _RGAP = _BW - 38.0, _BW   # one-line mode: right edges of the plan's € and the gap
+_TOP = 18.0                      # where the stacks start, under the column labels
+_PITCH1, _UNIT1 = 14.5, 2.2      # one label line; px per point of weight
+_PITCH2, _UNIT2 = 23.0, 2.4      # two label lines
+_SEAM = 0.8                      # ground between two slices of a stack
+_BAND_ALPHA = 0.30               # a band is the line's colour, translucent over the ground
+_SELL_ALPHA = 0.26
 _ASSET_SHORT = {"Fixed Income": "Fixed inc."}
 _GEO_SHORT = {"Eurozone EMU": "Eurozone", "Dev ex-USA ex-EMU ex-JP": "Other dev",
               "Emerging Markets": "Emerging"}
@@ -1463,17 +1425,11 @@ def _mix(fg: str, bg: str, a: float) -> str:
 
 
 def _lift(colour: Optional[str]) -> str:
-    """The class colours were tuned for a light page; lifted toward white they hold
-    on the dark card without changing hue."""
+    """A colour tuned for a light page, lifted toward white so it holds on the dark
+    ground without changing hue (the geography set)."""
     if not colour or not str(colour).startswith("#") or len(str(colour)) != 7:
         return PALETTE["accent"]
     return _mix("#FFFFFF", str(colour), 0.28)
-
-
-def _shade(base: str, n: int) -> str:
-    """The n-th line of a class: the class's hue and chroma, its lightness stepped."""
-    lum, chroma, hue = _oklch(base)
-    return _from_oklch(lum + _SHADE_DL[n % len(_SHADE_DL)], chroma, hue)
 
 
 def _alloc_band(target: Optional[float], cfg) -> float:
@@ -1498,20 +1454,13 @@ def _band_colour(drift: Optional[float], target: Optional[float], cfg) -> str:
             else PALETTE["red"])
 
 
-def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 600,
-        anchor: str = "start", size: float = _FD, label: bool = False,
-        halo: bool = False, x_override: Optional[float] = None) -> str:
-    if x_override is not None:
-        x = x_override
-    """One SVG text at the data size by default. ``label`` adds the LABEL role's
-    tracking; its capitals are written as such, since text-transform does not
-    reach SVG text. ``halo`` outlines it in the card's colour, so it reads over the
-    bands it sits on without a patch hiding them."""
-    track = f' letter-spacing="{0.06 * size:.2f}"' if label else ""
-    ring = (f' stroke="{PALETTE["card"]}" stroke-width="3" stroke-linejoin="round" '
-            f'paint-order="stroke"' if halo else "")
+def _bt(x: float, y: float, s: str, *, fill: str, weight: int = 400,
+        anchor: str = "start", size: float = 10.0, label: bool = False) -> str:
+    """One SVG text. ``label`` adds the LABEL role's tracking; its capitals are
+    written as such, since text-transform does not reach SVG text."""
+    track = ' letter-spacing="0.6"' if label else ""
     return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size:g}" font-weight="{weight}" '
-            f'fill="{fill}" text-anchor="{anchor}"{track}{ring}>{_esc(str(s))}</text>')
+            f'fill="{fill}" text-anchor="{anchor}"{track}>{s}</text>')
 
 
 def _pc1(v: float) -> str:
@@ -1525,8 +1474,8 @@ def _move_text(trend: Optional[list]) -> str:
 
 
 def _move_colour(trend: Optional[list]) -> str:
-    """Green for a weight that rose over the month, red for one that fell, as the
-    sparkline beside it fills; muted for a move that prints as 0.0."""
+    """Green for a weight that rose over the month, red for one that fell; muted
+    for a move that prints as 0.0."""
     tr = [float(x) for x in (trend or []) if x is not None]
     if len(tr) < 2 or abs(tr[-1] - tr[0]) < 0.05:
         return PALETTE["muted"]
@@ -1559,413 +1508,184 @@ def _sleeve_note(what: str, today: float, plan: float, tail: str = ".") -> str:
     return f"% of {what} ({bases}){tail}"
 
 
-def _paren(s: str) -> str:
-    return f"({s})" if s else ""
+def _bridge_stack(rows: list, key: str, pitch: float, unit: float) -> tuple[dict, float, Optional[float]]:
+    """``({row key: (top, height)}, bottom, y of the 100% mark)`` for one stack.
+    A slice is its weight times ``unit`` and never thinner than ``pitch``; slices
+    are contiguous, so a label at a slice's centre never meets another."""
+    pos, y, hundred, acc = {}, _TOP, None, 0.0
+    for r in rows:
+        v = float(r[key] or 0.0)
+        if v <= 0:
+            continue
+        h = max(pitch, v * unit)
+        if hundred is None and acc + v >= 100.0 - 1e-9 and acc < 100.0 - 1e-9:
+            hundred = y + h * (100.0 - acc) / v
+        pos[r["key"]] = (y, h)
+        y += h
+        acc += v
+    return pos, y, hundred
 
 
-def _tag(name: str, pc: str, side: str) -> str:
-    """A line's label with its weight against the bar: "NTSG (14.6%)" on the TODAY
-    side, "(35.0%) NTSG" on the PLAN side, the name alone when there is no weight."""
-    if not pc:
-        return name
-    return f"{name} {_paren(pc)}" if side == "left" else f"{_paren(pc)} {name}"
-
-
-def _bridge_texts(left: list, right: list, tail=()) -> dict:
-    """Every string a card prints, by column, to size the columns on."""
-    lr = [r for r in left if r["now"] > 0]
-    rr = [r for r in right if (r["target"] or 0) > 0]
-    tail = list(tail or ())
-    return {
-        "move": [_move_text(r["trend"]) for r in lr] + [t["move"] for t in tail],
-        "neu": [_eur_smart(r["eur_now"]) for r in lr] + [t["now_eur"] for t in tail],
-        "llab": ([_tag(r["label"], _pc1(r["now"]), "left") for r in lr]
-                 + [_tag(t["name"], t["now_pc"], "left") for t in tail]),
-        "rlab": ([_tag(r["label"], _pc1(r["target"]), "right") for r in rr]
-                 + [_tag(t["name"], t["plan_pc"], "right") for t in tail]),
-        "peu": [_eur_smart(r["eur_tgt"]) for r in rr] + [t["plan_eur"] for t in tail],
-        "gap": [_gap_text(r) for r in rr] + [t["gap"] for t in tail],
-    }
-
-
-def _text_w(s: str, size: float = _FD, *, label: bool = False) -> float:
-    """The width of ``s`` at ``size`` from the measured advances, plus the LABEL
-    role's tracking when ``label``."""
-    w = sum(_GLYPH_W.get(ch, _GLYPH_DEFAULT) for ch in str(s)) * size
-    if label:
-        w += 0.06 * size * max(len(str(s)) - 1, 0)
-    return w
-
-
-def _tw(xs: list, size: float = _FD, *, label: bool = False) -> float:
-    """Width of the widest string in ``xs``."""
-    return max([_text_w(s, size, label=label) for s in xs] + [0.0])
-
-
-def _bridge_widths(tx: dict) -> dict:
-    w = {k: _tw(v) for k, v in tx.items()}
-    w["m1"] = max(_SPK_W + _SPK_GAP + w["move"], _tw(["1M"], 9.5, label=True))
-    w["gap"] = max(w["gap"], _tw(["GAP"], 9.5, label=True))
-    return w
-
-
-def _bridge_layout(specs: list, *, two_line: Optional[bool] = None) -> dict:
-    """Column positions shared by every card, so all three cards' columns line up
-    down the section, each sized on the widest string it holds in any card. The 1M
-    column stands apart at the far left. The two sides mirror each other: euros
-    outside, then the name with its weight, the weight against the bar."""
-    tx: dict = {}
-    for sp in specs:
-        for k, v in _bridge_texts(sp["left"], sp["right"], sp.get("tail") or ()).items():
-            tx.setdefault(k, []).extend(v)
-    w = _bridge_widths(tx)
-    one = {"spk0": _PAD, "m1": _PAD + w["m1"]}         # right edge of the month's move
-    one["neu0"] = one["m1"] + _GAP_1M                  # left edge of today's euros
-    one["neu"] = one["neu0"] + w["neu"]                # right edge of today's euros
-    one["llab"] = one["neu"] + _COLGAP + w["llab"]     # right edge of "NTSG (14.6%)"
-    one["LX0"] = one["llab"] + _LEAD
-    one["LX1"] = one["LX0"] + _BAR
-    one["gap"] = _BW - _PAD                            # right edge of the gap
-    one["peu"] = one["gap"] - w["gap"] - _COLGAP       # right edge of the plan's euros
-    one["rlab"] = one["peu"] - w["peu"] - _COLGAP - w["rlab"]  # left edge of "(35.0%) NTSG"
-    one["RX1"] = one["rlab"] - _LEAD
-    one["RX0"] = one["RX1"] - _BAR
-    one["two"] = False
-    if two_line is False or (two_line is None and one["RX0"] - one["LX1"] >= _MIN_FLOW):
-        return one
-    # Two label lines per pill: the name with its weight on the first, the month's
-    # move and the euros (left) or the euros and the gap (right) on the second.
-    # Long class and region names then fit the phone column with a real flow
-    # between the stacks; tickers stay on one line.
-    left_w = max(w["llab"], w["m1"] + _COLGAP + w["neu"])
-    right_w = max(w["rlab"], w["peu"] + _COLGAP + w["gap"])
-    x = {"two": True, "spk0": _PAD, "llab": _PAD + left_w, "neu": _PAD + left_w}
-    x["m1"] = x["neu"] - w["neu"] - _COLGAP            # right edge of the move, line two
-    x["neu0"] = x["m1"] + _COLGAP
-    x["LX0"] = x["llab"] + _LEAD
-    x["LX1"] = x["LX0"] + _BAR
-    x["gap"] = _BW - _PAD
-    x["rlab"] = x["gap"] - right_w                     # left edge of "(35.0%) Equities"
-    x["peu"] = x["rlab"] + w["peu"]                    # right edge of the plan's euros, line two
-    x["RX1"] = x["rlab"] - _LEAD
-    x["RX0"] = x["RX1"] - _BAR
-    return x
-
-
-def _oklch(hexc: str) -> tuple[float, float, float]:
-    """(L, C, hue in degrees) of a #RRGGBB colour, in OKLCH."""
-    def lin(c: float) -> float:
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-    r, g, b = (lin(int(hexc[i:i + 2], 16) / 255) for i in (1, 3, 5))
-    l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
-    m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
-    s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
-    lum = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
-    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
-    bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
-    return lum, math.hypot(a, bb), math.degrees(math.atan2(bb, a)) % 360
-
-
-def _from_oklch(lum: float, chroma: float, hue: float) -> str:
-    a, bb = chroma * math.cos(math.radians(hue)), chroma * math.sin(math.radians(hue))
-    l_ = (lum + 0.3963377774 * a + 0.2158037573 * bb) ** 3
-    m_ = (lum - 0.1055613458 * a - 0.0638541728 * bb) ** 3
-    s_ = (lum - 0.0894841775 * a - 1.2914855480 * bb) ** 3
-    rgb = (4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
-           -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
-           -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_)
-
-    def enc(c: float) -> int:
-        c = max(0.0, min(1.0, c))
-        return round((12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055) * 255)
-
-    return "#" + "".join(f"{enc(c):02x}" for c in rgb)
-
-
-def _bridge_hue(colour: Optional[str]) -> str:
-    """A line's colour in the bridge: its class's hue at one lightness and one chroma
-    shared by every hue. At the issue's own lightness and chroma the hues shouted
-    over each other -- gold and teal far brighter than blue -- and the section read
-    as the loudest thing in the digest."""
-    return _from_oklch(_BRIDGE_L, _BRIDGE_C, _oklch(_lift(colour))[2])
-
-
-#: Every line the plan sells, one calm red: ten alternating reds read as alarm.
-_SELL_COLOUR = _from_oklch(0.56, 0.10, _oklch(PALETTE["red"])[2])
-
-
-def _bridge_spark(vals, x0: float, ymid: float, colour: str) -> str:
-    """The month's weight in the 1M column, drawn the way a Markets row draws its
-    session: the line in the line's own colour, a dashed baseline at the weight a
-    month ago, and a light fill between them, green where the weight is above
-    where it started and red where below."""
-    series = [float(v) for v in (vals or []) if v is not None]
-    if len(series) < 2:
-        return ""
-    base = series[0]
-    lo, hi = min(series), max(series)
-    span = (hi - lo) or 1.0
-    lo, hi = lo - span * 0.14, hi + span * 0.14
-    span = hi - lo
-    top, n = ymid - _SPK_H / 2, len(series)
-
-    def X(i: int) -> float:
-        return x0 + i / (n - 1) * _SPK_W
-
-    def Y(v: float) -> float:
-        return top + _SPK_H - (v - lo) / span * _SPK_H
-
-    yb = Y(base)
-    pts = [(X(i), Y(v)) for i, v in enumerate(series)]
-    # Split every segment where it crosses the baseline, so each side's fill
-    # meets the baseline exactly there; then clamp each side to its half.
-    cut = [pts[0]]
-    for (xa, ya), (xb, yb2) in zip(pts, pts[1:]):
-        if (ya - yb) * (yb2 - yb) < 0:
-            t = (yb - ya) / (yb2 - ya)
-            cut.append((xa + t * (xb - xa), yb))
-        cut.append((xb, yb2))
-    ends = f"{pts[-1][0]:.1f},{yb:.1f} {pts[0][0]:.1f},{yb:.1f}"
-
-    def area(clamp, fill) -> str:
-        p = " ".join(f"{px:.1f},{clamp(py, yb):.1f}" for px, py in cut)
-        return f'<polygon points="{p} {ends}" fill="{fill}" fill-opacity="0.16"/>'
-
-    line = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
-    return (area(min, PALETTE["green"]) + area(max, PALETTE["red"])
-            + f'<line x1="{x0:.1f}" y1="{yb:.1f}" x2="{x0 + _SPK_W:.1f}" y2="{yb:.1f}" '
-              f'stroke="{PALETTE["subtle"]}" stroke-width="0.7" stroke-dasharray="2,2"/>'
-            + f'<polyline points="{line}" fill="none" stroke="{colour}" stroke-width="1.1" '
-              f'stroke-linejoin="round" stroke-linecap="round"/>'
-            + f'<circle cx="{pts[-1][0]:.1f}" cy="{pts[-1][1]:.1f}" r="1.4" fill="{colour}"/>')
-
-
-def _bridge_head(x: dict) -> str:
-    """The column labels, once, above the first card. Every card shares the
-    columns, so a card carries only its own name: a header band in each card held
-    the name and the labels on two lines and took more room than it gave."""
-    lab = {"fill": PALETTE["faint"], "weight": 700, "size": 9.5, "label": True}
-    if x.get("two"):
-        cols = [(x["llab"], "TODAY \u00b7 1M \u00b7 \u20ac", "end"),
-                (x["rlab"], "PLAN \u00b7 \u20ac", "start"), (x["gap"], "GAP", "end")]
-    else:
-        cols = [((x["spk0"] + x["m1"]) / 2, "1M", "middle"), (x["neu"], "\u20ac", "end"),
-                (x["llab"], "TODAY", "end"), (x["rlab"], "PLAN", "start"),
-                (x["peu"], "\u20ac", "end"), (x["gap"], "GAP", "end")]
-    body = "".join(_bt(cx, 10.0, s, anchor=a, **lab) for cx, s, a in cols)
-    return (f'<svg width="100%" viewBox="0 0 {_BW:g} 14" xmlns="http://www.w3.org/2000/svg" '
-            f'aria-hidden="true" style="display:block;width:100%;margin-top:6px;" '
-            f'font-family="{FONT_STACK}">{body}</svg>')
-
-
-def _tag_text(x: float, y: float, name: str, pc: str, side: str, *,
-              name_fill: str) -> str:
-    """A label's name and weight as one text, one space apart whatever their
-    lengths: right-aligned against the TODAY pills, left-aligned against the PLAN
-    pills."""
-    nm = f'<tspan fill="{name_fill}">{_esc(name)}</tspan>'
-    if pc:
-        wt = f'<tspan fill="{PALETTE["ink"]}">{_esc(_paren(pc))}</tspan>'
-        body = f"{nm} {wt}" if side == "left" else f"{wt} {nm}"
-    else:
-        body = nm
-    anchor = "end" if side == "left" else "start"
-    return (f'<text x="{x:.1f}" y="{y:.1f}" font-size="{_FD:g}" font-weight="600" '
-            f'text-anchor="{anchor}">{body}</text>')
-
-
-def _bridge_svg(left: list, right: list, stack_h: float, cfg, *, title: str = "",
-                tail=(), total_now: Optional[float] = None,
-                total_tgt: Optional[float] = None, layout: Optional[dict] = None,
+def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
                 aria: str = "Allocation, today against the plan") -> str:
-    """One card's SVG: its name, the two stacks of pill bars and the bands between
-    them, a label line level with each pill, then ``tail`` rows under the stacks in
-    the same columns (dicts: name, trend, move, now_pc, now_eur, plan_pc, plan_eur,
-    gap, colour). ``stack_h`` sets the scale, the height the larger side's weights
-    would take as one stack. ``layout`` is :func:`_bridge_layout` over every card,
-    so the columns line up; :func:`_bridge_head` labels them once."""
+    """One block's figure: the column labels, the two stacks, the bands, a label
+    level with each slice, the sale point; then the ``tail`` rows (dicts: name,
+    now_pc, now_eur, plan_pc, plan_eur, gap, colour) as a table under it.
+    ``two`` selects two label lines per slice (class and region names) over one
+    (tickers)."""
     P = PALETTE
     l_rows = [r for r in left if r["now"] > 0]
     r_rows = [r for r in right if (r["target"] or 0) > 0]
     if not l_rows and not r_rows:
         return ""
-    x = layout or _bridge_layout([{"left": left, "right": right, "tail": tail}])
-    LX0, LX1, RX0 = x["LX0"], x["LX1"], x["RX0"]
-    flow = RX0 - LX1
-    mid = (LX1 + RX0) / 2
-
-    tn = total_now if total_now is not None else sum(r["now"] for r in l_rows)
-    tt = total_tgt if total_tgt is not None else sum(r["target"] for r in r_rows)
-    two = bool(x.get("two"))
-    row_h = _ROW2 if two else _ROW
-    k = (stack_h - (max(len(l_rows), len(r_rows), 1) - 1) * _GAP) / max(tn, tt, 1e-9)
-
-    def stack(rows, key):
-        """(top, height) of each pill. A pill is as tall as its weight and starts a
-        _GAP below the pill above it, or lower: far enough that its centre is a
-        label line below that pill's centre. Every label then sits level with its
-        own pill, however thin."""
-        out, prev = {}, None
-        for r in rows:
-            v = r[key] or 0.0
-            if v <= 0:
-                continue
-            h = v * k
-            y = _TOP if prev is None else max(prev[0] + prev[1] + _GAP,
-                                              prev[0] + prev[1] / 2 + row_h - h / 2)
-            out[r["key"]] = prev = (y, h)
-        return out
-
-    L, R = stack(left, "now"), stack(right, "target")
-    # The lowest pill, or the lowest LABEL: a thin last pill carries a label that
-    # reaches a line below it, and the tail rows must clear that label.
-    bottom = max([y + h for y, h in [*L.values(), *R.values()]]
-                 + [y + h / 2 + row_h / 2 + 2.0 for y, h in [*L.values(), *R.values()]]
-                 + [_TOP])
+    pitch, unit = (_PITCH2, _UNIT2) if two else (_PITCH1, _UNIT1)
+    fs = 10.5 if two else 10.0
+    L, bot_l, h100_l = _bridge_stack(l_rows, "now", pitch, unit)
+    R, bot_r, h100_r = _bridge_stack(r_rows, "target", pitch, unit)
+    by_key = {r["key"]: r for r in right + left}
+    sold = [r for r in l_rows if r["legacy"] and r["key"] not in R]
+    sell_y = bot_l + 12.0 if sold else None
+    px = (_XL + _SW + _XR) / 2.0
+    s0, s1 = _XL + _SW, _XR
     g: list[str] = []
 
-    leg = [r for r in left if r["legacy"] and r["now"] > 0]
-    hub, sold, bw = None, (), 0.0
-    if leg:
-        y0 = L[leg[0]["key"]][0]
-        y1 = L[leg[-1]["key"]][0] + L[leg[-1]["key"]][1]
-        sold = ("sell", _pc1(sum(r["now"] for r in leg)),
-                _eur_smart(sum(r["eur_now"] for r in leg)))
-        # The sale's figures stack left of the point the bands meet at, clear of
-        # the TODAY pills.
-        bw = _tw(list(sold)) + 8.0
-        hub = (LX1 + max(min(flow - 40.0, max(0.5 * flow, 100.0)), bw + 12.0),
-               (y0 + y1) / 2)
-    by_key = {r["key"]: r for r in right + left}
-    # A band keeps _BAND of its pill's height, about its middle, and stops a seam
-    # short of the pills so the two stacks still read as stacks.
-    s0, s1 = LX1 + _SEAM, RX0 - _SEAM
-    lo_f, hi_f = (1 - _BAND) / 2, (1 + _BAND) / 2
-    bands, bars = [], []
-    for key in dict.fromkeys([r["key"] for r in left] + [r["key"] for r in right]):
+    # Column labels, once, over the stacks.
+    lab = {"fill": P["faint"], "weight": 700, "size": 9.0, "label": True}
+    if two:
+        g += [_bt(_CNAME, 10.0, "TODAY \u00b7 1M \u00b7 \u20ac", anchor="end", **lab),
+              _bt(_RNAME, 10.0, "PLAN \u00b7 \u20ac", **lab)]
+    else:
+        g += [_bt(_C1M, 10.0, "1M", anchor="end", **lab), _bt(_CEUR, 10.0, "\u20ac", anchor="end", **lab),
+              _bt(_CNAME, 10.0, "TODAY", anchor="end", **lab), _bt(_RNAME, 10.0, "PLAN", **lab),
+              _bt(_REUR, 10.0, "\u20ac", anchor="end", **lab)]
+    g.append(_bt(_RGAP, 10.0, "GAP", anchor="end", **lab))
+
+    # Bands first, then the slices over their ends.
+    for key in dict.fromkeys([r["key"] for r in l_rows] + [r["key"] for r in r_rows]):
         r = by_key[key]
-        ly, lh = L.get(key, (_TOP, 0.0))
-        ry, rh = R.get(key, (_TOP, 0.0))
-        la, lb = ly + lh * lo_f, ly + lh * hi_f
-        ra, rb = ry + rh * lo_f, ry + rh * hi_f
-        if lh > 0 and rh > 0:
-            d = (f'M{s0:.1f},{la:.1f} C{mid:.1f},{la:.1f} {mid:.1f},{ra:.1f} {s1:.1f},{ra:.1f} '
-                 f'L{s1:.1f},{rb:.1f} C{mid:.1f},{rb:.1f} {mid:.1f},{lb:.1f} {s0:.1f},{lb:.1f} Z')
-        elif lh > 0:
-            # Sold: every band the plan sells narrows into one point, the sale
-            # being one decision. A line with no target at all just tapers off.
-            tx, ty = hub if (hub and r["legacy"]) else (mid, ly + lh / 2)
-            cx = (s0 + tx) / 2
-            d = (f'M{s0:.1f},{la:.1f} C{cx:.1f},{la:.1f} {tx - 12:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
-                 f'C{tx - 12:.1f},{ty:.1f} {cx:.1f},{lb:.1f} {s0:.1f},{lb:.1f} Z')
-        elif rh > 0:
-            # Bought from nothing: it widens out of the sale that pays for it.
-            tx = (hub[0] + 5.0) if hub else (RX0 - 0.5 * flow)
-            ty = ry + rh / 2
-            cx = (tx + s1) / 2
-            d = (f'M{s1:.1f},{ra:.1f} C{cx:.1f},{ra:.1f} {tx + 8:.1f},{ty:.1f} {tx:.1f},{ty:.1f} '
-                 f'C{tx + 8:.1f},{ty:.1f} {cx:.1f},{rb:.1f} {s1:.1f},{rb:.1f} Z')
+        if key in L and key in R:
+            (y0, h0), (y1, h1) = L[key], R[key]
+            g.append(f'<path d="M{s0:.1f},{y0:.1f} C{s0 + 22:.1f},{y0:.1f} {s1 - 22:.1f},{y1:.1f} '
+                     f'{s1:.1f},{y1:.1f} L{s1:.1f},{y1 + h1:.1f} C{s1 - 22:.1f},{y1 + h1:.1f} '
+                     f'{s0 + 22:.1f},{y0 + h0:.1f} {s0:.1f},{y0 + h0:.1f} Z" '
+                     f'fill="{r["colour"]}" fill-opacity="{_BAND_ALPHA}"/>')
+        elif key in L:
+            y0, h0 = L[key]
+            if r["legacy"] and sell_y is not None:
+                # Sold: every band the plan sells narrows into one point, the sale
+                # being one decision.
+                g.append(f'<path d="M{s0:.1f},{y0:.1f} C{s0 + 18:.1f},{y0:.1f} {px - 8:.1f},{sell_y - 1.2:.1f} '
+                         f'{px:.1f},{sell_y:.1f} C{px - 8:.1f},{sell_y + 1.2:.1f} {s0 + 18:.1f},{y0 + h0:.1f} '
+                         f'{s0:.1f},{y0 + h0:.1f} Z" fill="{P["red"]}" fill-opacity="{_SELL_ALPHA}"/>')
+            else:
+                # Held with no plan weight: the band tapers off mid-flow.
+                ty = y0 + h0 / 2
+                g.append(f'<path d="M{s0:.1f},{y0:.1f} C{s0 + 18:.1f},{y0:.1f} {px - 8:.1f},{ty:.1f} '
+                         f'{px:.1f},{ty:.1f} C{px - 8:.1f},{ty:.1f} {s0 + 18:.1f},{y0 + h0:.1f} '
+                         f'{s0:.1f},{y0 + h0:.1f} Z" fill="{r["colour"]}" fill-opacity="{_BAND_ALPHA}"/>')
         else:
-            continue
-        bands.append(f'<path d="{d}" fill="{r["colour"]}"/>')
-        for bx, by, bh in ((LX0, ly, lh), (RX0, ry, rh)):
-            if bh > 0:
-                bars.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{_BAR:g}" '
-                            f'height="{bh:.1f}" rx="{min(_BAR_RX, bh / 2):.1f}" '
-                            f'fill="{r["colour"]}"/>')
-    g += bands + bars
-    # Where a stack passes 100% (futures overlay), a dashed tick across it and
-    # "100%" once, so the eye has the par line the totals row states in figures.
-    guide_label = False
-    for rows, key, pos, bx in ((l_rows, "now", L, LX0), (r_rows, "target", R, RX0)):
-        cum = 0.0
-        for r in rows:
-            v = r[key] or 0.0
-            if cum + v > 100.0 + 1e-9 and cum < 100.0 - 1e-9 and v > 0:
-                y, h = pos[r["key"]]
-                y100 = y + (100.0 - cum) / v * h
-                g.append(f'<line x1="{bx - 4:.1f}" y1="{y100:.1f}" x2="{bx + _BAR + 4:.1f}" '
-                         f'y2="{y100:.1f}" stroke="{P["ink"]}" stroke-width="1" '
-                         f'stroke-dasharray="2,2"/>')
-                if not guide_label:
-                    # In the flow, beside the tick: right of the TODAY stack, left
-                    # of the PLAN stack, clear of either side's labels.
-                    left_side = bx == LX0
-                    g.append(_bt(bx + _BAR + 7.0 if left_side else bx - 7.0, y100 + 3.0,
-                                 "100%", fill=P["muted"], weight=600, size=8.5, halo=True,
-                                 anchor="start" if left_side else "end"))
-                    guide_label = True
-                break
-            cum += v
-    if hub:
-        # Haloed rather than on a patch: a patch cut the bands short of the point
-        # they meet at, leaving stubs.
-        ex = hub[0] - 6.0
-        g.append(f'<circle cx="{hub[0]:.1f}" cy="{hub[1]:.1f}" r="2.4" fill="{P["red"]}"/>')
-        g += [_bt(ex, hub[1] - 9.5 + 13.0 * i, s, fill=P["ink"], anchor="end", halo=True)
-              for i, s in enumerate(sold)]
+            # Bought from nothing: it widens out of the sale that pays for it.
+            y1, h1 = R[key]
+            ty = y1 + h1 / 2
+            g.append(f'<path d="M{s1:.1f},{y1:.1f} L{s1:.1f},{y1 + h1:.1f} C{s1 - 18:.1f},{y1 + h1:.1f} '
+                     f'{s0 + 24:.1f},{ty:.1f} {s0 + 16:.1f},{ty:.1f} C{s0 + 24:.1f},{ty:.1f} '
+                     f'{s1 - 18:.1f},{y1:.1f} Z" fill="{r["colour"]}" fill-opacity="{_BAND_ALPHA}"/>')
+    for key, (y, h) in L.items():
+        g.append(f'<rect x="{_XL:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
+                 f'fill="{by_key[key]["colour"]}"/>')
+    for key, (y, h) in R.items():
+        g.append(f'<rect x="{_XR:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
+                 f'fill="{by_key[key]["colour"]}"/>')
 
-    # Labels level with their pills. One line: 1M · € · NAME (%) | (%) NAME · € · GAP.
-    # Two lines: NAME (%) over 1M · € on the left, (%) NAME over € … GAP on the right.
+    # Where a stack passes 100% (futures overlay): a dashed tick across it, and
+    # "100%" once between the stacks. A stack that sums to par has no mark: its
+    # bottom is 100%.
+    if sum(r["now"] for r in l_rows) <= 100.5:
+        h100_l = None
+    if sum(r["target"] or 0.0 for r in r_rows) <= 100.5:
+        h100_r = None
+    if h100_l is not None or h100_r is not None:
+        for xa, yy in ((_XL, h100_l), (_XR, h100_r)):
+            if yy is not None:
+                g.append(f'<line x1="{xa - 3:.1f}" x2="{xa + _SW + 3:.1f}" y1="{yy:.1f}" y2="{yy:.1f}" '
+                         f'stroke="{P["ink"]}" stroke-dasharray="2,2" stroke-width="1"/>')
+        yy = h100_l if h100_l is not None else h100_r
+        g.append(_bt(px, yy + 3.0, "100%", fill=P["muted"], size=8.5, anchor="middle"))
+
+    # Labels, level with their slices.
     for r in l_rows:
-        ly, lh = L[r["key"]]
-        y = ly + lh / 2
-        b1 = (y - 2.0) if two else (y + 3.5)
-        b2 = (y + 9.5) if two else b1
-        spk_y = (b2 - 3.5) if two else y
-        g += [_bridge_spark(r["trend"], x["spk0"] if not two else x["m1"] - _SPK_W - _SPK_GAP - _tw([_move_text(r["trend"])]),
-                            spk_y, r["colour"]),
-              _bt(x["m1"], b2, _move_text(r["trend"]), fill=_move_colour(r["trend"]),
-                  weight=400, anchor="end"),
-              _bt(x["neu"], b2, _eur_smart(r["eur_now"]), fill=P["muted"], weight=400,
-                  anchor="end"),
-              _tag_text(x["llab"], b1, r["label"], _pc1(r["now"]), "left",
-                        name_fill=P["red"] if r["legacy"] else P["ink"])]
+        y0, h0 = L[r["key"]]
+        yc = y0 + h0 / 2
+        move, mc = _move_text(r["trend"]), _move_colour(r["trend"])
+        name = f'<tspan font-weight="700" fill="{P["red"] if r["legacy"] else P["ink"]}">{_esc(r["label"])}</tspan>'
+        eur = _esc(_eur_smart(r["eur_now"]))
+        if two:
+            g += [_bt(_CNAME, yc - 1.5, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end"),
+                  _bt(_CNAME, yc + 9.5, f'<tspan fill="{mc}">{_esc(move)}</tspan> \u00b7 {eur}',
+                      fill=P["muted"], size=fs - 0.5, anchor="end")]
+        else:
+            yb = yc + 3.6
+            g += [_bt(_C1M, yb, _esc(move), fill=mc, size=fs, anchor="end"),
+                  _bt(_CEUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
+                  _bt(_CNAME, yb, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end")]
     for r in r_rows:
-        ry, rh = R[r["key"]]
-        y = ry + rh / 2
-        b1 = (y - 2.0) if two else (y + 3.5)
-        b2 = (y + 9.5) if two else b1
-        g += [_tag_text(x["rlab"], b1, r["label"], _pc1(r["target"]), "right",
-                        name_fill=P["ink"]),
-              _bt(x["peu"], b2, _eur_smart(r["eur_tgt"]), fill=P["muted"], weight=400,
-                  anchor="end" if not two else "start", x_override=(x["rlab"] if two else None)),
-              _bt(x["gap"], b2, _gap_text(r), fill=_band_colour(r["drift"], r["target"], cfg),
-                  weight=700, anchor="end")]
+        y1, h1 = R[r["key"]]
+        yc = y1 + h1 / 2
+        gc = _band_colour(r["drift"], r["target"], cfg)
+        name = f'<tspan font-weight="700">{_esc(r["label"])}</tspan>'
+        eur = _esc(_eur_smart(r["eur_tgt"]))
+        if two:
+            g += [_bt(_RNAME, yc - 1.5, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
+                  _bt(_RNAME, yc + 9.5, eur, fill=P["muted"], size=fs - 0.5),
+                  _bt(_RGAP, yc + 9.5, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
+        else:
+            yb = yc + 3.6
+            g += [_bt(_RNAME, yb, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
+                  _bt(_REUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
+                  _bt(_RGAP, yb, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
+    if sell_y is not None:
+        text = f'sell {_pc1(sum(r["now"] for r in sold))} {_eur_smart(sum(r["eur_now"] for r in sold))}'
+        g.append(f'<circle cx="{px:.1f}" cy="{sell_y:.1f}" r="2.2" fill="{P["red"]}"/>')
+        g.append(_bt(px + 6.0, sell_y + 3.6, _esc(text), fill=P["red"], weight=700, size=fs))
 
-    H = bottom + 7.0
-    if tail:
-        g.append(f'<line x1="0" y1="{H:.1f}" x2="{_BW:g}" y2="{H:.1f}" stroke="{P["border"]}"/>')
-        b = H + 14.0
-        tail_pitch = _TAIL + (10.0 if two else 0.0)
-        for t in tail:
-            bn = (b - 11.5) if two else b     # the name's line
-            spk_x = x["spk0"] if not two else x["m1"] - _SPK_W - _SPK_GAP - _tw([t["move"]])
-            g += [_bridge_spark(t.get("trend"), spk_x, b - 3.5, P["ink"]),
-                  _bt(x["m1"], b, t["move"], fill=_move_colour(t.get("trend")), weight=400,
-                      anchor="end"),
-                  _bt(x["neu"], b, t["now_eur"], fill=P["muted"] if t["now_pc"] else P["ink"],
-                      weight=400 if t["now_pc"] else 600, anchor="end"),
-                  _tag_text(x["llab"], bn, t["name"], t["now_pc"], "left", name_fill=P["ink"]),
-                  _tag_text(x["rlab"], bn, t["name"], t["plan_pc"], "right", name_fill=P["ink"]),
-                  _bt(x["peu"], b, t["plan_eur"], fill=P["muted"] if t["plan_pc"] else P["ink"],
-                      weight=400 if t["plan_pc"] else 600,
-                      anchor="end" if not two else "start", x_override=(x["rlab"] if two else None)),
-                  _bt(x["gap"], b, t["gap"], fill=t["colour"], weight=700, anchor="end")]
-            b += tail_pitch
-        H = b - tail_pitch + 7.0
-    H = int(H) + 1
-    return (f'<svg width="100%" viewBox="0 0 {_BW:g} {H}" preserveAspectRatio="xMidYMid meet" '
-            f'xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{_esc(aria)}" '
-            f'style="display:block;width:100%;" font-family="{FONT_STACK}">{"".join(g)}</svg>')
+    centres = [y + h / 2 for y, h in (*L.values(), *R.values())]
+    H = max([bot_l + 6.0, bot_r + 6.0, (sell_y or 0.0) + 10.0]
+            + [c + (14.0 if two else 8.0) for c in centres])
+    svg = (f'<svg width="100%" viewBox="0 0 {_BW:g} {int(H) + 1}" preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{_esc(aria)}" '
+           f'style="display:block;width:100%;" font-family="{FONT_STACK}">{"".join(g)}</svg>')
+    return svg + _bridge_tail(tail)
+
+
+def _bridge_tail(tail) -> str:
+    """The rows under the stacks (Total, Strategic reserve): name, today's weight
+    and euros, an arrow, the plan's, the gap."""
+    if not tail:
+        return ""
+    P = PALETTE
+    cell = f'padding:4px 0;border-top:1px solid {P["row_rule"]};{TYPE["data"]}font-weight:400;'
+    rows = ""
+    for t in tail:
+        now = (f'{_esc(t["now_pc"])} ' if t.get("now_pc") else "") + f'<span style="color:{P["muted"]};">{_esc(t["now_eur"])}</span>'
+        plan = (f'{_esc(t["plan_pc"])} ' if t.get("plan_pc") else "") + f'<span style="color:{P["muted"]};">{_esc(t["plan_eur"])}</span>'
+        rows += (f'<tr><td style="{cell}color:{P["ink"]};">{_esc(t["name"])}</td>'
+                 f'<td style="{cell}color:{P["ink"]};white-space:nowrap;">{now}</td>'
+                 f'<td style="{cell}color:{P["faint"]};">\u2192</td>'
+                 f'<td style="{cell}color:{P["ink"]};white-space:nowrap;">{plan}</td>'
+                 f'<td align="right" style="{cell}font-weight:700;color:{t["colour"]};white-space:nowrap;">'
+                 f'{_esc(t["gap"])}</td></tr>')
+    return ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="table-layout:fixed;border-collapse:collapse;margin-top:2px;font-family:{FONT_STACK};'
+            f'font-variant-numeric:tabular-nums;"><colgroup><col><col style="width:96px;">'
+            f'<col style="width:18px;"><col style="width:96px;"><col style="width:44px;"></colgroup>'
+            f'{rows}</table>')
 
 
 def _bridge_card(svg: str) -> str:
     """The figure on the ground: no shell. The statement draws rules, not boxes."""
     if not svg:
         return ""
-    return f'<div style="margin-top:4px;font-size:0;line-height:0;">{svg}</div>'
+    return f'<div style="margin-top:6px;font-size:0;line-height:0;">{svg}</div>'
 
 
 def _bridge_title(title: str) -> str:
@@ -2072,20 +1792,18 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
     new.sort(key=lambda r: (-r["tgt"], r["label"]))
     sold.sort(key=lambda r: (-r["now"], r["label"]))
 
-    steps: dict[str, int] = {}
-
     def colour(cls: str) -> str:
-        n = steps.get(cls, 0)
-        steps[cls] = n + 1
-        return _shade(_bridge_hue(ASSET_COLORS.get(cls) or PALETTE["accent"]), n)
+        # The class hue, as the band and rail beside the same instrument carry it.
+        return ASSET_COLORS.get(cls) or PALETTE["accent"]
 
     out_kept = [_bridge_row(key=r["isin"] or r["label"], label=r["label"],
                             colour=colour(r["cls"]), now=r["now"], target=r["tgt"],
                             base=base, plan_base=plan_base,
                             trend=trend_for(r["item"], r["isin"]))
                 for r in kept + new]
+    # A sold line keeps its class colour on the slice; its band is the sale's red.
     out_sold = [_bridge_row(key="sell:" + (r["isin"] or r["label"]), label=r["label"],
-                            colour=_SELL_COLOUR,
+                            colour=colour(r["cls"]),
                             now=r["now"], target=0.0, base=base,
                             trend=trend_for(r["item"], r["isin"]), legacy=True)
                 for r in sold]
@@ -2174,7 +1892,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             continue
         asset_rows.append(_bridge_row(
             key=r["name"], label=_ASSET_SHORT.get(r["name"], r["name"]),
-            colour=_bridge_hue(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
+            colour=r.get("color") or PALETTE["accent"], now=r.get("actual_pct_raw") or 0.0,
             target=r.get("target_left"), base=invested_base,
             trend=_timeline_vals(asset_series, r["name"])))
         lev = r.get("leverage")
@@ -2221,19 +1939,18 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                 "invested allocation base, not bank cash available for trades."
             )
         specs.append({"title": "Asset class", "left": asset_rows, "right": asset_rows,
-                      "tail": tail, "stack_h": 120.0,
-                      "total_now": tn, "total_tgt": tt, "note": " ".join(note),
+                      "tail": tail, "two": True, "note": " ".join(note),
                       "aria": "Asset class allocation, today against the plan"})
 
     # ── Equity geography ──
     geo_rows = [_bridge_row(
         key=r["name"], label=_GEO_SHORT.get(r["name"], geo_label(r["name"])),
-        colour=_bridge_hue(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
+        colour=_lift(r.get("color")), now=r.get("actual_pct_raw") or 0.0,
         target=r.get("target_left"), base=equity_base, plan_base=equity_plan_base,
         trend=_timeline_vals(geo_series, r["name"])) for r in geo.get("rows") or []]
     if geo_rows:
         specs.append({"title": "Equity geography", "left": geo_rows, "right": geo_rows,
-                      "stack_h": 100.0,
+                      "two": True,
                       "note": _sleeve_note("the equity sleeve", equity_base,
                                            equity_plan_base, ", so each side totals 100%."),
                       "aria": "Equity geography, today against the plan"})
@@ -2274,24 +1991,18 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         if not (kept or new or sold):
             continue
         specs.append({"title": title, "left": kept + sold, "right": kept + new,
-                      "stack_h": max(140.0, _ROW * (len(kept) + len(sold)) + 4.0),
-                      "note": note, "aria": f"{title}, today against the plan"})
+                      "two": False, "note": note, "aria": f"{title}, today against the plan"})
 
     legend = (f"1M: change in weight over the last month. Gap: now minus plan. Both in "
               f"points; green inside the band, red outside. Band: the narrower of "
               f"\u00b1{abs_pp:g} pts and \u00b1{rel:g}% of the target.")
     html: list[str] = []
     for i, sp in enumerate(specs):
-        # Each block lays out its own columns: class and region names need two
-        # label lines at phone width, tickers fit one, and a shared grid would
-        # force the tallest form on every block.
-        layout = _bridge_layout([sp])
-        html.append(_bridge_title(sp["title"]) + _bridge_head(layout))
+        # Class and region names take two label lines at phone width; tickers one.
+        html.append(_bridge_title(sp["title"]))
         html.append(_bridge_card(_bridge_svg(
-            sp["left"], sp["right"], sp["stack_h"], cfg, title=sp["title"],
-            tail=sp.get("tail") or (),
-            total_now=sp.get("total_now"), total_tgt=sp.get("total_tgt"),
-            layout=layout, aria=sp["aria"])))
+            sp["left"], sp["right"], cfg, two=sp["two"], tail=sp.get("tail") or (),
+            aria=sp["aria"])))
         # The last card's caption carries the legend, which every card shares.
         last = i == len(specs) - 1
         text = f'{sp["note"]} {legend}' if last else sp["note"]
@@ -2423,7 +2134,12 @@ def _class_of_action(isin, ticker, taxonomy) -> str:
     try:
         from tarzan import config as cfg
         hit = cfg.catalog_lookup(taxonomy, isin, ticker)
-        ac = (hit or {}).get("asset_class") if hasattr(hit, "get") else None
+        # The taxonomy map holds ``(asset_class, role)`` per instrument; a
+        # hand-built map may hold a dict. Read either.
+        if isinstance(hit, tuple):
+            ac = hit[0] if hit else None
+        else:
+            ac = (hit or {}).get("asset_class") if hasattr(hit, "get") else None
         return class_key(ac) if ac else ""
     except Exception:  # noqa: BLE001 — a rail colour, never a reason to fail the issue
         return ""

@@ -295,7 +295,7 @@ class TestEveryMarkupBoundaryEscapes:
         from tarzan.models.investor_config import InvestorConfig as _Cfg
         row = _bridge_row(key="c", label="Cash & Cash Eq.", colour="#15803D",
                           now=50.0, target=50.0, base=1000.0)
-        assert self._clean(_bridge_svg([row], [row], 100, _Cfg()))
+        assert self._clean(_bridge_svg([row], [row], _Cfg(), two=False))
 
     def test_the_hero_tile_and_status_bar_escape(self):
         """Both expose typed escaped text, without a second template escape."""

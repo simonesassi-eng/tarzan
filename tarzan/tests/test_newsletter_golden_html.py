@@ -523,7 +523,7 @@ class TestTheReturnsTablePrintsTheEngine:
         return header, rows
 
     def test_every_printed_cell_is_the_engine_figure(self, rendered):
-        from tarzan.export.newsletter._format import _pct_grid
+        from tarzan.export.newsletter._format import _pct_compact
         html, metrics, _config = rendered
         hp = metrics.holding_performance
         held = hp[hp["type"] == "In portfolio"]
@@ -541,8 +541,8 @@ class TestTheReturnsTablePrintsTheEngine:
                 if value is None or value != value:
                     assert cell in ("—", ""), f"{bare} {key}: engine has none, printed {cell!r}"
                     continue
-                # Bare figures at the grid's precision; the band header carries "%".
-                assert cell.rstrip("?") == _pct_grid(float(value)), (
+                # Bare figures; the band header carries the "%".
+                assert cell.rstrip("?") == _pct_compact(float(value)).rstrip("%"), (
                     f"{bare} {key}: printed {cell!r}, engine {float(value):+.4f}%")
                 checked += 1
         # Zero comparisons is a broken check, not a clean bill of health: the oracle's

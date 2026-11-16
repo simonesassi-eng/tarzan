@@ -489,11 +489,13 @@ def bench_short(name) -> str:
 # 1D cell with its session sparkline, then one cell per window). Column widths
 # are hard under ``table-layout:fixed`` so every grid in the issue lands its
 # windows on the same x positions. The budget, measured in the system font:
-# eight windows at 36px take 288px; the session column keeps 64px for a 26px
-# sparkline, 4px of air and a five-glyph figure (31px at 10.5px). A figure sits
-# in its cell with a 1px seam on the left and 3px of air on the right, so two
-# tinted neighbours never read as one band.
+# the rows of a group sit right of a 2px rail in the class hue and 6px of air,
+# so they share 346px; the session column keeps 64px for a 26px sparkline, 4px
+# of air and a figure, and the seven windows after it 40px each, which holds a
+# six-glyph figure ("+16.46" is 36px at 10.5px) with a 1px seam on the left and
+# 3px of air on the right, so two tinted neighbours never read as one band.
 GRID_W = 354
+GRID_RAIL_W, GRID_RAIL_GAP = 2, 6
 GRID_DAY_W = 64
 GRID_CELL_PX = 10.5
 
@@ -568,18 +570,21 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
     P = PALETTE
     ncol = len(columns)
     day_label, wins = columns[0], columns[1:]
-    win_w = (GRID_W - GRID_DAY_W) // max(len(wins), 1)
-    colgroup = (f'<colgroup><col style="width:{GRID_DAY_W}px;">'
+
+    def _grid_open(width: int) -> str:
+        win_w = (width - GRID_DAY_W) // max(len(wins), 1)
+        return ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                'border="0" style="table-layout:fixed;border-collapse:collapse;'
+                f'font-family:{FONT_STACK};"><colgroup><col style="width:{GRID_DAY_W}px;">'
                 + "".join(f'<col style="width:{win_w}px;">' for _ in wins) + '</colgroup>')
-    table_open = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                  'border="0" style="table-layout:fixed;border-collapse:collapse;'
-                  f'margin-top:8px;font-family:{FONT_STACK};')
+
     out = []
     since_header = header_every
     if portfolio_row is not None:
-        out.append(f'{table_open}">{colgroup}{_grid_header_row(day_label, wins)}'
-                   f'{_grid_instrument_rows(portfolio_row, ncol, last=True)}</table>')
+        out.append(f'<div style="margin-top:8px;">{_grid_open(GRID_W)}{_grid_header_row(day_label, wins)}'
+                   f'{_grid_instrument_rows(portfolio_row, ncol, last=True)}</table></div>')
         since_header = 0
+    inner_w = GRID_W - GRID_RAIL_W - GRID_RAIL_GAP
     for cls, col, role_list in groups:
         for role, rows in role_list:
             has_role = bool(role and role != "\u2014")
@@ -591,21 +596,29 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
                      + (f' <span style="color:{P["muted"]};font-weight:400;letter-spacing:0;'
                         f'text-transform:none;">\u00b7 {escape(str(role))}</span>'
                         if has_role else ""))
+            # The group: its band across the column, then the rail (a real cell,
+            # not a table border, which the collapsed-border model drops) beside
+            # the rows.
+            body = []
+            if since_header >= header_every:
+                body.append(_grid_header_row(day_label, wins))
+                since_header = 0
+            for i, row in enumerate(rows):
+                since_header += 1
+                body.append(_grid_instrument_rows(row, ncol, last=(i == len(rows) - 1)))
             out.append(
-                f'{table_open}border-left:2px solid {col};">{colgroup}'
-                f'<tr><td colspan="{ncol}" style="padding:5px 6px 4px 6px;background:{band};'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+                f'style="table-layout:fixed;border-collapse:collapse;margin-top:8px;font-family:{FONT_STACK};">'
+                f'<colgroup><col style="width:{GRID_RAIL_W}px;"><col></colgroup>'
+                f'<tr><td colspan="2" style="padding:5px 6px 4px 8px;background:{band};'
                 f'border-radius:0 3px 3px 0;">'
                 '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
                 f'<tr><td style="padding:0;{TYPE["label"]}">{label}</td>'
                 f'<td align="right" style="padding:0;font-size:{TYPE_PX["label"]}px;'
-                f'color:{P["muted"]};">{escape(str(unit_label))}</td></tr></table></td></tr>')
-            if since_header >= header_every:
-                out.append(_grid_header_row(day_label, wins))
-                since_header = 0
-            for i, row in enumerate(rows):
-                since_header += 1
-                out.append(_grid_instrument_rows(row, ncol, last=(i == len(rows) - 1)))
-            out.append("</table>")
+                f'color:{P["muted"]};">{escape(str(unit_label))}</td></tr></table></td></tr>'
+                f'<tr><td style="padding:0;background:{col};font-size:0;line-height:0;">&nbsp;</td>'
+                f'<td style="padding:0 0 0 {GRID_RAIL_GAP}px;vertical-align:top;">'
+                f'{_grid_open(inner_w)}{"".join(body)}</table></td></tr></table>')
     return "".join(out)
 
 

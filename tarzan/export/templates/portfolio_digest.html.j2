@@ -178,6 +178,7 @@
             <td style="padding:18px 13px 0 8px;">
               {{ kick("Holdings") }}
               {{ returns_snapshot.table_html|safe }}
+              <div style="margin-top:8px;{{ type.note }}color:{{ palette.muted }};">Beside the name: market value, gain since purchase in % and €. Tint: the column's own range, best green, worst red.</div>
               {% if holdings.note %}<div style="margin-top:8px;{{ type.note }}color:{{ palette.muted }};">{{ holdings.note }}</div>{% endif %}
             </td>
           </tr>

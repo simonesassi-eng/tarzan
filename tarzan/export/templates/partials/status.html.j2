@@ -25,7 +25,7 @@
                 {% set sc = sign_color(st.session.tone) %}
                 {% set sbg = palette.green_bg if st.session.tone == 'pos' else palette.red_bg if st.session.tone == 'neg' else palette.accent_bg %}
                 <td style="padding-left:10px;vertical-align:middle;">
-                  <span style="display:inline-block;padding:3px 9px;border-radius:999px;background:{{ sbg }};color:{{ sc }};font-size:12.5px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;"><span data-tarzan-session-percent="true">{{ st.session.pct }}</span>{% if st.session.day %} <span style="font-weight:400;">· {{ st.session.day }}</span>{% endif %}</span>
+                  <span style="display:inline-block;padding:3px 9px;border-radius:999px;background:{{ sbg }};color:{{ sc }};font-size:12.5px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;"><span data-tarzan-session-percent="true">{{ st.session.pct }}</span>{% if st.session.eur %} <span style="font-weight:400;">· {{ st.session.eur }}</span>{% endif %}{% if st.session.day %} <span style="font-weight:400;">· {{ st.session.day }}</span>{% endif %}</span>
                 </td>
                 {% endif %}
               </tr></table>

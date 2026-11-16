@@ -87,8 +87,11 @@ def _ctx(cash: float = 4000.0) -> _NewsletterContext:
 
 
 def _block(html: str, title: str) -> str:
+    """The block's SVG and the table of tail rows (Total, reserve) under it."""
     start = html.index(f'aria-label="{title}')
-    return html[start:html.index("</svg>", start)]
+    end = html.index("</svg>", start)
+    nxt = html.find("aria-label=", end)
+    return html[start:nxt if nxt != -1 else len(html)]
 
 
 class TestBridge:
@@ -99,8 +102,8 @@ class TestBridge:
 
     def test_the_lines_the_plan_sells_meet_in_one_sale(self):
         svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        assert ">sell<" in svg
-        assert ">60.0%<" in svg and ">\u20ac60k<" in svg  # synthetic
+        # The sale is one point, named once with its weight and euros.
+        assert ">sell 60.0% \u20ac60k<" in svg  # synthetic
 
     def test_a_line_bought_from_nothing_is_named_once(self):
         svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
@@ -108,56 +111,62 @@ class TestBridge:
 
     def test_weight_and_euros_side_by_side_and_the_gap_in_points(self):
         svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        for figure in ("(30.0%)", "\u20ac30k", "(50.0%)", "\u20ac50k"):  # synthetic
-            assert f">{figure}<" in svg, figure
+        # "NTSG 30.0%" today, "50.0% NTSG" in the plan; euros in their own column.
+        assert re.search(r">NTSG</tspan> 30\.0%<", svg) and ">\u20ac30k<" in svg  # synthetic
+        assert re.search(r">50\.0% <tspan[^>]*>NTSG</tspan><", svg) and ">\u20ac50k<" in svg  # synthetic
         assert re.search(rf'fill="{RED}"[^>]*>\u221220.0<', svg)
         assert re.search(rf'fill="{GREEN}"[^>]*>0.0<', svg)
 
     def test_cash_is_banded_at_a_quarter_of_its_target(self):
         within = _block(_build_diversification(_ctx(cash=4900.0))["html"], "Asset class")
         beyond = _block(_build_diversification(_ctx(cash=5100.0))["html"], "Asset class")
-        assert re.search(rf'fill="{GREEN}"[^>]*>\+\u20ac900<', within)
-        assert re.search(rf'fill="{RED}"[^>]*>\+\u20ac1.1k<', beyond)  # synthetic
+        # The reserve is a tail row under the stacks; its gap carries the colour.
+        assert re.search(rf'color:{GREEN};[^"]*">\+\u20ac900<', within)
+        assert re.search(rf'color:{RED};[^"]*">\+\u20ac1.1k<', beyond)  # synthetic
 
 
-class TestLabelsSitOnTheirPills:
-    """Every label stands level with its own pill, however thin, so nothing has to
-    tie the two together: a thin pill gets the room its label needs around it."""
+class TestLabelsSitOnTheirSlices:
+    """Every label stands level with its own slice, however thin: a slice is never
+    thinner than one label row, so the stack grows rather than the labels
+    drifting off it, and nothing has to tie the two together."""
+    _SLICE = re.compile(r'<rect x="(\d+)" y="([\d.]+)" width="10" height="([\d.]+)"')
+    _TEXT = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
+                       r'(?:<tspan|[\d.]+% <tspan)')
 
-    _PILL = re.compile(r'<rect x="([\d.]+)" y="([\d.]+)" width="8" height="([\d.]+)"')
-    _TAG = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
-                      r'<tspan')
-
-    def _check(self, svg: str) -> None:
-        """A card's labels are one line (ticker, weight, euros and gap level with
-        the pill's centre, baseline 3.5 below it) or two (the name line 2.0
-        above the centre, the figures 9.5 below), as :func:`_bridge_layout`
-        decides from the room the phone column leaves between the stacks."""
+    def _check(self, svg: str, *, two: bool) -> None:
         from tarzan.export.newsletter import _sections_alloc as sa
-        pills: dict = {}
-        for px, py, ph in self._PILL.findall(svg):
-            pills.setdefault(float(px), []).append(float(py) + float(ph) / 2)
-        left_x, right_x = min(pills), max(pills)
-        tags = self._TAG.findall(svg)
-        left_y = [float(y) for _, y, a in tags if a == "end"]
-        right_y = [float(y) for _, y, a in tags if a == "start"]
-        assert len(left_y) == len(pills[left_x]) and len(right_y) == len(pills[right_x])
-        # Which mode the card is in: the offset that puts the first label on its pill.
-        first_c, first_y = pills[left_x][0], left_y[0]
-        two = abs(first_c - (first_y + 2.0)) < abs(first_c - (first_y - 3.5))
-        offset, pitch = ((2.0, sa._ROW2) if two else (-3.5, sa._ROW))
-        for centres, labels in ((pills[left_x], left_y), (pills[right_x], right_y)):
-            for c, y in zip(centres, labels):
-                assert abs(c - (y + offset)) < 0.2, (c, y, two)
-            assert all(b - a >= pitch - 0.2 for a, b in zip(centres, centres[1:])), centres
-        # Bands are filled paths; a stroke tying a label to its pill was an unfilled one.
+        slices: dict = {}
+        for px, py, ph in self._SLICE.findall(svg):
+            # The drawn rect stops a seam short of the slice; the slice's own
+            # extent (top, bottom) is what the label is centred on.
+            slices.setdefault(int(px), []).append((float(py), float(py) + float(ph) + sa._SEAM))
+        left, right = slices[int(sa._XL)], slices[int(sa._XR)]
+        pitch = sa._PITCH2 if two else sa._PITCH1
+        # Contiguous: each slice starts where the one above ended; none thinner
+        # than one label row.
+        for stack in (left, right):
+            for (_a0, a1), (b0, _b1) in zip(stack, stack[1:]):
+                assert abs(a1 - b0) < 0.15, stack
+            assert all(b - a >= pitch - 0.2 for a, b in stack), stack
+        # The name line of each label (two-line mode also prints a figures line
+        # 11px lower; only the name line is level with the slice).
+        names = [(float(x), float(y), a) for x, y, a in self._TEXT.findall(svg)]
+        offset = -1.5 if two else 3.6
+        lefts = sorted(y - offset for x, y, a in names if a == "end" and abs(x - sa._CNAME) < 0.5)
+        rights = sorted(y - offset for x, y, a in names if a == "start" and abs(x - sa._RNAME) < 0.5)
+        if two:
+            # The left label's second line also ends in a tspan (the move); the
+            # right label's second line is plain euros and does not match.
+            lefts = lefts[::2]
+        assert len(lefts) == len(left) and len(rights) == len(right), (lefts, rights)
+        for stack, ys in ((left, lefts), (right, rights)):
+            for (a, b), y in zip(stack, ys):
+                assert abs((a + b) / 2 - y) < 0.2, ((a, b), y)
+        # Bands are filled paths; a stroke tying a label to its slice was an unfilled one.
         assert not re.search(r'<path[^>]*fill="none"', svg), "a leader stroke is back"
 
     def test_per_holding_card(self):
-        self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"))
+        self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"), two=False)
 
     def test_asset_class_card(self):
-        svg = _block(_build_diversification(_ctx())["html"], "Asset class")
-        # The tail rows (Total, Cash) carry tags too but no pill: check up to the rule
-        # that separates them from the stacks.
-        self._check(svg[:svg.index('<line x1="0"')])
+        self._check(_block(_build_diversification(_ctx())["html"], "Asset class"), two=True)

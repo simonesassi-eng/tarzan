@@ -52,7 +52,6 @@ from tarzan.export.newsletter._format import (
     _eur,
     _pct,
     _pct_compact,
-    _pct_grid,
     _signed,
     is_missing,
 )
@@ -907,8 +906,8 @@ def _build_performance30(ctx: _NewsletterContext) -> dict:
                 _sessions = max(len(_w["dates"]) - 1, 0)
                 ret_cells.append(_cellcap(_label, f'{_sessions} sessions') + _chart
                                  + _end_values(_ser))
-            else:
-                ret_cells.append(_empty_cell(_label, "not enough history"))
+            # A window the book has not lived (1Y on a ten-month book) is not a
+            # panel; the KPI matrix's note says when the long windows return.
 
 
         # One colour key per grid, beneath it. With six plots sharing three
@@ -1721,13 +1720,9 @@ def _returns_table_html(period_cols, portfolio: Optional[dict], groups: list,
     dneg, dpos = _heat.column_scale(row.get("day_raw") for row in every_row)
 
     def _figure(text, raw) -> str:
-        """The cell's figure at the grid's precision (:func:`_pct_grid`), from
-        the raw value; the text keeps only its marks (the unverified "?")."""
-        text = str(text if text is not None else "\u2014")
-        if raw is None or is_missing(raw):
-            return text.replace("%", "")
-        mark = _UNVERIFIED_MARK if text.endswith(_UNVERIFIED_MARK) else ""
-        return _pct_grid(float(raw), signed=True) + mark
+        """The cell's figure without its unit (the band header carries the %),
+        keeping its marks (the unverified "?")."""
+        return str(text if text is not None else "\u2014").replace("%", "")
 
     def _row(inst, *, weight=600):
         parts = inst.get("day_parts") or {}
@@ -1947,8 +1942,7 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
             return f"{v:.2f}".replace("-", "\u2212")
         if unit == "\u20ac":
             return f"{'+' if v >= 0 else '\u2212'}{abs(v) / 1000:.1f}k"
-        # Six windows leave 46px a cell, room for two decimals ("+14.92" is
-        # 36px); the eight-window grids taper earlier (:func:`_pct_grid`).
+        # Six windows leave 46px a cell, room for two decimals ("+14.92" is 36px).
         return _pct_compact(v, signed=key not in unsigned).replace("%", "")
 
     def _row_label(key, label, unit):
@@ -2389,17 +2383,19 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
     if not order:
         return ""
     bare = {**{r["ticker"]: r["bare"] for r in plan}, **{r["ticker"]: r["bare"] for r in book}}
+    rail = {**{r["ticker"]: r.get("colour") for r in plan}, **{r["ticker"]: r.get("colour") for r in book}}
     heaviest = max([r["weight"] for r in book + plan] or [1.0])
     scale = {}
     for key, _ in _MOVER_WINDOWS:
         mags = [abs(r["contrib"][key]) for r in book + plan if r["contrib"].get(key) is not None]
         scale[key] = max(mags) if mags else 1.0
-    # Window cell, weight bar cell, ticker cell: 42 + 2 x 18 + 8 x 34 = 350.
+    # Window cell, weight bar cell, ticker cell: 44 + 2 x 19 + 8 x 34 = 354.
     # A five-glyph figure is 31px at 10.5px; the cell keeps a 1px seam and 2px
-    # of air. The widest ticker (five capitals) is 38px. Without a plan the
-    # book's bank alone takes the column.
+    # of air. The ticker cell holds its 2px class rail, 4px of air and the
+    # widest ticker (five capitals, 38px). Without a plan the book's bank alone
+    # takes the column.
     has_plan = bool(plan)
-    cw, bw, tw = (34, 18, 42) if has_plan else (66, 26, 60)
+    cw, bw, tw = (34, 19, 44) if has_plan else (66, 26, 60)
     colgroup = (f'<colgroup><col style="width:{tw}px;"><col style="width:{bw}px;">'
                 + f'<col style="width:{cw}px;">' * 4
                 + ((f'<col style="width:{bw}px;">' + f'<col style="width:{cw}px;">' * 4) if has_plan else "")
@@ -2431,7 +2427,7 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
             return (f'<td style="{lb}"></td>'
                     + "".join(f'<td align="right" style="padding:4px 0 4px 2px;{TYPE["data"]}'
                               f'color:{P["faint"]};">&middot;</td>' for _ in _MOVER_WINDOWS))
-        fill = max(2, int(round(r["weight"] / heaviest * 14)))
+        fill = max(2, int(round(r["weight"] / heaviest * 17)))
         tds = (f'<td style="padding:4px 0 4px 2px;{lb}vertical-align:middle;">'
                f'<div style="width:{fill}px;height:6px;background:{P["blue"]};border-radius:1px;'
                f'font-size:0;line-height:0;">&nbsp;</div></td>')
@@ -2454,7 +2450,8 @@ def _movers_merged_html(book: list[dict], plan: list[dict],
     body = ""
     for i, tk in enumerate(order):
         body += (f'<tr style="border-bottom:1px solid {P["row_rule"]};">'
-                 f'<td style="padding:4px 0;{TYPE["data"]}font-weight:700;color:{P["ink"]};'
+                 f'<td style="padding:4px 0 4px 4px;border-left:2px solid {rail.get(tk) or P["row_rule"]};'
+                 f'{TYPE["data"]}font-weight:700;color:{P["ink"]};'
                  f'white-space:nowrap;overflow:hidden;">{_esc(bare.get(tk, tk))}</td>'
                  f'{_side(B.get(tk), bm, True)}'
                  f'{_side(Pm.get(tk), pm, False) if has_plan else ""}</tr>')
@@ -2525,21 +2522,36 @@ def _build_portfolio_movers(ctx: _NewsletterContext) -> dict:
                 "rets": rets,
             }
 
+    # The class rail beside each ticker: from the holding's own class, else the
+    # taxonomy (a plan line not yet held).
+    tax = getattr(getattr(ctx, "reference", None), "taxonomy", None)
+
+    def _colour(ticker: str, cls=None) -> str:
+        if not cls and tax is not None:
+            from tarzan.export.newsletter._sections_alloc import _class_of_action
+            try:
+                cls = _class_of_action(None, ticker, tax)
+            except Exception:  # noqa: BLE001 -- a rail, never a reason to fail the issue
+                cls = None
+        return ASSET_COLORS.get(str(cls or ""), PALETTE["row_rule"])
+
     df = getattr(m, "holdings_df", None)
     book_rows = []
     if df is not None and not df.empty and "ticker" in df.columns:
         for _i, row in df.iterrows():
-            entry = perf_by_ticker.get(str(row.get("ticker") or ""))
+            ticker = str(row.get("ticker") or "")
+            entry = perf_by_ticker.get(ticker)
             if entry is None:
                 continue
-            book_rows.append(dict(entry, weight=row.get("weight_pct")))
-
+            colour = _colour(ticker, row.get("asset_class"))
+            entry["colour"] = colour
+            book_rows.append(dict(entry, weight=row.get("weight_pct"), colour=colour))
     plan_rows = []
     for ticker, weight in (getattr(m, "target_weights", {}) or {}).items():
         entry = perf_by_ticker.get(str(ticker))
         if entry is not None:
-            plan_rows.append(dict(entry, weight=weight))
-
+            plan_rows.append(dict(entry, weight=weight,
+                                  colour=entry.get("colour") or _colour(str(ticker))))
     book = _mover_universe(book_rows)
     plan = _mover_universe(plan_rows)
     if not book and not plan:
