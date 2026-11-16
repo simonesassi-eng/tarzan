@@ -2032,15 +2032,12 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                 for who, t, c in universes if who in kpis]
         long_note = ""
     else:
-        long_note = ("1Y \u00b7 3Y \u00b7 5Y: not enough history yet; the columns return "
-                     "when the book has lived them. ")
+        long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'P&amp;L and Unrealized: euros net of contributions in the window. '
-            f'Return: time-weighted, as in the charts below. Target: its weights held constant. '
-            f'SI: since the book\u2019s inception. Volatility annualized; Sharpe and '
-            f'Sortino on the daily risk-free path; risk figures from 1M. Alpha and beta '
-            f'against {_escaped_text(bench_short(bench_label))} (its own: 0 and 1). TER: the book\u2019s '
-            f'value-weighted, averaged over the window as its lines changed.</div>')
+            f'P&amp;L, Unrealized: \u20ac net of flows. Return: TWR. Target: weights held fixed. '
+            f'SI: since inception. Volatility annualized; Sharpe, Sortino vs the daily risk-free '
+            f'rate; risk figures from 1M on. \u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} '
+            f'(its own 0 and 1). TER: value-weighted over the window.</div>')
     return f'<div style="margin-top:12px;">{"".join(out)}{note}</div>'
 
 

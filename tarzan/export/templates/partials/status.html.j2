@@ -67,9 +67,10 @@
               {# The engine's disclosures on what the figures rest on, one block:
                  the return basis, then the pricing provenance of the snapshot,
                  kept separate from historical order-price reconstruction. #}
-              {% if hero.return_basis_note or performance.returns %}
+              {# The return-basis disclosure (transfers, carrying prices) is in the
+                 Appendix beside the session proof: State keeps the figures. #}
+              {% if performance.returns %}
               <div style="margin-top:6px;{{ type.note }}color:{{ palette.muted }};">
-                {% if hero.return_basis_note %}{{ hero.return_basis_note }} {% endif %}
                 {% if performance.returns %}
                 {% if performance.returns.current_fallback_count %}Current portfolio: {{ performance.returns.current_fallback_count }} identifier{{ 's' if performance.returns.current_fallback_count != 1 else '' }} priced by order-price fallback.{% else %}Current portfolio: 100% market-priced.{% endif %}
                 {% if performance.returns.historical_closed_fallback_count %} Historical reconstruction used order-price fallback for {{ performance.returns.historical_closed_fallback_count }} closed identifier{{ 's' if performance.returns.historical_closed_fallback_count != 1 else '' }}.{% endif %}

@@ -48,10 +48,10 @@ def test_matrix_rows_and_euro_format():
     for text in ("Portfolio", "Target", "Return", "Volatility", "Sharpe", "Max DD", "SI",
                  "−1.80", "−0.3k", "+2.0k", "−1.4k"):  # synthetic
         assert text in html, text
-    assert "vs " not in html and "P&amp;L %" not in html and "Unr. %" not in html
+    assert ">vs <" not in html and "P&amp;L %" not in html and "Unr. %" not in html
     # 1Y · 3Y · 5Y open as columns only once the book has lived one of them;
     # until then one line says so.
-    assert ">5Y<" not in html and "not enough history yet" in html
+    assert ">5Y<" not in html and "appear once the book has lived them" in html
 
 
 def test_the_one_day_ter_is_todays_mix_not_a_lifetime_average():

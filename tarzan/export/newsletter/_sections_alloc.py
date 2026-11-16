@@ -1905,7 +1905,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                                 or (has_plan and (tlev is None or abs(tlev - 1) > 0.005))):
             part = f"{_ASSET_SHORT.get(r['name'], r['name']).lower()} {lev:.2f}\u00d7"
             if has_plan:
-                part += " \u2192 " + ("overlay only" if tlev is None else f"{tlev:.2f}\u00d7")
+                part += "\u2192" + ("futures only" if tlev is None else f"{tlev:.2f}\u00d7")
             levs.append(part)
     if asset_rows:
         tn = sum(r["now"] for r in asset_rows)
@@ -1933,16 +1933,13 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         levered = max(tn, tt) > 100.5
         note = [f"Notional, % of invested capital ({_eur_smart(invested_base)})."]
         if levered:
-            note.append(f"Totals past 100% are futures overlay, "
-                        f"{tn / 100:.2f}\u00d7 today and {tt / 100:.2f}\u00d7 in the plan"
-                        + (f": {', '.join(levs)}, the rest 1.00\u00d7." if levs else "."))
+            note.append(f"Totals past 100% = futures overlay: "
+                        f"{tn / 100:.2f}\u00d7 today, {tt / 100:.2f}\u00d7 plan"
+                        + (f" ({', '.join(levs)})." if levs else "."))
         elif levs:
-            note.append(f"Leverage by class: {', '.join(levs)}, the rest 1.00\u00d7.")
+            note.append(f"Leverage: {', '.join(levs)}.")
         if cash is not None:
-            note.append(
-                "Strategic reserve (Cash & Cash Equivalents) is outside the "
-                "invested allocation base, not bank cash available for trades."
-            )
+            note.append("Strategic reserve sits outside this base; not bank cash available for trades.")
         specs.append({"title": "Asset class", "left": asset_rows, "right": asset_rows,
                       "tail": tail, "two": True, "note": " ".join(note),
                       "aria": "Asset class allocation, today against the plan"})
@@ -1998,9 +1995,8 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         specs.append({"title": title, "left": kept + sold, "right": kept + new,
                       "two": False, "note": note, "aria": f"{title}, today against the plan"})
 
-    legend = (f"1M: change in weight over the last month. Gap: now minus plan. Both in "
-              f"points; green inside the band, red outside. Band: the narrower of "
-              f"\u00b1{abs_pp:g} pts and \u00b1{rel:g}% of the target.")
+    legend = (f"1M: weight change over the month. Gap: now \u2212 plan, in pts; green "
+              f"within \u00b1{abs_pp:g} pts or \u00b1{rel:g}% of the target, whichever is narrower.")
     html: list[str] = []
     for i, sp in enumerate(specs):
         # Class and region names take two label lines at phone width; tickers one.

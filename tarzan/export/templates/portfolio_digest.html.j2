@@ -290,6 +290,9 @@
                  against the evidence before anything is sent. #}
               <div style="margin-top:12px;{{ type.prose }}color:{{ palette.muted }};font-variant-numeric:tabular-nums;"><b style="color:{{ palette.ink }};">Session move</b> <span data-tarzan-session-caption="true">{{ hero.state.session.caption }}</span></div>
               {% endif %}
+              {% if hero.return_basis_note %}
+              <div style="margin-top:8px;{{ type.note }}color:{{ palette.muted }};"><b style="color:{{ palette.ink }};">Return basis</b> {{ hero.return_basis_note }}</div>
+              {% endif %}
               {% if tax_note.available %}
               <div style="margin-top:10px;">{{ tax_note.html|safe }}</div>
               {% endif %}
