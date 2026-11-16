@@ -190,3 +190,35 @@ def rank_ink(value: Optional[float], *, lo: float, hi: float,
     if abs(good - 0.5) * 2.0 >= _INK_ABOVE:
         return PALETTE["ink"]
     return None
+
+
+def rank_tint(value: Optional[float], values: Iterable[Optional[float]], *,
+              higher_is_better: bool, materiality: float = 0.20) -> Optional[str]:
+    """Background for one of a FEW values compared side by side (the three
+    universes of the KPI matrix): the best of them toward the green end of the
+    grids' ramp, the worst toward the red end, the middle on the surface.
+
+    Three values cannot carry a gradient, and a rank alone lies: with Ulcer at
+    1.48 / 1.51 / 1.48 the "worst" is worse by two hundredths and a full red
+    said otherwise. So the tint's strength is also the spread's size relative
+    to the values: at ``materiality`` (20% of the larger magnitude) or more the
+    ends saturate; a spread near zero leaves every cell on the surface.
+    """
+    if _is_blank(value):
+        return None
+    nums = [float(v) for v in values if not _is_blank(v)]
+    if len(nums) < 2:
+        return None
+    lo, hi = min(nums), max(nums)
+    span = hi - lo
+    if span < 1e-12:
+        return None
+    t = (float(value) - lo) / span
+    good = t if higher_is_better else 1.0 - t
+    rank = abs(good - 0.5) * 2.0
+    scale = max(abs(lo), abs(hi), 1e-9)
+    weight = min(1.0, (span / scale) / materiality)
+    alpha = rank * weight
+    if alpha < 0.05:
+        return None
+    return _mix(PALETTE["card_alt"], _GREEN_END if good >= 0.5 else _RED_END, alpha)

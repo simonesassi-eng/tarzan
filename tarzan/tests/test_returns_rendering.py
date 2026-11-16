@@ -62,11 +62,11 @@ class TestNewsletterReturns:
         html_off = render_newsletter(_minimal_metrics(False), _config())
         html_on = render_newsletter(_minimal_metrics(True), _config())
         # The KPI matrix renders only when the order-derived returns and daily
-        # series exist. Its first ledger's head ("Portfolio", after its swatch)
-        # is the anchor: the section heading above it is always present, because
-        # the PERFORMANCE section also carries the value chart.
-        assert "></span>Portfolio</th>" not in html_off
-        assert "></span>Portfolio</th>" in html_on
+        # series exist. Its tables carry a marker: the section heading above it
+        # is always present, because the PERFORMANCE section also carries the
+        # value chart.
+        assert 'data-tarzan-kpi="true"' not in html_off
+        assert 'data-tarzan-kpi="true"' in html_on
         assert "TWR" in html_on
 
     def test_no_decorative_em_dash_in_prose(self):

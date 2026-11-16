@@ -271,16 +271,16 @@ class TestRender:
         # Lean hero: the portfolio value band (scoreboard + mountain removed).
         assert "Portfolio" in html
         # The KPI matrix sits in the PERFORMANCE section, under the value chart:
-        # one ledger per universe, the universe's name in its head.
-        assert "></span>Portfolio</th>" in html
+        # the book's euro ledger, then the measures of the three universes.
+        assert 'data-tarzan-kpi="true"' in html
         # Every ampersand reaches the document as an entity. The matrix writes
         # it itself; the tiles go through the template, where autoescape is off
         # because the filename ends in .j2 — so they are escaped at their own
         # markup boundary in _build_hero._tile. Before that they arrived raw,
         # which is invalid HTML that mail clients happen to tolerate.
-        # Matrix row labels: the unit stands beside the measure's name.
-        assert re.search(r"P&amp;L <span[^>]*>\u20ac</span>", html)
-        assert re.search(r"Unrealized <span[^>]*>\u20ac</span>", html)
+        # Ledger row labels: the unit stands beside the measure's name.
+        assert re.search(r">P&amp;L</span> <span[^>]*>\u20ac</span>", html)
+        assert re.search(r">Unrealized</span> <span[^>]*>\u20ac</span>", html)
         assert "TWR" in html
         assert "Total P&amp;L" in html       # state tile
         assert "Unrealized P&amp;L" in html  # state tile
