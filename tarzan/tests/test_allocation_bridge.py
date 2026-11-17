@@ -1,4 +1,4 @@
-"""The Allocation section: one bridge per block, its figures built in.
+"""The Allocation section: one butterfly per block, its figures built in.
 
 The colours follow the 5/25 band -- the narrower of ±5 points and ±25% of the
 target -- and only the colours: the optimizer keeps its own tolerance.
@@ -94,6 +94,38 @@ def _block(html: str, title: str) -> str:
     return html[start:nxt if nxt != -1 else len(html)]
 
 
+_NAME = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*fill="(#[0-9A-Fa-f]{6})" '
+                   r'text-anchor="middle">([^<]+)</text>')
+_FIG = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
+                  r'<tspan font-weight="600">([^<]+)</tspan> <tspan[^>]*>([^<]+)</tspan></text>')
+_GAP = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*font-weight="700" fill="(#[0-9A-Fa-f]{6})" '
+                  r'text-anchor="end">([^<]+)</text>')
+_BAR = re.compile(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" '
+                  r'fill="#[0-9A-Fa-f]{6}"( fill-opacity="[\d.]+")?/>')
+
+
+def _rows(block: str) -> dict:
+    """The butterfly read back by row: for each name, its colour, the TODAY and
+    PLAN figures (weight, euros) or None, the gap (text, colour) or None, and the
+    bars on its line as (x, width) or None."""
+    svg = block[:block.index("</svg>")]
+    rows: dict = {}
+    for x, y, fill, name in _NAME.findall(svg):
+        rows[name] = {"x": float(x), "y": float(y), "name_fill": fill,
+                      "today": None, "plan": None, "gap": None,
+                      "today_bar": None, "plan_bar": None}
+    by_y = {r["y"]: r for r in rows.values()}
+    for x, y, anchor, pc, eur in _FIG.findall(svg):
+        by_y[float(y)]["today" if anchor == "end" else "plan"] = (pc, eur)
+    for x, y, fill, text in _GAP.findall(svg):
+        if float(x) == 354.0:
+            by_y[float(y)]["gap"] = (text, fill)
+    for x, y, w, h, faded in _BAR.findall(svg):
+        yc = float(y) + float(h) / 2.0
+        by_y[yc + 3.5]["plan_bar" if faded else "today_bar"] = (float(x), float(w))
+    return rows
+
+
 class TestBridge:
     def test_every_line_held_today_is_in_today(self):
         svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
@@ -101,21 +133,31 @@ class TestBridge:
             assert f">{ticker}<" in svg, ticker
 
     def test_the_lines_the_plan_sells_meet_in_one_sale(self):
-        svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        # The sale is one point, named once with its weight and euros.
-        assert ">sell 60.0% \u20ac60k<" in svg  # synthetic
+        block = _block(_build_diversification(_ctx())["html"], "Per-holding target")
+        rows = _rows(block)
+        # A line the plan sells keeps its red name and has no PLAN bar or figure.
+        for t in ("XDEV", "XMJP"):
+            assert rows[t]["name_fill"] == RED and rows[t]["plan"] is None, t
+        # Their sum is one row under the figure: what the rebalance raises.
+        tail = block[block.index("</svg>"):]
+        assert ">To sell<" in tail
+        assert re.search(r">60\.0% <span[^>]*>\u20ac60k</span>", tail)  # synthetic
+        assert re.search(rf'color:{RED};[^"]*">\+60\.0<', tail)
 
     def test_a_line_bought_from_nothing_is_named_once(self):
-        svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        assert svg.count(">AVWC<") == 1
+        block = _block(_build_diversification(_ctx())["html"], "Per-holding target")
+        assert block.count(">AVWC<") == 1
+        assert _rows(block)["AVWC"]["today"] is None
 
     def test_weight_and_euros_side_by_side_and_the_gap_in_points(self):
-        svg = _block(_build_diversification(_ctx())["html"], "Per-holding target")
-        # "NTSG 30.0%" today, "50.0% NTSG" in the plan; euros in their own column.
-        assert re.search(r">NTSG</tspan> 30\.0%<", svg) and ">\u20ac30k<" in svg  # synthetic
-        assert re.search(r">50\.0% <tspan[^>]*>NTSG</tspan><", svg) and ">\u20ac50k<" in svg  # synthetic
-        assert re.search(rf'fill="{RED}"[^>]*>\u221220.0<', svg)
-        assert re.search(rf'fill="{GREEN}"[^>]*>0.0<', svg)
+        block = _block(_build_diversification(_ctx())["html"], "Per-holding target")
+        r = _rows(block)["NTSG"]
+        # "30.0% €30k" today, left of the name; "50.0% €50k" in the plan (synthetic), right
+        # of it; the gap in points at the row's end, coloured by the band.
+        assert r["today"] == ("30.0%", "\u20ac30k")  # synthetic
+        assert r["plan"] == ("50.0%", "\u20ac50k")  # synthetic
+        assert r["gap"] == ("\u221220.0", RED)
+        assert _rows(block)["SGLD"]["gap"] == ("0.0", GREEN)
 
     def test_cash_is_banded_at_a_quarter_of_its_target(self):
         within = _block(_build_diversification(_ctx(cash=4900.0))["html"], "Asset class")
@@ -125,55 +167,71 @@ class TestBridge:
         assert re.search(rf'color:{RED};[^"]*">\+\u20ac1.1k<', beyond)  # synthetic
 
 
-class TestLabelsSitOnTheirSlices:
-    """Every label stands level with its own slice, however thin: a slice is never
-    thinner than one label row, so the stack grows rather than the labels
-    drifting off it, and nothing has to tie the two together."""
-    _SLICE = re.compile(r'<rect x="([\d.]+)" y="([\d.]+)" width="10" height="([\d.]+)"')
-    _TEXT = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
-                       r'(?:<tspan|[\d.]+% <tspan)')
 
-    def _check(self, svg: str, *, two: bool) -> None:
+
+class TestButterfly:
+    """One line per row: the name in a centre column, TODAY's bar growing left
+    from it, PLAN's bar growing right, both on the block's one scale; the
+    figures in fixed outer columns. Nothing is abbreviated, nothing wraps, and
+    no bar reaches into a figure column."""
+
+    def _check(self, block: str) -> None:
         from tarzan.export.newsletter import _sections_alloc as sa
-        slices: dict = {}
-        for px, py, ph in self._SLICE.findall(svg):
-            slices.setdefault(float(px), []).append((float(py), float(py) + float(ph) + sa._SEAM))
-        # The stacks' x is measured per block (the labels decide it), so read
-        # it from the drawing: the two columns of 10px rects.
-        xl, xr = min(slices), max(slices)
-        left, right = slices[xl], slices[xr]
-        # One-line labels end 7px before the TODAY stack and start 6px after
-        # the PLAN stack (fixed or measured columns alike); two-line ones use
-        # the module's fixed columns.
-        cname, rname = (sa._CNAME, sa._RNAME) if two else (xl - 7.0, xr + sa._SW + 6.0)
-        pitch = sa._PITCH2 if two else sa._PITCH1
-        # Contiguous: each slice starts where the one above ended; none thinner
-        # than one label row.
-        for stack in (left, right):
-            for (_a0, a1), (b0, _b1) in zip(stack, stack[1:]):
-                assert abs(a1 - b0) < 0.15, stack
-            assert all(b - a >= pitch - 0.2 for a, b in stack), stack
-        # The name line of each label (two-line mode also prints a figures line
-        # 11px lower; only the name line is level with the slice).
-        names = [(float(x), float(y), a) for x, y, a in self._TEXT.findall(svg)]
-        offset = -1.5 if two else 3.6
-        lefts = sorted(y - offset for x, y, a in names if a == "end" and abs(x - cname) < 0.5)
-        rights = sorted(y - offset for x, y, a in names if a == "start" and abs(x - rname) < 0.5)
-        if two:
-            # The left label's second line also ends in a tspan (the move); the
-            # right label's second line is plain euros and does not match.
-            lefts = lefts[::2]
-        assert len(lefts) == len(left) and len(rights) == len(right), (lefts, rights)
-        for stack, ys in ((left, lefts), (right, rights)):
-            for (a, b), y in zip(stack, ys):
-                assert abs((a + b) / 2 - y) < 0.2, ((a, b), y)
-        # Bands are filled paths; a stroke tying a label to its slice was an unfilled one.
+        svg = block[:block.index("</svg>")]
+        rows = _rows(block)
+        assert rows
+        # Every name is whole, in one text, on the one centre column.
+        assert len({r["x"] for r in rows.values()}) == 1
+        assert all("\u2026" not in n for n in rows)
+        # Rows sit on the module's pitch, the first under the column heads.
+        ys = sorted(r["y"] for r in rows.values())
+        assert ys[0] == pytest.approx(sa._TOP + sa._ROW / 2 + 3.5)
+        assert all(b - a == pytest.approx(sa._ROW) for a, b in zip(ys, ys[1:]))
+        # The figure columns: TODAY ends at one x (anchored end), PLAN starts
+        # at one x (anchored start), and the gap ends at the right edge.
+        today_x = {float(x) for x, _y, a, _p, _e in _FIG.findall(svg) if a == "end"}
+        plan_x = {float(x) for x, _y, a, _p, _e in _FIG.findall(svg) if a == "start"}
+        assert len(today_x) == 1 and len(plan_x) == 1
+        lf, rf = today_x.pop(), plan_x.pop()
+        # Bars: TODAY's end on one edge left of the name, PLAN's start on one
+        # edge right of it; each is level with its name and stays in its lane.
+        ends = {round(x + w, 0) for r in rows.values() if r["today_bar"] for x, w in [r["today_bar"]]}
+        starts = {x for r in rows.values() if r["plan_bar"] for x, _w in [r["plan_bar"]]}
+        assert len(ends) == 1 and len(starts) == 1, (ends, starts)
+        cx = next(iter(rows.values()))["x"]
+        assert max(ends) < cx < min(starts)
+        for r in rows.values():
+            if r["today_bar"]:
+                assert r["today_bar"][0] >= lf + 1.0, r
+            if r["plan_bar"]:
+                assert sum(r["plan_bar"]) <= rf - 1.0, r
+        # One scale on both wings: width per weight point is one number.
+        scale = set()
+        for r in rows.values():
+            for side, bar in (("today", "today_bar"), ("plan", "plan_bar")):
+                if r[bar] and r[side]:
+                    pct = float(r[side][0].rstrip("%"))
+                    if pct > 0:
+                        scale.add(round(r[bar][1] / pct, 1))
+        assert len(scale) == 1, scale
+        # A line the plan sells has a red name and no plan wing; a line bought
+        # from nothing has no today wing; every other line has both figures.
+        for n, r in rows.items():
+            if r["name_fill"] == RED:
+                assert r["plan"] is None and r["plan_bar"] is None, n
+            else:
+                assert r["plan"] is not None and r["plan_bar"] is not None, n
+            assert (r["today"] is None) == (r["today_bar"] is None), n
+            if r["plan"] is not None:
+                assert r["gap"] is not None, n
+        # Bands are fills; a stroke tying a label to its slice was an unfilled path.
         assert not re.search(r'<path[^>]*fill="none"', svg), "a leader stroke is back"
 
     def test_per_holding_card(self):
-        self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"), two=False)
+        self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"))
 
     def test_asset_class_card(self):
-        # Class names fit one line beside their figures on this fixture (two
-        # short classes), so the block takes the ticker grammar.
-        self._check(_block(_build_diversification(_ctx())["html"], "Asset class"), two=False)
+        self._check(_block(_build_diversification(_ctx())["html"], "Asset class"))
+
+    def test_geography_card(self):
+        self._check(_block(_build_diversification(_ctx())["html"], "Equity geography"))

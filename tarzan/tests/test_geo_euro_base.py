@@ -65,6 +65,23 @@ def _eur_to_float(token: str) -> float:
     return float(t.rstrip("k")) * mult
 
 
+_FIG = re.compile(r'<text x="[\d.]+" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
+                  r'<tspan font-weight="600">[^<]+</tspan> <tspan[^>]*>\u20ac([^<]+)</tspan></text>')
+
+
+def _geo_euros(html: str, region: str) -> dict:
+    """The geography butterfly's euros on ``region``'s line: {"today": €, "plan": €}.
+    The name stands centred on its row; TODAY's figures end left of it, PLAN's
+    start right of it, on the same baseline."""
+    geo = html[html.index('aria-label="Equity geography'):]
+    geo = geo[:geo.index("</svg>")]
+    m = re.search(rf'<text [^>]*y="([\d.]+)"[^>]*text-anchor="middle">{region}</text>', geo)
+    assert m, f"no {region} row rendered"
+    y = m.group(1)
+    return {"today" if a == "end" else "plan": _eur_to_float(e)
+            for yy, a, e in _FIG.findall(geo) if yy == y}
+
+
 def test_geo_euro_uses_the_notional_sleeve_not_the_market_value():
     ctx = _NewsletterContext(
         metrics=_levered_metrics(),
@@ -76,15 +93,8 @@ def test_geo_euro_uses_the_notional_sleeve_not_the_market_value():
     html = _build_diversification(ctx)["html"]
 
     # The Emerging Markets row's euro today must be at least what the sole EM
-    # holding is worth — the invariant the bug violated. In the geography block
-    # a TODAY label is one line in columns, 1M · € · "Emerging 9.1%": the euro
-    # is the last one printed before the name.
-    geo = html[html.index('aria-label="Equity geography'):]
-    geo = geo[:geo.index("</svg>")]
-    before = geo[:geo.index(">Emerging</tspan>")]
-    euros = re.findall(r"\u20ac([\d.,]+k?)<", before)
-    assert euros, "no Emerging Markets euro rendered"
-    em_eur = _eur_to_float(euros[-1])
+    # holding is worth — the invariant the bug violated.
+    em_eur = _geo_euros(html, "Emerging")["today"]
     assert em_eur >= 20000.0 - 500.0, (
         f"Emerging Markets shows €{em_eur:.0f}, below the €20k its only "
         f"holding (XMME) is worth — the notional share was applied to the "
@@ -105,11 +115,7 @@ def test_the_plan_side_is_sized_on_the_plans_own_sleeve():
     ctx = _NewsletterContext(metrics=_levered_metrics(), config=cfg, issue_number=1,
                              benchmark_alpha_beta="S&P 500", benchmark_geo="MSCI ACWI")
     html = _build_diversification(ctx)["html"]
-    geo = html[html.index('aria-label="Equity geography'):]
-    geo = geo[:geo.index("</svg>")]
-    # The PLAN labels start left-anchored at the plan's name column; the first
-    # euro after the plan's USA name is its plan sleeve share.
-    plan_side = geo[geo.index(">USA</tspan>", geo.index(">Emerging</tspan>")):]
-    euros = [_eur_to_float(e) for e in re.findall(r"\u20ac([\d.,]+k?)<", plan_side)]
-    assert euros and abs(euros[0] - 90000.0) < 1000.0, euros
+    # The PLAN euros on the USA line are the plan's sleeve share.
+    usa = _geo_euros(html, "USA")
+    assert abs(usa["plan"] - 90000.0) < 1000.0, usa
     assert "€220k notional today, €180k in the plan" in html   # synthetic
