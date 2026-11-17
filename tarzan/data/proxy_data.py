@@ -137,8 +137,12 @@ PROXY_FUND_ER = {
     "EWJ": 0.0049, "EZU": 0.0050, "VTMGX": 0.0005, "FDIVX": 0.0066, "EFA": 0.0032,
     "VEIEX": 0.0029, "EEM": 0.0072, "VTWSX": 0.0010, "ACWI": 0.0032,
     "VUSTX": 0.0020, "VFITX": 0.0020, "IEF": 0.0015, "GLD": 0.0040, "DBC": 0.0085,
-    "RYMFX": 0.0150, "AQMNX": 0.0150,
+    "RYMFX": 0.0150, "AQMNX": 0.0150, "AHLT": 0.0096,
 }
+
+#: The Man AHL Trend Core bucket (see ``_ahl_trend_series``): the trend leg of
+#: Man's Active Trend Enhanced funds, which run AHL's Trend Core program.
+AHL_TREND_KEY = "Alternative:AHL"
 
 
 def _gross_up(r: pd.Series, sym: Optional[str]) -> pd.Series:
@@ -841,6 +845,11 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
             if sym is not None and not r.empty:
                 USED_PROXY[k] = (f"{sym}{ccy}", r.index.min())
             out[k] = _usd_returns_to_eur(r)
+        elif k == AHL_TREND_KEY:
+            s, label, start = _ahl_trend_series(fin)
+            if s is not None and not s.empty:
+                USED_PROXY[k] = (f"{label}{ccy}", start)
+            out[k] = _usd_returns_to_eur(s)
         elif k == "Alternative":
             s, label, start = _alt_series(fin)
             if s is not None and not s.empty:
@@ -866,6 +875,39 @@ def proxy_returns_for(keys: set[str]) -> tuple[dict, Optional[pd.Series]]:
     # returned in USD terms — the borrow is a USD short rate; EUR/USD short-rate
     # differences are a small second-order effect on the financed sleeve.
     return out, fin
+
+
+def _ahl_trend_series(fin: Optional[pd.Series]):
+    """USD daily returns of Man AHL's Trend Core program, for the trend leg of
+    the Man Active Trend Enhanced funds (MATE US, the UCITS MATE/MAET).
+
+    AHLT (American Beacon AHL Trend) IS that program: same 26 markets, same
+    signs, position correlation 1.000 with both MATE classes on the same day
+    (TBTF holdings study, Nov 2026). It runs at the program's full 15% vol
+    target, grossed up by its own fee; each fund holds it at its own scale
+    through ``exp_alternative``. Before AHLT (Aug 2023) the generic trend
+    proxy stands in, its EXCESS return rescaled to AHLT's volatility over the
+    overlap so the scale means the same thing on both sides of the splice.
+    """
+    generic, glabel, _gstart = _alt_series(fin)
+    ahlt = _gross_up(_returns("AHLT"), "AHLT")
+    if ahlt is None or ahlt.empty:
+        return generic, glabel, _gstart
+    if generic is None or generic.empty:
+        return ahlt, "AHLT (AHL Trend Core)", ahlt.index.min()
+    cash = fin.reindex(generic.index).ffill().fillna(0.0) if fin is not None else 0.0
+    excess = generic - cash
+    overlap = excess.index.intersection(ahlt.index)
+    a_cash = fin.reindex(overlap).ffill().fillna(0.0) if fin is not None else 0.0
+    scale = 1.0
+    if len(overlap) > 60:
+        ratio = (ahlt.reindex(overlap) - a_cash).std() / excess.reindex(overlap).std()
+        if ratio and ratio == ratio and ratio > 0:
+            scale = float(ratio)
+    tail = (excess * scale + cash).loc[lambda r: r.index < ahlt.index.min()]
+    return (pd.concat([tail, ahlt]).sort_index(),
+            f"AHLT (AHL Trend Core) {ahlt.index.min():%Y}+, before it {glabel} at AHLT's vol",
+            tail.index.min() if len(tail) else ahlt.index.min())
 
 
 def _alt_series(fin: Optional[pd.Series]):

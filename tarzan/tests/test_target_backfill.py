@@ -36,29 +36,25 @@ def _tape(start, n, seed, scale=100.0):
     return pd.Series(scale * np.cumprod(1 + rng.normal(0.0004, 0.01, n)), index=idx)
 
 
-def test_the_twin_fund_reaches_a_young_sleeve_back_and_the_real_tape_is_kept(catalog, monkeypatch):
+def test_a_same_named_class_with_another_composition_is_no_twin(catalog, monkeypatch):
+    """The two Man Active Trend Enhanced classes share a name, not a portfolio
+    (S&P + ~0.84x AHL trend vs MSCI World + ~0.65x): the US tape must never
+    stand in for the UCITS, which goes to the composition model instead."""
     from tarzan.data import proxy_data
 
-    twin_native = _tape("2025-01-01", 480, 1)
     sleeve = SimpleNamespace(ticker="MATE.MI", isin=EU, target_portfolio=6.0,
                              price_history=_tape("2026-11-02", 8, 2, scale=10.0))
+    twin_native = _tape("2025-01-01", 480, 1)
     record = SimpleNamespace(isin=US, currency="USD", history=twin_native * 0.9,
                              history_native=twin_native)
-    carry = pd.Series(0.0001, index=pd.bdate_range("2024-01-01", "2027-01-01"))
-    fx = pd.Series(0.0, index=carry.index)
-    monkeypatch.setattr(proxy_data, "currency_hedge_legs", lambda: (fx, carry))
-    start = pd.Timestamp("2025-06-02")
-    out, note = target_backfill.extend(sleeve, start, {"MATE": record})
-
-    real = sleeve.price_history
-    pd.testing.assert_series_equal(out.loc[real.index], real, check_names=False)
-    assert out.index[0] <= start + pd.Timedelta(days=7)
-    assert note["real_from"] == real.index[0] and "twin fund MATE" in note["source"]
-    assert "EUR-hedged" in note["source"]
-    # The modeled stretch moves like the twin's native tape plus the carry.
-    modeled = out.loc[out.index < real.index[0]].pct_change().dropna()
-    expect = ((1 + twin_native.pct_change()) * (1 + 0.0001) - 1).reindex(modeled.index)
-    assert np.allclose(modeled.to_numpy(), expect.to_numpy(), atol=1e-12)
+    monkeypatch.setattr(proxy_data, "currency_hedge_legs",
+                        lambda: (pd.Series(dtype=float), pd.Series(dtype=float)))
+    monkeypatch.setattr(target_backfill, "_reconstructed_returns", lambda h: (None, ""))
+    out, note = target_backfill.extend(sleeve, pd.Timestamp("2025-06-02"), {"MATE": record})
+    assert note is None                                  # no model, and no borrowed twin
+    pd.testing.assert_series_equal(out, sleeve.price_history, check_names=False)
+    row = cfg.catalog().row(EU, None)
+    assert target_backfill.twin_rows(row) == []
 
 
 def test_a_sleeve_that_already_reaches_back_is_untouched(catalog):
@@ -103,3 +99,30 @@ def test_a_unhedged_eur_twin_has_its_currency_move_removed_for_a_hedged_sleeve(c
     got = modeled.pct_change().dropna()
     expect = usd_strategy.pct_change().reindex(got.index)   # the dollar strategy, hedged
     assert np.allclose(got.to_numpy(), expect.to_numpy(), atol=1e-10)
+
+
+def test_the_man_trend_leg_runs_on_the_ahl_program_at_each_funds_scale(monkeypatch):
+    """Both Man Active Trend Enhanced classes take AHLT (AHL Trend Core) for
+    their trend leg; before AHLT the generic trend proxy is rescaled to AHLT's
+    volatility, so a fund's scale means one thing across the splice."""
+    from types import SimpleNamespace
+    from tarzan.backtest import engine as E
+    from tarzan.backtest.model import WhatIfItem, EQ, ALT
+    from tarzan.data import proxy_data as P
+
+    h = SimpleNamespace(ter=0.96, geo_breakdown=None, role="Trend Stacked")
+    ucits = WhatIfItem("MATE", "MATE.MI", "IE000BS31R00", 6.0, h, {EQ: 100.0, ALT: 65.0}, {}, "")
+    other = WhatIfItem("CTA", "CTA", "US82889N6994", 6.0, h, {ALT: 100.0}, {}, "")
+    assert E.instrument_exposures(ucits)["Alternative:AHL"] == pytest.approx(0.65)
+    assert "Alternative" in E.instrument_exposures(other)            # generic trend
+
+    days = pd.bdate_range("2020-01-01", "2026-11-13")
+    rng = np.random.default_rng(4)
+    generic = pd.Series(rng.normal(0, 0.006, len(days)), index=days)      # synthetic
+    ahlt = pd.Series(rng.normal(0, 0.009, len(days)), index=days).loc["2023-08-30":]
+    monkeypatch.setattr(P, "_alt_series", lambda fin: (generic, "generic", days[0]))
+    monkeypatch.setattr(P, "_returns", lambda sym: ahlt)
+    series, _label, _start = P._ahl_trend_series(None)
+    before = series.loc[series.index < ahlt.index[0]]
+    assert before.std() == pytest.approx(ahlt.std() * 1.0, rel=0.06)    # vol-matched tail
+    assert (series.loc[ahlt.index] - (ahlt + 0.0096 / 252)).abs().max() < 1e-12   # AHLT, fee grossed up

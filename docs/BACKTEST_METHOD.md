@@ -23,6 +23,14 @@ here, with a test, and record it in this file.
    - Managed futures before 2007: AQR TSMOM timing at the real funds' level,
      only when ingested locally (`manual_proxies ingest TSMOM`; copyrighted,
      never vendored); otherwise cash.
+   - **Named trend programs** (`backtest.engine._TREND_PROGRAM`, by ISIN): a
+     fund whose trend leg IS a known program takes that program's own proxy.
+     Man Active Trend Enhanced (US and UCITS) runs AHL Trend Core, which is
+     AHLT (`proxy_data._ahl_trend_series`): AHLT grossed up by its fee from
+     Aug 2023; before it, the generic trend proxy's excess return rescaled to
+     AHLT's volatility. Each fund holds it at its own scale through
+     `exp_alternative`: MATE US 84, the UCITS 65 (TBTF holdings study,
+     17 Nov 2026: same 26 markets and signs, position correlation 1.000).
 
 2. **Sleeve model** — `backtest.engine.instrument_base_returns(item, …)`
    - Exposures from the taxonomy composition (`instrument_exposures`, duration
@@ -41,10 +49,12 @@ here, with a test, and record it in this file.
    - TER is charged as a daily drag on the modeled base only.
 
 3. **Real tape** — the fund's own history, extended back by its **twin**: another
-   catalog share class of the same strategy (`target_backfill.twin_rows`),
-   converted to this class's currency treatment. Examples: MFEH←DBMFE, and the
-   UCITS MATE←the US MATE. The backtest records twins in `TWIN_REAL`; the
-   target line uses the same rule.
+   catalog share class of the same strategy AND the same curated composition
+   (exposures and geography; `target_backfill.twin_rows`), converted to this
+   class's currency treatment. Example: MFEH←DBMFE. The two MATE classes are
+   NOT twins: the US one is S&P 500 + ~0.84× AHL trend, the UCITS MSCI World +
+   ~0.65×, so the UCITS goes to the composition model. The backtest records
+   twins in `TWIN_REAL`; the target line uses the same rule.
 
 4. **Splice** — the real tape always wins where it exists. Before it, modes are:
    - `factor`: Fama-French legs for factor funds, monthly;
@@ -88,7 +98,8 @@ here, with a test, and record it in this file.
 |---|---|---|
 | NTSG | weekly regression on MSCI World (EUR) + Treasury excess | equity β 0.91, bond β 0.44–0.52, α ≈ 0 |
 | CL2 | monthly fit of 2× EUR return − ECB financing | corr 0.963, residual drag ≈ 1.4%/yr (engine charges ≈ 1.0%) |
-| MATE | US class vs S&P + trend − cash | 1.4–3.6%/yr below, TER included — stress MAET at +1/+2% |
+| MATE | US class vs S&P + 0.84× AHL trend (engine model), Dec 2025–Nov 2026, USD | monthly corr 0.995, vol 19.9% vs 20.9%, model 1.7%/yr above; weekly tracking error lowest at 0.84 (0.65: 4.96%, 0.84: 4.52%, 1.0: 5.25%) |
+| MAET (UCITS) | MSCI World + 0.65× AHL trend, EUR-hedged | 4 days of overlap only (Nov 2026): cumulative +5.9% model vs +5.6% real — the 0.65 scale is provisional (one holdings date) |
 | Trend proxy | monthly vol vs DBMF, in USD, 2019–2026 | 10.9% vs 11.0% — matches. The daily realism ratio (0.5–0.85×) compares different periods: 2025–26 was a volatile stretch for trend |
 | UEQC | monthly, in USD, Dec 2021–Nov 2026 | corr 0.86, vol 5.8% vs 7.6%, real ~1.6%/yr below. In EUR the realism ratio is ~0.6× (the Xetra tape is noisy day to day) |
 

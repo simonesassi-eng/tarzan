@@ -173,7 +173,7 @@ class TestBridge:
                 "is implicit cash borrowed at the cash rate (0% today, \u221230% plan).") in html
         # NTSG is held and planned (no side) and comes first; MATE is in the plan only.
         assert ("Stacked funds: NTSG 1.5\u00d7 (0.9 equities + 0.6 fixed income), "
-                "MATE 2\u00d7 (1 equities + 1 alternative, plan only).") in html
+                "MATE 1.65\u00d7 (1 equities + 0.65 alternative, plan only).") in html
         assert "\u00d7\u2192" not in html and "futures" not in html
 
     def test_an_unlevered_book_prints_no_leverage_line(self):

@@ -252,13 +252,13 @@ class TestAgainstTheCommittedTaxonomy:
         assert notes == []
 
     def test_a_stacked_sleeve_whose_symbol_two_funds_share_counts_only_qualified(self):
-        """MATE is two funds (Nasdaq and UCITS); the taxonomy stacks each at 100%
-        equity + 100% alternative. Qualified by ISIN the sleeve levers the
+        """MATE is two funds (Nasdaq and UCITS); the taxonomy stacks the UCITS at
+        100% equity + 65% alternative (its AHL trend scale). Qualified by ISIN the sleeve levers the
         Alternative class; as a bare symbol it names no instrument and the class
         reads unlevered — the figure the newsletter printed until the leverage
         was read from the derived config instead of the venue-keyed weights."""
         qualified = td.derive_target_leverage({"MATE@IE000BS31R00": 10.0, "DBMFE": 10.0})
-        assert qualified["Alternative"] == pytest.approx(2.0)
+        assert qualified["Alternative"] == pytest.approx(1.65)
         assert qualified["Equities"] == pytest.approx(1.0)
         bare = td.derive_target_leverage({"MATE": 10.0, "DBMFE": 10.0})
         assert bare["Alternative"] == pytest.approx(1.0)

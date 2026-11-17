@@ -60,8 +60,35 @@ def _priced(benchmark_catalog, holdings):
                getattr(h, "price_history", None), getattr(h, "price_history_native", None))
 
 
+_COMPOSITION_COLUMNS = (
+    "usa", "emerging_markets", "eurozone_emu", "japan", "dev_ex_usa_ex_emu_ex_jp",
+    "exp_equities", "exp_fixed_income", "exp_gold", "exp_commodities",
+    "exp_alternative", "exp_crypto",
+)
+
+
+def _composition(row) -> tuple:
+    """The row's curated exposures and geography, as comparable numbers."""
+    out = []
+    for col in _COMPOSITION_COLUMNS:
+        try:
+            v = float(row.get(col))
+            out.append(round(v, 1) if v == v else None)
+        except (TypeError, ValueError):
+            out.append(None)
+    return tuple(out)
+
+
 def twin_rows(row) -> list:
-    """Other catalog share classes of the same strategy as ``row``."""
+    """Other catalog share classes of the same strategy AND the same curated
+    composition as ``row``.
+
+    The name alone is not enough: Man's two Active Trend Enhanced classes share
+    a strategy name but not a portfolio — the US one is S&P 500 plus ~0.84x the
+    AHL trend program, the UCITS MSCI World plus ~0.65x — so the US tape is no
+    stand-in for the UCITS. A twin must carry the same exposures and geography
+    in the catalog (MFEH and DBMFE do: one DBi programme, two classes).
+    """
     from tarzan import config as cfg
 
     index = cfg.catalog()
@@ -69,10 +96,12 @@ def twin_rows(row) -> list:
     own_strategy = _strategy_name(row.get("name"))
     if len(own_strategy) < 12:
         return []
+    own_mix = _composition(row)
     return [other for other in index.rows
             if other is not row and index.isin_of(other)
             and index.isin_of(other) != own_isin
-            and _strategy_name(other.get("name")) == own_strategy]
+            and _strategy_name(other.get("name")) == own_strategy
+            and _composition(other) == own_mix]
 
 
 def _twin_returns(holding, row, benchmark_catalog, start, holdings=()) -> tuple[Optional[pd.Series], str]:
@@ -137,7 +166,7 @@ def _reconstructed_returns(holding) -> tuple[Optional[pd.Series], str]:
     base = instrument_base_returns(item, proxies, fin, legs_fx)
     if base is None or base.empty:
         return None, ""
-    names = {"Alternative": "trend index", "Fixed Income": "bonds",
+    names = {"Alternative": "trend index", "Alternative:AHL": "AHL trend program", "Fixed Income": "bonds",
              "Commodities": "commodities", "Gold": "gold"}
     grouped: dict[str, float] = {}
     for k, v in exposures.items():   # geography legs read as one equity leg

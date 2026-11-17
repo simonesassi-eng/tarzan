@@ -152,6 +152,17 @@ def instrument_base_returns(item: WhatIfItem, proxies: dict, fin,
     return base
 
 
+#: Funds whose trend leg is a NAMED program with its own proxy, by ISIN: the
+#: trend sleeve goes to that bucket instead of the generic trend proxy, at the
+#: scale ``exp_alternative`` gives it. Man Active Trend Enhanced runs AHL's
+#: Trend Core (TBTF holdings study, Nov 2026: MATE US ~0.84x AHLT, the UCITS
+#: ~0.65x, same markets and signs).
+_TREND_PROGRAM = {
+    "US56164V3033": "Alternative:AHL",   # Man Active Trend Enhanced (US)
+    "IE000BS31R00": "Alternative:AHL",   # Man Active Trend Enhanced UCITS EUR Hedged
+}
+
+
 def instrument_exposures(item: WhatIfItem) -> dict:
     """Per-instrument exposure (fraction of the instrument's own value).
 
@@ -184,6 +195,8 @@ def instrument_exposures(item: WhatIfItem) -> dict:
         v = item.comp_notional.get(cls, 0.0) / 100.0
         if v > 0:
             key = FI_INTERMEDIATE if (cls == FI and not _is_long_duration(item)) else cls
+            if cls == ALT:
+                key = _TREND_PROGRAM.get(str(getattr(item, "isin", "") or "").upper(), key)
             exp[key] = exp.get(key, 0.0) + v
     return exp
 
