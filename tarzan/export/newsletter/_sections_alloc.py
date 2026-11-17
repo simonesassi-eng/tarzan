@@ -29,6 +29,7 @@ from tarzan.export._perf_series import (
     _perf_window,
     _window_money_pnl,
 )
+from tarzan.export._palette import text_width
 from tarzan.export.newsletter._constants import (
     ASSET_CLASS_ORDER,
     ASSET_COLORS,
@@ -1414,7 +1415,10 @@ _PITCH2, _UNIT2 = 23.0, 2.4      # two label lines
 _SEAM = 0.8                      # ground between two slices of a stack
 _BAND_ALPHA = 0.30               # a band is the line's colour, translucent over the ground
 _SELL_ALPHA = 0.26
-_ASSET_SHORT = {"Fixed Income": "Fixed inc."}
+# "Commodities" is the one class name a one-line label cannot carry at phone
+# width beside its figures; the rest print whole.
+_ASSET_SHORT = {"Fixed Income": "Fixed inc.", "Commodities": "Commod."}
+_MIN_BAND = 16.0                 # a band thinner than this is a seam, not a flow
 _GEO_SHORT = {"Eurozone EMU": "Eurozone", "Dev ex-USA ex-EMU ex-JP": "Other dev",
               "Emerging Markets": "Emerging"}
 
@@ -1529,6 +1533,33 @@ def _bridge_stack(rows: list, key: str, pitch: float, unit: float) -> tuple[dict
     return pos, y, hundred
 
 
+def _one_line_columns(l_rows: list, r_rows: list, fs: float) -> Optional[dict]:
+    """Column x positions for one-line labels sized on the block's OWN text
+    (measured glyph advances), the two stacks taking what the labels leave.
+    None when that is less than ``_MIN_BAND`` of band: the block then needs
+    two label lines."""
+    def w(s, weight=400):
+        return text_width(s, fs, weight)
+    l_move = max([w(_move_text(r["trend"])) for r in l_rows] + [0.0])
+    l_eur = max([w(_eur_smart(r["eur_now"])) for r in l_rows] + [0.0])
+    l_name = max([w(r["label"], 700) + w(f' {_pc1(r["now"])}') for r in l_rows] + [0.0])
+    r_name = max([w(f'{_pc1(r["target"])} ') + w(r["label"], 700) for r in r_rows] + [0.0])
+    r_eur = max([w(_eur_smart(r["eur_tgt"])) for r in r_rows] + [0.0])
+    r_gap = max([w(_gap_text(r), 700) for r in r_rows] + [0.0])
+    c1m = l_move + 2.0
+    ceur = c1m + 4.0 + l_eur
+    cname = ceur + 4.0 + l_name
+    xl = cname + 7.0          # the same gap as the fixed columns (_CNAME = _XL - 7)
+    rgap = _BW
+    reur = rgap - r_gap - 4.0
+    rname = reur - r_eur - 4.0 - r_name
+    xr = rname - 6.0 - _SW
+    if xr - (xl + _SW) < _MIN_BAND:
+        return None
+    return {"c1m": c1m, "ceur": ceur, "cname": cname, "xl": xl, "xr": xr,
+            "rname": rname, "reur": reur, "rgap": rgap}
+
+
 def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
                 aria: str = "Allocation, today against the plan") -> str:
     """One block's figure: the column labels, the two stacks, the bands, a label
@@ -1541,27 +1572,43 @@ def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
     r_rows = [r for r in right if (r["target"] or 0) > 0]
     if not l_rows and not r_rows:
         return ""
+    # Class and region names ask for one line too (the owner's choice), at
+    # 9.5px with the columns measured on the block's own labels; when even
+    # that leaves no room for the bands, the block falls back to two lines.
+    cols = None
+    if two:
+        cols = _one_line_columns(l_rows, r_rows, 9.5)
+        if cols is not None:
+            two = False
+    if cols is None:
+        cols = {"c1m": _C1M, "ceur": _CEUR, "cname": _CNAME, "xl": _XL, "xr": _XR,
+                "rname": _RNAME, "reur": _REUR, "rgap": _RGAP}
+        fs = 10.5 if two else 10.0
+    else:
+        fs = 9.5
+    XL, XR = cols["xl"], cols["xr"]
+    C1M, CEUR, CNAME, RNAME, REUR, RGAP = (cols["c1m"], cols["ceur"], cols["cname"],
+                                           cols["rname"], cols["reur"], cols["rgap"])
     pitch, unit = (_PITCH2, _UNIT2) if two else (_PITCH1, _UNIT1)
-    fs = 10.5 if two else 10.0
     L, bot_l, h100_l = _bridge_stack(l_rows, "now", pitch, unit)
     R, bot_r, h100_r = _bridge_stack(r_rows, "target", pitch, unit)
     by_key = {r["key"]: r for r in right + left}
     sold = [r for r in l_rows if r["legacy"] and r["key"] not in R]
     sell_y = bot_l + 12.0 if sold else None
-    px = (_XL + _SW + _XR) / 2.0
-    s0, s1 = _XL + _SW, _XR
+    px = (XL + _SW + XR) / 2.0
+    s0, s1 = XL + _SW, XR
     g: list[str] = []
 
     # Column labels, once, over the stacks.
     lab = {"fill": P["faint"], "weight": 700, "size": 9.0, "label": True}
     if two:
-        g += [_bt(_CNAME, 10.0, "TODAY \u00b7 1M \u00b7 \u20ac", anchor="end", **lab),
-              _bt(_RNAME, 10.0, "PLAN \u00b7 \u20ac", **lab)]
+        g += [_bt(CNAME, 10.0, "TODAY \u00b7 1M \u00b7 \u20ac", anchor="end", **lab),
+              _bt(RNAME, 10.0, "PLAN \u00b7 \u20ac", **lab)]
     else:
-        g += [_bt(_C1M, 10.0, "1M", anchor="end", **lab), _bt(_CEUR, 10.0, "\u20ac", anchor="end", **lab),
-              _bt(_CNAME, 10.0, "TODAY", anchor="end", **lab), _bt(_RNAME, 10.0, "PLAN", **lab),
-              _bt(_REUR, 10.0, "\u20ac", anchor="end", **lab)]
-    g.append(_bt(_RGAP, 10.0, "GAP", anchor="end", **lab))
+        g += [_bt(C1M, 10.0, "1M", anchor="end", **lab), _bt(CEUR, 10.0, "\u20ac", anchor="end", **lab),
+              _bt(CNAME, 10.0, "TODAY", anchor="end", **lab), _bt(RNAME, 10.0, "PLAN", **lab),
+              _bt(REUR, 10.0, "\u20ac", anchor="end", **lab)]
+    g.append(_bt(RGAP, 10.0, "GAP", anchor="end", **lab))
 
     # Bands first, then the slices over their ends.
     for key in dict.fromkeys([r["key"] for r in l_rows] + [r["key"] for r in r_rows]):
@@ -1594,10 +1641,10 @@ def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
                      f'{s0 + 24:.1f},{ty:.1f} {s0 + 16:.1f},{ty:.1f} C{s0 + 24:.1f},{ty:.1f} '
                      f'{s1 - 18:.1f},{y1:.1f} Z" fill="{r["colour"]}" fill-opacity="{_BAND_ALPHA}"/>')
     for key, (y, h) in L.items():
-        g.append(f'<rect x="{_XL:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
+        g.append(f'<rect x="{XL:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
                  f'fill="{by_key[key]["colour"]}"/>')
     for key, (y, h) in R.items():
-        g.append(f'<rect x="{_XR:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
+        g.append(f'<rect x="{XR:g}" y="{y:.1f}" width="{_SW:g}" height="{max(h - _SEAM, 0.6):.1f}" '
                  f'fill="{by_key[key]["colour"]}"/>')
 
     # Where a stack passes 100% (futures overlay): a dashed tick across it, and
@@ -1608,12 +1655,15 @@ def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
     if sum(r["target"] or 0.0 for r in r_rows) <= 100.5:
         h100_r = None
     if h100_l is not None or h100_r is not None:
-        for xa, yy in ((_XL, h100_l), (_XR, h100_r)):
+        for xa, yy in ((XL, h100_l), (XR, h100_r)):
             if yy is not None:
                 g.append(f'<line x1="{xa - 3:.1f}" x2="{xa + _SW + 3:.1f}" y1="{yy:.1f}" y2="{yy:.1f}" '
                          f'stroke="{P["ink"]}" stroke-dasharray="2,2" stroke-width="1"/>')
         yy = h100_l if h100_l is not None else h100_r
-        g.append(_bt(px, yy + 3.0, "100%", fill=P["muted"], size=8.5, anchor="middle"))
+        # The word sits just above the tick, between the stacks; when the bands
+        # are too narrow to hold it the dashed ticks say it alone.
+        if XR - (XL + _SW) >= 30.0:
+            g.append(_bt(px, yy - 2.5, "100%", fill=P["muted"], size=8.0, anchor="middle"))
 
     # Labels, level with their slices.
     for r in l_rows:
@@ -1623,14 +1673,14 @@ def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
         name = f'<tspan font-weight="700" fill="{P["red"] if r["legacy"] else P["ink"]}">{_esc(r["label"])}</tspan>'
         eur = _esc(_eur_smart(r["eur_now"]))
         if two:
-            g += [_bt(_CNAME, yc - 1.5, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end"),
-                  _bt(_CNAME, yc + 9.5, f'<tspan fill="{mc}">{_esc(move)}</tspan> \u00b7 {eur}',
+            g += [_bt(CNAME, yc - 1.5, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end"),
+                  _bt(CNAME, yc + 9.5, f'<tspan fill="{mc}">{_esc(move)}</tspan> \u00b7 {eur}',
                       fill=P["muted"], size=fs - 0.5, anchor="end")]
         else:
             yb = yc + 3.6
-            g += [_bt(_C1M, yb, _esc(move), fill=mc, size=fs, anchor="end"),
-                  _bt(_CEUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
-                  _bt(_CNAME, yb, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end")]
+            g += [_bt(C1M, yb, _esc(move), fill=mc, size=fs, anchor="end"),
+                  _bt(CEUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
+                  _bt(CNAME, yb, f'{name} {_pc1(r["now"])}', fill=P["ink"], size=fs, anchor="end")]
     for r in r_rows:
         y1, h1 = R[r["key"]]
         yc = y1 + h1 / 2
@@ -1638,14 +1688,14 @@ def _bridge_svg(left: list, right: list, cfg, *, two: bool, tail=(),
         name = f'<tspan font-weight="700">{_esc(r["label"])}</tspan>'
         eur = _esc(_eur_smart(r["eur_tgt"]))
         if two:
-            g += [_bt(_RNAME, yc - 1.5, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
-                  _bt(_RNAME, yc + 9.5, eur, fill=P["muted"], size=fs - 0.5),
-                  _bt(_RGAP, yc + 9.5, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
+            g += [_bt(RNAME, yc - 1.5, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
+                  _bt(RNAME, yc + 9.5, eur, fill=P["muted"], size=fs - 0.5),
+                  _bt(RGAP, yc + 9.5, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
         else:
             yb = yc + 3.6
-            g += [_bt(_RNAME, yb, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
-                  _bt(_REUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
-                  _bt(_RGAP, yb, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
+            g += [_bt(RNAME, yb, f'{_pc1(r["target"])} {name}', fill=P["ink"], size=fs),
+                  _bt(REUR, yb, eur, fill=P["muted"], size=fs, anchor="end"),
+                  _bt(RGAP, yb, _esc(_gap_text(r)), fill=gc, weight=700, size=fs, anchor="end")]
     if sell_y is not None:
         text = f'sell {_pc1(sum(r["now"] for r in sold))} {_eur_smart(sum(r["eur_now"] for r in sold))}'
         g.append(f'<circle cx="{px:.1f}" cy="{sell_y:.1f}" r="2.2" fill="{P["red"]}"/>')

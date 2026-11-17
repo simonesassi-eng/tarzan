@@ -129,7 +129,7 @@ class TestLabelsSitOnTheirSlices:
     """Every label stands level with its own slice, however thin: a slice is never
     thinner than one label row, so the stack grows rather than the labels
     drifting off it, and nothing has to tie the two together."""
-    _SLICE = re.compile(r'<rect x="(\d+)" y="([\d.]+)" width="10" height="([\d.]+)"')
+    _SLICE = re.compile(r'<rect x="([\d.]+)" y="([\d.]+)" width="10" height="([\d.]+)"')
     _TEXT = re.compile(r'<text x="([\d.]+)" y="([\d.]+)"[^>]*text-anchor="(end|start)">'
                        r'(?:<tspan|[\d.]+% <tspan)')
 
@@ -137,10 +137,15 @@ class TestLabelsSitOnTheirSlices:
         from tarzan.export.newsletter import _sections_alloc as sa
         slices: dict = {}
         for px, py, ph in self._SLICE.findall(svg):
-            # The drawn rect stops a seam short of the slice; the slice's own
-            # extent (top, bottom) is what the label is centred on.
-            slices.setdefault(int(px), []).append((float(py), float(py) + float(ph) + sa._SEAM))
-        left, right = slices[int(sa._XL)], slices[int(sa._XR)]
+            slices.setdefault(float(px), []).append((float(py), float(py) + float(ph) + sa._SEAM))
+        # The stacks' x is measured per block (the labels decide it), so read
+        # it from the drawing: the two columns of 10px rects.
+        xl, xr = min(slices), max(slices)
+        left, right = slices[xl], slices[xr]
+        # One-line labels end 7px before the TODAY stack and start 6px after
+        # the PLAN stack (fixed or measured columns alike); two-line ones use
+        # the module's fixed columns.
+        cname, rname = (sa._CNAME, sa._RNAME) if two else (xl - 7.0, xr + sa._SW + 6.0)
         pitch = sa._PITCH2 if two else sa._PITCH1
         # Contiguous: each slice starts where the one above ended; none thinner
         # than one label row.
@@ -152,8 +157,8 @@ class TestLabelsSitOnTheirSlices:
         # 11px lower; only the name line is level with the slice).
         names = [(float(x), float(y), a) for x, y, a in self._TEXT.findall(svg)]
         offset = -1.5 if two else 3.6
-        lefts = sorted(y - offset for x, y, a in names if a == "end" and abs(x - sa._CNAME) < 0.5)
-        rights = sorted(y - offset for x, y, a in names if a == "start" and abs(x - sa._RNAME) < 0.5)
+        lefts = sorted(y - offset for x, y, a in names if a == "end" and abs(x - cname) < 0.5)
+        rights = sorted(y - offset for x, y, a in names if a == "start" and abs(x - rname) < 0.5)
         if two:
             # The left label's second line also ends in a tspan (the move); the
             # right label's second line is plain euros and does not match.
@@ -169,4 +174,6 @@ class TestLabelsSitOnTheirSlices:
         self._check(_block(_build_diversification(_ctx())["html"], "Per-holding target"), two=False)
 
     def test_asset_class_card(self):
-        self._check(_block(_build_diversification(_ctx())["html"], "Asset class"), two=True)
+        # Class names fit one line beside their figures on this fixture (two
+        # short classes), so the block takes the ticker grammar.
+        self._check(_block(_build_diversification(_ctx())["html"], "Asset class"), two=False)
