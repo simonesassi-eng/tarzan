@@ -1254,17 +1254,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
     timeline = m.allocation_timeline or {}
     asset_series = timeline.get("asset")
 
-    # Physical capital per class (sum of the market value of holdings whose
-    # PRIMARY class is that class) — the denominator for the per-class
-    # leverage = notional exposure / physical capital. >1 means the class is
-    # partly synthetic (e.g. an efficient-core bond overlay).
-    inv_val = float(getattr(m, "invested_value", 0.0) or 0.0)
-    phys_by_class: dict[str, float] = {}
-    hdf = m.holdings_df
-    if hdf is not None and not hdf.empty and "asset_class" in hdf.columns:
-        for cls, grp in hdf.groupby("asset_class"):
-            phys_by_class[str(cls)] = float(grp["current_value"].sum())
-
     rows = []
     for klass in ASSET_CLASS_ORDER:
         match = (alloc_df[alloc_df["category"] == klass]
@@ -1279,9 +1268,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
         delta = actual - target if target is not None else None
         color = ASSET_COLORS.get(klass, PALETTE["accent"])
         spark_vals = _timeline_vals(asset_series, klass)
-        notional_eur = actual / 100.0 * inv_val
-        phys = phys_by_class.get(klass, 0.0)
-        leverage = (notional_eur / phys) if phys > 0 else None
         rows.append({
             "name": klass,
             "color": color,
@@ -1295,7 +1281,6 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "delta_color": _band_colour(delta, target, cfg),
             "bar_width": min(max(actual, 1), 100),
             "spark": _spark(spark_vals, target, color) if spark_vals else None,
-            "leverage": leverage,
         })
 
     # Strategic Cash & Cash Equivalents reserve, not spendable bank cash.
@@ -1757,6 +1742,66 @@ def _holding_bridge_rows(ctx: _NewsletterContext, items: list, *, base: float,
     return out_kept[:len(kept)], out_kept[len(kept):], out_sold
 
 
+def _financing(total_pct: float) -> str:
+    """The implicit cash position behind a notional total: −16% for 116%."""
+    cash = int(round(100.0 - float(total_pct)))
+    if cash == 0:
+        return "0%"
+    return f"{'\u2212' if cash < 0 else '+'}{abs(cash)}%"
+
+
+def _stacked_funds(ctx: _NewsletterContext) -> list[str]:
+    """The funds that carry more than one euro of exposure per euro invested, as
+    the return-stacking literature states them — "NTSG 1.5× (0.9 equities + 0.6
+    fixed income)" — held today, in the plan, or both ("plan only" / "today only").
+
+    Today's funds come from the book; the plan's from the per-instrument plan the
+    class targets were derived from (``config.target_plan_weights``, a shared
+    symbol ISIN-qualified). The two meet on the bare symbol.
+    """
+    from tarzan import config as taxonomy
+    from tarzan.engine.target_derivation import _primary_class
+
+    found: dict[str, dict] = {}
+
+    def add(symbol: str, breakdown: dict, side: str) -> None:
+        total = sum(float(v) for v in breakdown.values())
+        if total <= 100.5 or not symbol:
+            return
+        entry = found.setdefault(symbol, {"breakdown": breakdown, "total": total, "sides": set()})
+        entry["sides"].add(side)
+
+    hdf = ctx.metrics.holdings_df
+    if hdf is not None and not hdf.empty:
+        for _, h in hdf.iterrows():
+            symbol = _display_ticker(str(h.get("ticker") or "")) or ""
+            bd = taxonomy.class_breakdown_for(h.get("isin"), h.get("ticker"), h.get("asset_class")) or {}
+            add(symbol, bd, "today")
+    for key, weight in (getattr(ctx.config, "target_plan_weights", None) or {}).items():
+        if float(weight or 0.0) <= 0:
+            continue
+        bd = taxonomy.class_breakdown_for(None, key, _primary_class(key)) or {}
+        add(_display_ticker(str(key)) or "", bd, "plan")
+
+    out = []
+    # Held funds first (both sides, then today only), the plan's newcomers last;
+    # the largest stack first within each.
+    def order(kv):
+        sides = kv[1]["sides"]
+        rank = 0 if len(sides) == 2 else (1 if "today" in sides else 2)
+        return (rank, -kv[1]["total"], kv[0])
+
+    for symbol, e in sorted(found.items(), key=order):
+        parts = [(str(getattr(k, "value", k)).lower(), float(v)) for k, v in e["breakdown"].items() if float(v) > 0]
+        if len(parts) == 1:
+            body = parts[0][0]
+        else:
+            body = " + ".join(f"{v / 100:g} {k}" for k, v in parts)
+        side = "" if len(e["sides"]) == 2 else (", plan only" if "plan" in e["sides"] else ", today only")
+        out.append(f"{symbol} {e['total'] / 100:g}\u00d7 ({body}{side})")
+    return out
+
+
 def _build_diversification(ctx: _NewsletterContext) -> dict:
     """Pre-render the Allocation section: three bridge cards (asset class, equity
     geography, per-holding targets), each with its figures built in, their columns
@@ -1813,29 +1858,12 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     hold_series = _recent_timeline(tl.get("holding"), dates)
     hold_inv_series = _recent_timeline(tl.get("holding_invested"), dates)
 
-    # The plan's own leverage per class, derived with the class targets from the
-    # same plan (target_derivation.apply_to_config), so the note's multipliers
-    # describe the plan the PLAN column shows. Re-deriving here from the engine's
-    # venue-keyed target weights lost any sleeve whose symbol two funds share
-    # (MATE): its stacked leg vanished and Alternative read 1.00x. The fallback
-    # stays for a config that was never derived (the fixtures).
-    target_lev: dict = dict(getattr(cfg, "target_leverage_by_class", None) or {})
-    if not target_lev:
-        try:
-            from tarzan.engine.target_derivation import derive_target_leverage
-
-            plan = dict(getattr(m, "target_weights", {}) or {})
-            if plan:
-                target_lev = derive_target_leverage(plan)
-        except Exception:  # noqa: BLE001 -- a missing factor must not cost the section
-            target_lev = {}
-
     abs_pp = float(getattr(cfg, "allocation_band_abs_pp", 5.0))
     rel = float(getattr(cfg, "allocation_band_rel_pctg", 25.0))
     specs: list[dict] = []
 
     # ── Asset class ──
-    asset_rows, cash, levs = [], None, []
+    asset_rows, cash = [], None
     for r in alloc.get("rows") or []:
         if r.get("is_eur"):
             cash = r
@@ -1845,15 +1873,6 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
             colour=r.get("color") or PALETTE["accent"], now=r.get("actual_pct_raw") or 0.0,
             target=r.get("target_left"), base=invested_base,
             trend=_timeline_vals(asset_series, r["name"])))
-        lev = r.get("leverage")
-        has_plan = bool(target_lev) and (r.get("target_left") or 0) > 0
-        tlev = target_lev.get(r["name"]) if has_plan else None
-        if lev is not None and (abs(lev - 1) > 0.005
-                                or (has_plan and (tlev is None or abs(tlev - 1) > 0.005))):
-            part = f"{_ASSET_SHORT.get(r['name'], r['name']).lower()} {lev:.2f}\u00d7"
-            if has_plan:
-                part += "\u2192" + ("overlay only" if tlev is None else f"{tlev:.2f}\u00d7")
-            levs.append(part)
     if asset_rows:
         tn = sum(r["now"] for r in asset_rows)
         tt = sum(r["target"] or 0.0 for r in asset_rows)
@@ -1878,16 +1897,18 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                          "plan_eur": _eur(c_tgt, 0), "gap": _signed_eur(c_now - c_tgt),
                          "colour": P["green"] if c_ok else P["red"]})
         levered = max(tn, tt) > 100.5
+        stacks = _stacked_funds(ctx)
         note = [f"Notional, % of invested capital ({_eur_smart(invested_base)})."]
         if levered:
-            # "Leverage", not "futures": a 2x swap tracker (CL2) and a stacked
-            # trend fund (MATE) lever the book as much as an efficient core's
-            # bond futures do.
-            note.append(f"Totals past 100% = leverage: "
-                        f"{tn / 100:.2f}\u00d7 today, {tt / 100:.2f}\u00d7 plan"
-                        + (f" ({', '.join(levs)})." if levs else "."))
-        elif levs:
-            note.append(f"Leverage: {', '.join(levs)}.")
+            # The return-stacking statement of leverage: gross exposure per euro
+            # of capital, the excess as an implicit negative cash position
+            # financed at the cash rate, and the funds that stack it. Capital is
+            # attributed to no class, so there is no per-class ratio to print.
+            note.append(f"Totals past 100% are leverage: {tn / 100:.2f}\u00d7 today, "
+                        f"{tt / 100:.2f}\u00d7 plan; the excess is implicit cash borrowed at "
+                        f"the cash rate ({_financing(tn)} today, {_financing(tt)} plan).")
+        if stacks:
+            note.append(f"Stacked funds: {', '.join(stacks)}.")
         if cash is not None:
             note.append("Strategic reserve sits outside this base; not bank cash available for trades.")
         specs.append({"title": "Asset class", "left": asset_rows, "right": asset_rows,

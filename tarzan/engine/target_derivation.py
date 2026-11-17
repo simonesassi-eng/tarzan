@@ -249,18 +249,17 @@ def apply_to_config(config, target_rows: dict) -> Optional[dict]:
         merged_geo = {name: 0.0 for name in before_geo}
         merged_geo.update(geo)
         config.equity_geo_targets_pctg = merged_geo
-    # The plan's leverage travels with the targets it belongs to. The newsletter
-    # used to re-derive it from the engine's venue-keyed target weights, where a
-    # symbol two funds share (MATE) resolved to no instrument and its stacked
-    # leg fell out of the figure: Alternative read 1.00x in a plan that runs it
-    # at 1.38x.
-    leverage = derive_target_leverage(plan)
-    config.target_leverage_by_class = dict(leverage)
+    # The plan travels with the targets derived from it, keyed as it was derived
+    # (a shared symbol ISIN-qualified). The newsletter used to rebuild it from the
+    # engine's venue-keyed target weights, where MATE is a bare symbol two funds
+    # share and resolves to no instrument: its stacked leg fell out of the
+    # Allocation note.
+    config.target_plan_weights = dict(plan)
 
     report = {
         "applied": True,
         "plan": plan,
-        "target_leverage": leverage,
+        "target_leverage": derive_target_leverage(plan),
         "classes": merged,
         "geo": dict(config.equity_geo_targets_pctg),
         "declared_classes": before_classes,

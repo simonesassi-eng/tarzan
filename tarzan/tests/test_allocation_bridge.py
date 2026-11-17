@@ -159,19 +159,29 @@ class TestBridge:
         assert r["gap"] == ("\u221220.0", RED)
         assert _rows(block)["SGLD"]["gap"] == ("0.0", GREEN)
 
-    def test_the_note_takes_the_plans_leverage_from_the_derived_config(self):
-        """The plan's per-class leverage is derived once, with the class targets,
-        and stored on the config. Re-deriving it here from the engine's
-        venue-keyed weights dropped a stacked sleeve (MATE) and a class the
-        plan runs at 1.38x read 1.00x and was left out of the note."""
+    def test_the_note_states_leverage_as_the_return_stacking_literature_does(self):
+        """Gross exposure per euro of capital, the excess as implicit cash borrowed
+        at the cash rate, and the funds that stack it — today's from the book,
+        the plan's from the config's copy of the plan (a shared symbol ISIN-
+        qualified, so MATE's stacked leg is seen). No per-class ratio: capital
+        is attributed to no class."""
         ctx = _ctx()
         ctx.config.invested_allocation_targets_pctg = {"Equities": 120.0, "Gold": 10.0}
-        ctx.config.target_leverage_by_class = {"Equities": 1.38, "Gold": 1.0}
-        ctx.metrics.target_weights = {"NTSG.DE": 50.0, "SGLD.MI": 10.0}  # unlevered keying
+        ctx.config.target_plan_weights = {"NTSG": 50.0, "SGLD": 10.0, "MATE@IE000BS31R00": 10.0}
         html = _build_diversification(ctx)["html"]
-        assert "Totals past 100% = leverage: 1.00\u00d7 today, 1.30\u00d7 plan" in html
-        assert "(equities 1.00\u00d7\u21921.38\u00d7)" in html
-        assert "futures" not in html
+        assert ("Totals past 100% are leverage: 1.00\u00d7 today, 1.30\u00d7 plan; the excess "
+                "is implicit cash borrowed at the cash rate (0% today, \u221230% plan).") in html
+        # NTSG is held and planned (no side) and comes first; MATE is in the plan only.
+        assert ("Stacked funds: NTSG 1.5\u00d7 (0.9 equities + 0.6 fixed income), "
+                "MATE 2\u00d7 (1 equities + 1 alternative, plan only).") in html
+        assert "\u00d7\u2192" not in html and "futures" not in html
+
+    def test_an_unlevered_book_prints_no_leverage_line(self):
+        html = _build_diversification(_ctx())["html"]
+        assert "leverage" not in html
+        # The fixture holds NTSG (a 90/60 fund) at a weight that keeps the
+        # total under par; the stack is still named, the borrowing is not.
+        assert "Stacked funds: NTSG 1.5\u00d7" in html
 
     def test_cash_is_banded_at_a_quarter_of_its_target(self):
         within = _block(_build_diversification(_ctx(cash=4900.0))["html"], "Asset class")

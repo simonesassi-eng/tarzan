@@ -207,10 +207,10 @@ class TestWhatTheConfigEndsUpHolding:
         assert report["applied"] is False
         assert config.invested_allocation_targets_pctg["Equities"] == 65.0
 
-    def test_the_plans_leverage_lands_on_the_config_with_its_targets(self, monkeypatch):
-        """The newsletter's note reads the leverage from the config, next to the class
-        targets it was derived with; re-deriving it from another keying of the plan
-        lost a stacked sleeve (MATE) and printed 1.00x for a class run at 1.38x."""
+    def test_the_plan_itself_lands_on_the_config_with_its_targets(self, monkeypatch):
+        """The newsletter names the plan's stacked funds from the config's copy of the
+        plan, keyed as it was derived; rebuilding it from another keying lost a
+        stacked sleeve (MATE) and the note said nothing of it."""
         import tarzan.config as cfg
         # The plan is keyed by the catalog (ticker) or, for an identity the catalog
         # cannot name, by ISIN; the stubs answer to either.
@@ -225,9 +225,14 @@ class TestWhatTheConfigEndsUpHolding:
         config = self._Cfg()
         report = td.apply_to_config(config, _rows(("I1", "AVWC", 60.0), ("I2", "STACK", 20.0),
                                                   ("I3", "MFUT", 20.0)))
-        assert report["target_leverage"] == config.target_leverage_by_class
-        assert config.target_leverage_by_class["Alternative"] == pytest.approx(2.0)
-        assert config.target_leverage_by_class["Equities"] == pytest.approx(1.0)
+        assert config.target_plan_weights == report["plan"]
+        assert set(config.target_plan_weights) == {"AVWC", "I2", "I3"} or \
+            set(config.target_plan_weights) == {"AVWC", "STACK", "MFUT"}
+        assert sum(config.target_plan_weights.values()) == pytest.approx(100.0)
+        # The leverage the plan implies is still reported: the stacked sleeve
+        # doubles the Alternative class on its own capital.
+        assert report["target_leverage"]["Alternative"] == pytest.approx(2.0)
+        assert report["target_leverage"]["Equities"] == pytest.approx(1.0)
 
 
 class TestAgainstTheCommittedTaxonomy:
