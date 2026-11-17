@@ -319,7 +319,7 @@
               {% endif %}
               {% if ticker_sources.available %}
               {{ h3("Instrument data sources", ticker_sources.rows|length) }}
-              <div style="margin-top:5px;{{ type.note }}color:{{ palette.muted }};">Every instrument this issue names · the exact provider listing behind its daily bars and (↗) its intraday series. Held first, then watchlist, then closed positions; alphabetical within each.{% if ticker_sources.intraday_note %} {{ ticker_sources.intraday_note }}{% endif %}</div>
+              <div style="margin-top:5px;{{ type.note }}color:{{ palette.muted }};">Every instrument this issue names · the exact provider listing behind its daily bars and (↗) its intraday series. Held first, then watchlist, then closed positions; alphabetical within each. Names: Holdings and Watchlist; closed positions carry theirs here.{% if ticker_sources.intraday_note %} {{ ticker_sources.intraday_note }}{% endif %}</div>
               {% if ticker_sources.quality_note %}<div style="margin-top:4px;{{ type.note }}color:{{ palette.muted }};">{{ ticker_sources.quality_note }}</div>{% endif %}
               {{ ticker_sources.table_html|safe }}
               {% endif %}

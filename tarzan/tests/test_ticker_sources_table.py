@@ -125,6 +125,48 @@ class TestFeeds:
         assert (available, rows) == (False, ())
 
 
+class TestWhatARowPrints:
+    """A held or watched instrument is named in the Holdings or Watchlist grid, so
+    its sources row prints no name and puts the ticker and the feeds on one line
+    when they fit; a closed position is named nowhere else and keeps its name over
+    its feeds (owner's choice, Nov 2026)."""
+
+    @staticmethod
+    def _table(monkeypatch, records):
+        from tarzan import config as cfg
+        monkeypatch.setattr(cfg, "benchmark_identities", lambda: ())
+        metrics = SimpleNamespace(ticker_resolutions=tuple(records),
+                                  benchmark_tickers={}, intraday_quotes={})
+        out = _build_ticker_sources(_NewsletterContext(metrics=metrics, config=None))
+        return out["table_html"]
+
+    def test_a_held_instrument_has_no_name_and_one_line(self, monkeypatch):
+        html = self._table(monkeypatch, [_record("ZZZA.MI", "XX0000000001", "Current",
+                                                 name="A Very Long Fund Name Indeed",
+                                                 intraday="ZZZA.MI")])
+        assert "A Very Long Fund Name" not in html
+        row = html[html.index("<b>ZZZA</b>"):]
+        row = row[:row.index("</tr>")]
+        # Ticker, feeds and ISIN in the one row.
+        assert "ZZZA.MI" in row and "\u2197 ZZZA.MI" in row and "XX0000000001" in row
+        assert "colspan" not in row
+
+    def test_a_closed_position_keeps_its_name_over_its_feeds(self, monkeypatch):
+        html = self._table(monkeypatch, [_record("ZZZB.MI", "XX0000000002", "Historical only",
+                                                 name="Closed Fund Name")])
+        assert "Closed Fund Name" in html
+        row = html[html.index("<b>ZZZB</b>"):]
+        assert "XX0000000002" in row[:row.index("</tr>")]
+        assert 'colspan="2"' in row            # the feeds on their own line
+
+    def test_feeds_too_long_for_the_line_drop_under_the_ticker(self, monkeypatch):
+        html = self._table(monkeypatch, [_record("ZZZC", "XX0000000003", "Current",
+                                                 hist="ZZZC-LONG-LISTING-NAME.XX",
+                                                 intraday="ZZZC-LONG-LISTING-NAME.XX")])
+        row = html[html.index("<b>ZZZC</b>"):]
+        assert 'colspan="2"' in row and "Closed" not in row
+
+
 def test_the_template_reads_exactly_the_keys_the_builder_emits(monkeypatch):
     """The table is built in Python from the row dicts (``_sources_table_html``),
     so a renamed key fails silently (``dict.get`` prints "—" for a missing one).

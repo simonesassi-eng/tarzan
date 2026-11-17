@@ -159,6 +159,20 @@ class TestBridge:
         assert r["gap"] == ("\u221220.0", RED)
         assert _rows(block)["SGLD"]["gap"] == ("0.0", GREEN)
 
+    def test_the_note_takes_the_plans_leverage_from_the_derived_config(self):
+        """The plan's per-class leverage is derived once, with the class targets,
+        and stored on the config. Re-deriving it here from the engine's
+        venue-keyed weights dropped a stacked sleeve (MATE) and a class the
+        plan runs at 1.38x read 1.00x and was left out of the note."""
+        ctx = _ctx()
+        ctx.config.invested_allocation_targets_pctg = {"Equities": 120.0, "Gold": 10.0}
+        ctx.config.target_leverage_by_class = {"Equities": 1.38, "Gold": 1.0}
+        ctx.metrics.target_weights = {"NTSG.DE": 50.0, "SGLD.MI": 10.0}  # unlevered keying
+        html = _build_diversification(ctx)["html"]
+        assert "Totals past 100% = leverage: 1.00\u00d7 today, 1.30\u00d7 plan" in html
+        assert "(equities 1.00\u00d7\u21921.38\u00d7)" in html
+        assert "futures" not in html
+
     def test_cash_is_banded_at_a_quarter_of_its_target(self):
         within = _block(_build_diversification(_ctx(cash=4900.0))["html"], "Asset class")
         beyond = _block(_build_diversification(_ctx(cash=5100.0))["html"], "Asset class")

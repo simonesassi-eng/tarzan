@@ -158,6 +158,11 @@ class InvestorConfig:
     equity_geo_targets_pctg: dict[str, float] = field(
         default_factory=lambda: dict(cfg.default_equity_geo_targets_pctg())
     )
+    # The plan's leverage per class, {class: notional / physical capital}, None
+    # for a class the plan reaches only synthetically. Set by the target
+    # derivation alongside the class targets above, from the same plan, so the
+    # two never disagree; empty when no per-instrument plan was derived.
+    target_leverage_by_class: dict[str, "float | None"] = field(default_factory=dict)
 
     # Explicit provider/valuation policy keyed by instrument kind and data
     # class. Loaded from constants.yaml and validated into immutable policy

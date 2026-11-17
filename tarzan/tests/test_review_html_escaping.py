@@ -70,7 +70,9 @@ def test_provider_broker_and_feed_text_is_escaped_in_the_real_template(rendered,
     record = {
         "canonical_ticker": "UNLISTED.X", "isin": "XX0000000001", "name": "Unknown",
         "history_ticker": "UNLISTED.X", "intraday_effective_ticker": "",
-        "portfolio_presence": "Current",
+        # A closed position: the one band whose NAME the sources table prints
+        # (a held instrument's name is in the Holdings grid, not here).
+        "portfolio_presence": "Historical only",
     }
     record[field] = PAYLOAD
     metrics.ticker_resolutions = (record,)

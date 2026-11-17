@@ -207,6 +207,28 @@ class TestWhatTheConfigEndsUpHolding:
         assert report["applied"] is False
         assert config.invested_allocation_targets_pctg["Equities"] == 65.0
 
+    def test_the_plans_leverage_lands_on_the_config_with_its_targets(self, monkeypatch):
+        """The newsletter's note reads the leverage from the config, next to the class
+        targets it was derived with; re-deriving it from another keying of the plan
+        lost a stacked sleeve (MATE) and printed 1.00x for a class run at 1.38x."""
+        import tarzan.config as cfg
+        # The plan is keyed by the catalog (ticker) or, for an identity the catalog
+        # cannot name, by ISIN; the stubs answer to either.
+        primary = {"I1": "Equities", "AVWC": "Equities", "I2": "Equities", "STACK": "Equities",
+                   "I3": "Alternative", "MFUT": "Alternative"}
+        breakdown = {"I1": {"Equities": 100.0}, "AVWC": {"Equities": 100.0},
+                     "I2": {"Equities": 100.0, "Alternative": 100.0},
+                     "STACK": {"Equities": 100.0, "Alternative": 100.0},
+                     "I3": {"Alternative": 100.0}, "MFUT": {"Alternative": 100.0}}
+        monkeypatch.setattr(td, "_primary_class", lambda t: primary[t])
+        monkeypatch.setattr(cfg, "class_breakdown_for", lambda i, t, c: breakdown[t])
+        config = self._Cfg()
+        report = td.apply_to_config(config, _rows(("I1", "AVWC", 60.0), ("I2", "STACK", 20.0),
+                                                  ("I3", "MFUT", 20.0)))
+        assert report["target_leverage"] == config.target_leverage_by_class
+        assert config.target_leverage_by_class["Alternative"] == pytest.approx(2.0)
+        assert config.target_leverage_by_class["Equities"] == pytest.approx(1.0)
+
 
 class TestAgainstTheCommittedTaxonomy:
     """One end-to-end pass with no monkeypatching, so the wiring to the real lookups is
@@ -223,3 +245,15 @@ class TestAgainstTheCommittedTaxonomy:
         assert sum(geo.values()) == pytest.approx(100.0)
         assert geo["USA"] > geo["Japan"] > 0
         assert notes == []
+
+    def test_a_stacked_sleeve_whose_symbol_two_funds_share_counts_only_qualified(self):
+        """MATE is two funds (Nasdaq and UCITS); the taxonomy stacks each at 100%
+        equity + 100% alternative. Qualified by ISIN the sleeve levers the
+        Alternative class; as a bare symbol it names no instrument and the class
+        reads unlevered — the figure the newsletter printed until the leverage
+        was read from the derived config instead of the venue-keyed weights."""
+        qualified = td.derive_target_leverage({"MATE@IE000BS31R00": 10.0, "DBMFE": 10.0})
+        assert qualified["Alternative"] == pytest.approx(2.0)
+        assert qualified["Equities"] == pytest.approx(1.0)
+        bare = td.derive_target_leverage({"MATE": 10.0, "DBMFE": 10.0})
+        assert bare["Alternative"] == pytest.approx(1.0)

@@ -1021,6 +1021,12 @@ def _build_tax_note(ctx: _NewsletterContext) -> dict:
 # alphabetical by ticker, and there is no class/role grouping: this is a
 # reference table looked up by symbol, not a view of the portfolio's shape.
 _PRESENCE_BANDS = ("Portfolio", "Watchlist", "Hist. Portfolio only")
+# The data-sources table (Appendix). Bands whose instruments the issue names in
+# full elsewhere (Holdings, Watchlist) print no name here; a closed position does.
+_SOURCES_NAMED_ELSEWHERE = frozenset({"Portfolio", "Watchlist"})
+_SOURCES_ISIN_PX = 80                      # 12 mono glyphs at 9.5px (~71px) + air
+_MONO_EM = 0.62                            # a monospace glyph's advance, em
+_SOURCES_LINE_PX = 354.0 - 6.0 - _SOURCES_ISIN_PX   # ticker + feeds on one line
 
 # Holding-resolution presence -> band. "Rebalance target" (a seeded optimizer
 # target, never held) has no band and keeps its own label, sorted last: a target
@@ -1181,33 +1187,54 @@ def _sources_table_html(rows: list, ctx: _NewsletterContext) -> str:
     mono = f'font-family:{MONO_STACK};font-size:9.5px;line-height:1.3;'
     out = []
     for presence, rs in groups.items():
+        # The name is printed here only where the issue prints it nowhere else:
+        # a closed position. A held or watched instrument has its name in the
+        # Holdings or Watchlist grid, and without it the ticker and the feeds
+        # share one line when they fit (owner's choice, Nov 2026: ~1,300px).
+        named = presence not in _SOURCES_NAMED_ELSEWHERE
         body = ""
         for r in rs:
             rail = ASSET_COLORS.get(_class_of_action(r.get("isin"), r.get("ticker"), tax) or "",
                                     P["row_rule"])
             feed = [f'<span style="color:{P["muted"]};">{_esc(str(r.get("hist_ric") or "\u2014"))}</span>']
+            plain = [str(r.get("hist_ric") or "\u2014")]
             if r.get("history_note"):
                 feed.append(str(r["history_note"]))
+                plain.append(str(r["history_note"]))
             if str(r.get("intr_ric") or "").strip():
                 feed.append(f'<span style="color:{P["muted"]};">\u2197 {_esc(str(r["intr_ric"]))}</span>')
+                plain.append(f'\u2197 {r["intr_ric"]}')
             if r.get("intraday_note"):
                 feed.append(str(r["intraday_note"]))
+                plain.append(str(r["intraday_note"]))
             tk = str(r.get("ticker") or "")
             name = str(r.get("name") or "\u2014")
+            isin_cell = (f'<td align="right" style="padding:{{top}}px 0 {{bot}}px 8px;vertical-align:top;'
+                         f'{mono}color:{P["muted"]};white-space:nowrap;{{rule}}">'
+                         f'{_esc(str(r.get("isin") or "\u2014"))}</td>')
+            rule = f'border-bottom:1px solid {P["row_rule"]};'
+            one_line = (not named and text_width(tk, TYPE_PX["data"], 700) + 6.0
+                        + len(" \u00b7 ".join(plain)) * _MONO_EM * 9.5 <= _SOURCES_LINE_PX)
+            if one_line:
+                body += (f'<tr><td style="padding:5px 0 5px 6px;border-left:2px solid {rail};{rule}'
+                         f'font-size:{TYPE_PX["data"]}px;line-height:1.25;color:{P["ink"]};">'
+                         + (f'<b>{tk}</b> ' if tk else "")
+                         + f'<span style="{mono}color:{P["faint"]};">' + " \u00b7 ".join(feed)
+                         + '</span></td>'
+                         + isin_cell.format(top=6, bot=5, rule=rule) + '</tr>')
+                continue
             body += (f'<tr><td style="padding:5px 0 1px 6px;border-left:2px solid {rail};'
                      f'font-size:{TYPE_PX["data"]}px;line-height:1.25;color:{P["ink"]};">'
                      + (f'<b>{tk}</b> ' if tk else "")
-                     + f'<span style="color:{P["muted"]};">{name}</span></td>'
-                     f'<td align="right" style="padding:6px 0 1px 8px;vertical-align:top;'
-                     f'{mono}color:{P["muted"]};white-space:nowrap;">'
-                     f'{_esc(str(r.get("isin") or "\u2014"))}</td></tr>'
+                     + (f'<span style="color:{P["muted"]};">{name}</span>' if named else "")
+                     + '</td>' + isin_cell.format(top=6, bot=1, rule="") + '</tr>'
                      f'<tr><td colspan="2" style="padding:0 0 5px 6px;border-left:2px solid {rail};'
-                     f'border-bottom:1px solid {P["row_rule"]};{mono}color:{P["faint"]};">'
+                     f'{rule}{mono}color:{P["faint"]};">'
                      + " \u00b7 ".join(feed) + '</td></tr>')
         out.append(
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
             f'style="table-layout:fixed;border-collapse:collapse;margin-top:8px;font-family:{FONT_STACK};">'
-            f'<colgroup><col><col style="width:96px;"></colgroup>'
+            f'<colgroup><col><col style="width:{_SOURCES_ISIN_PX}px;"></colgroup>'
             f'<tr><td colspan="2" style="padding:10px 0 3px 0;border-bottom:1px solid {P["border"]};'
             f'{TYPE["label"]}color:{P["muted"]};">{_esc(presence)} \u00b7 {len(rs)}</td></tr>'
             f'<tr><td style="padding:3px 0 3px 6px;{TYPE["label"]}font-size:9.5px;color:{P["faint"]};">'
@@ -1261,10 +1288,9 @@ def _build_allocation(ctx: _NewsletterContext) -> dict:
             "actual_pct": _pct_smart(actual),
             "actual_pct_raw": actual,
             "target_pct": _pct_smart(target) if target is not None else None,
-            "target_left": (
-                min(max(float(target), 0), 100)
-                if target is not None else None
-            ),
+            # Notional: a class the plan runs past 100% of capital (a book heavy
+            # in 2x trackers) keeps its figure. The old 100% bar clipped it here.
+            "target_left": max(float(target), 0.0) if target is not None else None,
             "delta": _signed_pp(delta) if delta is not None else None,
             "delta_color": _band_colour(delta, target, cfg),
             "bar_width": min(max(actual, 1), 100),
@@ -1787,19 +1813,22 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
     hold_series = _recent_timeline(tl.get("holding"), dates)
     hold_inv_series = _recent_timeline(tl.get("holding_invested"), dates)
 
-    # The plan's own leverage per class. Only meaningful because the class targets
-    # are DERIVED from the per-instrument plan; without a plan there is none to show.
-    target_lev: dict = {}
-    try:
-        from tarzan.engine.target_derivation import derive_target_leverage, plan_weights
+    # The plan's own leverage per class, derived with the class targets from the
+    # same plan (target_derivation.apply_to_config), so the note's multipliers
+    # describe the plan the PLAN column shows. Re-deriving here from the engine's
+    # venue-keyed target weights lost any sleeve whose symbol two funds share
+    # (MATE): its stacked leg vanished and Alternative read 1.00x. The fallback
+    # stays for a config that was never derived (the fixtures).
+    target_lev: dict = dict(getattr(cfg, "target_leverage_by_class", None) or {})
+    if not target_lev:
+        try:
+            from tarzan.engine.target_derivation import derive_target_leverage
 
-        plan, _ = plan_weights(getattr(m, "target_rows", None) or {})
-        if not plan:
             plan = dict(getattr(m, "target_weights", {}) or {})
-        if plan:
-            target_lev = derive_target_leverage(plan)
-    except Exception:  # noqa: BLE001 -- a missing factor must not cost the section
-        target_lev = {}
+            if plan:
+                target_lev = derive_target_leverage(plan)
+        except Exception:  # noqa: BLE001 -- a missing factor must not cost the section
+            target_lev = {}
 
     abs_pp = float(getattr(cfg, "allocation_band_abs_pp", 5.0))
     rel = float(getattr(cfg, "allocation_band_rel_pctg", 25.0))
@@ -1823,7 +1852,7 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
                                 or (has_plan and (tlev is None or abs(tlev - 1) > 0.005))):
             part = f"{_ASSET_SHORT.get(r['name'], r['name']).lower()} {lev:.2f}\u00d7"
             if has_plan:
-                part += "\u2192" + ("futures only" if tlev is None else f"{tlev:.2f}\u00d7")
+                part += "\u2192" + ("overlay only" if tlev is None else f"{tlev:.2f}\u00d7")
             levs.append(part)
     if asset_rows:
         tn = sum(r["now"] for r in asset_rows)
@@ -1851,7 +1880,10 @@ def _build_diversification(ctx: _NewsletterContext) -> dict:
         levered = max(tn, tt) > 100.5
         note = [f"Notional, % of invested capital ({_eur_smart(invested_base)})."]
         if levered:
-            note.append(f"Totals past 100% = futures overlay: "
+            # "Leverage", not "futures": a 2x swap tracker (CL2) and a stacked
+            # trend fund (MATE) lever the book as much as an efficient core's
+            # bond futures do.
+            note.append(f"Totals past 100% = leverage: "
                         f"{tn / 100:.2f}\u00d7 today, {tt / 100:.2f}\u00d7 plan"
                         + (f" ({', '.join(levs)})." if levs else "."))
         elif levs:
