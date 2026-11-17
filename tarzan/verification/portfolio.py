@@ -108,7 +108,7 @@ def _financial_value(value):
 
 
 def portfolio_kpis(metrics):
-    """Financial outputs, separated from operation IDs, wall time and AI prose."""
+    """Financial outputs, separated from operation IDs and wall time."""
     result = {
         name: _financial_value(getattr(metrics, name, None))
         for name in PORTFOLIO_KPI_SCALAR_NAMES
@@ -234,7 +234,7 @@ def run_snapshot(snapshot: Path, *, label: str, capture: bool, input_dir: Path, 
             tempfile.TemporaryDirectory(prefix="working-cache-", dir=snapshot) as directory:
         working_cache = Path(directory) / "cache"
         shutil.copytree(initial, working_cache)
-        with patch.dict(os.environ, {"TARZAN_CACHE_DIR": str(working_cache), "TARZAN_DISABLE_AI": "1"}), \
+        with patch.dict(os.environ, {"TARZAN_CACHE_DIR": str(working_cache)}), \
                 patch.object(runtime, "_build_context", frozen_context), \
                 _snapshot_cache_clock(captured_at), tape:
             metrics, config = orchestrator.run(

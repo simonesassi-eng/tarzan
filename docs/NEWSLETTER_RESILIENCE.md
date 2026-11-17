@@ -15,14 +15,14 @@ python scripts/verify_newsletter.py \
 ```
 
 This reads the same order/target inputs and runs the actual analyzer and
-newsletter renderer. AI is disabled. It never enters `run_and_send`, obtains a
+newsletter renderer. It never enters `run_and_send`, obtains a
 delivery claim or calls SMTP; mail credentials are unnecessary. Exit code zero
 means normal/degraded publication is allowed, not that every market feed was
 available. Inspect `report.json` quality, ledger and KPI projections.
 
 On GitHub, run **Tarzan Newsletter** with the boolean **verify_only** enabled on
 the intended branch. Its separate step receives only Drive input credentials
-and the snapshot key, not SMTP, recipient, Gemini or claim credentials. Its
+and the snapshot key, not SMTP, recipient or claim credentials. Its
 concurrency group is separate from normal deliveries. Apps Script and automatic
 `repository_dispatch` sends need no changes and do not enable this mode.
 
@@ -203,7 +203,7 @@ initialization after the shim's standard-library imports; the additive
 `imports_and_entrypoint_seconds` still excludes interpreter startup, GitHub
 bootstrap and cleanup. Workflow creation-to-completion includes runner/setup
 and artifact/cache work. Creation-to-SMTP-ACK measures server acceptance, not
-inbox receipt. Verification deliberately omits AI, claims and SMTP, so it is
+inbox receipt. Verification deliberately omits claims and SMTP, so it is
 not a full-send benchmark.
 
 Stage wall times can overlap or contain nested stages. Process CPU measures all

@@ -86,9 +86,9 @@ The pinned-history test now checks actual behavior instead of source indentation
 Completed results retain their session and immutable `ReportView`. Output
 scopes reacquire the serial lease, bind the original clock and ledger, and restore
 the caller on exit. Financial tables, nested values, series and configuration
-are immutable facts with defensive typed pandas projections. Fixed market-context
-quotes are prepared during analysis; newsletter sections and the AI digest do
-not fetch them. AI attempts, diagnostics and logs stay with their original owner.
+are immutable facts with defensive typed pandas projections. Fixed market
+quotes are prepared during analysis; newsletter sections do not fetch them.
+Diagnostics and logs stay with their original owner.
 
 CLI finalization returns a typed outcome; exit success is decided only after
 the core manifest commits. Rendering/semantic errors retain computed financial
@@ -166,7 +166,7 @@ port (including cookie/crumb traffic), without a second outer retry multiplier.
 Owned intraday SDK batches run without internal threads so their operation
 context is retained; independent outer enrichment/referee workers remain
 parallel. The previous SDK default may impose a lower timeout than the configured
-ceiling. OpenFIGI, Borsa, justETF, optional external proxies and Gemini pass their
+ceiling. OpenFIGI, Borsa, justETF and optional external proxies pass their
 configured timeout to the native request. Native clients close on analysis exits.
 Before-input Drive authentication retains its separate bounded native timeout.
 Deadlines are checked before/after calls and waits; this does not terminate
@@ -239,8 +239,8 @@ The synthetic golden changes only entity serialization: decoded HTML bytes,
 parsed element/attribute/text events, numbers and CSS are independently compared
 before regeneration. The missing-critical-benchmark fixture remains rejected by
 the semantic gate; escaping does not manufacture its missing data or relax the
-gate. Adversarial provider/broker names, feed columns, risk notes, AI text and
-section labels cannot introduce images/scripts/event handlers into the document.
+gate. Adversarial provider/broker names, feed columns, risk notes and section
+labels cannot introduce images/scripts/event handlers into the document.
 The full suite passes 1,889 tests both in the existing environment and in a clean
 hash-locked environment under Actions logging context. The actual-portfolio
 checkpoint has no financial changes, network attempts or semantic errors;

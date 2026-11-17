@@ -111,18 +111,17 @@ def test_decryption_creates_private_json_and_preserves_an_existing_output(tmp_pa
 
 def test_native_secret_values_and_json_private_key_are_excluded(monkeypatch):
     monkeypatch.setenv("SMTP_PASS", "synthetic-mail-password")
-    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-gemini-key")
     monkeypatch.setenv("GOOGLE_DRIVE_CREDENTIALS_JSON", json.dumps({
         "private_key": "synthetic-private-key", "client_email": "synthetic@example.invalid",
     }))
     owner = result()
     owner.ledger.append(LedgerEntryType.STAGE, {
-        "message": "echo synthetic-mail-password synthetic-gemini-key synthetic-private-key",
+        "message": "echo synthetic-mail-password synthetic-private-key",
         "authorization": "native credential header",
     })
     document = diag.build_report(owner, operation="send", exit_code=1, duration_seconds=2)
     content = canonical_json_bytes(document)
-    for value in (b"synthetic-mail-password", b"synthetic-gemini-key", b"synthetic-private-key",
+    for value in (b"synthetic-mail-password", b"synthetic-private-key",
                   b"native credential header"):
         assert value not in content
     assert b"[REDACTED]" in content

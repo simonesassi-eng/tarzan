@@ -14,12 +14,11 @@ import pytest
 
 from tarzan import main, orchestrator, runtime
 from tarzan.contracts.report import ReportView
-from tarzan.export import ai_summary
 from tarzan.models.investor_config import InvestorConfig
 from tarzan.models.portfolio import PortfolioMetrics
 from tarzan.runtime import data_quality
 from tarzan.runtime.artifacts import LocalArtifactWriter
-from tarzan.runtime.ledger import LedgerEntryType, RunLedger
+from tarzan.runtime.ledger import RunLedger
 from tarzan.runtime.logging import LOG_CAPTURE
 from tarzan.runtime.session import (
     RunContext, RunMode, RunResult, RunSession, SerialExecutionGate,
@@ -136,23 +135,6 @@ def test_cross_run_nested_scope_fails_and_releases_without_deadlock():
                 pass
     with completed_run_scope(second):
         assert current_session() is second.session
-
-
-def test_ai_attempt_mirrors_only_to_matching_completed_ledger():
-    first = result()
-    record_last_run_result(first)
-    evidence = ai_summary.GeminiProviderResult(
-        (ai_summary.GeminiAttemptEvidence(
-            "Gemini", "synthetic", "GROUNDED", 1, "FAILED", selected_fallback="SIGNALS",
-        ),), "SIGNALS", "UNAVAILABLE",
-    )
-    with runtime.bind_context(first.session.context):
-        ai_summary._store_provider_result(evidence)
-    attempts = [e for e in first.ledger.entries if e.entry_type is LedgerEntryType.PROVIDER_ATTEMPT]
-    assert len(attempts) == 1
-    runtime.reset(attempt_id="other")
-    ai_summary._store_provider_result(evidence)
-    assert len([e for e in first.ledger.entries if e.entry_type is LedgerEntryType.PROVIDER_ATTEMPT]) == 1
 
 
 def test_logging_setup_preserves_foreign_handlers_and_is_idempotent(tmp_path):
@@ -274,4 +256,3 @@ def test_presentation_uses_prepared_market_facts_without_provider_io(monkeypatch
     monkeypatch.setattr(market_quotes, "fetch_market_quotes", lambda: pytest.fail("presentation IO"))
     metrics = PortfolioMetrics(market_quotes=())
     assert _build_markets(_NewsletterContext(metrics, InvestorConfig()))["available"] is False
-    assert "markets_today" not in ai_summary.build_digest(metrics, InvestorConfig())

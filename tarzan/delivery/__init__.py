@@ -741,12 +741,6 @@ def _publish_and_deliver(
             extra={"public_code": "PUBLICATION_BLOCKED"},
         )
     else:
-        from tarzan.export.ai_summary import is_enabled as _ai_on
-        logger.info(
-            "AI summary %s.",
-            "enabled (market-context block resolved at render)"
-            if _ai_on() else "disabled (no GEMINI_API_KEY / pinned mode)",
-        )
         # Manual/licensed sources are an explicit local backtest workflow, not
         # a newsletter input and never a public Actions cache dependency.
         # No candidate-portfolio backtest here: the newsletter no longer carries

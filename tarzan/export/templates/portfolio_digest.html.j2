@@ -140,19 +140,13 @@
 
           {# ─── [04] MARKETS ────────────────────────────────
              Indices, futures, bonds, commodities and currencies in two
-             columns, then the news digest. #}
-          {% if markets.available or ai_summary %}
+             columns. #}
+          {% if markets.available %}
           <tr>
             {{ gutter(secn) }}
             <td style="padding:18px 13px 0 8px;">
               {{ kick("Markets", markets.sub) }}
-              {% if markets.available %}{{ markets.html|safe }}{% endif %}
-              {% if ai_summary %}
-              <div style="margin-top:12px;border-top:1px solid {{ palette.border }};padding-top:8px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="{{ type.prose }}color:{{ palette.ink }};">{{ ai_summary_html|safe }}</table>
-                <div style="margin-top:6px;{{ type.note }}color:{{ palette.subtle }};">AI-generated news digest · via Google Search · not financial advice</div>
-              </div>
-              {% endif %}
+              {{ markets.html|safe }}
             </td>
           </tr>
           {% endif %}

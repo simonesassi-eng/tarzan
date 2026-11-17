@@ -13,7 +13,7 @@ from tarzan.models.investor_config import InvestorConfig
 def _no_live_credentials(monkeypatch):
     """Tests explicitly inject synthetic credentials when testing auth."""
     for name in (
-        "GEMINI_API_KEY", "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
+        "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
         "DRIVE_FOLDER_ID", "GOOGLE_DRIVE_CREDENTIALS_JSON",
         "GOOGLE_APPLICATION_CREDENTIALS", "TARZAN_CACHE_KEY_B64",
         "DELIVERY_CLAIM_ENDPOINT", "DELIVERY_CLAIM_TOKEN",
@@ -110,15 +110,10 @@ def _no_market_feeds(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _disable_ai_summary(monkeypatch):
-    """Force the AI portfolio summary off for the whole suite so tests
-    never hit the network or consume API tokens. Tests that exercise the
-    summary mock the call explicitly."""
-    monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    # The digest and the newsletter Markets strip pull live quotes through
-    # the price layer; stub them network-free for the suite (tests that
-    # exercise quotes mock the fetch explicitly).
+def _stub_market_quotes(monkeypatch):
+    """The newsletter Markets strip pulls live quotes through the price
+    layer; stub them network-free for the suite (tests that exercise quotes
+    mock the fetch explicitly)."""
     monkeypatch.setattr("tarzan.data.market_quotes.fetch_market_quotes",
                         lambda *a, **k: [], raising=True)
     yield

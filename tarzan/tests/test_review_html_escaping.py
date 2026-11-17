@@ -74,7 +74,7 @@ def test_provider_broker_and_feed_text_is_escaped_in_the_real_template(rendered,
     }
     record[field] = PAYLOAD
     metrics.ticker_resolutions = (record,)
-    html = newsletter.render_newsletter(metrics, investor, ai_summary="")
+    html = newsletter.render_newsletter(metrics, investor)
     assert_no_active_payload(html)
     assert "&amp;amp; Smith" not in html
 
@@ -86,17 +86,9 @@ def test_plain_risk_note_and_benchmark_name_are_not_trusted_markup(rendered):
         "available": True,
         "portfolio": {"span_label": PAYLOAD, "note": PAYLOAD, "metrics": {"beta": 1.0}},
     }
-    html = newsletter.render_newsletter(metrics, investor, ai_summary="")
+    html = newsletter.render_newsletter(metrics, investor)
     assert_no_active_payload(html)
     assert PAYLOAD in unescape(html)
-
-
-def test_ai_text_is_escaped_before_trusted_colored_html_and_charts_still_render(rendered):
-    _, metrics, investor = rendered
-    html = newsletter.render_newsletter(metrics, investor, ai_summary=f"[Today] {PAYLOAD} +1.23%")
-    assert_no_active_payload(html)
-    assert "+1.23%" in html and "<svg" in html
-    assert "&lt;svg" not in html
 
 
 def test_market_metadata_category_is_escaped_inside_prebuilt_html(rendered):
@@ -105,7 +97,7 @@ def test_market_metadata_category_is_escaped_inside_prebuilt_html(rendered):
         "name": PAYLOAD, "symbol": "UNKNOWN.X", "category": PAYLOAD,
         "value": 101.0, "pct": 1.0, "baseline": 100.0, "spark": [100.0, 101.0],
     },)
-    html = newsletter.render_newsletter(metrics, investor, ai_summary="")
+    html = newsletter.render_newsletter(metrics, investor)
     assert_no_active_payload(html)
 
 
@@ -117,7 +109,7 @@ def test_section_subtitle_and_plan_label_are_text_in_the_actual_template(rendere
             "total_buy": "0", "total_sell": "0", "actions": [],
         }],
     })
-    html = newsletter.render_newsletter(metrics, investor, ai_summary="")
+    html = newsletter.render_newsletter(metrics, investor)
     assert_no_active_payload(html)
     assert PAYLOAD in unescape(html)
 
@@ -146,7 +138,7 @@ def test_escaping_change_preserves_the_decoded_golden_document(rendered):
     # This fixture deliberately has no critical benchmark history. Escaping
     # must preserve its rejection, not pretend this synthetic issue can send.
     audit = {}
-    newsletter.build_context(metrics, rendered[2], ai_summary="", semantic_audit=audit)
+    newsletter.build_context(metrics, rendered[2], semantic_audit=audit)
     baseline_errors = validate_newsletter_semantics(metrics, audit, original)
     assert any("critical benchmark(s) did not resolve" in error for error in baseline_errors)
     assert validate_newsletter_semantics(metrics, audit, html) == baseline_errors

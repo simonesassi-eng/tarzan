@@ -319,21 +319,6 @@ def test_the_chart_axis_covers_every_bar(serve):
     assert ser.index[0] == pd.Timestamp(day[0][0])
 
 
-def test_the_ai_digest_reads_yields_in_basis_points():
-    from tarzan.export import ai_summary
-    from tarzan.models.investor_config import InvestorConfig
-    from tarzan.models.portfolio import PortfolioMetrics
-
-    rows = ({"name": "Bund 10Y", "unit": "yield", "value": 3.2941, "bp": -3.13, "pct": None},
-            {"name": "BTP–Bund 10Y", "unit": "spread", "value": 111.94, "bp": -4.7, "pct": None},
-            {"name": "DAX", "unit": "index", "value": 26107.0, "bp": None, "pct": 0.75})
-    m = PortfolioMetrics(total_value=1.0, invested_value=1.0, cash_value=0.0, market_quotes=rows)
-    got = ai_summary.build_digest(m, InvestorConfig())["markets_today"]
-    assert got[0] == {"name": "Bund 10Y", "level": 3.294, "unit": "yield %", "change_bp": -3.1}
-    assert got[1]["unit"] == "bp" and got[1]["change_bp"] == -4.7
-    assert got[2] == {"name": "DAX", "level": 26107.0, "change_pct": 0.75}
-
-
 # --- the cases seen live on 3 Nov 2026 ------------------------------------------------
 
 def test_a_lone_bad_print_is_not_drawn(serve):

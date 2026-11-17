@@ -109,7 +109,6 @@ def run_one(*, portfolio: str, instant: Optional[str], mode: str, strict: bool,
     from tarzan.stress import clock, net
 
     os.environ["TARZAN_CACHE_DIR"] = str(cache_dir)
-    os.environ["TARZAN_DISABLE_AI"] = "1"
     os.environ.pop("TARZAN_STRICT_INPUT", None)
 
     fixture = FIXTURES / portfolio
@@ -185,7 +184,6 @@ def quantities_in_process(*, portfolio: str, as_of, cache_dir: Path,
     global. It costs one extra run per checked cell and cannot go stale.
     """
     os.environ["TARZAN_CACHE_DIR"] = str(cache_dir)
-    os.environ["TARZAN_DISABLE_AI"] = "1"
     from tarzan.data import enricher
     from tarzan.stress import net
 

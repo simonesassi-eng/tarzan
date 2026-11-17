@@ -297,7 +297,7 @@ class PortfolioMetrics:
         income are excluded; a zero/empty cost basis yields ``total_value``.
 
         Single source for the ``total_value − cost`` figure the subject line,
-        performance matrix, diversification hero and AI digest all show."""
+        performance matrix and diversification hero all show."""
         cost = float(self.holdings_df["cost_basis_eur"].sum()) if not self.holdings_df.empty else 0.0
         return self.total_value - cost
 

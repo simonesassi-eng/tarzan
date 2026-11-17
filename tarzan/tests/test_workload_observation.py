@@ -31,7 +31,6 @@ def test_network_free_harness_exercises_explicit_kinds_and_categories(monkeypatc
     assert first == second
     assert first["network_access"] == "NOT_USED"
     assert first["drive_access"] == "NOT_USED"
-    assert first["gemini_access"] == "NOT_USED"
     assert first["delivery_access"] == "NOT_USED"
     assert first["instrument_kinds"] == ["STOCK", "ETF", "BOND", "CASH"]
     assert first["tracked_categories"] == [

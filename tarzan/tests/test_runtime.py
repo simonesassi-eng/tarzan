@@ -1,7 +1,7 @@
 """Tests for the deterministic / as-of run context (tarzan.runtime).
 
 Scope of the guarantee (deliberately): deterministic mode makes the computed
-NUMBERS reproducible (pinned clock, no live intraday, no AI) and leaves an
+NUMBERS reproducible (pinned clock, no live intraday) and leaves an
 ordinary run byte-for-byte unchanged. It does NOT promise a byte-identical
 newsletter — a residual row-order non-determinism remains (holding rows can
 tie on weight and their order traces to a set() of open ISINs); that is a
@@ -113,16 +113,15 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
     """Property 1 / C2 exploration for the accepted ``as_of``-only mode.
 
     CLI messaging calls this deterministic, but runtime gates only on the
-    separate deterministic flag.  Capture the report/artifact stamp plus live
-    market and Gemini transports in one diagnostic rather than stopping at the
-    first inconsistent surface.
+    separate deterministic flag.  Capture the report/artifact stamp plus the
+    live market transport in one diagnostic rather than stopping at the first
+    inconsistent surface.
     """
     import pandas as pd
     import pytest
 
     from tarzan.data import market_quotes, price_cache
     from tarzan.engine.metrics import MetricsEngine
-    from tarzan.export import ai_summary
     from tarzan.models.investor_config import InvestorConfig
 
     calls: list[object] = []
@@ -135,20 +134,11 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
 
     try:
         with pytest.MonkeyPatch.context() as mp:
-            mp.delenv("TARZAN_DISABLE_AI", raising=False)
-            mp.setenv("GEMINI_API_KEY", "test-key-not-sent")
-            mp.setattr(ai_summary, "build_digest", lambda *a, **k: {})
-            mp.setattr(
-                ai_summary,
-                "_call_gemini",
-                lambda *a, **k: calls.append("gemini") or "Market context complete.",
-            )
             mp.setattr(price_cache, "load_resolution", lambda ticker: ticker)
             mp.setattr(market_quotes, "intraday_feeds", fake_intraday_feeds)
 
             runtime.configure(deterministic=False, as_of=effective_date)
             artifact_stamp = runtime.now_stamp("%Y-%m-%d %H:%M")
-            ai_summary.generate_summary(object(), object())
 
             engine = MetricsEngine([], InvestorConfig())
             engine._live_1d({
@@ -164,8 +154,8 @@ def test_c2_asof_only_mode_uses_one_clock_and_blocks_live_transports(effective_d
                     "expected": expected_stamp,
                     "actual": artifact_stamp,
                 }
-            live_calls = [call for call in calls if call == "gemini" or
-                          (isinstance(call, tuple) and call[0] == "market")]
+            live_calls = [call for call in calls
+                          if isinstance(call, tuple) and call[0] == "market"]
             if live_calls:
                 violations["live_transports"] = live_calls
     finally:

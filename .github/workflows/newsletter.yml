@@ -124,7 +124,7 @@ jobs:
         run: python -m tarzan.data.public_cache import --only-missing
 
       # Verification has only read-only input access and the snapshot key.
-      # It has no mail/recipient/Gemini/claim credential and uses a separate
+      # It has no mail/recipient/claim credential and uses a separate
       # entry point, not the delivery path's dry-run switch.
       - name: Verify newsletter without delivery
         if: inputs.verify_only
@@ -149,7 +149,6 @@ jobs:
           SMTP_PORT: "465"
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           GOOGLE_DRIVE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS_JSON }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUBJECT_PREFIX: "Portfolio Digest"
           ISSUE_NUMBER: ${{ github.run_number }}
           TARZAN_STABLE_EVENT_ID: ${{ steps.trigger.outputs.event_id }}

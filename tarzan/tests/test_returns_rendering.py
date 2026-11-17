@@ -72,7 +72,7 @@ class TestNewsletterReturns:
     def test_no_decorative_em_dash_in_prose(self):
         # "—" is allowed ONLY as the standalone missing-data placeholder in its
         # own table cell. A connective em-dash inside prose (subtitles, captions,
-        # footers, the AI note) is the taste-skill anti-slop tell and must not
+        # footers) is the taste-skill anti-slop tell and must not
         # come back (e.g. "Annualized — TWR"). We scan the RENDERED HTML but
         # require the dash's neighbours to be in the SAME text run (no HTML tag
         # between them) — so a "—" placeholder cell sitting next to a table

@@ -73,7 +73,6 @@ def _synthetic_environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"):
         monkeypatch.setenv(name, "synthetic-" + name.lower())
-    monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
 
 
 def _reference():
@@ -434,7 +433,7 @@ def test_source_mutation_and_previous_output_mutation_cannot_change_frozen_evide
 
 
 @pytest.mark.parametrize("stage,severity,affected", [
-    ("gemini", "WARNING", ["market_context_summary"]),
+    ("provider_transport", "WARNING", ["market_data"]),
     ("newsletter_semantics", "CRITICAL", ["newsletter"]),
     ("valuation", "CRITICAL", ["portfolio", "planning"]),
     ("delivery_reconciliation", "CRITICAL", ["delivery", "publication"]),

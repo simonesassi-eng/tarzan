@@ -15,7 +15,7 @@ from tarzan.runtime.ledger import (
 from tarzan.runtime.transport import ProviderBudget, ProviderTransportSettings
 
 
-PROVIDERS = ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+PROVIDERS = ("yahoo", "openfigi", "borsa", "justetf", "manual",
              "tradingview", "cnbc", "marketwatch")
 
 

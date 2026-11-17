@@ -3,7 +3,7 @@
 The verification command captures public provider answers at the transport
 boundary, not enriched holdings or previously computed metrics. A replay runs
 the real loader, resolver, valuation, metrics engine and newsletter renderer
-again against those same answers. It performs no SMTP delivery and disables AI.
+again against those same answers. It performs no SMTP delivery.
 
 ```sh
 python -m tarzan.verification.portfolio capture \
@@ -31,7 +31,7 @@ replay; it must never silently introduce a fresh quote.
 
 The comparison includes total valuation, gross/net P&L, MWR, TWR, period
 returns, risk, coverage, allocation, individual positions and rebalancing plans.
-Operational IDs and AI prose are not financial KPIs. Tiny floating-point
+Operational IDs are not financial KPIs. Tiny floating-point
 roundoff is excluded, but zero and Unavailable are different outcomes.
 
 A capture is not an atomic market snapshot: providers answer at different

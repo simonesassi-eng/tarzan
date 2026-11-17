@@ -9,7 +9,6 @@ from markupsafe import Markup
 import pandas as pd
 
 from tarzan.export._format import base_symbol
-from tarzan.export.newsletter._constants import FONT_STACK, PALETTE, TYPE_PX
 
 
 def _escaped_text(value) -> Markup:
@@ -155,66 +154,3 @@ def _display_ticker(symbol: Optional[str]) -> Optional[str]:
     if "/" in ticker or " " in ticker:
         return None
     return base_symbol(ticker) or ticker
-
-def _colorize_pct(text: str) -> str:
-    """HTML-escape ``text`` and wrap signed percentages AND percentage-point
-    figures (e.g. +0.81%, -1.2%, +0.92pp, -4.53pp) in green/red spans, so both
-    the market-context note (uses %) and the divergence note (uses pp) show
-    moves in colour. Unsigned percentages (yield levels like 4.38%) are left
-    neutral."""
-    import html as _html
-    import re as _re
-    if not text:
-        return ""
-    esc = _html.escape(text)
-
-    def _wrap(m):
-        tok = m.group(0)
-        neg = tok[0] in "-\u2212"
-        col = PALETTE["red"] if neg else PALETTE["green"]
-        return f'<span style="color:{col};font-weight:700;">{tok}</span>'
-
-    # Signed number followed by %, pp, or "percentage point(s)" (bare beta like
-    # "0.69" stays neutral). The model sometimes spells out "percentage points"
-    # instead of "pp", so match both.
-    return _re.sub(
-        r"[+\-\u2212]\d+(?:[.,]\d+)?\s?(?:%|pp|percentage points?)", _wrap, esc)
-
-
-def _colorize_pct_lines(text: str) -> str:
-    """Like :func:`_colorize_pct`, but for the news digest's newline-
-    separated items. Each line may start with a '[tag]' time marker (e.g.
-    '[14:30]' or '[Today]', see _system_prompt); the tag, if present, is
-    pulled out and styled distinctly (muted, monospace) from the headline.
-    Returns <tr><td> rows, not <li>: the caller wraps this in a <table>,
-    which renders far more consistently across email clients than native
-    list bullets/spacing (Outlook in particular)."""
-    import html as _html
-    import re as _re
-    if not text:
-        return ""
-    raw_lines = [ln for ln in text.split("\n") if ln.strip()]
-    tag_re = _re.compile(r"^\[([^\]]{1,20})\]\s*")
-    rows = []
-    for i, line in enumerate(raw_lines):
-        m = tag_re.match(line)
-        tag, rest = (m.group(1), line[m.end():]) if m else (None, line)
-        tag_html = (
-            # 62px is "Yesterday" -- the longest tag -- at the NOTE size. At
-            # 52px that tag overflowed its own gutter and pushed its sentence
-            # 7px right of every "Today" sentence, so the narrative column had
-            # a ragged left edge.
-            f'<span style="display:inline-block;min-width:62px;'
-            f'font-family:{FONT_STACK};'
-            f'color:{PALETTE["subtle"]};font-size:{TYPE_PX["prose"]}px;">'
-            f'{_html.escape(tag)}</span> '
-        ) if tag else ""
-        border = (f'border-bottom:1px solid {PALETTE["border"]};'
-                  if i < len(raw_lines) - 1 else "")
-        rows.append(
-            f'<tr><td style="padding:5px 2px;{border}">'
-            f'{tag_html}<span style="color:{PALETTE["ink"]};">'
-            f"{_colorize_pct(rest)}</span></td></tr>"
-        )
-    return "".join(rows)
-

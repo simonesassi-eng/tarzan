@@ -52,7 +52,7 @@ def _result(metrics=None):
     )
 
 
-def _fail(result, *, stage, severity="WARNING", affected=("market_context_summary",)):
+def _fail(result, *, stage, severity="WARNING", affected=("market_data",)):
     return result.ledger.open_failure(
         stage=stage, stable_code="SYNTHETIC_FAILURE", severity=severity,
         error="synthetic evidence", affected_outputs=affected,
@@ -149,7 +149,7 @@ def test_summary_facts_are_deeply_immutable_and_render_mutation_is_isolated():
 @pytest.mark.parametrize(
     "stage,severity,affected,decision",
     [
-        ("gemini", "WARNING", ("market_context_summary",), "SEND_DEGRADED_NORMAL"),
+        ("provider_transport", "WARNING", ("market_data",), "SEND_DEGRADED_NORMAL"),
         ("newsletter_semantics", "CRITICAL", ("newsletter",), "BLOCK_ALL_DELIVERY"),
         ("delivery_reconciliation", "CRITICAL", ("delivery", "publication"),
          "BLOCK_NORMAL_AND_NOTIFY_FAILURE"),
@@ -157,7 +157,7 @@ def test_summary_facts_are_deeply_immutable_and_render_mutation_is_isolated():
          "BLOCK_NORMAL_AND_NOTIFY_FAILURE"),
     ],
 )
-def test_new_ai_semantic_or_delivery_evidence_changes_a_later_summary(
+def test_new_provider_semantic_or_delivery_evidence_changes_a_later_summary(
     stage, severity, affected, decision,
 ):
     result = _result()

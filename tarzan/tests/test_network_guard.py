@@ -104,7 +104,7 @@ def test_prebound_stdlib_opener_is_still_blocked_at_the_socket_boundary():
 
 def test_production_credentials_are_absent_unless_the_test_injects_them():
     assert not any(os.environ.get(name) for name in (
-        "GEMINI_API_KEY", "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
+        "SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
         "DRIVE_FOLDER_ID", "GOOGLE_DRIVE_CREDENTIALS_JSON",
         "GOOGLE_APPLICATION_CREDENTIALS", "TARZAN_CACHE_KEY_B64",
         "DELIVERY_CLAIM_ENDPOINT", "DELIVERY_CLAIM_TOKEN",

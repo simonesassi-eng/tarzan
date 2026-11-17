@@ -51,7 +51,6 @@ def strictly_offline(monkeypatch):
     monkeypatch.setenv("TZ", "UTC")
     if hasattr(time, "tzset"):
         time.tzset()
-    monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
     monkeypatch.setenv("TARZAN_DISABLE_CACHE", "1")
     monkeypatch.delenv(diagnostics.DIRECTORY_ENV, raising=False)
     monkeypatch.delenv(sealed.KEY_ENV, raising=False)
@@ -65,7 +64,6 @@ def strictly_offline(monkeypatch):
     monkeypatch.setattr(delivery, "send_email", forbidden)
     monkeypatch.setattr(delivery, "_delivery_claim_store", forbidden)
     monkeypatch.setattr(delivery, "_failed_checks_sha", lambda: None)
-    monkeypatch.setattr("tarzan.export.ai_summary.generate_summary", lambda *a, **k: None)
     monkeypatch.setattr("tarzan.data.market_quotes.fetch_market_quotes", lambda *a, **k: [])
     runtime.reset(attempt_id="synthetic-nav-integration", invocation_source="test")
     yield
@@ -148,7 +146,7 @@ def real_render(result):
         metrics, config = result.report_view.project()
         audit = {}
         html = render_newsletter(
-            metrics, config, ai_summary="", semantic_audit=audit, run_result=result,
+            metrics, config, semantic_audit=audit, run_result=result,
         )
         return html, validate_newsletter_semantics(metrics, audit, html)
 

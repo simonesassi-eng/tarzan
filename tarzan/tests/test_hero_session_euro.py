@@ -83,7 +83,7 @@ def caption(m):
 
 
 def render(m):
-    return render_newsletter(m, InvestorConfig(), ai_summary="")
+    return render_newsletter(m, InvestorConfig())
 
 
 @pytest.mark.parametrize("total, invested", [(50000.0, 0.0), (100000.0, 96000.0), (1.0, 1.0)])

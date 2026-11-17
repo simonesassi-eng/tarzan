@@ -2,7 +2,6 @@
 
 import base64
 import json
-import os
 import smtplib
 
 import pandas as pd
@@ -43,7 +42,7 @@ def exercise(monkeypatch, tmp_path):
     inputs.mkdir()
     for name in ("order_list.csv", "targets.csv", "targets_per_holding.csv"):
         (inputs / name).write_text("synthetic,private,input\n")
-    for name in ("SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL", "GEMINI_API_KEY",
+    for name in ("SMTP_USER", "SMTP_PASS", "RECIPIENT_EMAIL",
                  "DELIVERY_CLAIM_ENDPOINT", "DELIVERY_CLAIM_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(diag.DIRECTORY_ENV, str(tmp_path / "encrypted"))
@@ -67,7 +66,6 @@ def exercise(monkeypatch, tmp_path):
 
 def publish_fake(monkeypatch, completed):
     def run(**kwargs):
-        assert os.environ["TARZAN_DISABLE_AI"] == "1"
         record_last_run_result(completed)
         return completed.compatibility_tuple()
     monkeypatch.setattr(verify.orchestrator, "run", run)
@@ -193,11 +191,3 @@ def test_input_cleanup_is_owned_and_does_not_authorize_send(exercise, monkeypatc
     publish_fake(monkeypatch, result())
     assert verify.main([]) == 0
     assert closed == [True]
-
-
-def test_ai_environment_is_restored_after_verification(exercise, monkeypatch):
-    inputs, local, encrypted = exercise
-    monkeypatch.setenv("TARZAN_DISABLE_AI", "caller-setting")
-    publish_fake(monkeypatch, result())
-    assert verify.main(["--input-dir", str(inputs)]) == 0
-    assert os.environ["TARZAN_DISABLE_AI"] == "caller-setting"

@@ -123,7 +123,7 @@ class TestCredentialsReachOnlyThePublicationStep:
     """The one invariant in the old validator that nothing else enforced.
 
     Checkout, Python setup, dependency installation and the cache restore all run
-    before the send, and any of them could be handed SMTP, Gemini or Drive
+    before the send, and any of them could be handed SMTP or Drive
     credentials by a one-line edit. Keeping the secrets in the final step means a
     third-party action compromised upstream sees none of them.
     """
@@ -134,7 +134,6 @@ class TestCredentialsReachOnlyThePublicationStep:
             "SMTP_USER": {_PUBLICATION_STEP},
             "SMTP_PASS": {_PUBLICATION_STEP},
             "RECIPIENT_EMAIL": {_PUBLICATION_STEP},
-            "GEMINI_API_KEY": {_PUBLICATION_STEP},
             "DELIVERY_CLAIM_ENDPOINT": {_PUBLICATION_STEP},
             "DELIVERY_CLAIM_TOKEN": {_PUBLICATION_STEP},
             "DRIVE_FOLDER_ID": {_PUBLICATION_STEP, verify},
@@ -171,7 +170,7 @@ class TestCredentialsReachOnlyThePublicationStep:
         assert option["type"] == "boolean" and option["default"] == "false"
         step = _steps()["Verify newsletter without delivery"]
         assert _condition(step["if"]) == "inputs.verify_only"
-        assert not any(name.startswith(("SMTP_", "RECIPIENT_", "GEMINI_", "DELIVERY_CLAIM_"))
+        assert not any(name.startswith(("SMTP_", "RECIPIENT_", "DELIVERY_CLAIM_"))
                        for name in step["env"])
         assert "tarzan-newsletter-verify" in workflow["concurrency"]["group"]
         assert "inputs.verify_only" in workflow["concurrency"]["group"]
@@ -279,10 +278,3 @@ class TestOneVersionAuthority:
 
     def test_the_cli_uses_the_package_authority(self):
         assert "from tarzan import __version__" in _text("tarzan/main.py")
-
-    def test_the_gemini_model_and_api_version_are_pinned(self):
-        """A floating model or API version changes the digest's prose without a
-        commit. The pin is the constant itself; nothing needs to restate it."""
-        source = _text("tarzan/export/ai_summary.py")
-        assert re.search(r'(?m)^_PINNED_MODEL\s*=\s*["\'][^"\']+["\']', source)
-        assert re.search(r"/v\d[a-z]*/models/", source)

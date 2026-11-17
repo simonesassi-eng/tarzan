@@ -41,7 +41,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--deterministic", action="store_true",
         help="Reproducible run (requires --as_of): pin the clock, skip live "
-             "intraday quotes and the AI summary, so the same inputs produce the "
+             "intraday quotes, so the same inputs produce the "
              "same output (golden-testable / offline-reproducible on a warm cache).",
     )
     parser.add_argument(
@@ -295,7 +295,7 @@ def main(argv=None) -> int:
     logger.info("Output directory: %s", output_dir)
 
     if args.deterministic or as_of is not None:
-        logger.info("Deterministic run%s (live quotes + AI summary skipped).",
+        logger.info("Deterministic run%s (live quotes skipped).",
                     f" as of {as_of}" if as_of else "")
     strict = args.strict or os.environ.get("TARZAN_STRICT_INPUT", "").strip() in ("1", "true", "yes")
     if strict:

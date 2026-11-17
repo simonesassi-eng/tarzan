@@ -289,12 +289,11 @@ def _initialize_worker():
         if (
             name.startswith(("SMTP_", "GOOGLE_", "DRIVE_", "DELIVERY_CLAIM_"))
             or name in {
-                "GEMINI_API_KEY", "OPENFIGI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
+                "OPENFIGI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
                 "RECIPIENT_EMAIL", "TARZAN_CACHE_KEY_B64", "AUTHORIZED_RESEND_TOKEN",
             }
         ):
             os.environ.pop(name, None)
-    os.environ["TARZAN_DISABLE_AI"] = "1"
     os.environ["TARZAN_DISABLE_CACHE"] = "1"
     import http.client
     import smtplib

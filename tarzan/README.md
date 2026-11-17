@@ -59,7 +59,6 @@ tarzan/
 │   └── robustness.py            # rolling, stress, and bootstrap analysis
 ├── export/
 │   ├── newsletter/              # in-memory HTML newsletter rendering
-│   ├── ai_summary.py            # typed Gemini boundary and deterministic Signals fallback
 │   └── whatif_excel.py          # local-only What-If workbook rendering
 └── tests/                       # deterministic unit/property/integration evidence
 ```
@@ -106,7 +105,7 @@ python -m tarzan.main \
 
 ### Run modes
 
-- `LIVE`: no boundary date; one captured clock and eligible live market/Gemini
+- `LIVE`: no boundary date; one captured clock and eligible live market
   transport.
 - `POINT_IN_TIME`: `--as_of YYYY-MM-DD`; one clock/order boundary and no live
   transport.
@@ -308,19 +307,6 @@ primary error or an acknowledged delivery state. Caller-owned inputs are not del
 Newsletter text in `.html.j2` templates is autoescaped; prebuilt HTML is an
 explicit builder boundary, not a blanket trust of broker/provider content.
 
-## Gemini boundary
-
-The request payload (`build_digest`) carries only typed parsed
-portfolio/analysis domain content and explicit summary instructions.
-Environment maps, arbitrary paths or files, credentials, authentication
-objects, and machine metadata are not inputs. The API key reaches only the
-final transport adapter. Keys, prompts, payloads, raw responses, environment
-fragments, file contents, and secret-bearing exceptions are not persisted.
-
-Grounded, non-grounded, failed, and deterministic Signals fallback attempts are
-recorded as non-secret structured evidence. Gemini transport is prohibited in
-`POINT_IN_TIME` and `REPRODUCIBLE` modes.
-
 ## Delivery safety
 
 Normal newsletters and critical-failure notifications have different stable
@@ -345,7 +331,7 @@ deliberate host-local fallback has no cross-run guarantee on an ephemeral runner
 GitHub automation uses standalone push/PR Checks, native event preflight,
 compilation/dependency consistency checks, full-SHA action pins,
 hash-enforced Python installation, and one final step scoped to the
-Drive, Gemini, claim-service, recipient, and SMTP secrets it consumes. The Apps
+Drive, claim-service, recipient, and SMTP secrets it consumes. The Apps
 Script claim endpoint uses `LockService` plus a separate `delivery_claim:`
 Properties namespace and retains hashed control records beyond the declared
 reconciliation window.
@@ -372,7 +358,7 @@ financial decisions and is not a portfolio-size, latency, throughput, memory,
 availability, or unlimited-scale claim.
 
 The deterministic harness exercises explicit kinds/categories without market,
-Drive, Gemini, delivery, upload, or other network access:
+Drive, delivery, upload, or other network access:
 
 ```bash
 python scripts/observe_workload.py

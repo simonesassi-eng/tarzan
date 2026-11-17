@@ -19,7 +19,7 @@ Fresh-environment comparisons must preserve Python, wheels, hash lock,
 resolver behavior, hardware and the initial cache, and alternate the arms.
 
 An offline local-wheel experiment measures this bounded component, not
-live provider acquisition, download latency, AI or delivery time. Linux
+live provider acquisition, download latency or delivery time. Linux
 verification and later natural sends remain separate release evidence.
 No newsletter-runtime saving is claimed solely from a faster pip step.
 
@@ -30,4 +30,4 @@ with eager compilation and 6.852 s without it. The first import itself
 increased from 0.826 s to 3.242 s; that cost is included, not hidden.
 The four combined samples per arm ranged from 16.198–16.504 s and
 6.836–6.862 s respectively. This is one runner's bounded component
-experiment, excluding download, provider latency, AI and delivery.
+experiment, excluding download, provider latency and delivery.

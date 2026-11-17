@@ -87,7 +87,7 @@ def test_legacy_cube_is_prepared_once_at_the_context_boundary(monkeypatch):
     calls = []
     reference = ReportReference(benchmark_alpha_beta="Reference", benchmark_geo="Reference")
     monkeypatch.setattr(ReportReference, "prepare", classmethod(lambda cls: calls.append(1) or reference))
-    context = build_context(PortfolioMetrics(), InvestorConfig(), ai_summary="")
+    context = build_context(PortfolioMetrics(), InvestorConfig())
     assert calls == [1]
     assert context["risk_legend"]
 
@@ -96,7 +96,7 @@ def test_completed_render_keeps_its_reference_when_globals_change(rendered, monk
     original_html, metrics, investor = rendered
     assert metrics.report_reference is not None
     _forbid_global_reference_reads(monkeypatch)
-    assert render_newsletter(metrics, investor, issue_number=31, ai_summary="") == original_html
+    assert render_newsletter(metrics, investor, issue_number=31) == original_html
     projected, _ = ReportView.build(metrics, investor).project()
     assert projected.report_reference == metrics.report_reference
     with pytest.raises(TypeError):

@@ -64,16 +64,6 @@ def test_a_buy_only_plan_never_opens_a_position_below_five_percent():
     assert not opened, actions
 
 
-def test_the_ai_note_cannot_flip_a_sign_and_still_pass_as_grounded():
-    from tarzan.export.ai_summary import _numbers_are_grounded as grounded
-
-    digest = {"gap_pp": -4.5, "portfolio_pct": 5.1, "beta": 0.92}
-    assert grounded("Behind by 4.5pp; portfolio +5.1%; beta 0.92.", digest)
-    assert not grounded("Ahead +4.5pp.", digest)
-    assert not grounded("Portfolio -5.1%.", digest)
-    assert not grounded("Beta 0.7.", digest)
-
-
 def test_calibrated_splice_does_not_extrapolate_an_insignificant_intercept():
     import numpy as np
     import pandas as pd

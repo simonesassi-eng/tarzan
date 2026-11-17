@@ -17,7 +17,7 @@ import time
 
 
 _PROVIDERS = frozenset({
-    "yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+    "yahoo", "openfigi", "borsa", "justetf", "manual",
     "tradingview", "cnbc", "marketwatch",
 })
 _operation = ContextVar("tarzan_provider_operation", default=None)

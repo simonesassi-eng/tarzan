@@ -54,9 +54,9 @@ is an explicit local CLI workflow, never an automatic newsletter dependency.
 
 ## Run modes
 
-- `LIVE` — captured current clock and eligible live market/Gemini transport.
+- `LIVE` — captured current clock and eligible live market transport.
 - `POINT_IN_TIME` — `--as_of YYYY-MM-DD`; one effective boundary controls clocks and orders, and live transport is disabled.
-- `REPRODUCIBLE` — `--deterministic --as_of YYYY-MM-DD`; requires the date and uses only replayable/cache evidence. Live market and Gemini transport are disabled.
+- `REPRODUCIBLE` — `--deterministic --as_of YYYY-MM-DD`; requires the date and uses only replayable/cache evidence. Live market transport is disabled.
 
 ```bash
 python -m tarzan.main --input_orders input/order_list.csv --as_of 2026-06-30
@@ -110,10 +110,6 @@ Publication has an independent materiality policy. Decisions include
 and `BLOCK_ALL_DELIVERY`. Critical runs do not send the normal newsletter;
 rendered semantic contradictions block SMTP entirely.
 
-## Gemini boundary
-
-Gemini receives only typed portfolio/analysis domain content and explicit instructions. The API credential is passed only to transport. Keys, prompts, payloads, environment data, arbitrary files, raw provider responses, and secret-bearing exceptions are never persisted. Grounded, non-grounded, failed, and deterministic Signals fallback attempts are recorded without payload content. Gemini is never called in `POINT_IN_TIME` or `REPRODUCIBLE` mode.
-
 ## Delivery safety
 
 Each normal or failure-notification intent has a purpose-specific stable
@@ -143,10 +139,10 @@ tracebacks. Older public logs/history do not become private retroactively.
 
 The standalone `Checks` workflow runs the full suite on pushes/pull requests.
 Newsletter preflight validates native event metadata, compilation and installed
-dependency consistency, without Drive/Gemini/claim/recipient/SMTP credentials.
-Mail/Gemini/claim secrets are scoped to the publication step. The explicit
+dependency consistency, without Drive/claim/recipient/SMTP credentials.
+Mail/claim secrets are scoped to the publication step. The explicit
 `verify_only` mode reads Drive inputs and renders with no mail/recipient/claim
-credentials, no AI, no SMTP and no delivery claim. The snapshot key is bound
+credentials, no SMTP and no delivery claim. The snapshot key is bound
 only to native consumers, not external actions. Actions are SHA-pinned;
 installation enforces package hashes. A failed `Checks` run adds a notice rather
 than itself withholding a digest; operational freshness, financial/semantic

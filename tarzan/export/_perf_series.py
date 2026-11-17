@@ -85,8 +85,7 @@ def market_snapshot(m: PortfolioMetrics, spark_points: int = 30) -> list[dict]:
     indices, derived from ``m.benchmark_histories`` (no extra network).
 
     Each entry: ``{name, value, change, pct, spark}``. Indices with fewer
-    than two observations are skipped. Used by both the newsletter Markets
-    strip and the AI digest (so the narrative can cite real figures)."""
+    than two observations are skipped. Used by the newsletter Markets strip."""
     out: list[dict] = []
     bh = m.benchmark_histories or {}
     for name in _MARKETS_ORDER:
@@ -564,8 +563,8 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
 
     ``mwr`` is off by default because it is the one line here that is SOLVED
     rather than read: an XIRR per plotted point, and this function is called
-    several times per issue (the chart, the benchmark gap, its history, the AI
-    summary) where only the chart draws it."""
+    several times per issue (the chart, the benchmark gap, its history) where
+    only the chart draws it."""
     if m.portfolio_history is None or m.actual_value_series is None:
         return None
     nav_full = _norm_series(m.portfolio_history)

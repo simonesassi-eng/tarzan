@@ -31,7 +31,6 @@ from tarzan.export.newsletter._constants import (  # noqa: F401 (re-exported)
     _NewsletterContext,
     _PERF_CLASS_ORDER,
 )
-from tarzan.export.newsletter._format import _colorize_pct, _colorize_pct_lines
 from tarzan.export.newsletter import _charts as _charts_mod
 from tarzan.export.newsletter._sections_alloc import (
     _build_headline,
@@ -106,7 +105,6 @@ def build_context(
     issue_number: int = 1,
     benchmark_alpha_beta: Optional[str] = None,
     benchmark_geo: Optional[str] = None,
-    ai_summary: Optional[str] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build the full Jinja2 context dict for the newsletter template.
@@ -119,7 +117,6 @@ def build_context(
             resolves it from the curated taxonomy — see ``_benchmark_names``.
         benchmark_geo: Display name of geographic allocation benchmark. None
             resolves it from the taxonomy's ``is_benchmark_geo`` row.
-        ai_summary: Optional precomputed market-context narrative.
         semantic_audit: Optional mutable mapping populated with the exact raw
             intraday request and rendered chart-label sources.
 
@@ -160,8 +157,6 @@ def build_context(
         "headline": _build_headline(nctx, hero),
         "hero": hero,
         "performance30": _build_performance30(nctx),
-        "ai_summary": ai_summary,
-        "ai_summary_html": _colorize_pct_lines(ai_summary) if ai_summary else None,
         "movers": _build_movers(nctx),
         "diversification": _build_diversification(nctx),
         "holdings": _build_holdings(nctx),
@@ -195,7 +190,6 @@ def render_newsletter(
     issue_number: int = 1,
     benchmark_alpha_beta: Optional[str] = None,
     benchmark_geo: Optional[str] = None,
-    ai_summary: Optional[str] = None,
     semantic_audit: Optional[dict[str, Any]] = None,
     run_result=None,
 ) -> str:
@@ -229,29 +223,20 @@ def render_newsletter(
                 projected_metrics, projected_config, issue_number,
                 benchmark_alpha_beta or result.report_view.benchmark_alpha_beta,
                 benchmark_geo or result.report_view.benchmark_geo,
-                ai_summary, semantic_audit,
+                semantic_audit,
             )
     return _render_newsletter_facts(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
-        ai_summary, semantic_audit,
+        semantic_audit,
     )
 
 
 def _render_newsletter_facts(
     metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
-    ai_summary, semantic_audit,
+    semantic_audit,
 ):
     # Benchmark display names are resolved in build_context (one resolver, so no
     # entry point can name a different index than the engine computed against).
-    # Resolve the optional AI market-context summary when not explicitly passed,
-    # so every caller (CLI + email) renders the SAME newsletter. generate_summary
-    # is fully self-guarding: it returns None when no GEMINI_API_KEY is set, in a
-    # deterministic run, or on any error — it never raises and never blocks the
-    # render. Pass ai_summary="" to force the block off even when a key exists.
-    if ai_summary is None:
-        from tarzan.export.ai_summary import generate_summary
-        ai_summary = generate_summary(metrics, config)
-
     template_dir = os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "templates")
     env = Environment(
@@ -263,7 +248,7 @@ def _render_newsletter_facts(
     template = env.get_template("portfolio_digest.html.j2")
     context = build_context(
         metrics, config, issue_number, benchmark_alpha_beta, benchmark_geo,
-        ai_summary=ai_summary, semantic_audit=semantic_audit,
+        semantic_audit=semantic_audit,
     )
     return template.render(**context)
 
@@ -280,8 +265,7 @@ def generate_newsletter(
 
     Writes ``portfolio_digest_<YYYYMMDD_HHMM>.html`` into ``output_dir``. The
     rendering goes through :func:`render_newsletter`, so a CLI run and an
-    emailed send produce the same HTML (benchmark names and the optional AI
-    market-context summary are resolved there).
+    emailed send produce the same HTML (benchmark names are resolved there).
 
     Args:
         metrics: Computed portfolio metrics.

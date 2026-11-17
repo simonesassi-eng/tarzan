@@ -50,14 +50,10 @@ GOLDEN_PATH = Path(__file__).parent / "golden" / "newsletter.html"
 
 
 def _render(metrics, config) -> str:
-    # ai_summary="" forces the market-context block off explicitly rather than
-    # relying on the absence of a key, so the golden cannot depend on the
-    # environment.
     return render_newsletter(
         metrics=metrics,
         config=config,
         issue_number=31,
-        ai_summary="",
     )
 
 
@@ -220,8 +216,8 @@ class TestSectionNumbering:
     """Section ordinals must run 1..N over the sections actually rendered.
 
     The kicker macro increments a namespace counter rather than taking a fixed
-    number per section, because optional blocks (market context, optimizer) come
-    and go: a static ordinal left holes in the sequence — [02] with no [01] —
+    number per section, because optional blocks (markets, optimizer) come and
+    go: a static ordinal left holes in the sequence — [02] with no [01] —
     whenever one was unavailable.
     """
 
@@ -238,14 +234,17 @@ class TestSectionNumbering:
         assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
 
     def test_sequence_absorbs_an_optional_block(self, rendered):
-        """Adding the market-context block shifts the rest by one and still
-        leaves a gapless run."""
+        """Adding the Markets block (absent from the fixture, whose quote fetch
+        is stubbed empty) shifts the rest by one and still leaves a gapless run."""
+        from dataclasses import replace
         _html, metrics, config = rendered
-        with_ai = render_newsletter(
-            metrics=metrics, config=config, issue_number=31,
-            ai_summary="A market context note.",
-        )
-        ordinals = self._ordinals(with_ai)
+        quoted = replace(metrics, market_quotes=({
+            "name": "Synthetic index", "symbol": "SYNTH.X", "category": "Indices",
+            "value": 101.0, "pct": 1.0, "baseline": 100.0, "spark": [100.0, 101.0],
+        },))
+        with_markets = render_newsletter(metrics=quoted, config=config, issue_number=31)
+        assert "Markets" in _section_labels(with_markets)
+        ordinals = self._ordinals(with_markets)
         assert ordinals == list(range(1, len(ordinals) + 1)), ordinals
         assert len(ordinals) == len(self._ordinals(_html)) + 1
 

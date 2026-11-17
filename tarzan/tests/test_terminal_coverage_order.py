@@ -70,7 +70,7 @@ def test_real_builder_coverage_is_identical_across_interpreter_hash_seeds(seed):
         }
     }
     environment.update(
-        PYTHONHASHSEED=seed, TARZAN_DISABLE_CACHE="1", TARZAN_DISABLE_AI="1",
+        PYTHONHASHSEED=seed, TARZAN_DISABLE_CACHE="1",
         PYTHONPATH=str(root), PYTHONNOUSERSITE="1",
     )
     script = (

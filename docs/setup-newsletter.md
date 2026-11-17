@@ -187,7 +187,7 @@ In your repo on github.com:
 > editor, select all, copy, paste into the GitHub Secret value field.
 > GitHub stores it as-is — don't reformat it.
 
-Optional `GEMINI_API_KEY` enables AI text. If using the existing durable claim
+If using the existing durable claim
 service, set both `DELIVERY_CLAIM_ENDPOINT` and `DELIVERY_CLAIM_TOKEN`.
 An incomplete pair or an unavailable configured service blocks SMTP; it does
 not fall back locally. With neither present, the intentional fallback is
@@ -220,8 +220,8 @@ Only `report.sealed` is retained as a diagnostic artifact, for 14 days.
 
 1. github.com → your repo → **Actions** tab → **Tarzan Newsletter**.
 2. Click **Run workflow**, select the intended branch and enable **verify_only**.
-   Run it: this separate entry point has no mail credentials, cannot claim or
-   invoke SMTP, and disables AI. Ordinary automatic requests still send normally.
+   Run it: this separate entry point has no mail credentials and cannot claim
+   or invoke SMTP. Ordinary automatic requests still send normally.
 3. Wait for completion; queueing, providers and native services affect duration.
 4. Inspect the step **Verify newsletter without delivery**, then privately
    decrypt its diagnostic artifact as described in
@@ -530,7 +530,6 @@ unset DRIVE_FOLDER_ID GOOGLE_DRIVE_CREDENTIALS_JSON
 SMTP_USER=sender@example.invalid SMTP_PASS=synthetic \
 RECIPIENT_EMAIL=reader@example.invalid \
 DRY_RUN=1 \
-TARZAN_DISABLE_AI=1 \
 ORDERS_PATH=input/order_list.csv \
 TARGETS_PATH=input/targets.csv \
 TARGETS_PER_HOLDING_PATH=input/targets_per_holding.csv \

@@ -49,15 +49,13 @@ _SCOPE = (
 
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch):
-    monkeypatch.setenv("TARZAN_DISABLE_AI", "1")
     monkeypatch.setattr("tarzan.runtime.today", lambda: pd.Timestamp("2026-10-21").date())
 
     def forbidden(*args, **kwargs):
-        pytest.fail("cash funding display must not call AI, provider or SMTP")
+        pytest.fail("cash funding display must not call a provider or SMTP")
 
     monkeypatch.setattr("requests.sessions.Session.request", forbidden)
     monkeypatch.setattr("smtplib.SMTP", forbidden)
-    monkeypatch.setattr("tarzan.export.ai_summary.generate_summary", forbidden)
 
 
 def _reference():
@@ -168,7 +166,7 @@ def _context(metrics, config):
 
 def _render(metrics, config):
     audit = {}
-    html = render_newsletter(metrics, config, ai_summary="", semantic_audit=audit)
+    html = render_newsletter(metrics, config, semantic_audit=audit)
     return html, audit
 
 
@@ -356,7 +354,7 @@ def test_only_last_final_proof_controls_display_not_an_earlier_draft():
 @pytest.mark.parametrize("actions", [False, True])
 def test_non_executable_proof_takes_precedence_over_trade_count(actions):
     metrics, config = _cube(buy=actions, buffer=3000.0)
-    context = build_context(metrics, config, ai_summary="")
+    context = build_context(metrics, config)
     assert context["hero"]["rebal_label"] == "Not executable"
     assert context["hero"]["rebal_executable"] is False
     assert "not executable" in context["headline"]["text"]
@@ -372,7 +370,7 @@ def test_no_action_with_residual_target_drift_is_not_fabricated_alignment():
     assert _proof(metrics)["status"] == "EXECUTABLE"
     assert any(check["status"] == "⚠ PARTIAL" for check in metrics.rebalancing_verifications
                if check["kind"] != "funding")
-    context = build_context(metrics, config, ai_summary="")
+    context = build_context(metrics, config)
     assert context["hero"]["rebal_label"] != "Aligned"
     assert "allocation is on target" not in context["headline"]["text"]
     html, _ = _render(metrics, config)
@@ -383,13 +381,13 @@ def test_no_action_with_residual_target_drift_is_not_fabricated_alignment():
 
 def test_zero_actions_can_be_aligned_only_with_nonempty_target_evidence():
     metrics, config = _cube(buy=False, buffer=1000.0)
-    context = build_context(metrics, config, ai_summary="")
+    context = build_context(metrics, config)
     assert context["hero"]["rebal_label"] == "Aligned"
     html, _ = _render(metrics, config)
     assert "Checked targets within tolerance" in html
     assert _plan_document(html)["attrs"]["data-tarzan-target-alignment"] == "proven"
     metrics.rebalancing_verifications[:] = [_proof(metrics)]
-    context = build_context(metrics, config, ai_summary="")
+    context = build_context(metrics, config)
     assert context["hero"]["rebal_label"] != "Aligned"
 
 
@@ -634,7 +632,7 @@ def test_nonempty_target_rows_still_need_known_numeric_evidence(kind, field, val
     metrics, config = _cube(buy=False, buffer=1000.0)
     target = next(check for check in metrics.rebalancing_verifications if check["kind"] == kind)
     target["items"][0][field] = value
-    context = build_context(metrics, config, ai_summary="")
+    context = build_context(metrics, config)
     assert context["hero"]["rebal_label"] != "Aligned"
     html, audit = _render(metrics, config)
     assert _plan_document(html)["attrs"]["data-tarzan-target-alignment"] == "unproven"

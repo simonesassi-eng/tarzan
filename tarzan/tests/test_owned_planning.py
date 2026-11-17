@@ -605,9 +605,8 @@ def _worker_safety_probe():
     return {
         "rejected": rejected,
         "secret_keys_present": any(name in os.environ for name in (
-            "GEMINI_API_KEY", "SMTP_PASS", "GITHUB_TOKEN", "TARZAN_CACHE_KEY_B64",
+            "SMTP_PASS", "GITHUB_TOKEN", "TARZAN_CACHE_KEY_B64",
         )),
-        "AI_disabled": os.environ.get("TARZAN_DISABLE_AI") == "1",
     }
 
 
@@ -615,7 +614,7 @@ def test_spawn_worker_rejects_native_io_and_removes_credentials(monkeypatch):
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
 
-    for name in ("GEMINI_API_KEY", "SMTP_PASS", "GITHUB_TOKEN", "TARZAN_CACHE_KEY_B64"):
+    for name in ("SMTP_PASS", "GITHUB_TOKEN", "TARZAN_CACHE_KEY_B64"):
         monkeypatch.setenv(name, "synthetic-unused-credential")
     with ProcessPoolExecutor(
         max_workers=1, mp_context=multiprocessing.get_context("spawn"),
@@ -624,4 +623,3 @@ def test_spawn_worker_rejects_native_io_and_removes_credentials(monkeypatch):
         evidence = pool.submit(_worker_safety_probe).result(timeout=15.0)
     assert evidence["rejected"] == [True] * 7
     assert not evidence["secret_keys_present"]
-    assert evidence["AI_disabled"]

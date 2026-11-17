@@ -500,7 +500,6 @@ def run_network_free_workload_harness() -> dict[str, Any]:
         "harness_schema_version": WORKLOAD_TELEMETRY_SCHEMA_VERSION,
         "network_access": "NOT_USED",
         "drive_access": "NOT_USED",
-        "gemini_access": "NOT_USED",
         "delivery_access": "NOT_USED",
         "instrument_kinds": exercised_kinds,
         "tracked_categories": exercised_categories,

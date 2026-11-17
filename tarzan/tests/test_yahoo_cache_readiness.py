@@ -33,7 +33,7 @@ def _budget():
         300,
         tuple(
             ProviderTransportPolicy(name, 20, 1)
-            for name in ("yahoo", "openfigi", "borsa", "justetf", "manual", "gemini",
+            for name in ("yahoo", "openfigi", "borsa", "justetf", "manual",
                          "tradingview", "cnbc", "marketwatch")
         ),
     )

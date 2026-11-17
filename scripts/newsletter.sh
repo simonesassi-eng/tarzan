@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Generate a newsletter (with the AI summary) for the current portfolio, on
-# demand. Run it whenever you want a fresh digest:
+# Generate a newsletter for the current portfolio, on demand. Run it
+# whenever you want a fresh digest:
 #
 #     bash scripts/newsletter.sh          # or: ./scripts/newsletter.sh
 #
 # Writes output/<YYYY-MM-DD>/portfolio_digest_<HHMM>.html and opens it (macOS).
-# Loads the Gemini key from .private/gemini_key so the "Market context" and
-# "Why you're diverging" AI blocks are populated; without a key it still
-# renders, just without those blocks.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,13 +18,6 @@ if [ ! -f "$ORDERS" ]; then
   echo "No $ORDERS found. Put your order list there first." >&2
   exit 1
 fi
-
-# Load the Gemini key (enables the AI summary) if not already in the env.
-if [ -z "${GEMINI_API_KEY:-}" ] && [ -f .private/gemini_key ]; then
-  GEMINI_API_KEY="$(tr -d '[:space:]' < .private/gemini_key)"
-  export GEMINI_API_KEY
-fi
-[ -n "${GEMINI_API_KEY:-}" ] && echo "AI summary: ON" || echo "AI summary: OFF (no .private/gemini_key)"
 
 PY="$(command -v python3 || command -v python)"
 CFG_ARG=(); [ -f "$CONFIG" ] && CFG_ARG=(--input_config "$CONFIG")

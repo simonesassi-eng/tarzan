@@ -29,12 +29,12 @@ def test_holdings_only_report_does_not_claim_a_tracked_transfer_return():
 
 
 def test_holdings_only_template_does_not_print_a_transfer_contribution_claim():
-    html = render_newsletter(_minimal_metrics(False), _config(), ai_summary="")
+    html = render_newsletter(_minimal_metrics(False), _config())
     assert "Securities transfers are contributions" not in html
 
 
 def test_real_template_prints_the_disclosure_once_and_escapes_the_ampersand():
-    html = render_newsletter(_minimal_metrics(True), _config(), ai_summary="")
+    html = render_newsletter(_minimal_metrics(True), _config())
     assert html.count("Total P&amp;L, TWR and MWR cover the tracked period") == 1
     assert "Total P&amp;amp;L, TWR" not in html
     assert "Carrying prices remain the cost-basis reference" in html
