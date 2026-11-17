@@ -1801,7 +1801,7 @@ _KPI_ROWS = (("pnl_eur", "P&L", "\u20ac", True),
 _KPI_RISK_WINDOWS = frozenset({"1m", "3m", "ytd", "1y", "3y", "5y", "si"})
 
 #: The three universes of the matrix, in order: the book, its plan, the market.
-_KPI_WHO = ("portfolio", "target", "acwi")
+_KPI_WHO = ("portfolio", "static", "target", "acwi")
 
 
 def _window_kpis(m, windows, geo_name) -> dict:
@@ -1832,11 +1832,13 @@ def _window_kpis(m, windows, geo_name) -> dict:
     nav = _norm_series(ph) if ph is not None else None
     tgt = (_norm_series(m.target_history).dropna()
            if getattr(m, "target_history", None) is not None else None)
+    static = (_norm_series(m.static_history).dropna()
+              if getattr(m, "static_history", None) is not None else None)
     bench_raw = (_geo_benchmark_series(m, geo_name)
                  if geo_name and getattr(m, "benchmark_histories", None) is not None else None)
     bench = _norm_series(bench_raw).dropna() if bench_raw is not None else None
-    series = {"portfolio": nav, "target": tgt, "acwi": bench}
-    keys = {"portfolio": "twr", "target": "target", "acwi": "acwi"}
+    series = {"portfolio": nav, "static": static, "target": tgt, "acwi": bench}
+    keys = {"portfolio": "twr", "static": "static", "target": "target", "acwi": "acwi"}
     rf = getattr(m, "risk_free_daily", None)
     ter_tl = getattr(m, "ter_timeline", None)
     bench_row = (cfg.catalog().row(None, None, geo_name) if geo_name else None)
@@ -1852,7 +1854,7 @@ def _window_kpis(m, windows, geo_name) -> dict:
                 return None
             ends = {k: (float(v[-1]) if v else None)
                     for k, v in (("twr", full.get("twr")), ("target", full.get("target")),
-                                 ("acwi", full.get("acwi")))}
+                                 ("static", full.get("static")), ("acwi", full.get("acwi")))}
             return pd.Timestamp(full["dates"][0]), pd.Timestamp(full["dates"][-1]), ends
         win = _perf_window(m, 30, geo_name, bucket=b)
         if not win:
@@ -1867,7 +1869,7 @@ def _window_kpis(m, windows, geo_name) -> dict:
                 v = _window_twr(nav, "1d")
                 if v is not None:
                     rows["portfolio"]["return"] = v
-            for who in ("target", "acwi"):
+            for who in ("static", "target", "acwi"):
                 ser = series[who]
                 if ser is not None and len(ser) >= 2:
                     v = compute_period_return(ser, "1d")
@@ -1915,6 +1917,9 @@ def _window_kpis(m, windows, geo_name) -> dict:
             rows["portfolio"]["ter"] = float(tl.mean())
         if getattr(m, "target_ter", None) is not None and rows["target"]:
             rows["target"]["ter"] = float(m.target_ter)
+        # Today's mix held fixed carries today's TER on every window.
+        if ter_tl is not None and len(ter_tl) and rows["static"]:
+            rows["static"]["ter"] = float(ter_tl.iloc[-1])
         if bench_ter is not None and rows["acwi"]:
             rows["acwi"]["ter"] = float(bench_ter) * 100.0
         if getattr(m, "pnl_series", None) is not None and getattr(m, "actual_value_series", None) is not None:
@@ -1980,9 +1985,10 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
     long_w = [k for k in period_keys if k in ("1y", "3y", "5y")]
     unsigned = {"volatility", "ulcer_index", "ter"}
     universes = [("portfolio", "Portfolio", P["ink"]),
+                 ("static", "Static", P["static"]),
                  ("target", "Target", _charts.TARGET),
                  ("acwi", bench_short(bench_label), _charts.BENCH)]
-    universes = [u for u in universes if u[0] in kpis]
+    universes = [u for u in universes if u[0] in kpis and kpis[u[0]]]
     labels = {k: (lab, u, t) for k, lab, u, t in _KPI_ROWS}
 
     def _fmt(v, key, unit):
@@ -2114,15 +2120,18 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
                 if any(k in kpis[who].get(window, {}) for k in risk_keys)]
         if not cols:
             return ""
-        colw = 80
-        # The span under the title, on its own line: the first column is 114px.
+        colw = 66 if len(cols) > 3 else 80
+        # The span under the title, on its own line: the first column is 90px.
         span = "SI" if window == "si" else window.upper()
         if window == "si" and si_sessions:
             span += f" \u00b7 {si_sessions} sessions"
         title = ('Risk<br><span style="font-weight:400;letter-spacing:0;text-transform:none;'
                  f'font-size:{TYPE_PX["label"]}px;color:{P["faint"]};">{_esc(span)}</span>')
+        # The universe's name in its own colour (the swatch would not fit four
+        # columns); the Return rows above pair each colour with its name.
         head = ('<tr>' + _th(title, align="left", first=True)
-                + "".join(_th(_swatch(col) + _esc(name), width=colw) for _w, name, col in cols)
+                + "".join(_th(f'<span style="letter-spacing:0.06em;">{_esc(name)}</span>',
+                              width=colw, colour=col) for _w, name, col in cols)
                 + '</tr>')
         body = ""
         present = [k for k in risk_keys
@@ -2158,12 +2167,13 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
         long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
     out.append(_risk())
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'Return: TWR; Target: weights held fixed; SI: since inception. '
+            f'Return: TWR; Static: today\u2019s weights held fixed; Target: the plan\u2019s weights '
+            f'held fixed; SI: since inception. '
             f'Risk over the book\u2019s whole life, plan and index clipped to the same span; '
             f'Max DD and Ulcer are of the span, VaR and CVaR the worst 5% of days. '
             f'\u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} (its own 0 and 1). '
-            f'TER: value-weighted. Tint: best (green) and worst (red) of the three, fainter when '
-            f'they are close; volatility and \u03b2 untinted.</div>')
+            f'TER: value-weighted. Tint: best (green) and worst (red) in each window or row, '
+            f'fainter when they are close; volatility and \u03b2 untinted.</div>')
     return f'<div style="margin-top:12px;">{"".join(out)}{note}</div>'
 
 

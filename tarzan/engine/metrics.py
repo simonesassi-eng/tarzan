@@ -147,6 +147,7 @@ class MetricsEngine:
             self._geo_benchmark,
             self._holding_histories,
             self._target_history,
+            self._static_history,
             self._historical_risk,
         ]
         # Option Y: when an order list is supplied it becomes the single
@@ -2844,6 +2845,58 @@ class MetricsEngine:
             "sleeves": modeled,
         } if modeled else None
 
+    def _static_history(self, ctx: dict) -> None:
+        """NAV of the book's CURRENT weights held constant over its whole life:
+        what today's mix would have done, with no trades and no flows.
+
+        Beside the real TWR it isolates what the changes in weights (trades,
+        contributions landing in one sleeve) added or cost; beside the target
+        it says how far today's book is from the plan in outcome, not only in
+        weight. Same construction as ``_target_history``: prices aligned before
+        differencing, each sleeve reached back with its modeled stretch, the
+        whole line withheld if any held sleeve has no usable history, because
+        dropping one draws a different portfolio under the book's name.
+        """
+        from tarzan.engine import target_backfill
+        from tarzan.engine.synthetic import combine_returns
+        unavailable = set(ctx.get("_order_history_unavailable", []))
+        weights, prices, missing = {}, {}, []
+        book = ctx.get("portfolio_history")
+        start = (pd.Timestamp(book.index[0]) - pd.Timedelta(days=45)
+                 if book is not None and len(book) else None)
+        for h in self.holdings:
+            value = float(getattr(h, "current_value", 0.0) or 0.0)
+            if value <= 0:
+                continue
+            key = h.ticker or h.isin
+            ph = h.price_history
+            if h.isin in unavailable or ph is None or len(ph) < 2:
+                missing.append(str(key))
+                continue
+            weights[key] = weights.get(key, 0.0) + value
+            prices[key] = normalize_index(ph, drop_duplicates=True)
+            if start is not None:
+                prices[key], _note = target_backfill.extend(
+                    h, start, ctx.get("_benchmark_catalog"), self.holdings)
+        if not weights:
+            return
+        if missing:
+            logger.warning(
+                "Static-weight series withheld: no usable price history for %s",
+                ", ".join(sorted(missing)),
+            )
+            return
+        total = sum(weights.values())
+        px = pd.concat(prices, axis=1).sort_index().ffill().dropna(how="any")
+        rets = px.pct_change().dropna(how="any")
+        if len(rets) < 2:
+            return
+        w = pd.Series({k: v / total for k, v in weights.items()}).reindex(px.columns).astype(float)
+        nav = (1.0 + combine_returns(rets, w, "daily")).cumprod() * 100.0
+        ctx["static_history"] = pd.concat(
+            [pd.Series([100.0], index=[rets.index[0] - pd.Timedelta(days=1)]), nav]
+        )
+
     # ------------------------------------------------------------------
     # Historical risk profile (uncapped, per-instrument full history)
     # ------------------------------------------------------------------
@@ -3091,6 +3144,7 @@ class MetricsEngine:
             holding_histories=ctx.get("holding_histories", {}),
             target_history=ctx.get("target_history"),
             target_history_modeled=ctx.get("target_history_modeled"),
+            static_history=ctx.get("static_history"),
             ter_timeline=ctx.get("ter_timeline"),
             target_ter=ctx.get("target_ter"),
             # The daily risk-free path _risk used, so a consumer computing a

@@ -60,6 +60,9 @@ PALETTE = {
     "unreal": "#A855F7",
     "port": "#EEF2F7",
     "target": "#F472B6",
+    # The book's current weights held fixed: a lavender, dE >= 15 from every
+    # other series and status colour (the target's pink is the nearest).
+    "static": "#E0B0FF",
 }
 
 # Asset-class hues, from the one source every surface reads

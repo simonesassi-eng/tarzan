@@ -58,9 +58,9 @@ class TestProperty1Identity:
         # order path to feed the newsletter Diversification sparklines.
         assert names[-1] == "_allocation_timeline"
         # Portfolio history precedes optional benchmark discovery. The order
-        # path keeps the 19-computer base, swaps the history provider in place,
+        # path keeps the 20-computer base, swaps the history provider in place,
         # then appends _returns and _allocation_timeline.
-        assert len(names) == 21
+        assert len(names) == 22
         # Holdings were already stamped by the data layer. Benchmarks receive
         # their current point after preprocessing and before metric consumers.
         assert "_current_prices" in names
@@ -72,6 +72,9 @@ class TestProperty1Identity:
         # in the engine because this is the only scope holding both the book and
         # the rebalance seeds (not-held target instruments).
         assert "_target_history" in names
+        # Today's weights held fixed over the book's life: the STATIC universe of
+        # the Performance tables, built beside the target for the same reason.
+        assert "_static_history" in names
         # How much of the book the 1D figure covers. Its own stage because
         # _live_1d returns early on a provider error, and a partial 1D is exactly
         # what a degraded run produces.

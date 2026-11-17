@@ -207,6 +207,21 @@ def _target_line(m: PortfolioMetrics, idx) -> "list | None":
     return _rebase_to_window(s, pd.DatetimeIndex(idx))
 
 
+def _static_line(m: PortfolioMetrics, idx):
+    """The book's current weights held fixed, as % over ``idx`` -- the same
+    rebasing as ``_target_line``; None when the series is absent or does not
+    reach the window's first day."""
+    raw = getattr(m, "static_history", None)
+    if raw is None or len(raw) < 2 or len(idx) < 2:
+        return None
+    s = _norm_series(raw).replace(
+        [float("inf"), float("-inf")], float("nan")
+    ).dropna()
+    if len(s) < 2 or s.index[0] > pd.Timestamp(idx[0]):
+        return None
+    return _rebase_to_window(s, pd.DatetimeIndex(idx))
+
+
 def target_dash_until(m: PortfolioMetrics, dates) -> int:
     """How many leading points of a target line over ``dates`` rest on MODELED
     sleeve history (drawn dashed), 0 when the whole line is real."""
@@ -356,12 +371,14 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
     pnl_pct = _window_pct(m.pnl_series)
     unreal_pct = _window_pct(m.unrealized_series)
     target = _target_line(m, idx)
+    static = _static_line(m, idx)
 
     dates = list(idx)
     endpoints = {
         "twr": float(twr[-1]) if twr else None,
         "acwi": float(acwi[-1]) if acwi else None,
         "target": float(target[-1]) if target else None,
+        "static": float(static[-1]) if static else None,
         "pnl_pct": float(pnl_pct[-1]) if pnl_pct else None,
         "unreal_pct": float(unreal_pct[-1]) if unreal_pct else None,
     }
@@ -371,6 +388,7 @@ def _perf_window(m: PortfolioMetrics, n_days: int = 30,
         "twr": twr,
         "acwi": acwi,
         "target": target,
+        "static": static,
         "target_dash_until": target_dash_until(m, dates) if target else 0,
         "pnl_pct": pnl_pct,
         "unreal_pct": unreal_pct,
@@ -574,6 +592,7 @@ def _perf_full_series(m: PortfolioMetrics, geo_name: Optional[str] = None,
         # Read through the same helper as the 30-day window rather than through
         # _perf_level_series' fixed 4-tuple, whose shape other callers depend on.
         "target": _target_line(m, list(idx)),
+        "static": _static_line(m, list(idx)),
         "target_dash_until": target_dash_until(m, list(idx)),
         # One XIRR solve per plotted point, so it is only paid for when a caller
         # asks for it -- see ``with_mwr``.
