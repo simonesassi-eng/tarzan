@@ -2846,8 +2846,8 @@ class MetricsEngine:
         } if modeled else None
 
     def _static_history(self, ctx: dict) -> None:
-        """NAV of the book's CURRENT weights held constant over its whole life:
-        what today's mix would have done, with no trades and no flows.
+        """NAV of the book's CURRENT mix held constant over its whole life:
+        what today's weights would have done, with no trades and no flows.
 
         Beside the real TWR it isolates what the changes in weights (trades,
         contributions landing in one sleeve) added or cost; beside the target
@@ -2855,7 +2855,9 @@ class MetricsEngine:
         weight. Same construction as ``_target_history``: prices aligned before
         differencing, each sleeve reached back with its modeled stretch, the
         whole line withheld if any held sleeve has no usable history, because
-        dropping one draws a different portfolio under the book's name.
+        dropping one draws a different portfolio under the book's name. The
+        weights are the book's at the previous close (see below), so the last
+        session on this line is the book's own.
         """
         from tarzan.engine import target_backfill
         from tarzan.engine.synthetic import combine_returns
@@ -2886,12 +2888,22 @@ class MetricsEngine:
                 ", ".join(sorted(missing)),
             )
             return
-        total = sum(weights.values())
         px = pd.concat(prices, axis=1).sort_index().ffill().dropna(how="any")
         rets = px.pct_change().dropna(how="any")
         if len(rets) < 2:
             return
-        w = pd.Series({k: v / total for k, v in weights.items()}).reindex(px.columns).astype(float)
+        # The weights are the book's at the START of the last session on the
+        # tape (the previous close), not its end-of-session values: a constant
+        # mix rebalanced to them each morning walks the last session exactly as
+        # the book did, so on a day without trades its 1D IS the book's 1D.
+        # Weighted on today's values, the lines that fell today weighed too
+        # little and the line read a basis point or two better than the book
+        # over the same hours (-0.80 against -0.81, with nothing traded).
+        values = pd.Series(weights, dtype=float).reindex(px.columns)
+        last_step = (px.iloc[-1] / px.iloc[-2]).astype(float)
+        last_step = last_step.where((last_step > 0) & last_step.notna(), 1.0)
+        start_values = values / last_step
+        w = (start_values / float(start_values.sum())).astype(float)
         nav = (1.0 + combine_returns(rets, w, "daily")).cumprod() * 100.0
         ctx["static_history"] = pd.concat(
             [pd.Series([100.0], index=[rets.index[0] - pd.Timedelta(days=1)]), nav]

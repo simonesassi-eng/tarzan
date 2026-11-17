@@ -1985,7 +1985,9 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
     long_w = [k for k in period_keys if k in ("1y", "3y", "5y")]
     unsigned = {"volatility", "ulcer_index", "ter"}
     universes = [("portfolio", "Portfolio", P["ink"]),
-                 ("static", "Static", P["static"]),
+                 # The owner's own mix, frozen: not "Static", which read as a
+                 # portfolio of someone else's.
+                 ("static", "Fixed mix", P["static"]),
                  ("target", "Target", _charts.TARGET),
                  ("acwi", bench_short(bench_label), _charts.BENCH)]
     universes = [u for u in universes if u[0] in kpis and kpis[u[0]]]
@@ -2167,8 +2169,8 @@ def _kpi_matrix_html(kpis: dict, period_keys, day_label: str,
         long_note = "1Y \u00b7 3Y \u00b7 5Y appear once the book has lived them. "
     out.append(_risk())
     note = (f'<div style="{TYPE["note"]}color:{P["subtle"]};margin-top:6px;">{long_note}'
-            f'Return: TWR; Static: today\u2019s weights held fixed; Target: the plan\u2019s weights '
-            f'held fixed; SI: since inception. '
+            f'Return: TWR; Fixed mix: the portfolio\u2019s current weights held fixed from day '
+            f'one; Target: the plan\u2019s weights held fixed; SI: since inception. '
             f'Risk over the book\u2019s whole life, plan and index clipped to the same span; '
             f'Max DD and Ulcer are of the span, VaR and CVaR the worst 5% of days. '
             f'\u03b1, \u03b2 vs {_escaped_text(bench_short(bench_label))} (its own 0 and 1). '
