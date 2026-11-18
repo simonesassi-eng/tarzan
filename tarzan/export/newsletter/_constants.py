@@ -34,7 +34,6 @@ from tarzan.export._palette import (
     PALETTE,
     TYPE,
     TYPE_PX,
-    class_band,
 )
 
 
@@ -484,10 +483,12 @@ def bench_short(name) -> str:
 
 # ── The statement grid ───────────────────────────────────────────────────────
 # Holdings, Target instruments and Watchlist at phone width (358px). One table
-# per asset class · role block, carrying the class band and a 2px rail in the
-# class hue; each instrument is two rows: the name row (ticker, name, and an
-# optional right-hand block such as the book figures) and the window row (the
-# 1D cell with its session sparkline, then one cell per window). Column widths
+# per asset class · role block, the class hue carried by a 2px rail alone (the
+# tinted band across the head was "troppo invasiva", Nov 2026); each instrument
+# is two rows: the name row (ticker, name, and an optional right-hand block
+# such as the book figures) and the window row (the 1D cell with its session
+# sparkline, then one cell per window), set tight: 4px over the name, 2px
+# around the window cells, a 2px seam row under them. Column widths
 # are hard under ``table-layout:fixed`` so every grid in the issue lands its
 # windows on the same x positions. The budget, measured in the system font:
 # the rows of a group sit right of a 2px rail in the class hue and 6px of air,
@@ -534,20 +535,20 @@ def _grid_instrument_rows(row, ncol, *, last):
                + (f'<td align="right" style="padding:0 0 0 6px;white-space:nowrap;'
                   f'vertical-align:baseline;">{right}</td>' if right else "")
                + '</tr></table>')
-    out = f'<tr><td colspan="{ncol}" style="padding:5px 0 1px 0;">{name_td}</td></tr>'
+    out = f'<tr><td colspan="{ncol}" style="padding:4px 0 0 0;">{name_td}</td></tr>'
     day_bg = f'background:{row["day_bg"]};' if row.get("day_bg") else ""
     tds = (f'<td align="right" style="padding:2px 3px 2px 0;{day_bg}white-space:nowrap;'
            f'font-variant-numeric:tabular-nums;">{row.get("day_html", "")}</td>')
     for c in row["cells"]:
         bg = f'background:{c["bg"]};' if c.get("bg") else ""
-        tds += (f'<td align="{c["align"]}" style="padding:3px 2px 3px 0;{bg}'
+        tds += (f'<td align="{c["align"]}" style="padding:2px 2px 2px 0;{bg}'
                 f'border-left:1px solid {P["page"]};'
                 f'font-variant-numeric:tabular-nums;font-size:{GRID_CELL_PX}px;'
                 f'font-weight:{c["weight"]};color:{c["color"]};white-space:nowrap;">'
                 f'{c["html"]}</td>')
     rule = "" if last else f'border-bottom:1px solid {P["row_rule"]};'
     out += (f'<tr>{tds}</tr>'
-            f'<tr><td colspan="{ncol}" style="padding:0;height:3px;font-size:0;'
+            f'<tr><td colspan="{ncol}" style="padding:0;height:2px;font-size:0;'
             f'line-height:0;{rule}">&nbsp;</td></tr>')
     return out
 
@@ -592,17 +593,15 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
     for cls, col, role_list in groups:
         for role, rows in role_list:
             has_role = bool(role and role != "\u2014")
-            band = class_band(cls) if cls else P["shade"]
-            label = (f'<span style="display:inline-block;width:8px;height:8px;'
-                     f'border-radius:1px;background:{col};margin-right:6px;'
-                     f'vertical-align:1px;"></span>'
-                     f'<span style="color:{P["ink"]};">{escape(str(cls or ""))}</span>'
+            label = (f'<span style="color:{P["ink"]};">{escape(str(cls or ""))}</span>'
                      + (f' <span style="color:{P["muted"]};font-weight:400;letter-spacing:0;'
                         f'text-transform:none;">\u00b7 {escape(str(role))}</span>'
                         if has_role else ""))
-            # The group: its band across the column, then the rail (a real cell,
-            # not a table border, which the collapsed-border model drops) beside
-            # the rows.
+            # The group: its head as a plain label line on the ground, then the
+            # rail (a real cell, not a table border, which the collapsed-border
+            # model drops) beside the rows. The rail is the only colour: a
+            # tinted band across the head and a swatch before the name said
+            # the same thing three times.
             body = []
             # The window header leads the first band; it repeats when due, but
             # not over a one-row band, where it read as that band's own header.
@@ -614,10 +613,10 @@ def render_statement_grid(columns, groups, *, header_every=12, portfolio_row=Non
                 body.append(_grid_instrument_rows(row, ncol, last=(i == len(rows) - 1)))
             out.append(
                 '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-                f'style="table-layout:fixed;border-collapse:collapse;margin-top:8px;font-family:{FONT_STACK};">'
+                f'style="table-layout:fixed;border-collapse:collapse;margin-top:6px;font-family:{FONT_STACK};">'
                 f'<colgroup><col style="width:{GRID_RAIL_W}px;"><col></colgroup>'
-                f'<tr><td colspan="2" style="padding:5px 6px 4px 8px;background:{band};'
-                f'border-radius:0 3px 3px 0;">'
+                f'<tr><td colspan="2" style="padding:3px 0 3px {GRID_RAIL_W + GRID_RAIL_GAP}px;'
+                f'border-bottom:1px solid {P["row_rule"]};">'
                 '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
                 f'<tr><td style="padding:0;{TYPE["label"]}">{label}</td>'
                 f'<td align="right" style="padding:0;font-size:{TYPE_PX["label"]}px;'
