@@ -29,10 +29,10 @@ from tarzan.export._perf_series import (
     target_dash_until,
 )
 from tarzan.export import _heat
+from tarzan.export._palette import text_width
 from tarzan.export.newsletter._constants import (
     ASSET_COLORS,
     MARKET_FLAGS,
-    MARKET_REGION_COLORS,
     PALETTE,
     TYPE,
     TYPE_PX,
@@ -87,11 +87,11 @@ def _nowrap_parts(parts: list, *, lead: bool = False) -> str:
 
 
 def _build_markets(ctx: _NewsletterContext) -> dict:
-    """Markets strip (yfinance-style): roomy, neutral 5-column cards — level,
-    a daily-change pill and a stretched mini sparkline — grouped by region.
-    Each region is introduced by its own heading with a region-accent colour
-    swatch, so colour lives in the section labels (not on every card) and no
-    separate legend is needed. Live cached quotes, falling back to the
+    """The markets board: one full-width block per category (Futures, Asia,
+    Europe, US, Bonds, Commodities, Currencies), its rows in two columns; a
+    row is the name with the day's change, then the hours, the session path
+    and the level. The change cell is tinted on its category's own range, the
+    returns grids' rule. Live cached quotes, falling back to the
     benchmark-derived snapshot if the live fetch yields nothing."""
     m = ctx.metrics
     P = PALETTE
@@ -121,9 +121,6 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
         CATEGORY_ORDER = ["Indices"]
     if not snap:
         return {"available": False, "html": ""}
-
-    def _rc(cat) -> str:
-        return MARKET_REGION_COLORS.get(cat, P["subtle"])
 
     def _spark_for(d: dict) -> str:
         """Session path for one index: the timestamped intraday series when
@@ -229,14 +226,22 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             parts.append(word)
         return _nowrap_parts(parts)
 
-    def _row(d: dict) -> str:
+    def _good_delta(d: dict) -> float:
+        """The day's move with the bondholder's sign: a falling yield or spread
+        is the good direction, so it is turned positive before ranking."""
+        unit = d.get("unit", "index")
+        delta = float(d["bp"] if unit in ("yield", "spread") else d["pct"])
+        return -delta if unit in ("yield", "spread") else delta
+
+    def _row(d: dict, neg: float, pos: float) -> str:
         unit = d.get("unit", "index")
         delta = d["bp"] if unit in ("yield", "spread") else d["pct"]
-        up = delta >= 0
-        # A rising yield or spread is the bad direction for the bondholder, so
-        # its colour is inverted: green when it falls.
-        good = (not up) if unit in ("yield", "spread") else up
-        col = P["green"] if good else P["red"]
+        # The change cell is tinted on its category's own range, the grids'
+        # rule: the background says which way and how far among its peers,
+        # the figure is ink (or stepped back when the tint is faint). A rising
+        # yield or spread is the bad direction for the bondholder, so bonds
+        # are ranked on the inverted move.
+        bg, col = _heat.heat(_good_delta(d), neg=neg, pos=pos)
         name = d["name"]
         # The "(FUT)" MARKETS carries keeps a future's name unique from its cash
         # index; on the board the "Futures" heading says it, and a commodity
@@ -280,8 +285,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'style="table-layout:fixed;"><colgroup><col><col style="width:56px;"></colgroup><tr>'
             f'<td style="padding:0;{TYPE["data"]}font-size:11.5px;color:{P["ink"]};'
             f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{dot}{label}</td>'
-            f'<td align="right" style="padding:0;{TYPE["data"]}font-size:11.5px;font-weight:700;'
-            f'color:{col};white-space:nowrap;font-variant-numeric:tabular-nums;">{move}</td>'
+            f'<td align="right" style="padding:1px 3px;{TYPE["data"]}font-size:11.5px;font-weight:700;'
+            + (f'background:{bg};' if bg else "")
+            + f'color:{col};white-space:nowrap;font-variant-numeric:tabular-nums;">{move}</td>'
             f'</tr></table></td></tr>'
             f'<tr><td style="padding:1px 0 4px 0;border-bottom:1px solid {P["row_rule"]};'
             f'vertical-align:top;font-size:9.5px;line-height:1.3;color:{P["faint"]};'
@@ -296,25 +302,70 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
             f'</tr></table></td></tr>')
 
     def _region_head(cat: str) -> str:
-        return (f'<tr><td colspan="2" style="padding:10px 0 3px;border-bottom:1px solid {P["border"]};'
-                f'{TYPE["label"]}color:{P["muted"]};">{_esc(str(cat))}</td></tr>')
+        """A category's head across the whole column: label over a rule."""
+        return (f'<div style="margin-top:12px;padding-bottom:3px;border-bottom:1px solid {P["border"]};'
+                f'{TYPE["label"]}color:{P["muted"]};">{_esc(str(cat))}</div>')
 
-    def _table(entries: list) -> str:
-        """One column of the board: region heads interleaved with their rows.
+    def _row_height(d: dict) -> float:
+        """A row's height in px, estimated: the name line, then the hours line
+        wrapped as the 74px sub cell wraps it (each time range and the status
+        word are unbreakable segments). Futures with two sessions run to three
+        lines; splitting a category by row count left one column a screen
+        taller than the other."""
+        cap, _open, _day = _status(d)
+        word = _status_word(d)
+        segs = [x for x in cap.split(", ") if x] if cap else []
+        if word and word != majority:
+            segs.append(f"\u00b7 {word}")
+        width = 170 - (_SPARK_W + 56)
+        lines, cur = 0, 0.0
+        for seg in segs:
+            w = text_width(seg, 9.5)
+            if cur and cur + 4.0 + w > width:
+                lines, cur = lines + 1, w
+            else:
+                cur = (cur + 4.0 + w) if cur else w
+        lines += 1 if segs else 0
+        return 20.0 + 12.4 * max(float(lines), 1.3) + 6.0
 
-        Fixed layout with the widths declared up front: the first row is a
-        region head spanning every column, so without the ``colgroup`` the
-        columns split evenly and the name was squeezed to a quarter."""
-        body, last = [], None
-        for cat, d in entries:
-            if cat != last:
-                body.append(_region_head(cat))
-                last = cat
-            body.append(_row(d))
+    def _table(rows: list, neg: float, pos: float) -> str:
+        """One column of a category's rows.
+
+        Fixed layout with the widths declared up front: without the ``colgroup``
+        the columns split evenly and the name was squeezed to a quarter."""
         return ('<table role="presentation" width="100%" cellpadding="0" '
                 'cellspacing="0" border="0" style="table-layout:fixed;">'
                 f'<colgroup><col><col style="width:{_SPARK_W + 56}px;"></colgroup>'
-                + "".join(body) + '</table>')
+                + "".join(_row(d, neg, pos) for d in rows) + '</table>')
+
+    def _block(cat: str, rows: list) -> str:
+        """One category as a full-width block: its head across the column, its
+        rows flowing down two columns (first half left, second half right).
+        Two independent columns of whole categories put the boundaries at
+        different heights on either side and the reader lost where one
+        category ended ("difficile capire dove finisce una categoria").
+        The change cells are tinted on this category's own range."""
+        neg, pos = _heat.column_scale([_good_delta(d) for d in rows])
+        # The split that leaves the two columns nearest the same height, rows
+        # kept in order (first half left); on a tie the left is the taller.
+        hs = [_row_height(d) for d in rows]
+        total = sum(hs)
+        half, best = len(rows), None
+        for k in range(1, len(rows)):
+            lh = sum(hs[:k])
+            gap = abs(lh - (total - lh))
+            if best is None or gap < best - 0.01 or (abs(gap - best) <= 0.01 and lh >= total - lh):
+                half, best = k, gap
+        left, right = rows[:half], rows[half:]
+        if right:
+            body = ('<table role="presentation" width="100%" cellpadding="0" '
+                    'cellspacing="0" border="0" style="table-layout:fixed;">'
+                    '<colgroup><col style="width:170px;"><col style="width:14px;"><col style="width:170px;"></colgroup>'
+                    f'<tr><td valign="top">{_table(left, neg, pos)}</td><td></td>'
+                    f'<td valign="top">{_table(right, neg, pos)}</td></tr></table>')
+        else:
+            body = _table(left, neg, pos)
+        return _region_head(cat) + body
 
     # Region order: the configured order first, then any category the snapshot
     # carries that the configuration does not know about, so nothing is dropped.
@@ -327,10 +378,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     if not entries:
         return {"available": False, "html": ""}
 
-    # Two side-by-side columns instead of a five-wide card grid: the same
-    # indices cost roughly half the height, and this section is the backdrop a
-    # reader glances at, not the subject of the issue. The split lands on a
-    # region boundary so neither column starts mid-region.
+    # Rows in two columns (inside each category's block): the same indices
+    # cost roughly half the height of one list, and this section is the
+    # backdrop a reader glances at, not the subject of the issue.
     # The status most rows share is said once in the subtitle and dropped from
     # those rows; a row with another status (a venue open, a yield's print
     # time) keeps its own.
@@ -344,27 +394,9 @@ def _build_markets(ctx: _NewsletterContext) -> dict:
     common_note = (_notes.most_common(1)[0][0]
                    if _notes and _notes.most_common(1)[0][1] * 2 >= len(entries) else "")
     note_others = sum(_notes.values()) - (_notes[common_note] if common_note else 0)
-    # Two columns of whole regions, balanced by row count.
-    left, right, hl, hr = [], [], 0, 0
-    for cat in order:
-        rows = [(c, d) for c, d in entries if c == cat]
-        if not rows:
-            continue
-        if hl <= hr:
-            left += rows; hl += len(rows)
-        else:
-            right += rows; hr += len(rows)
-    if right:
-        grid = ('<table role="presentation" width="100%" cellpadding="0" '
-                'cellspacing="0" border="0" style="margin-top:2px;table-layout:fixed;">'
-                '<colgroup><col style="width:170px;"><col style="width:14px;"><col style="width:170px;"></colgroup>'
-                '<tr>'
-                f'<td valign="top">{_table(left)}</td>'
-                '<td></td>'
-                f'<td valign="top">{_table(right)}</td>'
-                '</tr></table>')
-    else:
-        grid = f'<div style="margin-top:2px;">{_table(left)}</div>'
+    # One block per category, in opening order, each across the whole column.
+    grid = "".join(_block(cat, [d for c, d in entries if c == cat])
+                   for cat in order if any(c == cat for c, _d in entries))
     grid += _feed_note(snap)
     # Section subtitle: when this live snapshot was captured, in the reader's
     # timezone (Europe/Rome) with a DST-aware label (CEST/CET) -- the anchor

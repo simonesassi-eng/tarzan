@@ -376,3 +376,80 @@ def test_a_closed_future_is_labelled_with_the_readers_day_it_last_traded():
     assert F.schedule(rows["fut:MME"], at("2026-11-14T12:00"))[1:] == (False, "Fri")  # Saturday
     assert F.schedule(rows["fut:MME"], at("2026-11-16T01:30"))[1] is True             # Sun 20:30 NY
     assert F.schedule(rows["fut:NK"], at("2026-11-11T23:20"))[1:] == (False, "Wed")
+
+
+def _q(name, sym, cat, pct, **extra):
+    v = 1000.0
+    return dict({"name": name, "symbol": sym, "category": cat, "value": v,
+                 "change": v * pct / 100, "pct": pct, "spark": [v, v], "baseline": v}, **extra)
+
+
+class TestTheBoardIsBlocksOfCategories:
+    """Each category is a full-width block (head over a rule, then its rows in
+    two columns), so a category boundary is a horizontal line across the whole
+    section. Two independent columns of whole categories put the boundaries at
+    different heights on either side ("difficile capire dove finisce una
+    categoria e comincia la successiva")."""
+
+    def test_every_category_head_spans_the_column_and_precedes_its_rows(self):
+        rows = [_q("A", "A1", "Asia", 1.0), _q("B", "B1", "Asia", -1.0), _q("C", "C1", "Asia", 0.5),
+                _q("D", "D1", "Europe", 0.2), _q("E", "E1", "Europe", -0.4)]
+        with mock.patch.object(mq, "market_status", return_value=(False, "Thu")):
+            html = _build_markets(_ctx(rows))["html"]
+        heads = [m.start() for m in re.finditer(r'border-bottom:1px solid #2A3442;[^"]*">(Asia|Europe)</div>', html)]
+        assert len(heads) == 2
+        # Asia's three rows all sit between the Asia head and the Europe head.
+        asia, europe = heads
+        for n in ("A<", "B<", "C<"):
+            assert asia < html.index(">" + n) < europe, n
+        assert html.index(">D<") > europe and html.index(">E<") > europe
+        # The rows of a category flow down two columns: the first half left.
+        block = html[asia:europe]
+        assert block.count('<td valign="top">') == 2
+        assert block.index(">A<") < block.index(">B<") < block.index('<td></td>') < block.index(">C<")
+
+    def test_the_change_cell_is_tinted_on_its_own_category(self):
+        """The grids' rule: background says which way and how far among the
+        category's peers; the figure is ink. The best and worst of a category
+        reach the ramp's ends whatever another category did."""
+        from tarzan.export._heat import _GREEN_END, _RED_END
+        rows = [_q("A", "A1", "Asia", 0.30), _q("B", "B1", "Asia", -0.10),
+                _q("C", "C1", "Europe", 3.00), _q("D", "D1", "Europe", -2.00)]
+        with mock.patch.object(mq, "market_status", return_value=(False, "Thu")):
+            html = _build_markets(_ctx(rows))["html"]
+
+        def cell(name):
+            i = html.index(">" + name + "<")
+            return re.search(r'<td align="right" style="padding:1px 3px;[^"]*">', html[i:]).group(0)
+        assert f"background:{_GREEN_END};" in cell("A") and f"background:{_GREEN_END};" in cell("C")
+        assert f"background:{_RED_END};" in cell("B") and f"background:{_RED_END};" in cell("D")
+        assert "color:#EEF2F7;" in cell("A")
+        # Mixed signs keep each side's own end: A at +0.30 is as green as C at +3.00.
+
+    def test_a_falling_yield_is_the_good_end_of_the_bonds_ramp(self):
+        from tarzan.export._heat import _GREEN_END, _RED_END
+        rows = [dict(_q("US 2Y", "y:US2", "Bonds", 0.0), unit="yield", bp=+4.0, value=4.5, feed_row=True),
+                dict(_q("Bund 2Y", "y:DE2", "Bonds", 0.0), unit="yield", bp=-3.0, value=2.1, feed_row=True)]
+        with mock.patch.object(mq, "market_status", return_value=(False, "Thu")):
+            html = _build_markets(_ctx(rows))["html"]
+        i, j = html.index(">US 2Y<"), html.index(">Bund 2Y<")
+        us = re.search(r'<td align="right" style="padding:1px 3px;[^"]*">', html[i:]).group(0)
+        de = re.search(r'<td align="right" style="padding:1px 3px;[^"]*">', html[j:]).group(0)
+        assert f"background:{_RED_END};" in us and f"background:{_GREEN_END};" in de
+
+    def test_a_longer_hours_caption_weighs_more_in_the_column_split(self):
+        """Four rows: three with two-session captions (three lines each) and
+        one single-line. By count the split is 2/2; by height the left takes
+        two tall rows and the right two... unless the tall ones cluster:
+        three tall then one short → left two tall, right one tall + one short."""
+        from tarzan.export.newsletter import _sections_perf as sp
+        tall = {"feed_row": True, "hours_caption": "23:50\u201306:30, 07:10\u201321:00", "live": True,
+                "session_day": "Thu"}
+        rows = [dict(_q("A", "f:A", "Futures", 0.1), **tall), dict(_q("B", "f:B", "Futures", 0.2), **tall),
+                dict(_q("C", "f:C", "Futures", 0.3), **tall),
+                dict(_q("D", "f:D", "Futures", 0.4), feed_row=True, hours_caption="08:00\u201322:00",
+                     live=True, session_day="Thu")]
+        with mock.patch.object(mq, "market_status", return_value=(True, "Thu")):
+            html = _build_markets(_ctx(rows))["html"]
+        left = html[:html.index("<td></td>")]
+        assert ">A<" in left and ">B<" in left and ">C<" not in left
